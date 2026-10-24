@@ -133,7 +133,9 @@ gesucht, nie ueber einen Pfad.
 - [x] Mainline-Kernel 7.1 + 14 Gerätepatches bauen (clang/LLVM, kein Cross-GCC)
 - [x] Leste-Rootfs-Image mit Kernel, Modulen, Firmware und Loop-Root-Initramfs
 - [x] Boot-Image bauen und gegen die `boot_a`-Parameter verifizieren
-- [ ] Rootfs-Image aufs Geraet uebertragen (additiv, laeuft)
+- [x] Rootfs-Image aufs Geraet uebertragen (`/userdata/maemo-leste.img`, 24 GiB,
+      3,5 GB belegt) und Inhalt am Geraet verifiziert
+- [x] Boot-Image aufs Geraet gelegt (`/userdata/boot-leste.img`), noch nicht geflasht
 - [ ] **Slot-B-Test ohne Schreibvorgang** (siehe docs/slot-b-offene-frage.md)
 - [ ] `boot_b` flashen, `dtbo_b` nullen, umschalten
 - [ ] Audio (UCM2-Profile des NixOS-Ports), Sensoren (hexagonfs), Kamera
@@ -156,10 +158,25 @@ gesucht, nie ueber einen Pfad.
 | `scripts/30-build-kernel.sh` | Build-Host | Patches anwenden, Kernel + Module bauen |
 | `scripts/40-make-rootfs.sh` | Build-Host, sudo | Rootfs-Image bauen, Initramfs erzeugen |
 | `scripts/50-build-bootimg.sh` | Build-Host | Android-Boot-Image v2 packen |
-| `scripts/55-deploy-rootfs.sh` | Geraet, root | Image uebertragen und aufziehen (additiv) |
+| `scripts/55-deploy-rootfs.sh` | Geraet, root | Erstdeployment: schrumpfen, streamen, aufziehen (additiv) |
+| `scripts/56-update-rootfs.sh` | Geraet, root | Updates per rsync-Delta (`--inplace`) |
 | `scripts/60-flash-slot-b.sh` | Geraet, root | **schreibend**: Boot-Image in den inaktiven Slot |
 | `scripts/70-switch-slot.sh` | PC | Slot per fastboot umschalten |
 | `scripts/lib/bootimg-params.py` | beide | Android-Boot-Header v0-v2 auslesen |
+
+### Image-Transfer: wann zstd-Stream, wann rsync
+
+Erstdeployment per rsync ist ein Reinfall: rsync liest die volle apparent size
+von 24 GiB, gemessen 1,5 MB/s -- gut vier Stunden. Stattdessen schrumpft
+`55-deploy-rootfs.sh` das Dateisystem mit `resize2fs -M` auf 3,8 GiB, streamt
+es zstd-komprimiert (gemessen ~7 MB/s Nutzdaten, rund elf Minuten) und zieht es
+auf dem Geraet wieder auf 24 GiB. Danach haben beide Seiten dieselbe Geometrie,
+und fuer jede weitere Aenderung ist rsync das richtige Werkzeug:
+`56-update-rootfs.sh` uebertraegt mit `--inplace --no-whole-file` nur die
+geaenderten Bloecke.
+
+Noch ein busybox-Fallstrick: Sailfish hat kein `truncate`, darum wird die
+Imagegroesse auf dem Geraet per `python3` gesetzt.
 
 ### Hinweis zum Build-Host (Arch)
 
