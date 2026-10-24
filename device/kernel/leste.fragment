@@ -1,0 +1,16 @@
+# Kernel options Maemo Leste needs on top of the NixOS port's config.
+# Merged by scripts/30-build-kernel.sh after config.aarch64.
+
+# CAL: Maemo keeps the device lock code and other settings in a CAL area,
+# which libcal reads from /dev/mtd1. The Pro1X has no NAND, so a small file on
+# userdata is attached as an MTD device through block2mtd (see
+# /etc/init.d/pro1x-cal). The /dev/mtdN character devices need no option any
+# more: mtdchar is part of the MTD core since MTD_CHAR was dropped.
+CONFIG_MTD_BLOCK2MTD=m
+
+# Kernel log of a crashed or watchdog-reset boot in /sys/fs/pstore. Built in so
+# it already captures early boot; the region comes from the ramoops node in
+# the device tree (patches/0001-leste-status-leds-and-ramoops.patch).
+CONFIG_PSTORE_RAM=y
+CONFIG_PSTORE_CONSOLE=y
+CONFIG_PSTORE_PMSG=y

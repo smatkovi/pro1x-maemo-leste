@@ -28,12 +28,13 @@ IMAGE_PATH=${IMAGE_PATH:-/maemo-leste.img}
 
 CMDLINE="root=/dev/loop0 rootfstype=ext4 rootwait rw"
 CMDLINE="$CMDLINE pro1x.backing=$BACKING pro1x.image=$IMAGE_PATH"
-# Bring-up phase: verbose console on the debug UART and the panel.
-CMDLINE="$CMDLINE loglevel=7 ignore_loglevel earlycon=msm_geni_serial,0x4a90000"
-# ttyGS0 is the ACM console of the built-in g_cdc gadget -- reachable over
-# USB, unlike the debug UART. tty1 comes last and thus becomes /dev/console,
-# so the output stays on the panel.
-CMDLINE="$CMDLINE console=ttyMSM0,115200n8 console=ttyGS0,115200 console=tty1"
+# Kernel messages on the debug UART and the panel (tty1 comes last and thus
+# becomes /dev/console). Deliberately NOT on ttyGS0, the ACM port of the g_cdc
+# gadget: when nobody reads it on the PC, its buffer fills up and every
+# console write blocks -- including init's, which then never changes runlevel
+# (reboot and shutdown silently did nothing). A getty still runs on ttyGS0.
+CMDLINE="$CMDLINE loglevel=4 earlycon=msm_geni_serial,0x4a90000"
+CMDLINE="$CMDLINE console=ttyMSM0,115200n8 console=tty1"
 
 for f in "$OUT/Image.gz" "$OUT/initrd.img-$KVER" "$OUT/sm6115-fxtec-pro1x.dtb"; do
   [ -f "$f" ] || { echo "missing: $f"; exit 1; }

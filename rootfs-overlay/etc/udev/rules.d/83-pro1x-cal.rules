@@ -1,0 +1,4 @@
+# libcal opens /dev/mtd1 (the CAL partition on the N900). On the Pro1X the
+# CAL area is a block2mtd device on a loop device (see /etc/init.d/pro1x-cal);
+# give it that name, whatever number the kernel assigned.
+SUBSYSTEM=="mtd", KERNEL=="mtd[0-9]*", KERNEL!="mtd*ro", ATTR{name}=="block2mtd: /dev/loop*", SYMLINK+="mtd1"

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Gives the Pro1X WLAN interface a stable MAC address.
+#
+# The WCN3990 firmware provides no MAC address ("invalid MAC address; choosing
+# random"), and the persist partition holds no wlan_mac.bin, so every boot got
+# a new random address. Derive a locally administered one from the device
+# serial number the bootloader passes on the kernel command line instead.
+# Called by /etc/udev/rules.d/82-pro1x-wlan-mac.rules with the interface name.
+set -eu
+IFACE=${1:?interface}
+SERIAL=$(sed -n 's/.*androidboot\.serialno=\([^ ]*\).*/\1/p' /proc/cmdline)
+[ -n "$SERIAL" ] || exit 0
+
+HASH=$(printf 'pro1x-wlan:%s' "$SERIAL" | sha256sum | cut -c1-12)
+# First octet: clear the multicast bit, set the locally-administered bit.
+FIRST=$(( (0x$(echo "$HASH" | cut -c1-2) & 0xfe) | 0x02 ))
+MAC=$(printf '%02x' "$FIRST")$(echo "$HASH" | cut -c3-12 | sed 's/../:&/g')
+
+ip link set dev "$IFACE" down 2>/dev/null || true
+ip link set dev "$IFACE" address "$MAC"

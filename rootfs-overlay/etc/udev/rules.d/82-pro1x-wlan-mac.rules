@@ -1,0 +1,2 @@
+# Stable WLAN MAC address for the Pro1X (see /usr/local/sbin/pro1x-wlan-mac).
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="ath10k_snoc", RUN+="/usr/local/sbin/pro1x-wlan-mac %k"

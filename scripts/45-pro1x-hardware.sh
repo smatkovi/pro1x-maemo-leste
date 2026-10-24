@@ -56,6 +56,7 @@ chmod 755 /etc/init.d/pro1x-*
 rc-update add pro1x-tqftpserv default
 rc-update add pro1x-rmtfs default
 rc-update add pro1x-rmnet default
+rc-update add pro1x-cal default
 rc-update add bluetooth default
 
 # --- Audio: UCM profile and helpers from the NixOS port --------------------

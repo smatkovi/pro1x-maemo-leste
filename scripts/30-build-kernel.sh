@@ -7,6 +7,7 @@
 # device tree).
 set -euo pipefail
 WORK=${WORK:?set WORK=<build-dir>}
+REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 LINUX=$WORK/build/linux
 NIXOS=$WORK/build/nixos-pro1x
 OUT=$WORK/out
@@ -32,11 +33,31 @@ else
   echo "patches already applied"
 fi
 
-# Take over the NixOS port's config; olddefconfig drops GCC-specific options,
-# because we build with clang/lld (no aarch64 GCC on the host).
+# Our own patches for Maemo Leste on top (device/kernel/patches, in order).
+if [ ! -f .leste-patches-applied ]; then
+  for p in "$REPO"/device/kernel/patches/*.patch; do
+    echo ">> patch $(basename "$p")"
+    git apply -v "$p"
+  done
+  git add -A && git -c user.name=build -c user.email=build@local commit -qm \
+    "Maemo Leste patches on top of the Pro1X device patches"
+  touch .leste-patches-applied
+else
+  echo "Leste patches already applied"
+fi
+
+# Take over the NixOS port's config plus our fragment; olddefconfig drops
+# GCC-specific options, because we build with clang/lld (no aarch64 GCC on
+# the host).
 cp "$NIXOS/device/kernel/config.aarch64" .config
+scripts/kconfig/merge_config.sh -m -O . .config "$REPO/device/kernel/leste.fragment" >/dev/null
 MAKE=(make ARCH=arm64 LLVM=1 -j"$JOBS")
 "${MAKE[@]}" olddefconfig
+# merge_config only warns when a value does not stick; fail instead.
+while IFS= read -r line; do
+  case "$line" in CONFIG_*=*) grep -qx "$line" .config ||
+    { echo "ERROR: $line did not make it into .config"; exit 1; } ;; esac
+done < "$REPO/device/kernel/leste.fragment"
 "${MAKE[@]}" Image.gz dtbs
 "${MAKE[@]}" modules
 mkdir -p "$OUT"

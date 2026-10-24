@@ -11,7 +11,7 @@
 set -e
 DATA=${DATA:-$( [ -d /userdata/dualboot-backup ] && echo /userdata || echo /host )}
 IMG=${IMG:-$DATA/boot-leste.img}
-VBMETA=${VBMETA:-$DATA/vbmeta-disabled.img}  # leave empty: vbmeta unchanged
+VBMETA=${VBMETA-$DATA/vbmeta-disabled.img}  # leave empty: vbmeta unchanged
 ERASE_DTBO=${ERASE_DTBO:-1}   # mainline brings its DTB inside the boot image;
                               # foreign overlays from the target slot's dtbo get in the way.
 

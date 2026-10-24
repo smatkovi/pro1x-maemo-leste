@@ -1,0 +1,4 @@
+# Pro1X: mce's iio-accelerometer and iio-proximity modules give up when
+# iio-sensor-proxy is not there yet, and the sensors only appear once
+# hexagonrpcd has served the ADSP its configuration. Start mce after both.
+rc_after="pro1x-hexagonrpcd iio-sensor-proxy"
