@@ -1,5 +1,5 @@
 #!/bin/sh
-# losetup ins Initramfs kopieren (initramfs-tools bringt nur blkid mit).
+# Copy losetup into the initramfs (initramfs-tools only brings blkid).
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
 case "$1" in

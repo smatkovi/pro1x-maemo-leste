@@ -1,13 +1,13 @@
 #!/bin/sh
-# Stellt das Maemo-Leste-Rootfs-Image als /dev/loop0 bereit, damit
-# initramfs-tools es als root=/dev/loop0 mounten kann.
+# Provides the Maemo Leste rootfs image as /dev/loop0, so that
+# initramfs-tools can mount it as root=/dev/loop0.
 #
-# Hintergrund: Auf dem Pro1X ist keine freie Partition fuer ein zweites System
-# vorhanden (userdata ist die letzte Partition der LUN). Leste liegt deshalb als
-# Image-Datei auf userdata, neben dem Sailfish-Rootfs. Modernes
-# initramfs-tools kennt kein root=...,loop= mehr, also machen wir es selbst.
+# Background: the Pro1X has no free partition for a second system
+# (userdata is the last partition of the LUN). Leste therefore lives as an
+# image file on userdata, next to the Sailfish rootfs. Modern
+# initramfs-tools no longer knows root=...,loop=, so we do it ourselves.
 #
-# Kernel-Cmdline: pro1x.backing=UUID=<fs-uuid>  pro1x.image=/pfad/im/backing
+# Kernel cmdline: pro1x.backing=UUID=<fs-uuid>  pro1x.image=/path/in/backing
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
 case "$1" in
@@ -24,10 +24,10 @@ for x in $(cat /proc/cmdline); do
     pro1x.image=*)   IMAGE="${x#pro1x.image=}" ;;
   esac
 done
-[ -n "$BACKING" ] || panic "pro1x-loop-root: pro1x.backing= fehlt auf der Cmdline"
+[ -n "$BACKING" ] || panic "pro1x-loop-root: pro1x.backing= missing from the cmdline"
 [ -n "$IMAGE" ] || IMAGE=/maemo-leste.img
 
-# Backing-Device aufloesen; UFS braucht einen Moment, bis es da ist.
+# Resolve the backing device; UFS takes a moment to appear.
 dev=""
 i=0
 while [ $i -lt 120 ]; do
@@ -41,16 +41,16 @@ while [ $i -lt 120 ]; do
   i=$((i + 1))
   sleep 0.25
 done
-[ -n "$dev" ] || panic "pro1x-loop-root: Backing-Device $BACKING nicht gefunden"
+[ -n "$dev" ] || panic "pro1x-loop-root: backing device $BACKING not found"
 
 mkdir -p /host
 mount -t ext4 -o rw,noatime "$dev" /host \
-  || panic "pro1x-loop-root: $dev konnte nicht auf /host gemountet werden"
-[ -f "/host$IMAGE" ] || panic "pro1x-loop-root: /host$IMAGE existiert nicht"
+  || panic "pro1x-loop-root: could not mount $dev on /host"
+[ -f "/host$IMAGE" ] || panic "pro1x-loop-root: /host$IMAGE does not exist"
 
-# Loop-Geraet deterministisch auf loop0, damit root=/dev/loop0 passt.
+# Loop device deterministically on loop0, so that root=/dev/loop0 matches.
 [ -b /dev/loop0 ] || mknod /dev/loop0 b 7 0
 losetup /dev/loop0 "/host$IMAGE" \
-  || panic "pro1x-loop-root: losetup auf /host$IMAGE fehlgeschlagen"
+  || panic "pro1x-loop-root: losetup on /host$IMAGE failed"
 
 exit 0

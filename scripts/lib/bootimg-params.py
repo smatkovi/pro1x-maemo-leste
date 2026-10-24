@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Android-Boot-Image-Header (v0-v2) auslesen.
+"""Read an Android boot image header (v0-v2).
 
-Aufruf: bootimg-params.py /dev/disk/by-partlabel/boot_a
-Gibt Header-Felder und die passenden mkbootimg-Argumente aus.
+Usage: bootimg-params.py /dev/disk/by-partlabel/boot_a
+Prints the header fields and the matching mkbootimg arguments.
 """
 import struct, sys
 
@@ -10,7 +10,7 @@ path = sys.argv[1] if len(sys.argv) > 1 else "/dev/disk/by-partlabel/boot_a"
 with open(path, "rb") as f:
     d = f.read(2048)
 if d[:8] != b"ANDROID!":
-    sys.exit(f"{path}: kein Android-Boot-Image (magic={d[:8]!r})")
+    sys.exit(f"{path}: not an Android boot image (magic={d[:8]!r})")
 
 ks, ka, rs, ra, ss, sa, ta, ps, hv, osv = struct.unpack("<10I", d[8:48])
 name = d[48:64].rstrip(b"\0").decode()

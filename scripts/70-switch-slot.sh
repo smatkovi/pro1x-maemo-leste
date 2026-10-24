@@ -1,19 +1,19 @@
 #!/bin/bash
-# Boot-Slot umschalten -- laeuft auf dem PC, Geraet haengt im Bootloader am USB.
+# Switches the boot slot -- runs on the PC, the device sits in the bootloader on USB.
 #
-# Auf diesem Port ist kein bootctl installiert, darum geht das Umschalten nur
-# per fastboot. Geraet vorher per "reboot bootloader" (oder Tastenkombination)
-# in den Bootloader bringen.
+# This port has no bootctl installed, so switching only works via fastboot.
+# Bring the device into the bootloader first with "reboot bootloader" (or the
+# key combination).
 set -euo pipefail
 SLOT=${1:-}
 case "$SLOT" in
   a|b) ;;
-  *) echo "Nutzung: $0 a|b"; exit 1 ;;
+  *) echo "Usage: $0 a|b"; exit 1 ;;
 esac
 
-echo ">> aktueller Zustand"
+echo ">> current state"
 fastboot getvar current-slot 2>&1 | head -2
-echo ">> setze Slot $SLOT aktiv"
+echo ">> setting slot $SLOT active"
 fastboot --set-active="$SLOT"
 fastboot getvar current-slot 2>&1 | head -1
 echo ">> reboot"

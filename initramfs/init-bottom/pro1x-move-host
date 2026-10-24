@@ -1,7 +1,7 @@
 #!/bin/sh
-# Nimmt die Backing-Partition (userdata) in das neue Root mit, damit das
-# Loop-Image nicht an einem verwaisten Mount haengt und man von Leste aus an
-# das Sailfish-Rootfs herankommt.
+# Moves the backing partition (userdata) into the new root, so that the
+# loop image does not hang off an orphaned mount and the Sailfish rootfs is
+# reachable from Leste.
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
 case "$1" in

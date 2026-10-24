@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Reboot direkt in den Bootloader (fastboot) -- als root ausfuehren.
+"""Reboot straight into the bootloader (fastboot) -- run as root.
 
-Funktioniert auf beiden Systemen (Sailfish und Maemo Leste), weil es den
-reboot(2)-Syscall mit LINUX_REBOOT_CMD_RESTART2 und dem Argument "bootloader"
-aufruft. Der Qualcomm-Reboot-Handler im Kernel legt daraus die Reboot-Reason
-ab, die der ABL beim naechsten Start auswertet.
+Works on both systems (Sailfish and Maemo Leste), because it calls the
+reboot(2) syscall with LINUX_REBOOT_CMD_RESTART2 and the argument "bootloader".
+The Qualcomm reboot handler in the kernel turns that into the reboot reason
+that the ABL evaluates on the next start.
 
-Die Wege ueber `reboot bootloader` scheitern sonst gern: busybox-reboot nimmt
-kein Argument, und `systemctl reboot bootloader` gibt es erst ab systemd 246.
+The usual ways via `reboot bootloader` tend to fail: busybox reboot takes no
+argument, and `systemctl reboot bootloader` only exists from systemd 246 on.
 """
 import ctypes
 import os
@@ -19,7 +19,7 @@ CMD_RESTART2 = 0xA1B2C3D4
 NR_REBOOT_AARCH64 = 142
 
 if os.geteuid() != 0:
-    sys.exit("als root ausfuehren")
+    sys.exit("run as root")
 
 arg = (sys.argv[1] if len(sys.argv) > 1 else "bootloader").encode()
 
@@ -34,6 +34,6 @@ rc = libc.syscall(
     ctypes.c_ulong(CMD_RESTART2),
     ctypes.c_char_p(arg),
 )
-# Bei Erfolg kommt der Aufruf nicht zurueck.
+# On success the call does not return.
 err = ctypes.get_errno()
-sys.exit(f"reboot-Syscall fehlgeschlagen: rc={rc} errno={err} ({os.strerror(err)})")
+sys.exit(f"reboot syscall failed: rc={rc} errno={err} ({os.strerror(err)})")

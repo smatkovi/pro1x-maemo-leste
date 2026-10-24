@@ -1,10 +1,10 @@
 #!/sbin/openrc-run
-# Qualcomm Remote-Filesystem-Dienst: stellt dem Modem modemst1/2, fsg und fsc
-# bereit und startet es (-s). Ohne laufendes Modem gibt es auf dem Pro1X weder
-# Mobilfunk noch WLAN.
+# Qualcomm remote filesystem service: provides modemst1/2, fsg and fsc to the
+# modem and starts it (-s). Without a running modem the Pro1X has neither
+# cellular nor Wi-Fi.
 #
-# -r: nur lesend -- Schreibzugriffe des Modems bleiben im RAM, die Partitionen
-# (IMEI, Kalibrierung) werden nie veraendert. So macht es auch der NixOS-Port.
+# -r: read-only -- the modem's writes stay in RAM, the partitions (IMEI,
+# calibration) are never modified. The NixOS port does the same.
 
 description="Qualcomm remote filesystem service (modemst1/2, fsg, fsc)"
 command=/usr/bin/rmtfs
@@ -21,7 +21,7 @@ depend() {
 
 start_pre() {
 	modprobe -q rmtfs_mem
-	# Die Modem-remoteproc-Instanz taucht erst auf, wenn qcom_q6v5_pas geladen ist.
+	# The modem remoteproc instance only appears once qcom_q6v5_pas is loaded.
 	i=0
 	while [ "$i" -lt 60 ]; do
 		for n in /sys/class/remoteproc/*/name; do
@@ -30,6 +30,6 @@ start_pre() {
 		i=$((i + 1))
 		sleep 1
 	done
-	eerror "modem-remoteproc nicht gefunden"
+	eerror "modem remoteproc not found"
 	return 1
 }

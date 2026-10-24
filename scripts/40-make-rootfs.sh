@@ -1,11 +1,11 @@
 #!/bin/bash
-# Baut das Maemo-Leste-Rootfs-Image fuer den Pro1X (Build-Host, braucht sudo).
+# Builds the Maemo Leste rootfs image for the Pro1X (build host, needs sudo).
 #
-# Nimmt das offizielle arm64-generic-Image als Basis, legt den selbst gebauten
-# 7.1-Kernel samt Modulen und die Pro1X-Firmware hinein, verdrahtet das
-# Loop-Root-Initramfs und zieht initrd + vmlinuz nach $WORK/out heraus.
+# Takes the official arm64-generic image as the base, puts the self-built
+# 7.1 kernel with its modules and the Pro1X firmware into it, wires up the
+# loop-root initramfs and pulls initrd + vmlinuz out into $WORK/out.
 set -euo pipefail
-WORK=${WORK:?WORK=<build-verzeichnis> setzen}
+WORK=${WORK:?set WORK=<build-dir>}
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 SRC_IMG=${SRC_IMG:-$WORK/dl/leste.img}
 IMG=${IMG:-$WORK/out/maemo-leste.img}
@@ -17,19 +17,19 @@ SSH_PUBKEY=${SSH_PUBKEY:-$HOME/.ssh/id_ed25519.pub}
 SRC_MNT=/mnt/leste-src
 DST_MNT=/mnt/leste-dst
 
-# Das auf Arch registrierte binfmt zeigt auf das dynamisch gelinkte
-# qemu-aarch64, dessen Host-Bibliotheken im Chroot fehlen. Wir registrieren
-# darum fuer die Dauer des Builds die statische Variante und stellen danach
-# den Originalzustand wieder her.
+# The binfmt registered on Arch points at the dynamically linked
+# qemu-aarch64, whose host libraries are missing inside the chroot. So for the
+# duration of the build we register the static variant and restore the
+# original state afterwards.
 BINFMT_SWITCHED=0
 AARCH64_MAGIC='\x7f\x45\x4c\x46\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00'
 AARCH64_MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
 
 binfmt_use_static() {
-  [ -x /usr/bin/qemu-aarch64-static ] || { echo "qemu-aarch64-static fehlt"; exit 1; }
+  [ -x /usr/bin/qemu-aarch64-static ] || { echo "qemu-aarch64-static missing"; exit 1; }
   if [ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ] &&
      grep -q 'interpreter /usr/bin/qemu-aarch64-static' /proc/sys/fs/binfmt_misc/qemu-aarch64; then
-    return 0   # schon statisch, nichts zu tun
+    return 0   # already static, nothing to do
   fi
   [ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ] &&
     sudo -n sh -c 'echo 0 > /proc/sys/fs/binfmt_misc/qemu-aarch64'
@@ -46,7 +46,7 @@ binfmt_restore() {
   BINFMT_SWITCHED=0
 }
 
-# In der Zielumgebung ausfuehren; PATH explizit, weil das Chroot den Host-PATH erbt.
+# Run inside the target; PATH set explicitly because the chroot inherits the host PATH.
 in_target() {
   sudo -n chroot "$DST_MNT" /usr/bin/env \
     PATH=/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive \
@@ -62,15 +62,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ -f "$WORK/out/Image.gz" ] || { echo "Kernel fehlt, erst 30-build-kernel.sh"; exit 1; }
-[ -d "$WORK/out/modules/lib/modules/$KVER" ] || { echo "Module fuer $KVER fehlen"; exit 1; }
+[ -f "$WORK/out/Image.gz" ] || { echo "kernel missing, run 30-build-kernel.sh first"; exit 1; }
+[ -d "$WORK/out/modules/lib/modules/$KVER" ] || { echo "modules for $KVER missing"; exit 1; }
 
-# Firmware-Blobs (proprietaer, aus dem sm6115-mainline-Projekt)
+# Firmware blobs (proprietary, from the sm6115-mainline project)
 FW=$WORK/build/firmware-fxtec-qx1050
 [ -d "$FW" ] || git clone -q --depth 1 \
   https://github.com/sm6115-mainline/firmware-fxtec-qx1050.git "$FW"
 
-echo ">> leeres Image anlegen ($IMG_SIZE, sparse)"
+echo ">> creating empty image ($IMG_SIZE, sparse)"
 mkdir -p "$(dirname "$IMG")"
 rm -f "$IMG"
 truncate -s "$IMG_SIZE" "$IMG"
@@ -80,16 +80,16 @@ sudo -n mkdir -p "$SRC_MNT" "$DST_MNT"
 sudo -n mount -o ro,loop,offset=$((264192 * 512)) "$SRC_IMG" "$SRC_MNT"
 sudo -n mount -o loop "$IMG" "$DST_MNT"
 
-echo ">> Rootfs kopieren"
+echo ">> copying rootfs"
 sudo -n rsync -aHAX --numeric-ids "$SRC_MNT/" "$DST_MNT/"
 
-echo ">> Kernel, Module, Firmware einsetzen"
+echo ">> installing kernel, modules, firmware"
 sudo -n cp "$WORK/out/Image.gz" "$DST_MNT/boot/vmlinuz-$KVER"
 sudo -n cp "$WORK/build/linux/.config" "$DST_MNT/boot/config-$KVER"
 sudo -n rsync -a "$WORK/out/modules/lib/modules/$KVER" "$DST_MNT/lib/modules/"
 sudo -n rsync -a "$FW/lib/firmware/" "$DST_MNT/lib/firmware/"
 
-echo ">> Initramfs-Hooks installieren"
+echo ">> installing initramfs hooks"
 sudo -n install -d "$DST_MNT/etc/initramfs-tools/hooks" \
                    "$DST_MNT/etc/initramfs-tools/scripts/local-top" \
                    "$DST_MNT/etc/initramfs-tools/scripts/init-bottom"
@@ -100,11 +100,11 @@ sudo -n install -m 0755 "$REPO/initramfs/local-top/pro1x-loop-root" \
 sudo -n install -m 0755 "$REPO/initramfs/init-bottom/pro1x-move-host" \
   "$DST_MNT/etc/initramfs-tools/scripts/init-bottom/"
 
-echo ">> fstab anpassen (kein eigenes /boot auf diesem Geraet)"
-sudo -n sed -i 's|^/dev/mmcblk0p1 /boot|#&  # Pro1X: /boot liegt im Rootfs-Image|' \
+echo ">> adjusting fstab (no separate /boot on this device)"
+sudo -n sed -i 's|^/dev/mmcblk0p1 /boot|#&  # Pro1X: /boot lives in the rootfs image|' \
   "$DST_MNT/etc/fstab"
 
-echo ">> Zugang einrichten"
+echo ">> setting up access"
 binfmt_use_static
 in_target "echo 'root:$ROOT_PW' | chpasswd"
 if [ -f "$SSH_PUBKEY" ]; then
@@ -112,12 +112,12 @@ if [ -f "$SSH_PUBKEY" ]; then
   sudo -n tee "$DST_MNT/root/.ssh/authorized_keys" < "$SSH_PUBKEY" >/dev/null
   sudo -n chmod 0600 "$DST_MNT/root/.ssh/authorized_keys"
 fi
-# Serielle Konsole fuer die Bringup-Phase (Pro1X: ttyMSM0 ueber USB-Debug)
+# Serial console for the bring-up phase (Pro1X: ttyMSM0 via USB debug)
 grep -q ttyMSM0 "$DST_MNT/etc/inittab" || \
   echo 'T0:23:respawn:/sbin/agetty -L 115200 ttyMSM0 vt100' | \
   sudo -n tee -a "$DST_MNT/etc/inittab" >/dev/null
 
-echo ">> Initramfs bauen (chroot via qemu-aarch64/binfmt)"
+echo ">> building initramfs (chroot via qemu-aarch64/binfmt)"
 sudo -n mount -t proc proc "$DST_MNT/proc"
 sudo -n mount -t sysfs sys "$DST_MNT/sys"
 sudo -n mount --bind /dev "$DST_MNT/dev"
@@ -130,7 +130,7 @@ sudo -n sh -c "df -h $DST_MNT | tail -1"
 
 cleanup
 trap - EXIT
-echo "fertig:"
+echo "done:"
 ls -la "$IMG" "$WORK/out/initrd.img-$KVER"
 du -h --apparent-size "$IMG" | cut -f1 | sed 's/^/  apparent: /'
-du -h "$IMG" | cut -f1 | sed 's/^/  belegt:   /'
+du -h "$IMG" | cut -f1 | sed 's/^/  used:     /'

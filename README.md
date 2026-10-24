@@ -1,121 +1,123 @@
-# Maemo Leste als zweiter Booteintrag auf dem F(x)tec Pro1X
+# Maemo Leste as a second boot entry on the F(x)tec Pro1X
 
-Ziel: Sailfish OS bleibt unangetastet auf Slot A, Maemo Leste kommt als
-zweites System auf Slot B.
+Goal: Sailfish OS stays untouched on slot A, Maemo Leste goes onto slot B as a
+second system.
 
-Stand 24.10.2026: **Maemo Leste bootet aus Slot B**, Sailfish bleibt in Slot A.
-Hildon-Desktop laeuft GPU-beschleunigt (Adreno 610, Mesa 25 aus
-daedalus-backports), dazu Tastatur samt Beleuchtung, Touch, Modem, WLAN,
-Bluetooth und Lautsprecher. Der Weg dorthin, alle getesteten Boot-Image-
-Varianten und was noch fehlt: [docs/UEBERGABE-ARCHBANG.md](docs/UEBERGABE-ARCHBANG.md).
+Status 24.10.2026: **Maemo Leste boots from slot B**, Sailfish stays in slot A.
+Hildon Desktop runs GPU-accelerated (Adreno 610, Mesa 25 from
+daedalus-backports), plus the keyboard including its backlight, touch, modem,
+Wi-Fi, Bluetooth and the loudspeaker. How we got there, every boot image
+variant that was tested, and what is still missing: [docs/HANDOFF.md](docs/HANDOFF.md).
 
-Der entscheidende Punkt: der stock-ABL nimmt bei leerem `dtbo` nur ein **an
-den Kernel angehaengtes DTB** an (Header v0); die DTB-Sektion von Header v2
-reicht nicht. `scripts/50-build-bootimg.sh` baut das so.
-Die Hardware richtet `scripts/45-pro1x-hardware.sh` im Rootfs ein.
+The key point: with an empty `dtbo` the stock ABL only accepts a **DTB appended
+to the kernel** (header v0); the DTB section of header v2 is not enough.
+`scripts/50-build-bootimg.sh` builds it that way.
+`scripts/45-pro1x-hardware.sh` sets up the hardware support in the rootfs.
 
-Slot B bootet auf diesem Geraet (mit Sailfishs eigenem `boot_a`/`dtbo_a` dort
-nachgewiesen); die Notiz im NixOS-Port, Slot B boote nicht, gilt hier nicht.
-Hintergrund zur alten Slot-B-Frage: [docs/slot-b-offene-frage.md](docs/slot-b-offene-frage.md).
+Slot B does boot on this device (proven with Sailfish's own `boot_a`/`dtbo_a`
+copied there); the note in the NixOS port that slot B does not boot does not
+apply here. Background on the old slot B question: [docs/slot-b-question.md](docs/slot-b-question.md).
 
-## Ausgangslage
+## Starting point
 
 | | |
 |---|---|
-| Geraet | F(x)tec Pro1X, `halium-qx1050`, SoC SM6115 (bengal) |
-| Installiertes OS | Sailfish OS 5.0.0.78, Kernel 4.19.157-perf-halium, Android-HAL im LXC-Container |
-| Rootfs SFOS | Verzeichnis `/userdata/halium-rootfs` auf `/dev/sda13` (225 GiB, ~129 GB frei) |
-| `/home` | `home.img` ueber dm-crypt (`home_encrypted`), 76 GiB, nur ~9 GB frei |
-| Bootloader | entsperrt (`androidboot.vbmeta.device_state=unlocked`, `verifiedbootstate=orange`) |
-| Slots | A/B vollstaendig vorhanden, aktiv ist `_a` |
-| `bootctl` | auf diesem Port **nicht** installiert -> Slot-Wechsel nur per fastboot vom PC |
-| UFS | sechs LUNs (sda..sdf), **4-KiB-Sektoren** |
+| Device | F(x)tec Pro1X, `halium-qx1050`, SoC SM6115 (bengal) |
+| Installed OS | Sailfish OS 5.0.0.78, kernel 4.19.157-perf-halium, Android HAL in an LXC container |
+| SFOS rootfs | directory `/userdata/halium-rootfs` on `/dev/sda13` (225 GiB, ~129 GB free) |
+| `/home` | `home.img` via dm-crypt (`home_encrypted`), 76 GiB, only ~9 GB free |
+| Bootloader | unlocked (`androidboot.vbmeta.device_state=unlocked`, `verifiedbootstate=orange`) |
+| Slots | A/B fully present, `_a` is active |
+| `bootctl` | **not** installed on this port -> switching slots only via fastboot from a PC |
+| UFS | six LUNs (sda..sdf), **4 KiB sectors** |
 
-Vollstaendige Partitionsliste: [`device/partition-map.txt`](device/partition-map.txt).
-`userdata` (sda13) ist die letzte Partition der LUN; zwischen ihrem Ende und dem
-Plattenende liegen nur 40 Sektoren. Eine eigene Partition fuer Leste waere also
-nur durch Schrumpfen von `userdata` moeglich -- und das nur offline. Deshalb
-liegt Leste als ext4-Image-Datei auf `userdata`, neben `halium-rootfs`.
+Full partition list: [`device/partition-map.txt`](device/partition-map.txt).
+`userdata` (sda13) is the last partition of its LUN; between its end and the
+end of the disk there are only 40 sectors. A partition of its own for Leste
+would therefore only be possible by shrinking `userdata` -- and only offline.
+That is why Leste lives as an ext4 image file on `userdata`, next to
+`halium-rootfs`.
 
-## Diagnose-Ergebnisse
+## Diagnostic results
 
-### Slot B ist technisch intakt
+### Slot B is technically intact
 
-`scripts/00-slot-ab-check.sh` vergleicht jedes `*_a`/`*_b`-Paar (Inhalt + Hash):
+`scripts/00-slot-ab-check.sh` compares every `*_a`/`*_b` pair (content + hash):
 
 * `xbl`, `xbl_config`, `rpm`, `tz`, `hyp`, `abl`, `bluetooth`, `modem`, `dsp`,
   `keymaster`, `devcfg`, `qupfw`, `vbmeta`, `imagefv`, `uefisecapp`,
-  `featenabler`, `multiimgoem`: **befuellt und bit-identisch zu Slot A**
-* `mdtp`, `mdtpsecapp`, `cmnlib`, `cmnlib64`: in **beiden** Slots leer (ab Werk)
-* `boot_a` == `boot_b`: in Slot B liegt aktuell dasselbe SFOS-hybris-boot
-* `dtbo`: unterscheidet sich -- `dtbo_a` hat 1 Eintrag (vom SFOS-Flash),
-  `dtbo_b` 37 (Werkszustand)
+  `featenabler`, `multiimgoem`: **populated and bit-identical to slot A**
+* `mdtp`, `mdtpsecapp`, `cmnlib`, `cmnlib64`: empty in **both** slots (factory state)
+* `boot_a` == `boot_b`: slot B currently holds the same SFOS hybris boot image
+* `dtbo`: differs -- `dtbo_a` has 1 entry (from the SFOS flash),
+  `dtbo_b` has 37 (factory state)
 
-GPT-Slot-Attribute von `boot_b`: Priority 3, Retry 6, `SUCCESSFUL` gesetzt,
-`UNBOOTABLE` nicht gesetzt -- nur `ACTIVE` steht auf A. `vbmeta_a`/`vbmeta_b`
-sind unveraendert Werkszustand (signiert, Flags `0x0`); Sailfish bootet
-trotzdem, weil der Bootloader entsperrt ist.
+GPT slot attributes of `boot_b`: priority 3, retry 6, `SUCCESSFUL` set,
+`UNBOOTABLE` not set -- only `ACTIVE` points at A. `vbmeta_a`/`vbmeta_b` are
+unchanged factory images (signed, flags `0x0`); Sailfish boots anyway because
+the bootloader is unlocked.
 
-Der NixOS-Port notiert "slot b does not boot on this phone" -- das gilt fuer
-dessen U-Boot-Image. Auf diesem Geraet bootete Sailfish aus Slot B, aber ohne
-funktionierende Tastatur: `dtbo_a` (von Sailfish geflasht, 1 Eintrag) enthaelt
-`aw9523b@5b` samt `idea_keys` und `kbd_backlight`, Eintrag 0 von `dtbo_b`
-(Werkszustand, 37 Eintraege) nicht -- und das Sailfish-Overlay ist unter den 37
-gar nicht vorhanden. Siehe [docs/slot-b-offene-frage.md](docs/slot-b-offene-frage.md).
+The NixOS port notes "slot b does not boot on this phone" -- that applies to
+its U-Boot image. On this device Sailfish did boot from slot B, but without a
+working keyboard: `dtbo_a` (flashed by Sailfish, 1 entry) contains
+`aw9523b@5b` together with `idea_keys` and `kbd_backlight`, entry 0 of `dtbo_b`
+(factory state, 37 entries) does not -- and the Sailfish overlay is not among
+the 37 at all. See [docs/slot-b-question.md](docs/slot-b-question.md).
 
-### Boot-Image-Parameter
+### Boot image parameters
 
-Aus dem laufenden `boot_a` ausgelesen (`scripts/lib/bootimg-params.py`),
-abgelegt in [`device/boot_a-params.env`](device/boot_a-params.env):
-Header v2, Pagesize 4096, base 0x0, kernel 0x8000, ramdisk 0x1000000,
-tags 0x100, dtb 0x1f00000. Boot-Partition 96 MiB, dtbo 24 MiB.
-Dieselben Offsets verwendet auch der NixOS-Port (`lib/bootimg.nix`) --
-unabhaengige Gegenprobe.
+Read from the running `boot_a` (`scripts/lib/bootimg-params.py`), stored in
+[`device/boot_a-params.env`](device/boot_a-params.env):
+header v2, page size 4096, base 0x0, kernel 0x8000, ramdisk 0x1000000,
+tags 0x100, dtb 0x1f00000. Boot partition 96 MiB, dtbo 24 MiB.
+The NixOS port uses the same offsets (`lib/bootimg.nix`) -- an independent
+cross-check.
 
-## Warum Mainline und nicht Halium
+## Why mainline and not Halium
 
-Maemo Leste nutzt **kein** Halium/libhybris, sondern ist ein Devuan-arm64-Port
-auf Mainline-Kernel; einen offiziellen Porting-Guide gibt es nicht. Den
-vorhandenen 4.19-Halium-Kernel weiterzuverwenden hiesse, libhybris und droid-hal
-nach Devuan zu portieren -- viel Arbeit und ausserhalb dessen, was Leste traegt.
+Maemo Leste does **not** use Halium/libhybris; it is a Devuan arm64 port on a
+mainline kernel, and there is no official porting guide. Reusing the existing
+4.19 Halium kernel would mean porting libhybris and droid-hal to Devuan -- a
+lot of work and outside of what Leste supports.
 
-Mainline auf dem Pro1X ist dagegen weit. Wichtig: der Branch `qx1050-7.1` von
-`sm6115-mainline/linux` ist **identisch mit Upstream v7.1**
-(Commit `8cd9520d35a6`); der komplette Gerätesupport steckt in den 14 Patches
-des NixOS-Ports, die in dessen Reihenfolge angewendet werden muessen.
-Dokumentiert funktionierend: Display, Adreno 610, Touch, Hardware-Tastatur
-inkl. Slider, WLAN, BT, Audio, Mikrofone, Telefonie/SMS/Daten, beide Kameras,
-Vibration, Laden, Suspend. Offen/ungetestet: GPS, SD-Karte, NFC, Video-Codecs.
+Mainline on the Pro1X, on the other hand, is far along. Important: the branch
+`qx1050-7.1` of `sm6115-mainline/linux` is **identical to upstream v7.1**
+(commit `8cd9520d35a6`); the complete device support lives in the 14 patches
+of the NixOS port, which have to be applied in that port's order.
+Documented as working: display, Adreno 610, touch, hardware keyboard
+including the slider, Wi-Fi, BT, audio, microphones, telephony/SMS/data, both
+cameras, vibration, charging, suspend. Open/untested: GPS, SD card, NFC, video
+codecs.
 
-## Was gebaut wurde
+## What was built
 
-| Artefakt | Groesse | Inhalt |
+| Artifact | Size | Content |
 |---|---|---|
-| `out/Image.gz` | 16,1 MiB | Linux 7.1 + 14 Pro1X-Patches, Config des NixOS-Ports, clang/LLVM gebaut |
-| `out/sm6115-fxtec-pro1x.dtb` | 80 KiB | passender Device Tree |
-| `out/modules/` | 82 MiB | Kernelmodule 7.1.0+ |
-| `out/initrd.img-7.1.0+` | 11,2 MiB | initramfs-tools mit Loop-Root-Hooks |
-| `out/maemo-leste.img` | 24 GiB (3,2 GiB belegt) | Leste-Rootfs (Devuan 5 daedalus, arm64-generic `20260426`) + Kernel + Module + Firmware |
-| `out/boot-leste.img` | 27 MiB | Android-Boot-Image v2, passt in die 96-MiB-Partition |
+| `out/Image.gz` | 16.1 MiB | Linux 7.1 + 14 Pro1X patches, config of the NixOS port, built with clang/LLVM |
+| `out/sm6115-fxtec-pro1x.dtb` | 80 KiB | matching device tree |
+| `out/modules/` | 82 MiB | kernel modules 7.1.0+ |
+| `out/initrd.img-7.1.0+` | 11.2 MiB | initramfs-tools with loop-root hooks |
+| `out/maemo-leste.img` | 24 GiB (3.2 GiB used) | Leste rootfs (Devuan 5 daedalus, arm64-generic `20260426`) + kernel + modules + firmware |
+| `out/boot-leste.img` | 27 MiB | Android boot image v2, fits into the 96 MiB partition |
 
-Firmware-Blobs kommen aus `sm6115-mainline/firmware-fxtec-qx1050`.
+The firmware blobs come from `sm6115-mainline/firmware-fxtec-qx1050`.
 
-## Boot-Weg
+## Boot path
 
-Es ist keine freie Partition fuer ein zweites Rootfs vorhanden, und modernes
-initramfs-tools kennt `root=...` mit `loop=` nicht mehr. Deshalb drei kleine
-Skripte in [`initramfs/`](initramfs/):
+There is no free partition for a second rootfs, and modern initramfs-tools no
+longer understands `root=...` with `loop=`. Hence three small scripts in
+[`initramfs/`](initramfs/):
 
-* `local-top/pro1x-loop-root` -- liest `pro1x.backing=` und `pro1x.image=` aus
-  der Cmdline, wartet auf das UFS-Device, mountet es auf `/host` und haengt das
-  Rootfs-Image als `/dev/loop0` ein. Danach findet initramfs-tools sein
-  `root=/dev/loop0` wie gewohnt.
-* `init-bottom/pro1x-move-host` -- nimmt den Backing-Mount als `/host` ins neue
-  Root mit, damit das Loop-Image nicht an einem verwaisten Mount haengt (und man
-  von Leste aus an das Sailfish-Rootfs kommt).
-* `hooks/pro1x-loop` -- kopiert `losetup` ins Initramfs.
+* `local-top/pro1x-loop-root` -- reads `pro1x.backing=` and `pro1x.image=` from
+  the cmdline, waits for the UFS device, mounts it on `/host` and attaches the
+  rootfs image as `/dev/loop0`. After that initramfs-tools finds its
+  `root=/dev/loop0` as usual.
+* `init-bottom/pro1x-move-host` -- moves the backing mount into the new root as
+  `/host`, so the loop image does not hang off an orphaned mount (and so the
+  Sailfish rootfs is reachable from Leste).
+* `hooks/pro1x-loop` -- copies `losetup` into the initramfs.
 
-Cmdline des Boot-Images:
+Cmdline of the boot image:
 
 ```
 root=/dev/loop0 rootfstype=ext4 rootwait rw
@@ -125,133 +127,134 @@ loglevel=7 ignore_loglevel earlycon=msm_geni_serial,0x4a90000
 console=ttyMSM0,115200n8 console=tty1
 ```
 
-Die Geraetenamen (`/dev/sdaN`) unterscheiden sich zwischen Halium-4.19 und
-Mainline, darum wird das Backing-Dateisystem konsequent ueber seine UUID
-gesucht, nie ueber einen Pfad.
+The device names (`/dev/sdaN`) differ between Halium 4.19 and mainline, so the
+backing filesystem is always looked up by its UUID, never by a path.
 
-## Zugang beim ersten Boot
+## Access on first boot
 
-WLAN ist nicht vorkonfiguriert (Maemo verwaltet `wlan0` ueber seinen eigenen
-Stack, `/etc/network/interfaces` laesst es auf `manual`). Der Zugang laeuft
-darum ueber dasselbe USB-Kabel, das fuer fastboot sowieso dran ist: der Kernel
-hat `CONFIG_USB_CDC_COMPOSITE=y`, der g_cdc-Gadget bindet beim Boot von allein
-und liefert gleichzeitig Ethernet und eine serielle Konsole.
+Wi-Fi is not preconfigured (Maemo manages `wlan0` through its own stack,
+`/etc/network/interfaces` leaves it on `manual`). Access therefore goes over
+the same USB cable that is plugged in for fastboot anyway: the kernel has
+`CONFIG_USB_CDC_COMPOSITE=y`, the g_cdc gadget binds by itself at boot and
+provides Ethernet and a serial console at the same time.
 
-* `usb0` statisch auf **172.16.42.1/24**, Gegenstelle am PC 172.16.42.2/24
-  (beide Seiten statisch, kein DHCP-Server im Image)
-* `sshd` startet automatisch (`S03ssh` in `rc2.d`), Root-Login per Key ist
-  erlaubt (`PermitRootLogin prohibit-password`), der Public Key des Build-Hosts
-  liegt in `/root/.ssh/authorized_keys`
-* serielle Konsole: `screen /dev/ttyACM0 115200` am PC -- `agetty` auf `ttyGS0`,
-  und der Kernel loggt dorthin mit (`console=ttyGS0,115200`). `/dev/console`
-  bleibt `tty1`, die Ausgabe steht also auch auf dem Panel
-* `agetty` zusaetzlich auf `ttyMSM0` -- das ist der Debug-UART und ohne
-  Zerlegen des Geraets nicht erreichbar, kostet aber nichts
-* root-Passwort wird beim Imagebau gesetzt (`ROOT_PW`, Standard `pro1x-leste`)
-  -- **nach dem ersten Login aendern**
+* `usb0` statically on **172.16.42.1/24**, the PC side is 172.16.42.2/24
+  (both sides static, no DHCP server in the image)
+* `sshd` starts automatically (`S03ssh` in `rc2.d`), root login with a key is
+  allowed (`PermitRootLogin prohibit-password`), the build host's public key
+  is in `/root/.ssh/authorized_keys`
+* serial console: `screen /dev/ttyACM0 115200` on the PC -- `agetty` on
+  `ttyGS0`, and the kernel logs there as well (`console=ttyGS0,115200`).
+  `/dev/console` stays `tty1`, so the output is also shown on the panel
+* an additional `agetty` on `ttyMSM0` -- that is the debug UART and cannot be
+  reached without taking the device apart, but it costs nothing
+* the root password is set when the image is built (`ROOT_PW`, default
+  `pro1x-leste`) -- **change it after the first login**
 
-## Zurueck zu Sailfish
+## Back to Sailfish
 
-Sailfish liegt unveraendert in Slot A. Zurueckschalten:
+Sailfish is unchanged in slot A. To switch back:
 
 ```
-./scripts/70-switch-slot.sh a      # auf dem PC, Geraet im Bootloader
+./scripts/70-switch-slot.sh a      # on the PC, device in the bootloader
 ```
 
-In den Bootloader kommt man aus beiden Systemen heraus mit
+From either system you get into the bootloader with
 
 ```
 sudo python3 scripts/lib/reboot-bootloader.py
 ```
 
-(reboot(2) mit `LINUX_REBOOT_CMD_RESTART2` und Argument `bootloader` --
-busybox-`reboot` nimmt kein Argument, `systemctl reboot bootloader` gibt es
-erst ab systemd 246.)
+(reboot(2) with `LINUX_REBOOT_CMD_RESTART2` and the argument `bootloader` --
+busybox `reboot` takes no argument, and `systemctl reboot bootloader` only
+exists from systemd 246 on.)
 
-Scheitert der Boot von Slot B ganz, zaehlt ABL die Retries herunter und faellt
-von selbst auf Slot A zurueck -- Sailfish kommt dann ohne Zutun wieder.
+If booting slot B fails completely, the ABL counts down the retries and falls
+back to slot A by itself -- Sailfish then comes back without any action.
 
-Noch unschoen: der Wechsel braucht einen PC. Abhilfe waere ein `qbootctl` auf
-beiden Systemen, das die GPT-Slot-Attribute direkt setzt; steht auf der Liste.
+Still not nice: switching needs a PC. The fix would be a `qbootctl` on both
+systems that sets the GPT slot attributes directly; it is on the list.
 
-## Vorgehen
+## Plan
 
-- [x] Geraet inventarisieren, Bootloader-Status, Slot-Belegung pruefen
+- [x] Inventory the device, check bootloader status and slot contents
 - [x] Backups: `boot_a/b`, `dtbo_a/b`, `vbmeta_a/b`, `misc`, `devinfo`, `frp`,
-      `keystore`, GPT (primaer + Backup) aller sechs LUNs -- auf dem Geraet und
-      auf dem Build-Host, Pruefsummen beidseitig verifiziert
-- [x] Boot-Image-Parameter aus `boot_a` extrahieren
-- [x] Mainline-Kernel 7.1 + 14 Gerätepatches bauen (clang/LLVM, kein Cross-GCC)
-- [x] Leste-Rootfs-Image mit Kernel, Modulen, Firmware und Loop-Root-Initramfs
-- [x] Boot-Image bauen und gegen die `boot_a`-Parameter verifizieren
-- [x] Rootfs-Image aufs Geraet uebertragen (`/userdata/maemo-leste.img`, 24 GiB,
-      3,5 GB belegt) und Inhalt am Geraet verifiziert
-- [x] Boot-Image aufs Geraet gelegt (`/userdata/boot-leste.img`), noch nicht geflasht
-- [x] Slot-B-Bootfaehigkeit geklaert (bootet; DTBO war die Tastatur-Ursache)
-- [x] geprueft, dass der Leste-DTB die Hardware selbst mitbringt (Keypad samt
-      64-Tasten-Keymap, WLAN, BT, Haptik, MPSS/ADSP, Kameras, Charger)
-- [ ] `boot_b` flashen, `dtbo_b` nullen, per fastboot umschalten
-- [ ] `qbootctl` o.ae. auf beiden Systemen, damit der Slot-Wechsel ohne PC geht
-- [ ] Audio (UCM2-Profile des NixOS-Ports), Sensoren (hexagonfs), Kamera
-- [ ] Telefonie: Leste erwartet ofono, Mainline liefert QMI/qrtr
+      `keystore`, GPT (primary + backup) of all six LUNs -- on the device and
+      on the build host, checksums verified on both sides
+- [x] Extract the boot image parameters from `boot_a`
+- [x] Build mainline kernel 7.1 + 14 device patches (clang/LLVM, no cross GCC)
+- [x] Leste rootfs image with kernel, modules, firmware and loop-root initramfs
+- [x] Build the boot image and verify it against the `boot_a` parameters
+- [x] Transfer the rootfs image to the device (`/userdata/maemo-leste.img`,
+      24 GiB, 3.5 GB used) and verify its content on the device
+- [x] Put the boot image on the device (`/userdata/boot-leste.img`), not flashed yet
+- [x] Settle whether slot B is bootable (it boots; the DTBO caused the dead keyboard)
+- [x] Checked that the Leste DTB brings the hardware description itself (keypad
+      with 64-key keymap, Wi-Fi, BT, haptics, MPSS/ADSP, cameras, charger)
+- [ ] Flash `boot_b`, zero `dtbo_b`, switch over via fastboot
+- [ ] `qbootctl` or similar on both systems, so switching slots works without a PC
+- [ ] Audio (UCM2 profiles of the NixOS port), sensors (hexagonfs), camera
+- [ ] Telephony: Leste expects oFono, mainline provides QMI/qrtr
 
-## Risiken
+## Risks
 
-* Slot-Wechsel braucht derzeit einen PC mit fastboot (kein `bootctl` auf dem
-  Geraet) -- mittelfristig loest das ein `qbootctl` auf beiden Systemen.
-* `dtbo_b` kann nur einem System recht sein: genullt fuer Leste, oder eine
-  Kopie von `dtbo_a` fuer Sailfish-auf-B. Nicht beides.
-* `/home` hat nur ~9 GB frei; das Leste-Image gehoert nach `/userdata`.
-* Ein kaputtes `boot_b` kostet einen Bootversuch, kein Brick -- ABL zaehlt die
-  Retries herunter und faellt auf Slot A zurueck, `boot_a` ist gesichert.
+* Switching slots currently needs a PC with fastboot (no `bootctl` on the
+  device) -- in the medium term a `qbootctl` on both systems solves this.
+* `dtbo_b` can only suit one system: zeroed for Leste, or a copy of `dtbo_a`
+  for Sailfish-on-B. Not both.
+* `/home` has only ~9 GB free; the Leste image belongs in `/userdata`.
+* A broken `boot_b` costs one boot attempt, not a brick -- the ABL counts down
+  the retries and falls back to slot A, and `boot_a` is backed up.
 
 ## Scripts
 
-| Datei | Wo | Zweck |
+| File | Where | Purpose |
 |---|---|---|
-| `scripts/00-slot-ab-check.sh` | Geraet, root | A/B-Paare vergleichen (rein lesend) |
-| `scripts/10-backup-slot-a.sh` | Geraet, root | Boot/dtbo/vbmeta/GPT sichern (rein lesend) |
-| `scripts/20-fetch-sources.sh` | Build-Host | Kernel-Branch klonen, Leste-Image holen |
-| `scripts/30-build-kernel.sh` | Build-Host | Patches anwenden, Kernel + Module bauen |
-| `scripts/40-make-rootfs.sh` | Build-Host, sudo | Rootfs-Image bauen, Initramfs erzeugen |
-| `scripts/50-build-bootimg.sh` | Build-Host | Android-Boot-Image v2 packen |
-| `scripts/55-deploy-rootfs.sh` | Geraet, root | Erstdeployment: schrumpfen, streamen, aufziehen (additiv) |
-| `scripts/56-update-rootfs.sh` | Geraet, root | Updates per rsync-Delta (`--inplace`) |
-| `scripts/60-flash-slot-b.sh` | Geraet, root | **schreibend**: Boot-Image in den inaktiven Slot |
-| `scripts/70-switch-slot.sh` | PC | Slot per fastboot umschalten |
-| `scripts/80-switch-and-connect.sh` | PC, losgelöst | wartet auf fastboot, schaltet um, bootet, richtet den USB-Link ein, testet SSH |
-| `scripts/lib/reboot-bootloader.py` | beide, root | Reboot direkt in den Bootloader |
-| `scripts/lib/bootimg-params.py` | beide | Android-Boot-Header v0-v2 auslesen |
+| `scripts/00-slot-ab-check.sh` | device, root | compare A/B pairs (read-only) |
+| `scripts/10-backup-slot-a.sh` | device, root | back up boot/dtbo/vbmeta/GPT (read-only) |
+| `scripts/20-fetch-sources.sh` | build host | clone the kernel branch, fetch the Leste image |
+| `scripts/30-build-kernel.sh` | build host | apply patches, build kernel + modules |
+| `scripts/40-make-rootfs.sh` | build host, sudo | build the rootfs image, generate the initramfs |
+| `scripts/45-pro1x-hardware.sh` | inside the rootfs, root | Mesa, firmware, modem services, mce/audio configuration |
+| `scripts/50-build-bootimg.sh` | build host | pack the Android boot image (v0, DTB appended) |
+| `scripts/55-deploy-rootfs.sh` | device, root | first deployment: shrink, stream, grow again (additive) |
+| `scripts/56-update-rootfs.sh` | device, root | updates as rsync delta (`--inplace`) |
+| `scripts/60-flash-slot-b.sh` | device, root | **writes**: boot image into the inactive slot |
+| `scripts/70-switch-slot.sh` | PC | switch slots via fastboot |
+| `scripts/80-switch-and-connect.sh` | PC, detached | waits for fastboot, switches, boots, sets up the USB link, tests SSH |
+| `scripts/lib/reboot-bootloader.py` | both, root | reboot straight into the bootloader |
+| `scripts/lib/bootimg-params.py` | both | read Android boot headers v0-v2 |
 
-### Image-Transfer: wann zstd-Stream, wann rsync
+### Image transfer: when a zstd stream, when rsync
 
-Erstdeployment per rsync ist ein Reinfall: rsync liest die volle apparent size
-von 24 GiB, gemessen 1,5 MB/s -- gut vier Stunden. Stattdessen schrumpft
-`55-deploy-rootfs.sh` das Dateisystem mit `resize2fs -M` auf 3,8 GiB, streamt
-es zstd-komprimiert (gemessen ~7 MB/s Nutzdaten, rund elf Minuten) und zieht es
-auf dem Geraet wieder auf 24 GiB. Danach haben beide Seiten dieselbe Geometrie,
-und fuer jede weitere Aenderung ist rsync das richtige Werkzeug:
-`56-update-rootfs.sh` uebertraegt mit `--inplace --no-whole-file` nur die
-geaenderten Bloecke.
+A first deployment via rsync is a flop: rsync reads the full apparent size of
+24 GiB, measured at 1.5 MB/s -- a good four hours. Instead
+`55-deploy-rootfs.sh` shrinks the filesystem with `resize2fs -M` to 3.8 GiB,
+streams it zstd-compressed (measured ~7 MB/s of payload, about eleven
+minutes) and grows it back to 24 GiB on the device. After that both sides
+have the same geometry, and for every further change rsync is the right tool:
+`56-update-rootfs.sh` transfers only the changed blocks with
+`--inplace --no-whole-file`.
 
-Noch ein busybox-Fallstrick: Sailfish hat kein `truncate`, darum wird die
-Imagegroesse auf dem Geraet per `python3` gesetzt.
+One more busybox pitfall: Sailfish has no `truncate`, so the image size on the
+device is set with `python3`.
 
-### Hinweis zum Build-Host (Arch)
+### Note on the build host (Arch)
 
-Es ist kein aarch64-GCC nötig, der Kernel baut mit `LLVM=1` (clang + lld).
-Fuer das Chroot ins arm64-Rootfs reicht das auf Arch registrierte binfmt
-**nicht**: es zeigt auf das dynamisch gelinkte `qemu-aarch64`, dessen
-Host-Bibliotheken im Chroot fehlen (Kindprozesse scheitern mit "required file
-not found"). `40-make-rootfs.sh` registriert darum fuer die Dauer des Builds
-`qemu-aarch64-static` und stellt den Ausgangszustand danach wieder her.
+No aarch64 GCC is needed, the kernel builds with `LLVM=1` (clang + lld).
+For the chroot into the arm64 rootfs, the binfmt registered on Arch is **not**
+enough: it points at the dynamically linked `qemu-aarch64`, whose host
+libraries are missing inside the chroot (child processes fail with "required
+file not found"). `40-make-rootfs.sh` therefore registers
+`qemu-aarch64-static` for the duration of the build and restores the original
+state afterwards.
 
-## Quellen
+## Sources
 
-* <https://leste.maemo.org/Leste_FAQ> -- Leste nutzt kein Halium
-* <https://maedevu.maemo.org/images/arm64-generic/> -- arm64-generic-Images
-* <https://github.com/sm6115-mainline/linux> -- Kernel, Branch `qx1050-7.1`
-* <https://github.com/sm6115-mainline/firmware-fxtec-qx1050> -- Firmware
-* <https://github.com/nyymi609/fxtec-pro1x-nixos> -- Gerätepatches, Config, UCM, Hardware-Status
+* <https://leste.maemo.org/Leste_FAQ> -- Leste does not use Halium
+* <https://maedevu.maemo.org/images/arm64-generic/> -- arm64-generic images
+* <https://github.com/sm6115-mainline/linux> -- kernel, branch `qx1050-7.1`
+* <https://github.com/sm6115-mainline/firmware-fxtec-qx1050> -- firmware
+* <https://github.com/nyymi609/fxtec-pro1x-nixos> -- device patches, config, UCM, hardware status
 * <https://gitlab.com/postmarketOS/pmaports/-/merge_requests/5350> -- pmOS qx1050
-* <https://gist.github.com/Kabouik/94e9e60d84c0eeae9d48e18c11ed419e> -- Dualboot Pro1
+* <https://gist.github.com/Kabouik/94e9e60d84c0eeae9d48e18c11ed419e> -- dual boot on the Pro1

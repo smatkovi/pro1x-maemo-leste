@@ -1,24 +1,24 @@
 #!/bin/sh
-# Rootfs-Image erstmalig auf das Geraet bringen und dort aufziehen.
-# Laeuft AUF DEM GERAET als root (zieht per ssh vom Build-Host).
+# Brings the rootfs image onto the device for the first time and grows it there.
+# Runs ON THE DEVICE as root (pulls via ssh from the build host).
 #
-# Fuer den ERSTEN Transfer, nicht fuer Updates: das Image ist 24 GiB gross und
-# damit per rsync ueber WLAN unzumutbar (rsync liest die volle apparent size,
-# gemessen 1,5 MB/s -> gut vier Stunden). Darum wird es auf dem Build-Host mit
-# resize2fs -M geschrumpft, komprimiert gestreamt und hier wieder aufgezogen.
-# Fuer spaetere Aenderungen: 56-update-rootfs.sh (rsync-Delta).
+# For the FIRST transfer, not for updates: the image is 24 GiB, which makes
+# rsync over Wi-Fi unbearable (rsync reads the full apparent size, measured at
+# 1.5 MB/s -> a good four hours). So it is shrunk on the build host with
+# resize2fs -M, streamed compressed, and grown back here.
+# For later changes: 56-update-rootfs.sh (rsync delta).
 #
-# Rein additiv: es entsteht nur eine neue Datei auf userdata.
+# Purely additive: the only result is a new file on userdata.
 set -e
-HOST=${HOST:?HOST=user@buildhost setzen}
-SRC=${SRC:?SRC=/pfad/out/maemo-leste.img auf dem Build-Host setzen}
+HOST=${HOST:?set HOST=user@buildhost}
+SRC=${SRC:?set SRC=/path/out/maemo-leste.img on the build host}
 DST=${DST:-/userdata/maemo-leste.img}
 SIZE_GIB=${SIZE_GIB:-24}
 SSH_KEY=${SSH_KEY:-/home/defaultuser/.ssh/id_ed25519}
 SSH_KNOWN=${SSH_KNOWN:-/home/defaultuser/.ssh/known_hosts}
 
-# Der Build-Host schrumpft vor dem Senden auf Mindestgroesse.
-echo ">> schrumpfe Quelle auf $HOST"
+# The build host shrinks the image to its minimum size before sending.
+echo ">> shrinking the source on $HOST"
 ssh -o BatchMode=yes -i "$SSH_KEY" -o UserKnownHostsFile="$SSH_KNOWN" "$HOST" "
   set -e
   e2fsck -fp '$SRC' || true
@@ -28,26 +28,26 @@ ssh -o BatchMode=yes -i "$SSH_KEY" -o UserKnownHostsFile="$SSH_KNOWN" "$HOST" "
   truncate -s \$((blocks * bs)) '$SRC'
   ls -la '$SRC'"
 
-echo ">> uebertrage $HOST:$SRC -> $DST (zstd-komprimiert)"
+echo ">> transferring $HOST:$SRC -> $DST (zstd-compressed)"
 ssh -o BatchMode=yes -i "$SSH_KEY" -o UserKnownHostsFile="$SSH_KNOWN" "$HOST" \
   "zstd -c -T0 -3 '$SRC'" | zstd -dc > "$DST"
 
-# Achtung: busybox auf Sailfish hat kein truncate, darum python3.
-echo ">> auf ${SIZE_GIB} GiB aufziehen"
+# Careful: busybox on Sailfish has no truncate, hence python3.
+echo ">> growing to ${SIZE_GIB} GiB"
 python3 -c "open('$DST','r+b').truncate($SIZE_GIB*1024**3)"
 e2fsck -fp "$DST" || true
 resize2fs "$DST"
 
-# Gleiche Geometrie auf beiden Seiten, damit 56-update-rootfs.sh spaeter
-# wirklich nur Deltas uebertragen kann.
-echo ">> Quelle auf $HOST ebenfalls auf ${SIZE_GIB} GiB bringen"
+# Same geometry on both sides, so that 56-update-rootfs.sh can later really
+# transfer only deltas.
+echo ">> bringing the source on $HOST to ${SIZE_GIB} GiB as well"
 ssh -o BatchMode=yes -i "$SSH_KEY" -o UserKnownHostsFile="$SSH_KNOWN" "$HOST" "
   set -e
   truncate -s ${SIZE_GIB}G '$SRC'
   e2fsck -fp '$SRC' || true
   resize2fs '$SRC' >/dev/null
-  echo quelle-fertig"
+  echo source-done"
 
-echo ">> Ergebnis"
+echo ">> result"
 dumpe2fs -h "$DST" 2>/dev/null | grep -E 'Filesystem volume name|Block count|Free blocks|Filesystem state'
 ls -la "$DST"

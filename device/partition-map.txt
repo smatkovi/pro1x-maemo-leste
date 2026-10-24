@@ -1,6 +1,6 @@
 # F(x)tec Pro1X (halium-qx1050) partition map
-# erzeugt am 2026-10-24T11:16:58Z unter 4.19.157-perf-halium-qx1050
-# Spalten: partlabel  device  sectors  MiB
+# generated at 2026-10-24T11:16:58Z on 4.19.157-perf-halium-qx1050
+# columns: partlabel  device  sectors  MiB
 ALIGN_TO_128K_1        /dev/sdd1           208        0
 ALIGN_TO_128K_2        /dev/sdf1           208        0
 abl_a                  /dev/sde8          2048        1
