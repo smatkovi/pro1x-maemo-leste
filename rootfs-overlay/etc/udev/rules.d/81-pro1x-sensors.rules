@@ -1,0 +1,8 @@
+# Pro1X: the accelerometer, light, proximity and magnetometer sensors sit on
+# the ADSP (Qualcomm SSC) and are reached through /dev/fastrpc-adsp, served by
+# hexagonrpcd. iio-sensor-proxy (>= 3.9, built with libssc) picks the sensor
+# types from this property; upstream only asks for light and compass.
+# Mount matrix verified on a Pro1X by the NixOS port (x and y flipped).
+ACTION=="remove", GOTO="pro1x_sensors_end"
+SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", ENV{IIO_SENSOR_PROXY_TYPE}="ssc-accel ssc-light ssc-proximity ssc-compass", ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, -1, 0; 0, 0, 1"
+LABEL="pro1x_sensors_end"

@@ -1,0 +1,37 @@
+diff --git a/meson.build b/meson.build
+index 24de0ff..2f925fb 100644
+--- a/meson.build
++++ b/meson.build
+@@ -42,7 +42,7 @@ endif
+ if get_option('gtk-tests')
+     gtk_dep = dependency('gtk+-3.0', required: false)
+ endif
+-gio_dep = dependency('gio-2.0', version: '>= 2.76')
++gio_dep = dependency('gio-2.0', version: '>= 2.74')
+ gudev_dep = dependency('gudev-1.0', version: '>= 237')
+ polkit_gobject_dep = dependency('polkit-gobject-1', version: '>= 0.91')
+ polkit_policy_directory = polkit_gobject_dep.get_pkgconfig_variable('policydir')
+diff --git a/src/iio-buffer-utils.c b/src/iio-buffer-utils.c
+index 29163ee..db06955 100644
+--- a/src/iio-buffer-utils.c
++++ b/src/iio-buffer-utils.c
+@@ -10,6 +10,7 @@
+  * the Free Software Foundation.
+  */
+ 
++#include "pro1x-glib-compat.h"
+ #include "iio-buffer-utils.h"
+ #include "utils.h"
+ 
+diff --git a/src/pro1x-glib-compat.h b/src/pro1x-glib-compat.h
+new file mode 100644
+--- /dev/null
++++ b/src/pro1x-glib-compat.h
+@@ -0,0 +1,7 @@
++/* GLib 2.76 added g_autofd; Debian bookworm / Devuan daedalus ship 2.74. */
++#include <glib.h>
++#include <unistd.h>
++#if !GLIB_CHECK_VERSION(2, 76, 0)
++static inline void pro1x_autofd_close (int *fd) { if (*fd >= 0) { close (*fd); *fd = -1; } }
++#define g_autofd __attribute__((cleanup(pro1x_autofd_close)))
++#endif

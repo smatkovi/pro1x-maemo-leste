@@ -1,0 +1,25 @@
+# Pro1X: GPS comes from the modem's QMI LOC service. pro1x-gnss turns the
+# modem's position reports into NMEA and sends them to gpsd over UDP.
+#
+# Leste's location-daemon starts and stops gpsd on demand
+# (sudo /etc/init.d/gpsd start|stop); pro1x-gnss follows gpsd, so the GNSS
+# engine only runs while some application asks for the position.
+
+GPSD_DEVICES="udp://127.0.0.1:29470"
+
+PRO1X_GNSS_PIDFILE=/run/pro1x-gnss.pid
+
+start_post() {
+	ebegin "Starting pro1x-gnss (modem GNSS -> gpsd)"
+	start-stop-daemon --start --background --make-pidfile \
+		--pidfile "$PRO1X_GNSS_PIDFILE" --exec /usr/local/bin/pro1x-gnss -- -p 29470
+	eend $?
+}
+
+stop_pre() {
+	ebegin "Stopping pro1x-gnss"
+	# SIGTERM makes pro1x-gnss stop the LOC session before it exits.
+	start-stop-daemon --stop --quiet --retry=TERM/5/KILL/2 --pidfile "$PRO1X_GNSS_PIDFILE"
+	eend 0
+	rm -f "$PRO1X_GNSS_PIDFILE"
+}

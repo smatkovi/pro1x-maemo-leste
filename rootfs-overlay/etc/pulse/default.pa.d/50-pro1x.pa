@@ -1,0 +1,6 @@
+### Pro1X: every resume of the sound card pops in the loudspeaker (codec and
+### amplifier power-up). Suspend only after 5 minutes of silence instead of 5 s.
+.ifexists module-suspend-on-idle.so
+unload-module module-suspend-on-idle
+load-module module-suspend-on-idle timeout=300
+.endif

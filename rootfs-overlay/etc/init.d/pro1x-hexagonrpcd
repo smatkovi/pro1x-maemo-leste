@@ -1,0 +1,82 @@
+#!/sbin/openrc-run
+# Hexagon RPC daemon: serves the ADSP its sensor configuration over FastRPC.
+#
+# The Pro1X's accelerometer, gyroscope, magnetometer, light and proximity
+# sensors are not on a Linux-visible bus; they belong to the ADSP (Qualcomm
+# SSC), which reads its configuration and registry from Linux through
+# hexagonrpcd. Once that works, QRTR service 400 appears and libssc /
+# iio-sensor-proxy can read the sensors.
+#
+# The sensor files (Android /vendor/etc/sensors and the persist registry of a
+# Pro1X) are installed to /usr/share/pro1x/hexagonfs by 46-sensor-stack.sh.
+
+description="Hexagon RPC daemon (ADSP sensor configuration)"
+command=/usr/local/bin/hexagonrpcd
+command_args="-f /dev/fastrpc-adsp -d adsp -s -R /var/lib/hexagonrpcd"
+supervisor=supervise-daemon
+respawn_delay=10
+respawn_max=3
+respawn_period=300
+output_log=/var/log/hexagonrpcd.log
+error_log=/var/log/hexagonrpcd.log
+
+SRC=/usr/share/pro1x/hexagonfs
+STATE=/var/lib/hexagonrpcd
+
+depend() {
+	after localmount mountall
+	before iio-sensor-proxy mce
+}
+
+start_pre() {
+	[ -d "$SRC/sensors" ] || { eerror "$SRC missing"; return 1; }
+	mkdir -p "$STATE/sensors"
+
+	# config and sns_reg.conf are static: refresh them on every start.
+	rm -rf "$STATE/sensors/config"
+	cp -r "$SRC/sensors/config" "$STATE/sensors/config"
+	cp -f "$SRC/sensors/sns_reg.conf" "$STATE/sensors/sns_reg.conf"
+	rm -rf "$STATE/dsp"
+	[ -d "$SRC/dsp" ] && cp -r "$SRC/dsp" "$STATE/dsp"
+
+	# The ADSP rewrites its registry (parsed config, calibration), so it needs
+	# a writable copy; seed it once and keep it afterwards.
+	reg="$STATE/sensors/persist/registry"
+	if [ ! -d "$reg/registry" ]; then
+		mkdir -p "$reg"
+		cp -r "$SRC/sensors/registry/." "$reg/registry/"
+	fi
+
+	# Platform properties the ADSP asks for; "QRD" selects the bengal_qrd_*
+	# configuration files, which list this phone's sensor chips.
+	rm -rf "$STATE/properties"
+	mkdir -p "$STATE/properties"
+	echo QRD > "$STATE/properties/hw_platform"
+	ln -sfn /sys/devices/soc0 "$STATE/socinfo"
+
+	# A crashing ADSP must not restart in a loop: that can freeze the phone.
+	# With recovery off a crash only costs audio until the next reboot.
+	for rp in /sys/class/remoteproc/*; do
+		[ "$(cat "$rp/name" 2>/dev/null)" = adsp ] && echo disabled > "$rp/recovery"
+	done
+
+	# The ADSP remoteproc registers late in boot; wait for its FastRPC node.
+	i=0
+	while [ "$i" -lt 120 ] && [ ! -e /dev/fastrpc-adsp ]; do
+		i=$((i + 1))
+		sleep 1
+	done
+	[ -e /dev/fastrpc-adsp ] || { eerror "/dev/fastrpc-adsp did not appear"; return 1; }
+}
+
+start_post() {
+	# Let iio-sensor-proxy start into a ready sensor service (QRTR 400).
+	i=0
+	while [ "$i" -lt 60 ]; do
+		qrtr-lookup 2>/dev/null | grep -q '^ *400 ' && return 0
+		i=$((i + 1))
+		sleep 1
+	done
+	ewarn "SSC sensor service (QRTR 400) did not appear"
+	return 0
+}
