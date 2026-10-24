@@ -55,11 +55,13 @@ undo() {
 	while read -r p; do
 		rm -f "$H$p"
 	done < "$STATE/added"
-	if [ -f "$STATE/converted" ]; then
+	# Files changed in place (prelink conversion, later binary patches)
+	for list in converted patched; do
+		[ -f "$STATE/$list" ] || continue
 		while read -r p; do
 			mv -f "$SAVE$p" "$H$p"
-		done < "$STATE/converted"
-	fi
+		done < "$STATE/$list"
+	done
 	while read -r p; do
 		mkdir -p "$(dirname "$H$p")"
 		mv -f "$SAVE$p" "$H$p"

@@ -7,14 +7,18 @@
 #   pro1x-boot timeout <seconds>    boot menu countdown (0 = no menu)
 #   pro1x-boot slot a|b             make the bootloader start slot a or b
 #   pro1x-boot reboot <system>      next <system> + reboot
+#   pro1x-boot current              the system that is running now
 #
-# Systems: leste, meego (images on userdata, started from slot b through
-# the boot menu in the initramfs) and sailfish (slot a, its own kernel).
+# Systems: leste, meego (started from slot b through the boot menu in the
+# initramfs) and sailfish (slot a, its own kernel). MeeGo is Harmattan
+# (/harmattan.img) running on Maemo Leste's hardware layer, so both boot
+# the Leste image; the initramfs records the choice in pro1x-boot/current.
 # Works in the initramfs, in Maemo Leste/MeeGo (userdata on /host) and in
 # Sailfish OS (userdata on /userdata), so the choice never depends on keys:
 # pick the next system from the running one, then reboot.
 #
-# Internal, for the initramfs: entries, take-next, get-default, get-timeout.
+# Internal, for the initramfs: entries, take-next, get-default, get-timeout,
+# set-current.
 set -eu
 
 if [ -n "${PRO1X_BOOT_HOST:-}" ]; then HOST=$PRO1X_BOOT_HOST
@@ -25,17 +29,19 @@ CONF=$HOST/pro1x-boot
 
 die() { echo "pro1x-boot: $*" >&2; exit 1; }
 
-# key|label|image -- the image is empty for sailfish (it is a slot)
+# key|label|image|also-needed -- the image is empty for sailfish (a slot)
 all_entries() {
-	echo "leste|Maemo Leste|/maemo-leste.img"
-	echo "meego|MeeGo|/meego.img"
-	echo "sailfish|Sailfish OS|"
+	echo "leste|Maemo Leste|/maemo-leste.img|"
+	echo "meego|MeeGo Harmattan|/maemo-leste.img|/harmattan.img"
+	echo "sailfish|Sailfish OS||"
 }
 
+# key|label|image of the systems that are installed
 entries() {
-	all_entries | while IFS='|' read -r key label image; do
+	all_entries | while IFS='|' read -r key label image needs; do
 		if [ -n "$image" ]; then
-			[ -f "$HOST$image" ] && echo "$key|$label|$image"
+			[ -f "$HOST$image" ] && { [ -z "$needs" ] || [ -f "$HOST$needs" ]; } &&
+				echo "$key|$label|$image"
 		elif part_of boot_a >/dev/null 2>&1; then
 			echo "$key|$label|$image"
 		fi
@@ -101,6 +107,7 @@ list)
 	entries | while IFS='|' read -r key label image; do
 		echo "  $key  $label${image:+  ($HOST$image)}"
 	done
+	echo "running: $(cat "$CONF/current" 2>/dev/null || echo ?)"
 	echo "default: $(cat "$CONF/default" 2>/dev/null || echo leste)"
 	echo "next:    $(cat "$CONF/next" 2>/dev/null || echo -)"
 	echo "timeout: $(cat "$CONF/timeout" 2>/dev/null || echo 5) s"
@@ -140,9 +147,15 @@ take-next)
 	if [ -f "$CONF/next" ]; then cat "$CONF/next"; rm -f "$CONF/next"; sync; fi
 	;;
 get-default) cat "$CONF/default" 2>/dev/null || echo leste ;;
+current) cat "$CONF/current" 2>/dev/null || echo leste ;;
+set-current)
+	[ $# -eq 2 ] || die "usage: pro1x-boot set-current <system>"
+	mkdir -p "$CONF"
+	echo "$2" > "$CONF/current"
+	;;
 get-timeout) cat "$CONF/timeout" 2>/dev/null || echo 5 ;;
 *)
-	sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
 	exit 1
 	;;
 esac

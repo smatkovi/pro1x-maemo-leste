@@ -1,0 +1,36 @@
+#!/sbin/openrc-run
+# MeeGo Harmattan's user interface on Leste's X server, when the boot menu
+# started "MeeGo Harmattan" (pro1x-boot current = meego). See meego/ in the
+# pro1x-maemo-leste repository.
+
+description="MeeGo Harmattan user interface"
+SESSION=/usr/lib/pro1x-meego/harmattan-session
+
+depend() {
+	need xorg dbus
+	after mce dsme pulseaudio-enable-autospawn
+}
+
+start() {
+	if [ "$(/usr/local/sbin/pro1x-boot current 2>/dev/null)" != meego ]; then
+		einfo "Leste boot, MeeGo not started"
+		return 0
+	fi
+	ebegin "Starting MeeGo Harmattan"
+	# X and the session's cookie come from the autologin startx.
+	i=0
+	while [ $i -lt 60 ] && { [ ! -S /tmp/.X11-unix/X0 ] || [ ! -s /home/user/.Xauthority ]; }; do
+		sleep 1
+		i=$((i + 1))
+	done
+	start-stop-daemon --start --background --make-pidfile --pidfile /run/pro1x-meego.pid \
+		--exec /bin/sh -- -c "$SESSION start > /var/log/pro1x-meego.log 2>&1"
+	eend $?
+}
+
+stop() {
+	ebegin "Stopping MeeGo Harmattan"
+	$SESSION stop > /dev/null 2>&1
+	rm -f /run/pro1x-meego.pid
+	eend 0
+}

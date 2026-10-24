@@ -47,7 +47,8 @@ apt-get install -y -q \
   libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0 mesa-libgallium libdrm2 \
   firmware-qcom-soc firmware-atheros wireless-regdb \
   rmtfs tqftpserv qrtr-tools \
-  iw bluez gdisk mesa-utils
+  iw bluez gdisk mesa-utils \
+  xinput debootstrap debian-archive-keyring
 
 # --- Overlay: init scripts, mce configuration ------------------------------
 log "overlay from $REPO/rootfs-overlay"
@@ -78,5 +79,14 @@ log "boot menu"
 apt-get install -y -q --no-install-recommends gcc libc6-dev
 gcc -O2 -Wall -o /usr/local/sbin/pro1x-bootmenu "$REPO/tools/pro1x-bootmenu/pro1x-bootmenu.c"
 install -m 755 "$REPO/tools/pro1x-boot/pro1x-boot" /usr/local/sbin/
+
+# --- MeeGo Harmattan (meego/) -----------------------------------------------
+# The boot menu entry "MeeGo Harmattan" starts this image without Leste's
+# desktop (Xsession.d/01pro1x-meego); pro1x-meego then runs Harmattan's UI
+# from /host/harmattan.img (built with meego/20..37, see meego/README.md).
+log "MeeGo Harmattan session"
+install -D -m 755 "$REPO/meego/40-harmattan-session.sh" /usr/lib/pro1x-meego/harmattan-session
+mkdir -p /mnt/harmattan
+rc-update add pro1x-meego default
 
 log "done"

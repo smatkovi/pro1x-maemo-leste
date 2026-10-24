@@ -80,6 +80,8 @@ EOF
   elif [ -n "$image" ]; then
     IMAGE=$image
   fi
+  # The running system reads this (MeeGo shares the Leste image).
+  pro1x-boot set-current "$key"
 fi
 
 [ -f "/host$IMAGE" ] || panic "pro1x-loop-root: /host$IMAGE does not exist"

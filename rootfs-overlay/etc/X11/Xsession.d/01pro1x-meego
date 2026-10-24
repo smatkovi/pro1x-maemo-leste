@@ -1,0 +1,12 @@
+# MeeGo Harmattan boot (boot menu entry "MeeGo Harmattan"): no Leste
+# desktop. X stays up for Harmattan's UI, which the pro1x-meego service
+# starts on it; Harmattan's own Xsession is the same endless sleep.
+if [ "$(/usr/local/sbin/pro1x-boot current 2>/dev/null)" = meego ]; then
+	# Harmattan applications play through Leste's PulseAudio.
+	pulseaudio --start --log-target=syslog >/dev/null 2>&1
+	# Leste services that wait for the desktop (hildon-desktop's OpenRC
+	# job, and icd2 behind it) see Harmattan's as the desktop.
+	mkdir -p /tmp/hildon-desktop
+	touch /tmp/hildon-desktop/desktop-started.stamp
+	exec sleep infinity
+fi

@@ -15,9 +15,13 @@ set -eu
 IMG=${IMG:-/host/harmattan.img}
 H=${H:-/mnt/harmattan}
 HUID=1000                       # "user", the same on Leste and Harmattan
-# Harmattan works in 854x480; the 2160x1080 panel shows a 960x480 screen.
+# Harmattan works in 854x480; the 2160x1080 panel shows a 960x480 screen,
+# in landscape like the N950 (keyboard orientation). MeeGo Touch turns its
+# content to portrait itself.
 SCALE=${SCALE:-0.444444}
 OUTPUT=${OUTPUT:-DSI-1}
+ROTATE=${ROTATE:-right}
+TOUCH="Goodix Capacitive TouchScreen"
 LOG=$H/var/log/pro1x-session
 HOST_USER=user
 
@@ -133,7 +137,16 @@ do_start() {
 	for p in hildon-desktop hildon-home hildon-status-menu hildon-input-method; do
 		/usr/sbin/dsmetool -k /usr/bin/$p 2>/dev/null || true
 	done
-	host_x xrandr --output $OUTPUT --scale ${SCALE}x$SCALE --filter bilinear
+	host_x xrandr --output $OUTPUT --rotate $ROTATE --scale ${SCALE}x$SCALE --filter bilinear
+	# X does not turn absolute touch input with the screen (hildon-desktop
+	# does that for Leste).
+	case $ROTATE in
+	right) matrix="0 1 0 -1 0 1 0 0 1" ;;
+	left) matrix="0 -1 1 1 0 0 0 0 1" ;;
+	inverted) matrix="-1 0 1 0 -1 1 0 0 1" ;;
+	*) matrix="1 0 0 0 1 0 0 0 1" ;;
+	esac
+	host_x xinput set-prop "\"pointer:$TOUCH\"" "\"Coordinate Transformation Matrix\"" $matrix || true
 
 	start_root gconfd /usr/lib/gconf2/gconfd-2
 	as_user /usr/bin/dbus-daemon --session --fork --print-address \
