@@ -3,9 +3,14 @@
 Ziel: Sailfish OS bleibt unangetastet auf Slot A, Maemo Leste kommt als
 zweites System auf Slot B.
 
-Stand: **alles gebaut, nichts geflasht.** Kernel, Rootfs-Image und Boot-Image
-sind fertig; der erste Schreibvorgang an einer Boot-Partition steht noch aus
-und haengt an einer offenen Frage ([docs/slot-b-offene-frage.md](docs/slot-b-offene-frage.md)).
+Stand: **alles gebaut und auf dem Geraet, nichts geflasht.** Kernel,
+Rootfs-Image und Boot-Image liegen bereit; es fehlt nur noch der Schreibvorgang
+auf `boot_b` plus Slot-Wechsel.
+
+Die Frage, ob Slot B auf diesem Geraet ueberhaupt bootet, ist geklaert: **ja.**
+Sailfish lief dort schon einmal, nur mit toter Tastatur -- Ursache war das
+falsche DTBO, nicht der Slot. Details und warum das Leste nicht betrifft:
+[docs/slot-b-offene-frage.md](docs/slot-b-offene-frage.md).
 
 ## Ausgangslage
 
@@ -45,9 +50,12 @@ GPT-Slot-Attribute von `boot_b`: Priority 3, Retry 6, `SUCCESSFUL` gesetzt,
 sind unveraendert Werkszustand (signiert, Flags `0x0`); Sailfish bootet
 trotzdem, weil der Bootloader entsperrt ist.
 
-**Aber:** der NixOS-Port notiert "slot b does not boot on this phone". Diese
-Widersprueche und der risikolose Test dazu stehen in
-[docs/slot-b-offene-frage.md](docs/slot-b-offene-frage.md).
+Der NixOS-Port notiert "slot b does not boot on this phone" -- das gilt fuer
+dessen U-Boot-Image. Auf diesem Geraet bootete Sailfish aus Slot B, aber ohne
+funktionierende Tastatur: `dtbo_a` (von Sailfish geflasht, 1 Eintrag) enthaelt
+`aw9523b@5b` samt `idea_keys` und `kbd_backlight`, Eintrag 0 von `dtbo_b`
+(Werkszustand, 37 Eintraege) nicht -- und das Sailfish-Overlay ist unter den 37
+gar nicht vorhanden. Siehe [docs/slot-b-offene-frage.md](docs/slot-b-offene-frage.md).
 
 ### Boot-Image-Parameter
 
@@ -136,14 +144,20 @@ gesucht, nie ueber einen Pfad.
 - [x] Rootfs-Image aufs Geraet uebertragen (`/userdata/maemo-leste.img`, 24 GiB,
       3,5 GB belegt) und Inhalt am Geraet verifiziert
 - [x] Boot-Image aufs Geraet gelegt (`/userdata/boot-leste.img`), noch nicht geflasht
-- [ ] **Slot-B-Test ohne Schreibvorgang** (siehe docs/slot-b-offene-frage.md)
-- [ ] `boot_b` flashen, `dtbo_b` nullen, umschalten
+- [x] Slot-B-Bootfaehigkeit geklaert (bootet; DTBO war die Tastatur-Ursache)
+- [x] geprueft, dass der Leste-DTB die Hardware selbst mitbringt (Keypad samt
+      64-Tasten-Keymap, WLAN, BT, Haptik, MPSS/ADSP, Kameras, Charger)
+- [ ] `boot_b` flashen, `dtbo_b` nullen, per fastboot umschalten
+- [ ] `qbootctl` o.ae. auf beiden Systemen, damit der Slot-Wechsel ohne PC geht
 - [ ] Audio (UCM2-Profile des NixOS-Ports), Sensoren (hexagonfs), Kamera
 - [ ] Telefonie: Leste erwartet ofono, Mainline liefert QMI/qrtr
 
 ## Risiken
 
-* Slot-Wechsel braucht einen PC mit fastboot (kein `bootctl` auf dem Geraet).
+* Slot-Wechsel braucht derzeit einen PC mit fastboot (kein `bootctl` auf dem
+  Geraet) -- mittelfristig loest das ein `qbootctl` auf beiden Systemen.
+* `dtbo_b` kann nur einem System recht sein: genullt fuer Leste, oder eine
+  Kopie von `dtbo_a` fuer Sailfish-auf-B. Nicht beides.
 * `/home` hat nur ~9 GB frei; das Leste-Image gehoert nach `/userdata`.
 * Ein kaputtes `boot_b` kostet einen Bootversuch, kein Brick -- ABL zaehlt die
   Retries herunter und faellt auf Slot A zurueck, `boot_a` ist gesichert.

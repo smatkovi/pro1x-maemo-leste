@@ -1,84 +1,65 @@
-# Offene Frage: bootet Slot B auf dem Pro1X überhaupt?
+# Slot B: bootet, aber das DTBO stimmt dort nicht (geklärt)
 
-Der ganze Dualboot-Plan hängt daran, dass der stock-ABL des Pro1X den
-inaktiven Slot booten kann, wenn man ihn aktiv schaltet. Dazu gibt es
-widersprüchliche Hinweise.
+Die Frage war, ob der stock-ABL des Pro1X den inaktiven Slot bootet. Sie ist
+geklärt: **ja, Slot B bootet.** Der Hinweis im NixOS-Port
+(`lib/artifacts.nix`: "slot b does not boot on this phone") gilt für dessen
+U-Boot-Image, nicht allgemein.
 
-## Hinweis gegen Slot B
+## Was auf Slot B tatsächlich passiert
 
-Im NixOS-Port (`lib/artifacts.nix`) steht im Flash-Skript wörtlich:
+Sailfish wurde auf diesem Gerät schon einmal aus Slot B gestartet. Es bootete,
+aber **die Tastatur war tot**. Die Ursache liegt im DTBO, nicht im Boot-Image:
 
-> First install: U-Boot into boot_a (**slot b does not boot on this phone**),
-> vbmeta, rootfs.
+| | `dtbo_a` (Sailfish-Flash) | `dtbo_b` (Werkszustand) |
+|---|---|---|
+| Einträge | 1 | 37 |
+| Pagesize | 2048 | 4096 |
+| Gesamtgröße | 122.640 B | 3.935.828 B |
+| `aw9523b@5b` (Tastaturmatrix) | **vorhanden** | fehlt in Eintrag 0 |
+| `idea_keys` (alt/shift/ctrl/home/Pfeile) | **vorhanden** | fehlt |
+| `:kbd_backlight` | **vorhanden** | fehlt |
 
-Jemand, der das Gerät nachweislich zum Laufen gebracht hat, hat Slot B also
-als nicht bootfähig erlebt. Warum, steht dort nicht — es kann an ihrem
-U-Boot-Image liegen (U-Boot als Android-„Kernel" mit manipuliertem
-`text_offset`) oder an einer ABL-Eigenheit des Geräts.
+Das von Sailfish geflashte Overlay ist unter den 37 Werks-Einträgen von Slot B
+**nicht enthalten** (kein SHA256-Treffer gegen `dtboA-00`). `boot_a` und
+`boot_b` sind dagegen bit-identisch. Heißt: aus Slot B lief dasselbe
+hybris-boot, bekam aber ein Werks-Overlay ohne den AW9523B-Knoten vom
+Bootloader untergeschoben — und ohne diesen Knoten findet der Halium-Kernel
+die Tastaturmatrix nicht.
 
-## Hinweise für Slot B
+Bestätigend dazu die Kernel-Cmdline von Slot A: `androidboot.dtbo_idx=0`.
+Auf Slot A gibt es nur diesen einen (richtigen) Eintrag, auf Slot B ist Index 0
+ein ganz anderes Overlay.
 
-Alles, was am Gerät messbar ist, spricht nicht gegen Slot B:
+## Konsequenz für Maemo Leste: kein Problem
 
-* Sämtliche `*_b`-Firmwarepartitionen sind befüllt und **bit-identisch** zu
-  Slot A: `xbl_b`, `xbl_config_b`, `rpm_b`, `tz_b`, `hyp_b`, `abl_b`,
-  `modem_b`, `dsp_b`, `keymaster_b`, `devcfg_b`, `qupfw_b`, `imagefv_b`,
-  `uefisecapp_b`, `featenabler_b`, `bluetooth_b`.
-* `boot_b` enthält aktuell dasselbe hybris-boot wie `boot_a` (identischer
-  SHA256) — Slot B ist also mit einem bootfähigen Image bestückt.
-* Die GPT-Slot-Attribute von `boot_b` sind gesund:
-  Priority 3, Retry 6, `SUCCESSFUL` gesetzt, `UNBOOTABLE` **nicht** gesetzt —
-  nur `ACTIVE` steht auf A:
+Der Mainline-Kernel bringt seinen Device Tree **im Boot-Image** mit
+(Header v2, `--dtb`), nicht über ein Overlay. Im gebauten
+`sm6115-fxtec-pro1x.dtb` steckt die Hardware komplett drin, nachgeprüft:
 
-  | Partition | attr (hi16) | ACTIVE | TRIES | SUCCESSFUL | UNBOOTABLE |
-  |---|---|---|---|---|---|
-  | `boot_a` | 0x0077 | ja | 6 | ja | nein |
-  | `boot_b` | 0x0073 | nein | 6 | ja | nein |
+* `fxtec,pro1x-aw9523-keypad` samt vollständiger 64-Tasten-`linux,keymap`,
+  dazu `kbd-backlight` und `kbd-capslock`
+* `qcom,wcn3990-wifi`, `qcom,wcn3950-bt`
+* `awinic,aw86224` (Vibration), `fxtec,pro1x-charger-icl`, `qcom,pm6125`
+* `qcom,sm6115-mpss-pas` und `-adsp-pas` mit den Firmwarepfaden
+  `qcom/sm6115/Fxtec/QX1050/*.mbn`
+* `sony,imx582`, `samsung,s5k4h7`, `dongwoon,dw9800`, `qcom,qcm2290-camss`
+* Goodix-Touch, Hall-Switch, Panel
 
-  (Bitlage nach Qualcomm `gpt-utils`: Priority 48-49, Active 50,
-  Retry 51-53, Successful 54, Unbootable 55.)
-* `vbmeta_a` und `vbmeta_b` sind identisch und unverändert Werkszustand
-  (signiert, Flags `0x0`, also *keine* abgeschaltete Verifikation) — Sailfish
-  bootet trotzdem, weil der Bootloader entsperrt ist (`verifiedbootstate=orange`).
-  Die AVB-Begründung des NixOS-Ports („ABL refuses unsigned images") greift in
-  diesem Zustand also nicht zwingend.
+Deshalb wird `dtbo_b` beim Flashen **genullt** (`ERASE_DTBO=1` in
+`scripts/60-flash-slot-b.sh`): so legt der Bootloader kein fremdes Overlay auf
+unseren DTB. Denselben Weg geht der NixOS-Port ("flashing erases dtbo").
 
-Die Slot-B-Partitionen außer `boot_b` haben allerdings Priority 0 / Retry 0
-(`dtbo_b`, `vbmeta_b`, `modem_b` = `0x0040`/`0x1040`). Genau das räumt
-`fastboot --set-active=b` auf, indem es Priority, Retry und Active für den
-ganzen Slot setzt.
+## Falls Sailfish später auf Slot B soll
 
-## Risikoloser Test, bevor irgendwas geflasht wird
+Dann muss `dtbo_a` nach `dtbo_b` kopiert werden — ohne das richtige Overlay
+bleibt die Tastatur dort tot. Das ist genau das, was in unserem Setup
+umgekehrt nicht passieren darf, also nicht beides gleichzeitig: entweder
+`dtbo_b` genullt für Leste, oder `dtbo_b` = `dtbo_a` für Sailfish.
 
-Weil `boot_b` **schon jetzt** das identische Sailfish-Boot-Image enthält,
-lässt sich die Frage ohne jeden Schreibvorgang klären:
+## Rückweg
 
-1. Gerät per USB an den Build-Host, `reboot bootloader`
-2. `fastboot --set-active=b`
-3. `fastboot reboot`
-
-Ergebnis:
-
-* **Sailfish startet** → Slot-Umschaltung funktioniert, der Dualboot-Plan
-  trägt. Danach Leste-Boot-Image nach `boot_b` und wieder umschalten.
-* **Gerät bootet nicht / fällt auf Slot A zurück** → die NixOS-Notiz gilt auch
-  für uns. Rückweg jederzeit per `fastboot --set-active=a`.
-
-Fehlschlag kostet einen Bootversuch, kein Brick: ABL zählt bei Misserfolg die
-Retries herunter und fällt auf Slot A zurück, Backups von `boot_a`/`dtbo_a`
-liegen auf Gerät und Build-Host.
-
-## Fallback, falls Slot B wirklich nicht bootet
-
-Dann gibt es Dualboot nicht über zwei Slots, sondern nur über **ein**
-Boot-Image, das beim Start auswählt:
-
-* U-Boot (wie im NixOS-Port) nach `boot_a`, mit zwei Einträgen im Boot-Menü:
-  einmal der Mainline-Kernel für Leste, einmal der Halium-4.19-Kernel samt
-  hybris-Initramfs für Sailfish. Beide Kernel liegen dann als Dateien auf
-  `userdata`, nicht in Boot-Partitionen. Das ist der aufwändigere, aber
-  belastbarere Weg — und er liefert ein echtes Bootmenü statt eines
-  Slot-Schalters, der ohne `bootctl` nur am PC umlegbar ist.
-* Nachteil: Sailfish wird dann aus U-Boot statt direkt vom ABL gestartet;
-  dessen hybris-boot-Initramfs erwartet das nicht und muss entsprechend
-  gefüttert werden (Kernel + Ramdisk getrennt, passende Cmdline).
+`boot_a`, `dtbo_a`, `vbmeta_a` und die GPTs aller sechs LUNs liegen gesichert
+in `/userdata/dualboot-backup` und gespiegelt auf dem Build-Host. Umschalten
+in beide Richtungen per `fastboot --set-active=a|b`
+(`scripts/70-switch-slot.sh`). Scheitert ein Bootversuch, zählt ABL die
+Retries herunter und fällt auf Slot A zurück.
