@@ -3,14 +3,20 @@
 Ziel: Sailfish OS bleibt unangetastet auf Slot A, Maemo Leste kommt als
 zweites System auf Slot B.
 
-Stand: **alles gebaut und auf dem Geraet, nichts geflasht.** Kernel,
-Rootfs-Image und Boot-Image liegen bereit; es fehlt nur noch der Schreibvorgang
-auf `boot_b` plus Slot-Wechsel.
+Stand 24.10.2026: **Maemo Leste bootet aus Slot B**, Sailfish bleibt in Slot A.
+Hildon-Desktop laeuft GPU-beschleunigt (Adreno 610, Mesa 25 aus
+daedalus-backports), dazu Tastatur samt Beleuchtung, Touch, Modem, WLAN,
+Bluetooth und Lautsprecher. Der Weg dorthin, alle getesteten Boot-Image-
+Varianten und was noch fehlt: [docs/UEBERGABE-ARCHBANG.md](docs/UEBERGABE-ARCHBANG.md).
 
-Die Frage, ob Slot B auf diesem Geraet ueberhaupt bootet, ist geklaert: **ja.**
-Sailfish lief dort schon einmal, nur mit toter Tastatur -- Ursache war das
-falsche DTBO, nicht der Slot. Details und warum das Leste nicht betrifft:
-[docs/slot-b-offene-frage.md](docs/slot-b-offene-frage.md).
+Der entscheidende Punkt: der stock-ABL nimmt bei leerem `dtbo` nur ein **an
+den Kernel angehaengtes DTB** an (Header v0); die DTB-Sektion von Header v2
+reicht nicht. `scripts/50-build-bootimg.sh` baut das so.
+Die Hardware richtet `scripts/45-pro1x-hardware.sh` im Rootfs ein.
+
+Slot B bootet auf diesem Geraet (mit Sailfishs eigenem `boot_a`/`dtbo_a` dort
+nachgewiesen); die Notiz im NixOS-Port, Slot B boote nicht, gilt hier nicht.
+Hintergrund zur alten Slot-B-Frage: [docs/slot-b-offene-frage.md](docs/slot-b-offene-frage.md).
 
 ## Ausgangslage
 
