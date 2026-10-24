@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run a program of the Harmattan rootfs (meego/40-harmattan-session.sh),
+# for D-Bus activation of Harmattan's system services on Leste's bus.
+H=/mnt/harmattan
+[ -x "$H$1" ] || exit 1
+exec chroot "$H" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "$@"

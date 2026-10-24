@@ -1,0 +1,6 @@
+# Harmattan's system-wide GConf (MeeGo). Its clients ask the bus to start
+# it even while it runs, which needs this file on a current dbus-daemon.
+[D-BUS Service]
+Name=org.gnome.GConf
+Exec=/usr/lib/pro1x-meego/harmattan-exec /usr/lib/gconf2/gconfd-2
+User=root

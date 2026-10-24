@@ -4,27 +4,35 @@
 # Maemo Leste stays the hardware layer: its kernel, Xorg (modesetting +
 # glamor), modem, WLAN and audio services keep running. The Harmattan
 # rootfs runs on top in a chroot and draws on Leste's X server; its
-# compositor (mcompositor) takes the place of hildon-desktop.
+# compositor (mcompositor) takes the place of hildon-desktop. Harmattan's
+# user is Leste's user (uid 1000, 37-harmattan-user.sh) and shares Leste's
+# system bus (mce, dsme and icd2 speak the same Nokia interfaces) and
+# PulseAudio.
 #
 #   bash meego/40-harmattan-session.sh mount|start|stop|umount|shell
 set -eu
 
 IMG=${IMG:-/host/harmattan.img}
 H=${H:-/mnt/harmattan}
-HUID=29999                      # "user" on Harmattan
+HUID=1000                       # "user", the same on Leste and Harmattan
 # Harmattan works in 854x480; the 2160x1080 panel shows a 960x480 screen.
 SCALE=${SCALE:-0.444444}
 OUTPUT=${OUTPUT:-DSI-1}
 LOG=$H/var/log/pro1x-session
 HOST_USER=user
 
-in_h() { chroot "$H" "$@"; }
+# Harmattan's groups (adm, dialout, input, pulse-access) and Leste's
+# device groups, by number.
+GROUPS_H=4,20,30002,670
+GROUPS_L=$(getent group audio video input pulse-access | cut -d: -f3 | paste -sd,)
+
 as_user() {
-	chroot --userspec=$HUID:$HUID --groups=4,20,30002,670 "$H" /usr/bin/env -i \
+	chroot --userspec=$HUID:$HUID --groups=$GROUPS_H,$GROUPS_L "$H" /usr/bin/env -i \
 		HOME=/home/user USER=user LOGNAME=user SHELL=/bin/sh \
 		PATH=/opt/wunderw/bin:/usr/bin:/bin:/usr/sbin:/sbin \
 		LANG=en_US.utf8 TMPDIR=/var/tmp QT_IM_MODULE=MInputContext \
 		DISPLAY=:0 XAUTHORITY=/home/user/.Xauthority \
+		PULSE_SERVER=unix:/run/user/$HUID/pulse/native \
 		DBUS_SESSION_BUS_ADDRESS="$(cat "$H/var/run/pro1x-session-bus" 2>/dev/null)" \
 		"$@"
 }
@@ -35,12 +43,21 @@ do_mount() {
 	for m in dev dev/pts proc sys; do
 		mountpoint -q "$H/$m" || mount --bind "/$m" "$H/$m"
 	done
-	mountpoint -q "$H/dev/shm" || mount -t tmpfs -o mode=1777 shm "$H/dev/shm"
+	# Shared with Leste: POSIX shm (PulseAudio's memory blocks), the
+	# system bus, the user's runtime dir (PulseAudio socket), X.
+	mountpoint -q "$H/dev/shm" || mount --bind /dev/shm "$H/dev/shm"
 	mountpoint -q "$H/var/run" || mount -t tmpfs -o mode=1777 run "$H/var/run"
-	mkdir -p "$H/var/run/dbus" "$H/tmp/.X11-unix"
+	mkdir -p "$H/var/run/dbus" "$H/tmp/.X11-unix" "$H/run/user/$HUID"
+	mountpoint -q "$H/var/run/dbus" || mount --bind /run/dbus "$H/var/run/dbus"
+	if [ -d /run/user/$HUID ]; then
+		mountpoint -q "$H/run/user/$HUID" || mount --bind /run/user/$HUID "$H/run/user/$HUID"
+	fi
 	mountpoint -q "$H/tmp/.X11-unix" || mount --bind /tmp/.X11-unix "$H/tmp/.X11-unix"
 	cp /home/$HOST_USER/.Xauthority "$H/home/user/.Xauthority"
 	chown $HUID:$HUID "$H/home/user/.Xauthority"
+	if [ -f /home/$HOST_USER/.config/pulse/cookie ]; then
+		install -o $HUID -g $HUID -m 600 /home/$HOST_USER/.config/pulse/cookie "$H/home/user/.pulse-cookie"
+	fi
 	cp /etc/resolv.conf "$H/etc/resolv.conf"
 	mkdir -p "$LOG"
 	chown $HUID:$HUID "$LOG"
@@ -48,10 +65,26 @@ do_mount() {
 
 do_umount() {
 	do_stop || true
-	for m in tmp/.X11-unix var/run dev/shm dev/pts dev proc sys; do
+	for m in tmp/.X11-unix run/user/$HUID var/run/dbus var/run dev/shm dev/pts dev proc sys; do
 		mountpoint -q "$H/$m" && umount "$H/$m"
 	done
 	umount "$H"
+}
+
+# Qt's GL shader cache (a QSharedMemory segment) outlives the processes and
+# would hand stale program binaries to the next session: drop it. Its SysV
+# key is ftok() of the qipc file in Harmattan's TMPDIR, proj_id 'Q'.
+clear_qt_ipc() {
+	local f key
+	for f in "$H"/var/tmp/qipc_sharedmemory_qtgles2shadercache* "$H"/var/tmp/qipc_systemsem_qtgles2shadercache*; do
+		[ -e "$f" ] || continue
+		key=$(( (0x51 << 24) | (($(stat -c %d "$f") & 0xff) << 16) | ($(stat -c %i "$f") & 0xffff) ))
+		case "$f" in
+		*sharedmemory*) ipcrm -M $key 2>/dev/null || true ;;
+		*) ipcrm -S $key 2>/dev/null || true ;;
+		esac
+		rm -f "$f"
+	done
 }
 
 # Processes whose root is the Harmattan tree.
@@ -73,12 +106,12 @@ do_stop() {
 		pids=$(h_pids)
 		[ -z "$pids" ] || kill -9 $pids 2>/dev/null || true
 	fi
-	# SysV IPC left behind: Qt's GL shader cache would hand stale program
-	# binaries to the next session.
-	ipcs -m | awk -v u=$HUID '$3 == u { print $2 }' | xargs -r -n1 ipcrm -m
-	ipcs -s | awk -v u=$HUID '$3 == u { print $2 }' | xargs -r -n1 ipcrm -s
+	clear_qt_ipc
 	host_x xrandr --output $OUTPUT --scale 1x1 --filter nearest || true
-	su $HOST_USER -c "/usr/sbin/dsmetool -c 3 -T 180 -m -17 -f /usr/bin/hildon-desktop" || true
+	# Back to Leste's desktop, unless this boot is the MeeGo system.
+	if [ "$(pro1x-boot current 2>/dev/null)" != meego ]; then
+		su $HOST_USER -c "/usr/sbin/dsmetool -c 3 -T 180 -m -17 -f /usr/bin/hildon-desktop" || true
+	fi
 }
 
 start_bg() {
@@ -86,18 +119,23 @@ start_bg() {
 	as_user /bin/sh -c "exec $* > /var/log/pro1x-session/$name.log 2>&1" &
 }
 
+# Harmattan's system services that run as root on the (shared) system bus.
+start_root() {
+	local name=$1; shift
+	chroot "$H" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+		/bin/sh -c "exec $* > /var/log/pro1x-session/$name.log 2>&1" &
+}
+
 do_start() {
 	do_mount
-	ipcs -m | awk -v u=$HUID '$3 == u { print $2 }' | xargs -r -n1 ipcrm -m
-	ipcs -s | awk -v u=$HUID '$3 == u { print $2 }' | xargs -r -n1 ipcrm -s
+	clear_qt_ipc
 	# hildon-desktop and its panels run under dsme's process lifeguard.
 	for p in hildon-desktop hildon-home hildon-status-menu hildon-input-method; do
 		/usr/sbin/dsmetool -k /usr/bin/$p 2>/dev/null || true
 	done
 	host_x xrandr --output $OUTPUT --scale ${SCALE}x$SCALE --filter bilinear
 
-	rm -f "$H/var/run/dbus/pid"
-	in_h /usr/bin/dbus-daemon --system --fork 2>&1 | grep -v 'Unable to translate credential' || true
+	start_root gconfd /usr/lib/gconf2/gconfd-2
 	as_user /usr/bin/dbus-daemon --session --fork --print-address \
 		> "$H/var/run/pro1x-session-bus"
 	ln -sf /var/run/m.mthemedaemon "$H/tmp/m.mthemedaemon"
