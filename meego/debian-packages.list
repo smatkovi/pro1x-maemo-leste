@@ -1,0 +1,14 @@
+# Debian trixie armhf packages grafted into Harmattan (with their
+# runtime dependencies). Read by 20-debian-armhf.sh and 30-graft-debian-runtime.sh.
+
+# glibc 2.41 replaces Harmattan's eglibc 2.10
+libc6 libc-bin libcrypt1 locales
+
+# Mesa: freedreno for the Adreno 610, llvmpipe as fallback, EGL/GLES
+libegl1 libegl-mesa0 libgles2 libgles1 libgl1-mesa-dri mesa-libgallium libgbm1
+mesa-utils-bin
+
+# X extension client libraries: Harmattan's 2011 versions misparse the
+# replies of a current X server (old libXi corrupts the heap on XIQueryDevice)
+libxi6 libxrandr2 libxfixes3 libxdamage1 libxcomposite1 libxrender1
+libxcursor1 libxinerama1 libxtst6 libxv1
