@@ -46,6 +46,23 @@ mkbootimg \
 
 sz=$(stat -c%s "$OUT/boot-leste.img")
 max=$((BOOT_PARTITION_SIZE_MIB * 1024 * 1024))
-echo "boot-leste.img: $sz Byte ($((sz / 1048576)) MiB) von $BOOT_PARTITION_SIZE_MIB MiB Partitionsgroesse"
-[ "$sz" -le "$max" ] || { echo "FEHLER: Image passt nicht in boot_b"; exit 1; }
-python3 "$REPO/scripts/lib/bootimg-params.py" "$OUT/boot-leste.img"
+echo "Payload: $sz Byte ($((sz / 1048576)) MiB) von $BOOT_PARTITION_SIZE_MIB MiB Partitionsgroesse"
+# Platz fuer vbmeta (512 B) + Footer (64 B) muss uebrig bleiben
+[ "$sz" -le "$((max - 65536))" ] || { echo "FEHLER: Image passt nicht in boot_b"; exit 1; }
+
+# AVB-Hash-Footer anhaengen. Ohne ihn weist der stock-ABL des Pro1X das Image
+# ab: Slot B verbrannte alle sechs Retries und wurde unbootable markiert.
+# Das funktionierende Sailfish-boot_a traegt genau diese Struktur -- avbtool
+# 1.1.0, algorithm NONE (unsigniert), sha256-Hash-Deskriptor fuer Partition
+# "boot", vbmeta direkt hinter dem Payload, Footer bei Partitionsgroesse-64.
+avbtool add_hash_footer \
+  --image "$OUT/boot-leste.img" \
+  --partition_name boot \
+  --partition_size "$max" \
+  --algorithm NONE
+
+echo "--- avbtool info_image ---"
+avbtool info_image --image "$OUT/boot-leste.img" 2>&1 | head -18
+final=$(stat -c%s "$OUT/boot-leste.img")
+echo "boot-leste.img mit Footer: $final Byte (Partition: $max)"
+[ "$final" = "$max" ] || { echo "FEHLER: unerwartete Endgroesse"; exit 1; }
