@@ -56,7 +56,8 @@ in_target() {
 cleanup() {
   set +e
   binfmt_restore
-  for m in "$DST_MNT/dev/pts" "$DST_MNT/dev" "$DST_MNT/proc" "$DST_MNT/sys" "$DST_MNT" "$SRC_MNT"; do
+  for m in "$DST_MNT/mnt/pro1x-repo" "$DST_MNT/mnt/nixos-pro1x" \
+           "$DST_MNT/dev/pts" "$DST_MNT/dev" "$DST_MNT/proc" "$DST_MNT/sys" "$DST_MNT" "$SRC_MNT"; do
     mountpoint -q "$m" && sudo -n umount -l "$m"
   done
 }
@@ -117,11 +118,40 @@ grep -q ttyMSM0 "$DST_MNT/etc/inittab" || \
   echo 'T0:23:respawn:/sbin/agetty -L 115200 ttyMSM0 vt100' | \
   sudo -n tee -a "$DST_MNT/etc/inittab" >/dev/null
 
-echo ">> building initramfs (chroot via qemu-aarch64/binfmt)"
 sudo -n mount -t proc proc "$DST_MNT/proc"
 sudo -n mount -t sysfs sys "$DST_MNT/sys"
 sudo -n mount --bind /dev "$DST_MNT/dev"
 sudo -n mount --bind /dev/pts "$DST_MNT/dev/pts"
+
+# Hardware support (45..49): apt, source builds, overlay. Under qemu this
+# takes a long time; WITH_HARDWARE=0 builds the bare rootfs and the same
+# scripts can run on the phone later.
+if [ "${WITH_HARDWARE:-1}" = 1 ]; then
+  echo ">> hardware support (scripts 45-49 in the chroot)"
+  NIXOS=$WORK/build/nixos-pro1x
+  [ -d "$NIXOS" ] || git clone -q --depth 1 \
+    https://github.com/nyymi609/fxtec-pro1x-nixos.git "$NIXOS"
+  sudo -n mkdir -p "$DST_MNT/mnt/pro1x-repo" "$DST_MNT/mnt/nixos-pro1x"
+  sudo -n mount --bind "$REPO" "$DST_MNT/mnt/pro1x-repo"
+  sudo -n mount --bind "$NIXOS" "$DST_MNT/mnt/nixos-pro1x"
+  sudo -n cp -L /etc/resolv.conf "$DST_MNT/etc/resolv.conf"
+  for s in 45-pro1x-hardware 46-sensor-stack 47-libcal 48-camera-stack 49-apps; do
+    in_target "REPO=/mnt/pro1x-repo NIXOS=/mnt/nixos-pro1x SRC=/root/src bash /mnt/pro1x-repo/scripts/$s.sh"
+  done
+  sudo -n umount "$DST_MNT/mnt/pro1x-repo" "$DST_MNT/mnt/nixos-pro1x"
+fi
+
+echo ">> building initramfs (chroot via qemu-aarch64/binfmt)"
+# Everything needed to reach the root filesystem (UFS, ext4, loop, USB
+# gadget) is built into the kernel, so no modules go into the initramfs.
+# With all of them it was 11 MiB; the ABL then still booted, but a small
+# initramfs keeps kernel + ramdisk well inside what the stock image uses.
+sudo -n mkdir -p "$DST_MNT/etc/initramfs-tools/conf.d"
+sudo -n tee "$DST_MNT/etc/initramfs-tools/conf.d/pro1x" >/dev/null <<'EOF'
+# Pro1X: everything to reach the root filesystem is built into the kernel.
+MODULES=list
+COMPRESS=xz
+EOF
 in_target "depmod $KVER && update-initramfs -c -k $KVER"
 
 sudo -n cp "$DST_MNT/boot/initrd.img-$KVER" "$WORK/out/initrd.img-$KVER"
