@@ -46,6 +46,42 @@ done
 mkdir -p /host
 mount -t ext4 -o rw,noatime "$dev" /host \
   || panic "pro1x-loop-root: could not mount $dev on /host"
+
+# Boot menu: pick the system image (or switch to Sailfish in slot a).
+# A one-shot "next" choice (pro1x-boot next ...) is preselected, else the
+# default; after the countdown the preselected entry starts by itself.
+if [ -x /sbin/pro1x-bootmenu ] && [ -x /sbin/pro1x-boot ]; then
+  export PRO1X_BOOT_HOST=/host
+  entries=$(pro1x-boot entries)
+  want=$(pro1x-boot take-next)
+  [ -n "$want" ] || want=$(pro1x-boot get-default)
+  timeout=$(pro1x-boot get-timeout)
+  count=0
+  default=0
+  set --
+  while IFS='|' read -r key label image; do
+    [ "$key" = "$want" ] && default=$count
+    set -- "$@" "$label"
+    count=$((count + 1))
+  done <<EOF
+$entries
+EOF
+  choice=$default
+  if [ "$count" -gt 1 ] && [ "$timeout" -gt 0 ]; then
+    choice=$(pro1x-bootmenu -t "$timeout" -d "$default" "$@") || choice=$default
+  fi
+  line=$(echo "$entries" | sed -n "$((choice + 1))p")
+  key=${line%%|*}
+  image=${line##*|}
+  if [ "$key" = sailfish ]; then
+    log_begin_msg "Switching to Sailfish OS (slot a)"
+    pro1x-boot slot a && sync && umount /host && reboot -f
+    log_failure_msg "slot switch failed, booting $IMAGE"
+  elif [ -n "$image" ]; then
+    IMAGE=$image
+  fi
+fi
+
 [ -f "/host$IMAGE" ] || panic "pro1x-loop-root: /host$IMAGE does not exist"
 
 # Loop device deterministically on loop0, so that root=/dev/loop0 matches.

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copy losetup into the initramfs (initramfs-tools only brings blkid).
+# Tools for the loop root and the boot menu in the initramfs.
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
 case "$1" in
@@ -7,5 +7,16 @@ case "$1" in
 esac
 
 . /usr/share/initramfs-tools/hook-functions
+# losetup (initramfs-tools only brings blkid)
 copy_exec /sbin/losetup /sbin
 [ -x /bin/mountpoint ] && copy_exec /bin/mountpoint /bin
+
+# Boot menu: the menu itself, pro1x-boot (choices, slot switch for
+# Sailfish) and sgdisk, which pro1x-boot uses for the slot attributes.
+if [ -x /usr/local/sbin/pro1x-bootmenu ]; then
+  copy_exec /usr/local/sbin/pro1x-bootmenu /sbin
+  copy_file script /usr/local/sbin/pro1x-boot /sbin/pro1x-boot
+  copy_exec /sbin/sgdisk /sbin
+  # Touchscreen for choosing by tap; everything else is built in.
+  manual_add_modules goodix_ts
+fi

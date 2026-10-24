@@ -1,0 +1,148 @@
+#!/bin/sh
+# pro1x-boot -- choose what the F(x)tec Pro1X boots.
+#
+#   pro1x-boot list                 systems, default, next, active slot
+#   pro1x-boot next <system>        boot <system> once, on the next start
+#   pro1x-boot default <system>     preselect <system> in the boot menu
+#   pro1x-boot timeout <seconds>    boot menu countdown (0 = no menu)
+#   pro1x-boot slot a|b             make the bootloader start slot a or b
+#   pro1x-boot reboot <system>      next <system> + reboot
+#
+# Systems: leste, meego (images on userdata, started from slot b through
+# the boot menu in the initramfs) and sailfish (slot a, its own kernel).
+# Works in the initramfs, in Maemo Leste/MeeGo (userdata on /host) and in
+# Sailfish OS (userdata on /userdata), so the choice never depends on keys:
+# pick the next system from the running one, then reboot.
+#
+# Internal, for the initramfs: entries, take-next, get-default, get-timeout.
+set -eu
+
+if [ -n "${PRO1X_BOOT_HOST:-}" ]; then HOST=$PRO1X_BOOT_HOST
+elif [ -d /host/pro1x-boot ] || grep -q ' /host ' /proc/mounts 2>/dev/null; then HOST=/host
+else HOST=/userdata
+fi
+CONF=$HOST/pro1x-boot
+
+die() { echo "pro1x-boot: $*" >&2; exit 1; }
+
+# key|label|image -- the image is empty for sailfish (it is a slot)
+all_entries() {
+	echo "leste|Maemo Leste|/maemo-leste.img"
+	echo "meego|MeeGo|/meego.img"
+	echo "sailfish|Sailfish OS|"
+}
+
+entries() {
+	all_entries | while IFS='|' read -r key label image; do
+		if [ -n "$image" ]; then
+			[ -f "$HOST$image" ] && echo "$key|$label|$image"
+		elif part_of boot_a >/dev/null 2>&1; then
+			echo "$key|$label|$image"
+		fi
+	done
+}
+
+valid_key() {
+	all_entries | cut -d'|' -f1 | grep -qx "$1" || die "unknown system '$1' (leste, meego, sailfish)"
+}
+
+# "disk partition-number" for a partition label
+part_of() {
+	dev=$(readlink -f "/dev/disk/by-partlabel/$1" 2>/dev/null || true)
+	[ -b "$dev" ] || dev=$(blkid -t "PARTLABEL=$1" -o device 2>/dev/null | head -1)
+	[ -b "$dev" ] || return 1
+	name=${dev##*/}
+	disk=$(basename "$(readlink -f "/sys/class/block/$name/..")")
+	echo "/dev/$disk $(cat "/sys/class/block/$name/partition")"
+}
+
+attrs() { sgdisk -i "$2" "$1" | sed -n 's/^Attribute flags: //p'; }
+
+active_slot() {
+	p=$(part_of boot_a) || return 1
+	set -- $p
+	a=$(attrs "$1" "$2")
+	# bit 50 of the GPT attributes = slot active (Qualcomm layout)
+	case $(( (0x${a%????????????} >> 2) & 1 )) in 1) echo a ;; *) echo b ;; esac
+}
+
+# Qualcomm A/B attribute bits: 48-49 priority, 50 active, 51-53 retry
+# count, 54 successful, 55 unbootable. Like `fastboot set_active` the target
+# gets priority 3, active, 7 retries; unlike it, "successful" is kept set,
+# because Sailfish never marks its boot successful and would otherwise lose
+# its slot after seven starts.
+set_slot() {
+	target=$1
+	case $target in a) other=b ;; b) other=a ;; *) die "slot must be a or b" ;; esac
+	command -v sgdisk >/dev/null || die "sgdisk missing"
+	p=$(part_of "boot_$target") || die "boot_$target not found"
+	set -- $p
+	tdisk=$1 tnum=$2
+	p=$(part_of "boot_$other") || die "boot_$other not found"
+	set -- $p
+	odisk=$1 onum=$2
+	[ "$tdisk" = "$odisk" ] || die "boot_a and boot_b on different disks"
+	sgdisk -v "$tdisk" | grep -q 'No problems found' || die "GPT of $tdisk not clean, not touching it"
+	mkdir -p "$CONF"
+	sgdisk -b "$CONF/gpt-${tdisk##*/}.bak" "$tdisk" >/dev/null
+	sgdisk -A "$tnum:set:48" -A "$tnum:set:49" -A "$tnum:set:50" \
+	       -A "$tnum:set:51" -A "$tnum:set:52" -A "$tnum:set:53" \
+	       -A "$tnum:set:54" -A "$tnum:clear:55" \
+	       -A "$onum:clear:48" -A "$onum:set:49" -A "$onum:clear:50" \
+	       "$tdisk" >/dev/null
+	sync
+	[ "$(active_slot)" = "$target" ] || die "slot $target did not become active"
+	echo "slot $target active (boot_$target $(attrs "$tdisk" "$tnum"), boot_$other $(attrs "$odisk" "$onum"))"
+}
+
+case "${1:-list}" in
+list)
+	echo "systems:"
+	entries | while IFS='|' read -r key label image; do
+		echo "  $key  $label${image:+  ($HOST$image)}"
+	done
+	echo "default: $(cat "$CONF/default" 2>/dev/null || echo leste)"
+	echo "next:    $(cat "$CONF/next" 2>/dev/null || echo -)"
+	echo "timeout: $(cat "$CONF/timeout" 2>/dev/null || echo 5) s"
+	echo "active slot: $(active_slot 2>/dev/null || echo ?)"
+	;;
+next|default)
+	[ $# -eq 2 ] || die "usage: pro1x-boot $1 <system>"
+	valid_key "$2"
+	mkdir -p "$CONF"
+	echo "$2" > "$CONF/$1"
+	# Starting a slot-b system from Sailfish also needs slot b active.
+	if [ "$1" = next ] && [ "$2" != sailfish ] && [ "$(active_slot)" = a ]; then
+		set_slot b
+	elif [ "$1" = next ] && [ "$2" = sailfish ]; then
+		set_slot a
+	fi
+	sync
+	;;
+timeout)
+	[ $# -eq 2 ] && [ "$2" -ge 0 ] 2>/dev/null || die "usage: pro1x-boot timeout <seconds>"
+	mkdir -p "$CONF"
+	echo "$2" > "$CONF/timeout"
+	sync
+	;;
+slot)
+	[ $# -eq 2 ] || die "usage: pro1x-boot slot a|b"
+	set_slot "$2"
+	;;
+reboot)
+	[ $# -eq 2 ] || die "usage: pro1x-boot reboot <system>"
+	"$0" next "$2"
+	reboot
+	;;
+entries) entries ;;
+take-next)
+	# Print the one-shot choice and forget it.
+	if [ -f "$CONF/next" ]; then cat "$CONF/next"; rm -f "$CONF/next"; sync; fi
+	;;
+get-default) cat "$CONF/default" 2>/dev/null || echo leste ;;
+get-timeout) cat "$CONF/timeout" 2>/dev/null || echo 5 ;;
+*)
+	sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+	exit 1
+	;;
+esac

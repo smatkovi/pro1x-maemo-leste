@@ -71,4 +71,12 @@ ln -sfn ../Pro1X/Pro1X.conf "$U/sm4250/sm4250.conf"
 install -m 755 "$NIXOS/device/audio/pro1x-audio-init" /usr/bin/
 install -m 755 "$NIXOS/device/audio/pro1x-voice-call" /usr/bin/
 
+# --- Boot menu (initramfs) and pro1x-boot ----------------------------------
+# The initramfs hook copies both into the initramfs; pro1x-boot also serves
+# the running system (next/default system, slot switch to Sailfish).
+log "boot menu"
+apt-get install -y -q --no-install-recommends gcc libc6-dev
+gcc -O2 -Wall -o /usr/local/sbin/pro1x-bootmenu "$REPO/tools/pro1x-bootmenu/pro1x-bootmenu.c"
+install -m 755 "$REPO/tools/pro1x-boot/pro1x-boot" /usr/local/sbin/
+
 log "done"
