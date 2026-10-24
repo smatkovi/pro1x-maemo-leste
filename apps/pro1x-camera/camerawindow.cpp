@@ -33,9 +33,108 @@
 #include <gst/video/video.h>
 #include <gst/video/videooverlay.h>
 
+#include <fcntl.h>
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
 static const int PreviewWidth = 1280;
 static const int PreviewHeight = 960;   /* both sensors are 4:3 */
 static const int SettleFrames = 8;      /* frames for AE/AWB before the still */
+static const int AfWidth = 320;         /* grey frames the autofocus measures */
+static const int AfHeight = 240;
+
+/*
+ * Rear lens (dw9800 voice coil): a V4L2 sub-device with FOCUS_ABSOLUTE,
+ * 0..1023, about 100 = 1 m, higher = closer. It keeps its position only while
+ * the sub-device is open.
+ */
+static int openLens()
+{
+    for (int i = 0; i < 64; i++) {
+        const QByteArray path = QByteArray("/dev/v4l-subdev") + QByteArray::number(i);
+        const int fd = ::open(path.constData(), O_RDWR | O_CLOEXEC);
+        if (fd < 0)
+            continue;
+        struct v4l2_queryctrl q = {};
+        q.id = V4L2_CID_FOCUS_ABSOLUTE;
+        if (ioctl(fd, VIDIOC_QUERYCTRL, &q) == 0 && !(q.flags & V4L2_CTRL_FLAG_DISABLED))
+            return fd;
+        ::close(fd);
+    }
+    return -1;
+}
+
+static void setLens(int fd, int position)
+{
+    struct v4l2_control c = {};
+    c.id = V4L2_CID_FOCUS_ABSOLUTE;
+    c.value = qBound(0, position, 1023);
+    ioctl(fd, VIDIOC_S_CTRL, &c);
+}
+
+/* Contrast in the middle of a grey frame: sum of neighbour differences. */
+static qint64 sharpness(GstSample *sample)
+{
+    GstVideoInfo info;
+    GstMapInfo map;
+    qint64 sum = 0;
+
+    if (!gst_video_info_from_caps(&info, gst_sample_get_caps(sample)) ||
+        !gst_buffer_map(gst_sample_get_buffer(sample), &map, GST_MAP_READ))
+        return 0;
+    const int w = GST_VIDEO_INFO_WIDTH(&info), h = GST_VIDEO_INFO_HEIGHT(&info);
+    const int stride = GST_VIDEO_INFO_PLANE_STRIDE(&info, 0);
+    for (int y = h / 4; y < 3 * h / 4; y++) {
+        const guint8 *row = map.data + y * stride;
+        const guint8 *below = row + stride;
+        for (int x = w / 4; x < 3 * w / 4; x++)
+            sum += qAbs(row[x + 1] - row[x]) + qAbs(below[x] - row[x]);
+    }
+    gst_buffer_unmap(gst_sample_get_buffer(sample), &map);
+    return sum;
+}
+
+/* Measure one lens position: move, drop the frame already in flight, measure. */
+static qint64 measureAt(int fd, GstAppSink *sink, int position)
+{
+    setLens(fd, position);
+    for (int i = 0; i < 2; i++) {
+        GstSample *s = gst_app_sink_try_pull_sample(sink, GST_SECOND);
+        if (!s)
+            return -1;
+        if (i == 0) {
+            gst_sample_unref(s);
+            continue;
+        }
+        const qint64 v = sharpness(s);
+        gst_sample_unref(s);
+        return v;
+    }
+    return -1;
+}
+
+/* Coarse sweep over the whole range, then a fine one around the best. */
+static int findFocus(int fd, GstAppSink *sink)
+{
+    int best = 100;
+    qint64 bestValue = -1;
+    auto probe = [&](int position) {
+        const qint64 v = measureAt(fd, sink, position);
+        if (v > bestValue) {
+            bestValue = v;
+            best = position;
+        }
+    };
+    for (int p = 0; p <= 1000; p += 100)
+        probe(p);
+    const int centre = best;
+    for (int p = centre - 80; p <= centre + 80; p += 20)
+        if (p != centre && p >= 0 && p <= 1023)
+            probe(p);
+    setLens(fd, best);
+    return best;
+}
 
 /* Fremantle icons ship as PNGs in hicolor/<size>/hildon. */
 static QIcon hildonIcon(const QString &name)
@@ -122,9 +221,10 @@ CameraWindow::CameraWindow(QWidget *parent)
      * leaves 180 and 0. PRO1X_CAMERA_ROTATION_BACK/FRONT override that.
      */
     m_cameras << CameraInfo{ "/base/soc@0/cci@5c1b000/i2c-bus@0/camera@10", tr("Back camera"),
-                             3992, 3000, envInt("PRO1X_CAMERA_ROTATION_BACK", 180), false }
+                             3992, 3000, envInt("PRO1X_CAMERA_ROTATION_BACK", 180), false, true }
               << CameraInfo{ "/base/soc@0/cci@5c1b000/i2c-bus@1/camera@2d", tr("Front camera"),
-                             3256, 2448, envInt("PRO1X_CAMERA_ROTATION_FRONT", 0), true };
+                             3256, 2448, envInt("PRO1X_CAMERA_ROTATION_FRONT", 0), true, false };
+    m_lensFd = openLens();
 
     QPalette pal = palette();
     pal.setColor(QPalette::Window, Qt::black);
@@ -132,7 +232,8 @@ CameraWindow::CameraWindow(QWidget *parent)
     setAutoFillBackground(true);
 
     m_viewfinder = new Viewfinder(this);
-    connect(m_viewfinder, &Viewfinder::tapped, this, &CameraWindow::capture);
+    /* As on Fremantle: tapping focuses, the shutter takes the picture. */
+    connect(m_viewfinder, &Viewfinder::tapped, this, &CameraWindow::autofocus);
 
     auto makeButton = [this](const QString &icon, const QString &tip) {
         auto *b = new QToolButton(this);
@@ -175,6 +276,19 @@ CameraWindow::CameraWindow(QWidget *parent)
 CameraWindow::~CameraWindow()
 {
     stopViewfinder();
+    if (m_lensFd >= 0)
+        ::close(m_lensFd);
+}
+
+bool CameraWindow::lensAvailable() const
+{
+    return m_lensFd >= 0 && m_cameras.at(m_current).hasLens;
+}
+
+void CameraWindow::setBusy(bool busy)
+{
+    m_shutter->setEnabled(!busy);
+    m_switch->setEnabled(!busy);
 }
 
 QString CameraWindow::sinkName() const
@@ -222,11 +336,16 @@ void CameraWindow::startViewfinder()
     if (m_pipeline || m_capturing)
         return;
     const CameraInfo &cam = m_cameras.at(m_current);
+    /* Second branch: small grey frames for the autofocus, never blocking. */
     const QString desc = QStringLiteral(
-        "libcamerasrc camera-name=\"%1\" ! video/x-raw,width=%2,height=%3 ! "
-        "videoconvert ! videoflip method=%4 ! videoconvert ! %5 force-aspect-ratio=true")
+        "libcamerasrc camera-name=\"%1\" ! video/x-raw,width=%2,height=%3 ! tee name=t "
+        "t. ! queue ! videoconvert ! videoflip method=%4 ! videoconvert ! %5 force-aspect-ratio=true "
+        "t. ! queue leaky=downstream max-size-buffers=1 ! videoconvert ! videoscale ! "
+        "video/x-raw,format=GRAY8,width=%6,height=%7 ! "
+        "appsink name=af sync=false max-buffers=1 drop=true")
         .arg(cam.name).arg(PreviewWidth).arg(PreviewHeight)
-        .arg(flipMethod(cam.rotation, cam.mirrorPreview)).arg(sinkName());
+        .arg(flipMethod(cam.rotation, cam.mirrorPreview)).arg(sinkName())
+        .arg(AfWidth).arg(AfHeight);
 
     GError *err = nullptr;
     m_pipeline = gst_parse_launch(desc.toUtf8().constData(), &err);
@@ -251,8 +370,12 @@ void CameraWindow::stopViewfinder()
     m_pipeline = nullptr;
 }
 
-/* Runs in a worker thread: one full-resolution frame into *image. */
-static QString grabStill(const CameraInfo &cam, QImage *image)
+/*
+ * Runs in a worker thread: one full-resolution frame into *image. lensFd >= 0
+ * puts the lens back to `focus` once the sensor is running again (restarting
+ * the camera drops the lens to its default).
+ */
+static QString grabStill(const CameraInfo &cam, int lensFd, int focus, QImage *image)
 {
     const QString desc = QStringLiteral(
         "libcamerasrc camera-name=\"%1\" ! video/x-raw,width=%2,height=%3 ! "
@@ -279,6 +402,8 @@ static QString grabStill(const CameraInfo &cam, QImage *image)
         if (last)
             gst_sample_unref(last);
         last = s;
+        if (i == 0 && lensFd >= 0)
+            setLens(lensFd, focus);
     }
 
     QString error;
@@ -303,20 +428,50 @@ static QString grabStill(const CameraInfo &cam, QImage *image)
     return error;
 }
 
+void CameraWindow::autofocus()
+{
+    if (m_capturing || m_focusing || !m_pipeline || !lensAvailable())
+        return;
+    GstElement *sink = gst_bin_get_by_name(GST_BIN(m_pipeline), "af");
+    if (!sink)
+        return;
+    m_focusing = true;
+    setBusy(true);
+    QMaemo5InformationBox::information(this, tr("Focusing..."), 1500);
+
+    const int fd = m_lensFd;
+    QThread *worker = QThread::create([this, sink, fd]() {
+        const int position = findFocus(fd, GST_APP_SINK(sink));
+        gst_object_unref(sink);
+        QMetaObject::invokeMethod(this, "autofocusFinished", Qt::QueuedConnection,
+                                  Q_ARG(int, position));
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
+void CameraWindow::autofocusFinished(int position)
+{
+    m_focusing = false;
+    m_focus = position;
+    setBusy(false);
+}
+
 void CameraWindow::capture()
 {
-    if (m_capturing)
+    if (m_capturing || m_focusing)
         return;
     m_capturing = true;
-    m_shutter->setEnabled(false);
-    m_switch->setEnabled(false);
+    setBusy(true);
     stopViewfinder();
     QMaemo5InformationBox::information(this, tr("Taking picture..."), 2000);
 
     const CameraInfo cam = m_cameras.at(m_current);
-    QThread *worker = QThread::create([this, cam]() {
+    const int fd = lensAvailable() ? m_lensFd : -1;
+    const int focus = m_focus;
+    QThread *worker = QThread::create([this, cam, fd, focus]() {
         QImage image;
-        QString error = grabStill(cam, &image);
+        QString error = grabStill(cam, fd, focus, &image);
         QString path;
         if (error.isEmpty()) {
             QDir dir(QDir::homePath() + "/MyDocs/DCIM");
@@ -336,8 +491,7 @@ void CameraWindow::capture()
 void CameraWindow::captureFinished(const QString &path, const QString &error)
 {
     m_capturing = false;
-    m_shutter->setEnabled(true);
-    m_switch->setEnabled(true);
+    setBusy(false);
     if (error.isEmpty()) {
         m_lastPicture = path;
         updateGalleryButton();
@@ -345,8 +499,11 @@ void CameraWindow::captureFinished(const QString &path, const QString &error)
     } else {
         QMaemo5InformationBox::information(this, error);
     }
-    if (isVisible())
+    if (isVisible()) {
         startViewfinder();
+        if (lensAvailable())
+            setLens(m_lensFd, m_focus);
+    }
 }
 
 void CameraWindow::updateGalleryButton()
@@ -360,7 +517,7 @@ void CameraWindow::updateGalleryButton()
 
 void CameraWindow::switchCamera()
 {
-    if (m_capturing)
+    if (m_capturing || m_focusing)
         return;
     stopViewfinder();
     m_current = (m_current + 1) % m_cameras.size();
@@ -368,6 +525,7 @@ void CameraWindow::switchCamera()
                                                 : "camera_scene_mode_landscape"));
     QMaemo5InformationBox::information(this, m_cameras.at(m_current).label, 1500);
     startViewfinder();
+    QTimer::singleShot(1500, this, &CameraWindow::autofocus);
 }
 
 void CameraWindow::openLastPicture()
@@ -379,6 +537,10 @@ void CameraWindow::openLastPicture()
 void CameraWindow::keyPressEvent(QKeyEvent *event)
 {
     switch (event->key()) {
+    case Qt::Key_CameraFocus:   /* half press of the camera key */
+    case Qt::Key_F:
+        autofocus();
+        break;
     case Qt::Key_Camera:
     case Qt::Key_Space:
     case Qt::Key_Return:
@@ -399,6 +561,7 @@ void CameraWindow::showEvent(QShowEvent *event)
     QWidget::showEvent(event);
     /* The native viewfinder window has to exist before the sink asks for it. */
     QTimer::singleShot(0, this, &CameraWindow::startViewfinder);
+    QTimer::singleShot(1500, this, &CameraWindow::autofocus);
 }
 
 void CameraWindow::closeEvent(QCloseEvent *event)

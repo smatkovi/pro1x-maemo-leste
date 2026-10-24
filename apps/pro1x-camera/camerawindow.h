@@ -25,6 +25,7 @@ struct CameraInfo {
     int stillHeight;
     int rotation;      /* clockwise degrees the image needs in the landscape UI */
     bool mirrorPreview;
+    bool hasLens;      /* voice coil motor for focus (rear only) */
 };
 
 /* Native window the video sink draws into. */
@@ -65,9 +66,11 @@ protected:
 
 private slots:
     void capture();
+    void autofocus();
     void switchCamera();
     void openLastPicture();
     void captureFinished(const QString &path, const QString &error);
+    void autofocusFinished(int position);
 
 private:
     void startViewfinder();
@@ -75,6 +78,8 @@ private:
     static int busSyncHandler(GstBus *bus, GstMessage *message, void *self);
     QString sinkName() const;
     void updateGalleryButton();
+    void setBusy(bool busy);
+    bool lensAvailable() const;
 
     QList<CameraInfo> m_cameras;
     int m_current = 0;
@@ -85,6 +90,9 @@ private:
     QToolButton *m_gallery;
     GstElement *m_pipeline = nullptr;
     bool m_capturing = false;
+    bool m_focusing = false;
+    int m_lensFd = -1;        /* the lens only holds its position while open */
+    int m_focus = 100;        /* driver default, roughly 1 m */
     QString m_lastPicture;
 };
 
