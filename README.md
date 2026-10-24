@@ -3,11 +3,28 @@
 Goal: Sailfish OS stays untouched on slot A, Maemo Leste goes onto slot B as a
 second system.
 
-Status 24.10.2026: **Maemo Leste boots from slot B**, Sailfish stays in slot A.
-Hildon Desktop runs GPU-accelerated (Adreno 610, Mesa 25 from
-daedalus-backports), plus the keyboard including its backlight, touch, modem,
-Wi-Fi, Bluetooth and the loudspeaker. How we got there, every boot image
-variant that was tested, and what is still missing: [docs/HANDOFF.md](docs/HANDOFF.md).
+Status 24.10.2026: **Maemo Leste boots from slot B**, Sailfish stays in slot A,
+and a boot menu in the initramfs chooses between the systems. How we got
+there, every boot image variant that was tested: [docs/HANDOFF.md](docs/HANDOFF.md).
+
+| Hardware | State on Leste | How |
+|---|---|---|
+| Display, GPU (Adreno 610) | works, glamor/GLES on FD610 | Mesa 25 from daedalus-backports, `a630_sqe.fw` |
+| Touch, keyboard, keyboard light, slider | works | mainline drivers; mce `button-backlight` |
+| Status LED (RGB) | works (charging, notifications) | DT split into red/green/blue:status, mce `led-sw` + `led-dbus` |
+| Vibration | works | mce `evdevvibrator` |
+| Wi-Fi | works, stable MAC | modem up via `rmtfs`/`tqftpserv`; MAC derived from the serial |
+| Bluetooth | controller up | linux-firmware 2025 (`qca/cmbtfw12.tlv`); pairing not tested |
+| Modem in oFono | detected | `rmnet_data0..3` for oFono's `qrtrsoc`; calls/SMS/data untested (no SIM) |
+| Loudspeaker, microphone | works | NixOS UCM profile, PulseAudio 48 kHz, suspend after 5 min (pops) |
+| Earpiece, headphones | untested | |
+| Battery, charging | works | upower |
+| Accelerometer, light, proximity, compass | works | ADSP sensors: hexagonrpcd + libssc + iio-sensor-proxy 3.9 |
+| GPS | engine runs, positions arrive | `pro1x-gnss` (QMI LOC -> NMEA -> gpsd); outdoor fix untested |
+| Cameras (12 MP rear, 8 MP front) | works | libcamera 0.7.2 + soft ISP on the GPU; `pro1x-camera` app with autofocus |
+| Device lock code (CAL) | works | block2mtd file as `/dev/mtd1`, patched libcal |
+| Crash logs | works | ramoops, `/sys/fs/pstore` |
+| Double tap to wake | not working yet | goodix patch in the kernel, first test failed |
 
 The key point: with an empty `dtbo` the stock ABL only accepts a **DTB appended
 to the kernel** (header v0); the DTB section of header v2 is not enough.
@@ -151,12 +168,27 @@ provides Ethernet and a serial console at the same time.
 * the root password is set when the image is built (`ROOT_PW`, default
   `pro1x-leste`) -- **change it after the first login**
 
-## Back to Sailfish
+## Choosing the system
 
-Sailfish is unchanged in slot A. To switch back:
+The initramfs of slot B shows a boot menu (Maemo Leste, MeeGo if
+`/meego.img` exists on userdata, Sailfish OS). It works with any input that
+still works: keyboard (arrows, digits, first letter, Enter), side keys
+(volume chooses, power starts), a tap on the screen, or nothing (after the
+countdown the preselected entry starts). From a running system:
 
 ```
-./scripts/70-switch-slot.sh a      # on the PC, device in the bootloader
+pro1x-boot list               # systems, default, next, active slot
+pro1x-boot next sailfish      # once, on the next start (switches the slot)
+pro1x-boot default leste      # preselected entry
+pro1x-boot timeout 5          # countdown in seconds, 0 = no menu
+pro1x-boot slot a|b           # just switch the bootloader slot
+```
+
+Choosing Sailfish switches the bootloader to slot A and reboots. Back from
+Sailfish: `pro1x-boot next leste` there (needs `sgdisk`), or with a PC:
+
+```
+./scripts/70-switch-slot.sh b      # on the PC, device in the bootloader
 ```
 
 From either system you get into the bootloader with
@@ -172,8 +204,9 @@ exists from systemd 246 on.)
 If booting slot B fails completely, the ABL counts down the retries and falls
 back to slot A by itself -- Sailfish then comes back without any action.
 
-Still not nice: switching needs a PC. The fix would be a `qbootctl` on both
-systems that sets the GPT slot attributes directly; it is on the list.
+`pro1x-boot slot` sets the Qualcomm A/B attributes like `fastboot set_active`,
+but keeps "successful" set, because Sailfish never marks its own boot and
+would otherwise lose its slot after seven starts.
 
 ## Plan
 
@@ -191,10 +224,13 @@ systems that sets the GPT slot attributes directly; it is on the list.
 - [x] Settle whether slot B is bootable (it boots; the DTBO caused the dead keyboard)
 - [x] Checked that the Leste DTB brings the hardware description itself (keypad
       with 64-key keymap, Wi-Fi, BT, haptics, MPSS/ADSP, cameras, charger)
-- [ ] Flash `boot_b`, zero `dtbo_b`, switch over via fastboot
-- [ ] `qbootctl` or similar on both systems, so switching slots works without a PC
-- [ ] Audio (UCM2 profiles of the NixOS port), sensors (hexagonfs), camera
-- [ ] Telephony: Leste expects oFono, mainline provides QMI/qrtr
+- [x] Flash `boot_b`, zero `dtbo_b`, switch over -- Leste boots (v0 + appended DTB)
+- [x] `pro1x-boot` and the initramfs boot menu, so switching works without a PC
+- [x] Audio (UCM2 profiles of the NixOS port), sensors (hexagonfs), camera
+- [x] oFono sees the modem (qrtrsoc with rmnet_data links)
+- [ ] Calls, SMS, mobile data with a SIM; earpiece, headphones, Bluetooth pairing
+- [ ] Double tap to wake (kernel patch in place, does not wake yet)
+- [ ] MeeGo as a third system (boot menu entry is ready)
 
 ## Risks
 
@@ -215,7 +251,11 @@ systems that sets the GPT slot attributes directly; it is on the list.
 | `scripts/20-fetch-sources.sh` | build host | clone the kernel branch, fetch the Leste image |
 | `scripts/30-build-kernel.sh` | build host | apply patches, build kernel + modules |
 | `scripts/40-make-rootfs.sh` | build host, sudo | build the rootfs image, generate the initramfs |
-| `scripts/45-pro1x-hardware.sh` | inside the rootfs, root | Mesa, firmware, modem services, mce/audio configuration |
+| `scripts/45-pro1x-hardware.sh` | inside the rootfs, root | Mesa, firmware, modem services, mce/audio configuration, boot menu tools |
+| `scripts/46-sensor-stack.sh` | inside the rootfs, root | hexagonrpcd, libqmi 1.34, libssc, iio-sensor-proxy 3.9, pro1x-gnss |
+| `scripts/47-libcal.sh` | inside the rootfs, root | libcal that accepts the block2mtd CAL (lock code) |
+| `scripts/48-camera-stack.sh` | inside the rootfs, root | libcamera 0.7.2 with the Pro1X sensors |
+| `scripts/49-apps.sh` | inside the rootfs, root | `pro1x-camera` |
 | `scripts/50-build-bootimg.sh` | build host | pack the Android boot image (v0, DTB appended) |
 | `scripts/55-deploy-rootfs.sh` | device, root | first deployment: shrink, stream, grow again (additive) |
 | `scripts/56-update-rootfs.sh` | device, root | updates as rsync delta (`--inplace`) |
