@@ -7,6 +7,89 @@ Diese Übergabe ist für eine Session **auf archbang** (192.168.1.21, User
 Das Telefon selbst ist kein verlässlicher Arbeitsplatz mehr: die bisherigen
 Sessions liefen *auf* Sailfish und starben mit jedem Bootversuch.
 
+## Nachtrag 18:25 — LESTE BOOTET (aus Slot B)
+
+18:24:15 Reboot in Slot B, 18:24:31 meldet sich das g_cdc-Gadget
+(`0525:a4aa`), kurz danach `ssh root@172.16.42.1`: Devuan 5 / Maemo Leste,
+Kernel 7.1.0+, `/` = `/dev/loop0` aus `/host/maemo-leste.img`, Xorg +
+hildon-desktop laufen, Tastatur (aw9523), Goodix-Touch, Haptik, Panel (msm
+DRM, fb0), modem/adsp/cdsp-Remoteprocs hoch.
+Fehlt: `qcom/a630_sqe.fw` (GPU), `goodix_9286_cfg.bin`, `regulatory.db`.
+Am PC heißt das Gadget-Interface `enp19s0u1u1` (nicht `enx*`/`usb*`);
+`172.16.42.2/24` von Hand setzen.
+
+**Ursache der Ablehnung:** Der ABL sucht bei ungültigem/genulltem dtbo das
+DTB **angehängt an den Kernel** (Strings im ABL: „Single appended DTB found",
+„kernel image does not have appended DTB"); die DTB-Sektion von Header v2
+nutzt er nur zusammen mit einem gültigen dtbo (SoC-DTB + Board-Overlay, so
+bootet Sailfish). Ablehnung zeigt sich als Fastboot 5–9 s nach dem Reboot.
+
+**Funktionierendes Rezept** (`test-appended/out/boot-leste.img`, sha256
+72057d38…):
+
+* Kernel = `cat out/Image.gz test-boardid/out/sm6115-fxtec-pro1x.dtb`
+  (DTB mit zusätzlichem `qcom,board-id = <0 0>` per fdtput — ob nötig,
+  ungetestet)
+* Initramfs ohne `usr/lib/modules/*/kernel` (alles Bootrelevante ist `=y`),
+  `depmod` neu, xz `--check=crc32 -6`: 4,9 MiB statt 11,2 MiB
+  (`test-slim/out/initrd.img-7.1.0+`; ob nötig, ungetestet)
+* `mkbootimg --header_version 0`, Offsets wie bisher, kein `--dtb`,
+  danach `avbtool add_hash_footer` wie in `50-build-bootimg.sh`
+* `dtbo_b` genullt, `vbmeta_b` = `out/vbmeta-disabled.img`
+  (`mkvbmeta.py`, flags=2, auf 64 KiB aufgefüllt; ob nötig, ungetestet)
+
+`50-build-bootimg.sh` baut noch die alte (nicht bootende) v2-Variante.
+
+**Getestete Varianten in Slot B** (alle mit `dd` aus Sailfish geschrieben):
+
+| Zeit | Image | dtbo_b | vbmeta_b | Ergebnis |
+|---|---|---|---|---|
+| 17:48 | Sailfish `boot_a` | `dtbo_a` | Werk | bootet (Sailfish) |
+| 17:59 | v2, DTB-Sektion | 0 | flags=2 | Fastboot nach 7 s |
+| 18:06 | v2 + board-id | 0 | flags=2 | Fastboot nach 5 s |
+| 18:14 | v2 + board-id + slim initrd | 0 | flags=2 | Fastboot nach 9 s |
+| 18:24 | **v0, DTB an Kernel** + board-id + slim | 0 | flags=2 | **Leste läuft** |
+
+**Zurück zu Sailfish:** Bootloader, `fastboot set_active a`, `fastboot
+reboot` (Befehle wiederholen, bis OKAY; `/opt/android-sdk/platform-tools/
+fastboot` klappt meist schneller). Sailfish verlangt danach am Gerät den
+LUKS-Code; vorher blockt `pam_nologin` alle Nicht-root-SSH-Logins.
+Leste markiert Slot B nicht als „successful" — nach einigen Boots fällt der
+ABL von selbst auf A zurück.
+
+## Nachtrag 17:50 (Session auf archbang) — H1 widerlegt
+
+**Slot B bootet.** Test: `boot_a.img` und `dtbo_a.img` aus
+`/userdata/dualboot-backup/` per `dd` nach `boot_b`/`dtbo_b` kopiert (Hashes
+nach `drop_caches` geprüft: 583b77f7…, be54fca8…), `fastboot set_active b`,
+Reboot 17:48:30 — Sailfish meldet 17:49:11 `androidboot.slot_suffix=_b`.
+Damit ist **H2** dran: unser Leste-Boot-Image bootet nicht, der Slot war nie
+das Problem. Aktiver Slot ist danach `b` (Sailfish), `boot_a`/`dtbo_a`
+unverändert.
+
+**Fastboot kann hier nicht schreiben.** Am CPU-USB2-Controller (Bus 7,
+hinter dem eingebauten Genesys-Hub 05e3:0608) kommen ~10 % der Befehle
+verstümmelt an (`unknown command`, `GetVar Variable Not found`,
+`Invalid Slot` beim selben Befehl). `fastboot flash boot_X` mit 96 MiB
+scheitert reproduzierbar an `Requested download size is more than max
+allowed`, mit `-S 32M` hängt der Download. Kurze Befehle (`set_active`,
+`reboot`) gehen mit Wiederholung. **Konsequenz:** Leste nie nach `boot_a`
+flashen — der Rückweg per fastboot existiert nicht. Schreiben nur per `dd`
+aus Sailfish, Testen nur in Slot B.
+
+**Korrektur zu „Kernelformat":** Sailfishs 4.19-Kernel hat
+`text_offset = 0x80000`, nicht 0. Unserer hat 0 — laut NixOS-U-Boot-Rezept
+akzeptiert der ABL 0, also vermutlich kein Grund. Entpackte Größe beider
+Kernel ~43 MiB, kein Unterschied.
+
+**Unterschiede zum funktionierenden NixOS-Weg** (Kandidaten für H2):
+NixOS flasht `vbmeta` mit abgeschalteter Verifikation (`mkvbmeta.py`,
+flags=2) **und** löscht dtbo; wir hatten Werks-vbmeta **mit** genulltem
+dtbo. NixOS nutzt Header v0 mit an `Image.gz` angehängtem DTB, wir Header v2
+mit DTB-Sektion. Sailfishs DTB hat `qcom,board-id = <0 0>`, unserer nicht
+(NixOS' U-Boot-DTB auch nicht). Nächster Test in Slot B: Leste-Image +
+`vbmeta_b` aus `mkvbmeta.py` + genulltes `dtbo_b`.
+
 ## Stand in einem Satz
 
 Alles ist gebaut und liegt bereit, **Slot B bootet aber nicht** — zwei

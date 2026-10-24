@@ -1,9 +1,19 @@
 #!/bin/bash
 # Baut das Android-Boot-Image fuer Maemo Leste (Build-Host).
 #
-# Header v2 mit Kernel + Initramfs + DTB, Offsets exakt wie im vorhandenen
-# boot_a des Sailfish-Images (device/boot_a-params.env). Der stock-ABL des
-# Pro1X laedt daraus direkt den Mainline-Kernel -- kein U-Boot dazwischen.
+# Der stock-ABL des Pro1X laedt daraus direkt den Mainline-Kernel -- kein
+# U-Boot dazwischen. Was er dafuer verlangt, wurde am 24.10.2026 in Slot B
+# eingegrenzt (Tabelle in docs/UEBERGABE-ARCHBANG.md):
+#
+# * Header v0 und das DTB **an Image.gz angehaengt**. Bei leerem dtbo sucht der
+#   ABL ausschliesslich ein angehaengtes DTB ("Single appended DTB found"); die
+#   DTB-Sektion von Header v2 nutzt er nur zusammen mit einem gueltigen dtbo
+#   (SoC-DTB + Board-Overlay, so bootet Sailfish). Mit v2 + DTB-Sektion landet
+#   das Geraet 5-9 s nach dem Reboot wieder im Fastboot.
+# * Offsets wie im Sailfish-boot_a (device/boot_a-params.env), sonst ignoriert.
+#
+# Nebenbei, ungetestet ob noetig: qcom,board-id = <0 0> im DTB (wie im
+# Sailfish-DTB), dtbo genullt und vbmeta mit abgeschalteter Verifikation.
 set -euo pipefail
 WORK=${WORK:?WORK=<build-verzeichnis> setzen}
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
@@ -29,19 +39,24 @@ for f in "$OUT/Image.gz" "$OUT/initrd.img-$KVER" "$OUT/sm6115-fxtec-pro1x.dtb"; 
   [ -f "$f" ] || { echo "fehlt: $f"; exit 1; }
 done
 
+# DTB mit Board-ID, wie sie das Sailfish-DTB traegt; der ABL waehlt DTBs ueber
+# qcom,msm-id + qcom,board-id aus. Upstream fehlt die Board-ID.
+DTB=$OUT/sm6115-fxtec-pro1x-abl.dtb
+cp "$OUT/sm6115-fxtec-pro1x.dtb" "$DTB"
+fdtget "$DTB" / qcom,board-id >/dev/null 2>&1 || fdtput -t u "$DTB" / qcom,board-id 0 0
+cat "$OUT/Image.gz" "$DTB" > "$OUT/Image.gz-dtb"
+
 mkbootimg \
-  --kernel "$OUT/Image.gz" \
+  --kernel "$OUT/Image.gz-dtb" \
   --ramdisk "$OUT/initrd.img-$KVER" \
-  --dtb "$OUT/sm6115-fxtec-pro1x.dtb" \
   --cmdline "$CMDLINE" \
   --base "$BOOT_BASE" \
   --kernel_offset "$BOOT_KERNEL_OFFSET" \
   --ramdisk_offset "$BOOT_RAMDISK_OFFSET" \
   --second_offset "$BOOT_SECOND_OFFSET" \
   --tags_offset "$BOOT_TAGS_OFFSET" \
-  --dtb_offset "$BOOT_DTB_OFFSET" \
   --pagesize "$BOOT_PAGESIZE" \
-  --header_version "$BOOT_HEADER_VERSION" \
+  --header_version 0 \
   --output "$OUT/boot-leste.img"
 
 sz=$(stat -c%s "$OUT/boot-leste.img")
@@ -50,11 +65,8 @@ echo "Payload: $sz Byte ($((sz / 1048576)) MiB) von $BOOT_PARTITION_SIZE_MIB MiB
 # Platz fuer vbmeta (512 B) + Footer (64 B) muss uebrig bleiben
 [ "$sz" -le "$((max - 65536))" ] || { echo "FEHLER: Image passt nicht in boot_b"; exit 1; }
 
-# AVB-Hash-Footer anhaengen. Ohne ihn weist der stock-ABL des Pro1X das Image
-# ab: Slot B verbrannte alle sechs Retries und wurde unbootable markiert.
-# Das funktionierende Sailfish-boot_a traegt genau diese Struktur -- avbtool
-# 1.1.0, algorithm NONE (unsigniert), sha256-Hash-Deskriptor fuer Partition
-# "boot", vbmeta direkt hinter dem Payload, Footer bei Partitionsgroesse-64.
+# AVB-Hash-Footer anhaengen, strukturgleich zum funktionierenden Sailfish-boot_a
+# (avbtool, algorithm NONE, sha256-Hash-Deskriptor fuer Partition "boot").
 avbtool add_hash_footer \
   --image "$OUT/boot-leste.img" \
   --partition_name boot \
@@ -66,3 +78,7 @@ avbtool info_image --image "$OUT/boot-leste.img" 2>&1 | head -18
 final=$(stat -c%s "$OUT/boot-leste.img")
 echo "boot-leste.img mit Footer: $final Byte (Partition: $max)"
 [ "$final" = "$max" ] || { echo "FEHLER: unerwartete Endgroesse"; exit 1; }
+
+# vbmeta fuer den Leste-Slot: Verifikation abgeschaltet (flags=2), 64 KiB.
+python3 -I "$REPO/scripts/lib/mkvbmeta.py" "$OUT/vbmeta-disabled.img"
+sha256sum "$OUT/boot-leste.img" "$OUT/vbmeta-disabled.img"

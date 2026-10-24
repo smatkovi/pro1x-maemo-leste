@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+# TFTP-Server ueber QRTR: liefert dem Modem seine Firmware-Dateien (u. a.
+# wlanmdsp.mbn fuer das WLAN, das auf dem SM6115 ueber das Modem laeuft).
+# Debian liefert nur eine systemd-Unit; qrtr-ns ist im Kernel enthalten.
+
+description="QRTR TFTP service (Firmware fuer das Modem)"
+command=/usr/bin/tqftpserv
+supervisor=supervise-daemon
+respawn_delay=1
+respawn_max=0
+
+depend() {
+	after localmount mountall
+	before pro1x-rmtfs
+}
