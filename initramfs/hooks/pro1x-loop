@@ -1,0 +1,11 @@
+#!/bin/sh
+# losetup ins Initramfs kopieren (initramfs-tools bringt nur blkid mit).
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+  prereqs) prereqs; exit 0 ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+copy_exec /sbin/losetup /sbin
+[ -x /bin/mountpoint ] && copy_exec /bin/mountpoint /bin

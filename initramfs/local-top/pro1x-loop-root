@@ -1,0 +1,56 @@
+#!/bin/sh
+# Stellt das Maemo-Leste-Rootfs-Image als /dev/loop0 bereit, damit
+# initramfs-tools es als root=/dev/loop0 mounten kann.
+#
+# Hintergrund: Auf dem Pro1X ist keine freie Partition fuer ein zweites System
+# vorhanden (userdata ist die letzte Partition der LUN). Leste liegt deshalb als
+# Image-Datei auf userdata, neben dem Sailfish-Rootfs. Modernes
+# initramfs-tools kennt kein root=...,loop= mehr, also machen wir es selbst.
+#
+# Kernel-Cmdline: pro1x.backing=UUID=<fs-uuid>  pro1x.image=/pfad/im/backing
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+  prereqs) prereqs; exit 0 ;;
+esac
+
+. /scripts/functions
+
+BACKING=""
+IMAGE=""
+for x in $(cat /proc/cmdline); do
+  case "$x" in
+    pro1x.backing=*) BACKING="${x#pro1x.backing=}" ;;
+    pro1x.image=*)   IMAGE="${x#pro1x.image=}" ;;
+  esac
+done
+[ -n "$BACKING" ] || panic "pro1x-loop-root: pro1x.backing= fehlt auf der Cmdline"
+[ -n "$IMAGE" ] || IMAGE=/maemo-leste.img
+
+# Backing-Device aufloesen; UFS braucht einen Moment, bis es da ist.
+dev=""
+i=0
+while [ $i -lt 120 ]; do
+  case "$BACKING" in
+    UUID=*)     dev=$(blkid -U "${BACKING#UUID=}" 2>/dev/null) ;;
+    PARTUUID=*) dev=$(blkid -t "PARTUUID=${BACKING#PARTUUID=}" -o device 2>/dev/null | head -1) ;;
+    *)          [ -b "$BACKING" ] && dev="$BACKING" ;;
+  esac
+  [ -n "$dev" ] && [ -b "$dev" ] && break
+  dev=""
+  i=$((i + 1))
+  sleep 0.25
+done
+[ -n "$dev" ] || panic "pro1x-loop-root: Backing-Device $BACKING nicht gefunden"
+
+mkdir -p /host
+mount -t ext4 -o rw,noatime "$dev" /host \
+  || panic "pro1x-loop-root: $dev konnte nicht auf /host gemountet werden"
+[ -f "/host$IMAGE" ] || panic "pro1x-loop-root: /host$IMAGE existiert nicht"
+
+# Loop-Geraet deterministisch auf loop0, damit root=/dev/loop0 passt.
+[ -b /dev/loop0 ] || mknod /dev/loop0 b 7 0
+losetup /dev/loop0 "/host$IMAGE" \
+  || panic "pro1x-loop-root: losetup auf /host$IMAGE fehlgeschlagen"
+
+exit 0

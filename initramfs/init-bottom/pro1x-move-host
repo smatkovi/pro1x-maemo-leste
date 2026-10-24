@@ -1,0 +1,15 @@
+#!/bin/sh
+# Nimmt die Backing-Partition (userdata) in das neue Root mit, damit das
+# Loop-Image nicht an einem verwaisten Mount haengt und man von Leste aus an
+# das Sailfish-Rootfs herankommt.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+  prereqs) prereqs; exit 0 ;;
+esac
+
+if mountpoint -q /host 2>/dev/null || grep -q ' /host ' /proc/mounts; then
+  mkdir -p "${rootmnt}/host"
+  mount --move /host "${rootmnt}/host"
+fi
+exit 0
