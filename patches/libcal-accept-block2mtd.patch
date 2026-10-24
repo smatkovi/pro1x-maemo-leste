@@ -1,0 +1,27 @@
+Accept an emulated CAL partition (block2mtd) besides OneNAND.
+
+libcal only accepted MTD_NANDFLASH, the N900's OneNAND. Phones without NAND,
+such as the F(x)tec Pro1X, attach a small file through block2mtd as
+/dev/mtd1, which reports MTD_RAM. Everything else libcal does works on it:
+MEMGETBADBLOCK returns 0 (no bad blocks), MEMERASE fills with 0xFF, and a
+failing OTPSELECT is already tolerated. NAND devices behave as before.
+
+Also return an error when the type is rejected: rv still held 0 from the
+successful MEMGETINFO, so callers took the failed init for a success.
+
+--- a/src/cal.c
++++ b/src/cal.c
+@@ -446,9 +446,11 @@ cal_nand_init(struct cal *c)
+     goto err;
+   }
+
+-  if ( c->mtd_info.type != MTD_NANDFLASH )
++  /* MTD_RAM: CAL emulated with block2mtd on devices without NAND. */
++  if ( c->mtd_info.type != MTD_NANDFLASH && c->mtd_info.type != MTD_RAM )
+   {
+-    cal_error("Only NAND devices supported");
++    cal_error("Only NAND devices (or block2mtd) supported");
++    rv = -1;
+     goto err;
+   }
+

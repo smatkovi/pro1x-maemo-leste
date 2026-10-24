@@ -3,15 +3,15 @@
 #
 # Maemo keeps the device lock code (libdevlock) and a few other settings in
 # "CAL", which libcal reads and writes through /dev/mtd1 -- the CAL partition
-# of the N900's NAND. The Pro1X has no NAND, so a 256 KiB file on userdata
-# (the size of the N900's CAL partition, initially 0xFF like erased flash) is
+# of the N900's NAND. The Pro1X has no NAND, so a 512 KiB file on userdata
+# (four 128 KiB erase blocks, initially 0xFF like erased flash) is
 # attached through a loop device and block2mtd; the udev rule
 # 83-pro1x-cal.rules gives that MTD device the name /dev/mtd1.
 
 description="CAL area (device lock code) for Maemo, emulated with block2mtd"
 
 CAL_IMAGE=/host/pro1x-cal.img
-CAL_SIZE=262144          # 256 KiB
+CAL_SIZE=524288          # 512 KiB: libcal needs at least three erase blocks
 ERASE_SIZE=131072        # 128 KiB, as on the N900
 
 depend() {
