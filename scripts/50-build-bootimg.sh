@@ -20,7 +20,10 @@ CMDLINE="root=/dev/loop0 rootfstype=ext4 rootwait rw"
 CMDLINE="$CMDLINE pro1x.backing=$BACKING pro1x.image=$IMAGE_PATH"
 # Bringup-Phase: gespraechige Konsole auf Debug-UART und Panel.
 CMDLINE="$CMDLINE loglevel=7 ignore_loglevel earlycon=msm_geni_serial,0x4a90000"
-CMDLINE="$CMDLINE console=ttyMSM0,115200n8 console=tty1"
+# ttyGS0 ist die ACM-Konsole des eingebauten g_cdc-Gadgets -- ueber USB
+# erreichbar, im Gegensatz zum Debug-UART. tty1 steht zuletzt und wird damit
+# /dev/console, die Ausgabe bleibt also auf dem Panel.
+CMDLINE="$CMDLINE console=ttyMSM0,115200n8 console=ttyGS0,115200 console=tty1"
 
 for f in "$OUT/Image.gz" "$OUT/initrd.img-$KVER" "$OUT/sm6115-fxtec-pro1x.dtb"; do
   [ -f "$f" ] || { echo "fehlt: $f"; exit 1; }

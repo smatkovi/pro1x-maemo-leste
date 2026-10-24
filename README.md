@@ -125,11 +125,48 @@ gesucht, nie ueber einen Pfad.
 
 ## Zugang beim ersten Boot
 
+WLAN ist nicht vorkonfiguriert (Maemo verwaltet `wlan0` ueber seinen eigenen
+Stack, `/etc/network/interfaces` laesst es auf `manual`). Der Zugang laeuft
+darum ueber dasselbe USB-Kabel, das fuer fastboot sowieso dran ist: der Kernel
+hat `CONFIG_USB_CDC_COMPOSITE=y`, der g_cdc-Gadget bindet beim Boot von allein
+und liefert gleichzeitig Ethernet und eine serielle Konsole.
+
+* `usb0` statisch auf **172.16.42.1/24**, Gegenstelle am PC 172.16.42.2/24
+  (beide Seiten statisch, kein DHCP-Server im Image)
+* `sshd` startet automatisch (`S03ssh` in `rc2.d`), Root-Login per Key ist
+  erlaubt (`PermitRootLogin prohibit-password`), der Public Key des Build-Hosts
+  liegt in `/root/.ssh/authorized_keys`
+* serielle Konsole: `screen /dev/ttyACM0 115200` am PC -- `agetty` auf `ttyGS0`,
+  und der Kernel loggt dorthin mit (`console=ttyGS0,115200`). `/dev/console`
+  bleibt `tty1`, die Ausgabe steht also auch auf dem Panel
+* `agetty` zusaetzlich auf `ttyMSM0` -- das ist der Debug-UART und ohne
+  Zerlegen des Geraets nicht erreichbar, kostet aber nichts
 * root-Passwort wird beim Imagebau gesetzt (`ROOT_PW`, Standard `pro1x-leste`)
   -- **nach dem ersten Login aendern**
-* der Public Key des Build-Hosts landet in `/root/.ssh/authorized_keys`
-* `agetty` auf `ttyMSM0` (115200) fuer die Bringup-Phase, zusaetzlich zur
-  Konsole auf dem Panel
+
+## Zurueck zu Sailfish
+
+Sailfish liegt unveraendert in Slot A. Zurueckschalten:
+
+```
+./scripts/70-switch-slot.sh a      # auf dem PC, Geraet im Bootloader
+```
+
+In den Bootloader kommt man aus beiden Systemen heraus mit
+
+```
+sudo python3 scripts/lib/reboot-bootloader.py
+```
+
+(reboot(2) mit `LINUX_REBOOT_CMD_RESTART2` und Argument `bootloader` --
+busybox-`reboot` nimmt kein Argument, `systemctl reboot bootloader` gibt es
+erst ab systemd 246.)
+
+Scheitert der Boot von Slot B ganz, zaehlt ABL die Retries herunter und faellt
+von selbst auf Slot A zurueck -- Sailfish kommt dann ohne Zutun wieder.
+
+Noch unschoen: der Wechsel braucht einen PC. Abhilfe waere ein `qbootctl` auf
+beiden Systemen, das die GPT-Slot-Attribute direkt setzt; steht auf der Liste.
 
 ## Vorgehen
 
@@ -176,6 +213,8 @@ gesucht, nie ueber einen Pfad.
 | `scripts/56-update-rootfs.sh` | Geraet, root | Updates per rsync-Delta (`--inplace`) |
 | `scripts/60-flash-slot-b.sh` | Geraet, root | **schreibend**: Boot-Image in den inaktiven Slot |
 | `scripts/70-switch-slot.sh` | PC | Slot per fastboot umschalten |
+| `scripts/80-switch-and-connect.sh` | PC, losgelöst | wartet auf fastboot, schaltet um, bootet, richtet den USB-Link ein, testet SSH |
+| `scripts/lib/reboot-bootloader.py` | beide, root | Reboot direkt in den Bootloader |
 | `scripts/lib/bootimg-params.py` | beide | Android-Boot-Header v0-v2 auslesen |
 
 ### Image-Transfer: wann zstd-Stream, wann rsync
