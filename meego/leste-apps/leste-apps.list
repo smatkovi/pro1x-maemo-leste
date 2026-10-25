@@ -3,3 +3,10 @@
 # desktop id per line (from /usr/share/applications or its hildon/
 # directory) adjusts that: "-id" leaves an application out, "id" adds one
 # that has no menu entry of its own.
+
+# The Maemo 5 ports are meant for Leste's own desktop; MeeGo has its own
+# applications for these (or Harmattan versions of them)
+-gpodder-leste
+-petrovich
+-yappari
+-fahrplan2
