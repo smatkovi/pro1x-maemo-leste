@@ -103,6 +103,7 @@ h_pids() {
 
 do_stop() {
 	local pids
+	start-stop-daemon --stop --quiet --pidfile /run/pro1x-n9-sensors.pid --remove-pidfile || true
 	pids=$(h_pids)
 	if [ -n "$pids" ]; then
 		kill $pids 2>/dev/null || true
@@ -149,6 +150,18 @@ do_start() {
 	host_x xinput set-prop "\"pointer:$TOUCH\"" "\"Coordinate Transformation Matrix\"" $matrix || true
 
 	start_root gconfd /usr/lib/gconf2/gconfd-2
+	# The Pro1X's accelerometer, proximity sensor and keyboard slide as the
+	# N9's input device (41-leste-n9-sensors.sh), read by Harmattan's
+	# sensord (orientation, Screen.TopEdge) and contextkit (keyboard open).
+	start-stop-daemon --start --quiet --background --make-pidfile \
+		--pidfile /run/pro1x-n9-sensors.pid --exec /usr/lib/pro1x-meego/n9-sensors || true
+	# sensord looks for its input devices once, at start.
+	i=0
+	while [ $i -lt 20 ] && ! grep -q "ST LIS3LV02DL Accelerometer" /proc/bus/input/devices; do
+		sleep 0.25
+		i=$((i + 1))
+	done
+	start_root sensord /usr/sbin/sensord
 	as_user /usr/bin/dbus-daemon --session --fork --print-address \
 		> "$H/var/run/pro1x-session-bus"
 	ln -sf /var/run/m.mthemedaemon "$H/tmp/m.mthemedaemon"
