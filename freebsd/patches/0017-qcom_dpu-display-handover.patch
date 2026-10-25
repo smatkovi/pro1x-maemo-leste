@@ -1,4 +1,4 @@
-From a0c30f4e4b57ddee427d9db266f0e7468b4908ee Mon Sep 17 00:00:00 2001
+From a299f1e96752fdddc7064b3e96cbbf6dfe650e52 Mon Sep 17 00:00:00 2001
 From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
 Date: Sun, 25 Oct 2026 19:25:12 +0100
 Subject: [PATCH] qcom_dpu: take over the display Linux leaves running
@@ -11,17 +11,17 @@ them: the console shows on the next frame (video-mode panel).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- sys/arm64/qualcomm/qcom_dpu_handover.c | 230 +++++++++++++++++++++++++
+ sys/arm64/qualcomm/qcom_dpu_handover.c | 261 +++++++++++++++++++++++++
  sys/conf/files.arm64                   |   1 +
- 2 files changed, 231 insertions(+)
+ 2 files changed, 262 insertions(+)
  create mode 100644 sys/arm64/qualcomm/qcom_dpu_handover.c
 
 diff --git a/sys/arm64/qualcomm/qcom_dpu_handover.c b/sys/arm64/qualcomm/qcom_dpu_handover.c
 new file mode 100644
-index 000000000..d71543e8b
+index 000000000..7a0806108
 --- /dev/null
 +++ b/sys/arm64/qualcomm/qcom_dpu_handover.c
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,261 @@
 +/*-
 + * SPDX-License-Identifier: BSD-2-Clause
 + *
@@ -41,6 +41,9 @@ index 000000000..d71543e8b
 + *
 + * DPU 6.3 (SM6115) offsets from Linux's catalog, relative to the "mdp"
 + * registers: CTL_0 0x1000, SSPP VIG0 0x4000, DMA0 0x24000.
++ *
++ * The DSI controller's registers go to the console as they are (read
++ * only), for switching the panel off with DCS commands later.
 + */
 +
 +#include <sys/param.h>
@@ -171,6 +174,33 @@ index 000000000..d71543e8b
 +	return (ENXIO);
 +}
 +
++/* The DSI controller as Linux left it: 0x200 bytes, read only */
++static void
++dpu_dump_dsi(device_t dev, phandle_t node)
++{
++	phandle_t c;
++	bus_addr_t pa;
++	bus_size_t size;
++	vm_offset_t va;
++	u_int i;
++
++	for (c = OF_child(node); c > 0; c = OF_peer(c)) {
++		if (!ofw_bus_node_is_compatible(c, "qcom,mdss-dsi-ctrl") ||
++		    !ofw_bus_node_status_okay(c) ||
++		    ofw_reg_to_paddr(c, 0, &pa, &size, NULL) != 0)
++			continue;
++		va = (vm_offset_t)pmap_mapdev(pa, size);
++		device_printf(dev, "DSI at %#jx:\n", (uintmax_t)pa);
++		for (i = 0; i < 0x200 && i < size; i += 0x20)
++			printf("  %03x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
++			    i, *reg32(va, i), *reg32(va, i + 4), *reg32(va, i + 8),
++			    *reg32(va, i + 12), *reg32(va, i + 16),
++			    *reg32(va, i + 20), *reg32(va, i + 24),
++			    *reg32(va, i + 28));
++		pmap_unmapdev((void *)va, size);
++	}
++}
++
 +static int
 +qcom_dpu_probe(device_t dev)
 +{
@@ -236,6 +266,7 @@ index 000000000..d71543e8b
 +	device_printf(dev, "scanout now from %#jx (stride %u)\n",
 +	    (uintmax_t)fb_pa, stride);
 +	pmap_unmapdev((void *)va, mdp_size);
++	dpu_dump_dsi(dev, node);
 +	return (0);
 +}
 +
