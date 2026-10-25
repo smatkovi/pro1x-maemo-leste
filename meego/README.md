@@ -1,9 +1,12 @@
 # MeeGo Harmattan on the Pro1X
 
-The boot menu entry "MeeGo Harmattan" starts Maemo Leste without its
-desktop; Leste stays the hardware layer (kernel, Xorg, mce, dsme, icd2,
+The boot menu entry "MeeGo Harmattan" starts a Maemo Leste system without
+its desktop; Leste stays the hardware layer (kernel, Xorg, mce, dsme, icd2,
 PulseAudio, modem services) and Harmattan's user interface runs on top of it
-from an N950 rootfs image (`/host/harmattan.img`) in a chroot.
+from an N950 rootfs image (`/host/harmattan.img`) in a chroot. That Leste
+system is MeeGo's own copy (`/host/meego-leste.img`, step 45), independent
+of the Leste system the "Maemo Leste" entry boots; without the copy the
+entry uses the Leste image.
 
 ## How it fits together
 
@@ -18,6 +21,7 @@ from an N950 rootfs image (`/host/harmattan.img`) in a chroot.
 | 39 | `39-leste-mce.sh` | Leste's mce closes Harmattan's lock screen (`patches/`) and has Harmattan's radio states, mapped onto the device mode (`mce/`) |
 | 41 | `41-leste-helpers.sh` | Leste-side helpers of the session: the Pro1X's sensors, slide switch and side keys as the N9's input device (`sensors/`), dsme's IP heartbeat service (`iphb/`), PulseAudio's main volume interface for the volume bar (`mainvolume/`), BME's event file (`bme/`), Nokia's positioning daemon for QtLocation on Leste's gpsd (`positioning/`), Leste applications in Harmattan's application grid (`leste-apps/`) |
 | 40 | `40-harmattan-session.sh` | Mounts and starts the session (installed as `/usr/lib/pro1x-meego/harmattan-session`, run by the `pro1x-meego` OpenRC service in the MeeGo boot); runs Harmattan's own upstart jobs (`run_job`) |
+| 45 | `45-meego-image.sh` | MeeGo's own copy of the Leste system underneath (`/host/meego-leste.img`), so that the MeeGo boot no longer shares the Leste system's image; run it last |
 
 Steps 20-38 and 41 work on the mounted image (`H=/mnt/harmattan`); 39 and
 41 also build on Leste. `30-graft-debian-runtime.sh undo` restores the

@@ -80,7 +80,7 @@ EOF
   elif [ -n "$image" ]; then
     IMAGE=$image
   fi
-  # The running system reads this (MeeGo shares the Leste image).
+  # The running system reads this (MeeGo may boot the Leste image).
   pro1x-boot set-current "$key"
 fi
 

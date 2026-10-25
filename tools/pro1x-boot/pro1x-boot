@@ -11,8 +11,9 @@
 #
 # Systems: leste, meego, kali (started from slot b through the boot menu in
 # the initramfs) and sailfish (slot a, its own kernel). MeeGo is Harmattan
-# (/harmattan.img) running on Maemo Leste's hardware layer, so both boot
-# the Leste image; the initramfs records the choice in pro1x-boot/current.
+# (/harmattan.img) running on Maemo Leste's hardware layer: from its own
+# copy of it (/meego-leste.img, meego/45-meego-image.sh) or else from the
+# Leste image; the initramfs records the choice in pro1x-boot/current.
 # Kali (/kali.img, kali/ in the repo) boots Leste's kernel from its own image.
 # Works in the initramfs, in Maemo Leste/MeeGo (userdata on /host) and in
 # Sailfish OS (userdata on /userdata), so the choice never depends on keys:
@@ -30,19 +31,24 @@ CONF=$HOST/pro1x-boot
 
 die() { echo "pro1x-boot: $*" >&2; exit 1; }
 
-# key|label|image|also-needed -- the image is empty for sailfish (a slot)
+# key|label|image|also-needed -- the image is empty for sailfish (a slot);
+# "a:b" means the first of the images that exists
 all_entries() {
 	echo "leste|Maemo Leste|/maemo-leste.img|"
-	echo "meego|MeeGo Harmattan|/maemo-leste.img|/harmattan.img"
+	echo "meego|MeeGo Harmattan|/meego-leste.img:/maemo-leste.img|/harmattan.img"
 	echo "kali|Kali Linux|/kali.img|"
 	echo "sailfish|Sailfish OS||"
 }
 
 # key|label|image of the systems that are installed
 entries() {
-	all_entries | while IFS='|' read -r key label image needs; do
-		if [ -n "$image" ]; then
-			[ -f "$HOST$image" ] && { [ -z "$needs" ] || [ -f "$HOST$needs" ]; } &&
+	all_entries | while IFS='|' read -r key label images needs; do
+		image=
+		for i in $(echo "$images" | tr ':' ' '); do
+			[ -f "$HOST$i" ] && { image=$i; break; }
+		done
+		if [ -n "$images" ]; then
+			[ -n "$image" ] && { [ -z "$needs" ] || [ -f "$HOST$needs" ]; } &&
 				echo "$key|$label|$image"
 		elif part_of boot_a >/dev/null 2>&1; then
 			echo "$key|$label|$image"
@@ -157,7 +163,7 @@ set-current)
 	;;
 get-timeout) cat "$CONF/timeout" 2>/dev/null || echo 5 ;;
 *)
-	sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
 	exit 1
 	;;
 esac
