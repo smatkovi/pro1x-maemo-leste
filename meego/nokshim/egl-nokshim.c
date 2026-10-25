@@ -69,8 +69,11 @@ static void (*gl_GetTexLevelParameteriv)(GLenum, GLint, GLenum, GLint *);
 
 static void init(void)
 {
-	void *egl = dlopen("libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
-	void *gles = dlopen("libGLESv2.so.2", RTLD_NOW | RTLD_GLOBAL);
+	/* Local handles only: made global, Mesa's EGL would come before this
+	 * shim for everything bound later (in processes such as Python, where
+	 * the shim itself is not global, Qt's graphics system plugin). */
+	void *egl = dlopen("libEGL.so.1", RTLD_NOW);
+	void *gles = dlopen("libGLESv2.so.2", RTLD_NOW);
 	real_QueryString = dlsym(egl, "eglQueryString");
 	real_GetProcAddress = dlsym(egl, "eglGetProcAddress");
 	real_CreateWindowSurface = dlsym(egl, "eglCreateWindowSurface");
