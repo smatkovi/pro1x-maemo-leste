@@ -1,0 +1,374 @@
+diff --git a/src/hd-activate-views-dialog.c b/src/hd-activate-views-dialog.c
+index 598e679..83423c6 100644
+--- a/src/hd-activate-views-dialog.c
++++ b/src/hd-activate-views-dialog.c
+@@ -38,6 +38,7 @@
+ #include "hd-activate-views-dialog.h"
+ #include "hd-backgrounds.h"
+ #include "hd-change-background-dialog.h"
++#include "hd-scale.h"
+ 
+ #define HD_GCONF_KEY_ACTIVE_VIEWS "/apps/osso/hildon-desktop/views/active"
+ #define HD_DESKTOP_VIEWS_MAX 9
+@@ -270,7 +271,7 @@ hd_activate_views_dialog_init (HDActivateViewsDialog *dialog)
+                                     g_get_home_dir (),
+                                     i);        
+ 
+-      pixbuf = gdk_pixbuf_new_from_file_at_scale (bg_image, 125, 75, TRUE, &error);
++      pixbuf = gdk_pixbuf_new_from_file_at_scale (bg_image, HD_S (125), HD_S (75), TRUE, &error);
+ 
+       if (error)
+         {
+@@ -286,7 +287,7 @@ hd_activate_views_dialog_init (HDActivateViewsDialog *dialog)
+           pixbuf = gdk_pixbuf_new (GDK_COLORSPACE_RGB,
+                                    TRUE,
+                                    8,
+-                                   125, 75);
++                                   HD_S (125), HD_S (75));
+           gdk_pixbuf_fill (pixbuf,
+                            0x000000ff);
+         }
+diff --git a/src/hd-available-backgrounds.c b/src/hd-available-backgrounds.c
+index 58a4bf7..b3a7eb4 100644
+--- a/src/hd-available-backgrounds.c
++++ b/src/hd-available-backgrounds.c
+@@ -33,6 +33,7 @@
+ #include "hd-wallpaper-background.h"
+ 
+ #include "hd-available-backgrounds.h"
++#include "hd-scale.h"
+ 
+ struct _HDAvailableBackgroundsPrivate
+ {
+@@ -413,7 +414,7 @@ hd_available_backgrounds_run (HDAvailableBackgrounds *backgrounds,
+   if (icon_theme)
+     ovi_icon = gtk_icon_theme_load_icon (icon_theme,
+                                          "general_ovi_store",
+-                                         60, GTK_ICON_LOOKUP_NO_SVG,
++                                         HD_S (60), GTK_ICON_LOOKUP_NO_SVG,
+                                          NULL);
+ 
+   gtk_list_store_insert_with_values (priv->backgrounds_store,
+diff --git a/src/hd-background.c b/src/hd-background.c
+index 0d5c7b4..b172148 100644
+--- a/src/hd-background.c
++++ b/src/hd-background.c
+@@ -27,6 +27,7 @@
+ #include <hildon-thumbnail-factory.h>
+ 
+ #include "hd-background.h"
++#include "hd-scale.h"
+ 
+ struct _HDBackgroundPrivate
+ {
+@@ -108,7 +109,7 @@ hd_background_set_thumbnail_from_file (HDBackground *background,
+ 
+   hildon_thumbnail_factory_request_pixbuf (priv->thumbnail_factory,
+                                            uri,
+-                                           80, 60,
++                                           HD_S (80), HD_S (60),
+                                            FALSE,
+                                            NULL,
+                                            image_set_thumbnail_callback,
+diff --git a/src/hd-bookmark-shortcut.c b/src/hd-bookmark-shortcut.c
+index ea86924..5c9377b 100644
+--- a/src/hd-bookmark-shortcut.c
++++ b/src/hd-bookmark-shortcut.c
+@@ -34,20 +34,21 @@
+ #include "hd-cairo-surface-cache.h"
+ #include "hd-bookmark-shortcut.h"
+ #include "hd-dbus-utils.h"
++#include "hd-scale.h"
+ 
+ /* Size from Home layout guide 1.2 */
+-#define SHORTCUT_WIDTH 176
+-#define SHORTCUT_HEIGHT 146
++#define SHORTCUT_WIDTH HD_S (176)
++#define SHORTCUT_HEIGHT HD_S (146)
+ 
+-#define THUMBNAIL_WIDTH 160.0
+-#define THUMBNAIL_HEIGHT 96.0
++#define THUMBNAIL_WIDTH ((gdouble) HD_S (160))
++#define THUMBNAIL_HEIGHT ((gdouble) HD_S (96))
+ 
+-#define BORDER_WIDTH_LEFT 8
+-#define BORDER_WIDTH_TOP 8
++#define BORDER_WIDTH_LEFT HD_S (8)
++#define BORDER_WIDTH_TOP HD_S (8)
+ 
+ #define LABEL_WIDTH (SHORTCUT_WIDTH -                   \
+-                     (2 * HILDON_MARGIN_DEFAULT) -      \
+-                     (2 * HILDON_MARGIN_HALF))
++                     (2 * HD_S (HILDON_MARGIN_DEFAULT)) -      \
++                     (2 * HD_S (HILDON_MARGIN_HALF)))
+ 
+ #define LABEL_FONT "SmallSystemFont"
+ 
+@@ -331,7 +332,7 @@ create_default_thumbnail (HDBookmarkShortcut *shortcut,
+ 
+       pixbuf = gtk_icon_theme_load_icon (gtk_icon_theme_get_default (),
+                                          "general_bookmark",
+-                                         64,
++                                         HD_S (64),
+                                          GTK_ICON_LOOKUP_NO_SVG,
+                                          NULL);
+ 
+@@ -637,8 +638,8 @@ hd_bookmark_shortcut_init (HDBookmarkShortcut *applet)
+ 
+   alignment = gtk_alignment_new (0.5, 0.5, 0.0, 0.0);
+   gtk_alignment_set_padding (GTK_ALIGNMENT (alignment),
+-                             104, 8,
+-                             8, 8);
++                             HD_S (104), HD_S (8),
++                             HD_S (8), HD_S (8));
+   gtk_widget_show (alignment);
+ 
+   priv->label = gtk_label_new (NULL);
+diff --git a/src/hd-bookmark-widgets.c b/src/hd-bookmark-widgets.c
+index 091afb6..e4e9bdc 100644
+--- a/src/hd-bookmark-widgets.c
++++ b/src/hd-bookmark-widgets.c
+@@ -37,6 +37,7 @@
+ #include <osso_bookmark_parser.h>
+ 
+ #include "hd-bookmark-widgets.h"
++#include "hd-scale.h"
+ 
+ #define BOOKMARK_SHORTCUTS_GCONF_KEY "/apps/osso/hildon-home/bookmark-shortcuts"
+ 
+@@ -103,14 +104,14 @@ hd_bookmark_widgets_add_bookmark_item (HDBookmarkWidgets *widgets,
+                                     item->thumbnail_file,
+                                     NULL);
+ 
+-      pixbuf = gdk_pixbuf_new_from_file_at_size (icon_path, 106, 64, NULL);
++      pixbuf = gdk_pixbuf_new_from_file_at_size (icon_path, HD_S (106), HD_S (64), NULL);
+     }
+ 
+   if (!pixbuf)
+     {
+       pixbuf = gtk_icon_theme_load_icon (gtk_icon_theme_get_default (),
+                                          "general_bookmark",
+-                                         64,
++                                         HD_S (64),
+                                          GTK_ICON_LOOKUP_NO_SVG,
+                                          NULL);
+     }
+@@ -306,7 +307,7 @@ hd_bookmark_widgets_setup_column_renderes (HDWidgets     *widgets,
+ 
+   /* Add the label renderer */
+   renderer = gtk_cell_renderer_text_new ();
+-  g_object_set (renderer, "xpad", HILDON_MARGIN_DOUBLE, NULL);
++  g_object_set (renderer, "xpad", HD_S (HILDON_MARGIN_DOUBLE), NULL);
+   gtk_cell_layout_pack_start (column,
+                               renderer,
+                               FALSE);
+diff --git a/src/hd-change-background-dialog.c b/src/hd-change-background-dialog.c
+index 86372a5..160611c 100644
+--- a/src/hd-change-background-dialog.c
++++ b/src/hd-change-background-dialog.c
+@@ -35,6 +35,7 @@
+ #include "hd-change-background-dialog.h"
+ #include "hd-dbus-utils.h"
+ #include "hd-desktop.h"
++#include "hd-scale.h"
+ 
+ /* Add Image dialog */
+ #define RESPONSE_ADD 1
+@@ -260,7 +261,7 @@ hd_change_background_dialog_response (GtkDialog *dialog,
+                                                                   NULL);
+ 
+       if (hd_change_background_dialog_is_portrait ())
+-        gtk_widget_set_size_request (GTK_WIDGET (add_image), -1, 654);
++        gtk_widget_set_size_request (GTK_WIDGET (add_image), -1, HD_S (654));
+ 
+       /* Filter for shown mime-types: JPG, GIF, PNG, BMP, TIFF, sketch.png */
+       filter = gtk_file_filter_new ();
+@@ -415,7 +416,7 @@ hd_change_background_dialog_init (HDChangeBackgroundDialog *dialog)
+ 
+   /* Add the label renderer */
+   renderer = gtk_cell_renderer_text_new ();
+-  g_object_set (renderer, "xpad", HILDON_MARGIN_DOUBLE, NULL);
++  g_object_set (renderer, "xpad", HD_S (HILDON_MARGIN_DOUBLE), NULL);
+   gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (column),
+                               renderer,
+                               FALSE);
+@@ -431,9 +432,9 @@ hd_change_background_dialog_init (HDChangeBackgroundDialog *dialog)
+   gtk_container_add (GTK_CONTAINER (GTK_DIALOG (dialog)->vbox), priv->selector);
+ 
+   if (hd_change_background_dialog_is_portrait ())
+-    gtk_widget_set_size_request (GTK_WIDGET (dialog), -1, 678);
++    gtk_widget_set_size_request (GTK_WIDGET (dialog), -1, HD_S (678));
+   else
+-    gtk_widget_set_size_request (GTK_WIDGET (dialog), -1, 358);
++    gtk_widget_set_size_request (GTK_WIDGET (dialog), -1, HD_S (358));
+ }
+ 
+ GtkWidget *
+diff --git a/src/hd-desktop.h b/src/hd-desktop.h
+index 3b6ca92..3d9804a 100644
+--- a/src/hd-desktop.h
++++ b/src/hd-desktop.h
+@@ -26,8 +26,12 @@
+ /* Define amount of pannable desktop views default is 9 */
+ #define HD_DESKTOP_VIEWS 9
+ 
+-/* Define the desktop size default is 800x480 */
+-#define HD_SCREEN_WIDTH  800
+-#define HD_SCREEN_HEIGHT 480
++#include <gdk/gdk.h>
++
++/* The desktop's size: the screen's, in landscape (the N900's 800x480) */
++#define HD_SCREEN_WIDTH  MAX (gdk_screen_get_width (gdk_screen_get_default ()), \
++                              gdk_screen_get_height (gdk_screen_get_default ()))
++#define HD_SCREEN_HEIGHT MIN (gdk_screen_get_width (gdk_screen_get_default ()), \
++                              gdk_screen_get_height (gdk_screen_get_default ()))
+ 
+ #endif
+diff --git a/src/hd-incoming-event-window.c b/src/hd-incoming-event-window.c
+index 16589e2..30789a9 100644
+--- a/src/hd-incoming-event-window.c
++++ b/src/hd-incoming-event-window.c
+@@ -36,24 +36,25 @@
+ #include "hd-incoming-event-window.h"
+ #include "hd-incoming-events.h"
+ #include "hd-time-difference.h"
++#include "hd-scale.h"
+ 
+ /* Pixel sizes */
+-#define WINDOW_WIDTH 366
+-#define WINDOW_HEIGHT 88
++#define WINDOW_WIDTH HD_S (366)
++#define WINDOW_HEIGHT HD_S (88)
+ 
+-#define WINDOW_MARGIN HILDON_MARGIN_DOUBLE
++#define WINDOW_MARGIN HD_S (HILDON_MARGIN_DOUBLE)
+ 
+-#define ICON_SIZE 32
++#define ICON_SIZE HD_S (32)
+ 
+-#define ICON_SPACING HILDON_MARGIN_DEFAULT
++#define ICON_SPACING HD_S (HILDON_MARGIN_DEFAULT)
+ 
+-#define TITLE_TEXT_PADDING 1
++#define TITLE_TEXT_PADDING HD_S (1)
+ #define TITLE_TEXT_WIDTH (WINDOW_WIDTH - WINDOW_MARGIN - ICON_SIZE - ICON_SPACING - WINDOW_MARGIN)
+-#define TITLE_TEXT_HEIGHT 30
++#define TITLE_TEXT_HEIGHT HD_S (30)
+ #define TITLE_TEXT_FONT "SystemFont"
+ 
+ #define SECONDARY_TEXT_WIDTH TITLE_TEXT_WIDTH
+-#define SECONDARY_TEXT_HEIGHT 24
++#define SECONDARY_TEXT_HEIGHT HD_S (24)
+ #define SECONDARY_TEXT_FONT "SmallSystemFont"
+ 
+ #define IMAGES_DIR                   "/etc/hildon/theme/images/"
+diff --git a/src/hd-notification-manager.c b/src/hd-notification-manager.c
+index 6b92a2f..05d3d78 100644
+--- a/src/hd-notification-manager.c
++++ b/src/hd-notification-manager.c
+@@ -33,6 +33,7 @@
+ #include "hd-notification-manager.h"
+ #include "hd-notification-manager-glue.h"
+ #include "hd-marshal.h"
++#include "hd-scale.h"
+ 
+ #include <string.h>
+ #include <stdio.h>
+@@ -74,7 +75,7 @@ static guint signals[N_SIGNALS];
+ #define HD_NOTIFICATION_MANAGER_DBUS_NAME  "org.freedesktop.Notifications" 
+ #define HD_NOTIFICATION_MANAGER_DBUS_PATH  "/org/freedesktop/Notifications"
+ 
+-#define HD_NOTIFICATION_MANAGER_ICON_SIZE  48
++#define HD_NOTIFICATION_MANAGER_ICON_SIZE  HD_S (48)
+ 
+ struct _HDNotificationManagerPrivate
+ {
+diff --git a/src/hd-scale.h b/src/hd-scale.h
+new file mode 100644
+index 0000000..3a52dee
+--- /dev/null
++++ b/src/hd-scale.h
+@@ -0,0 +1,40 @@
++/*
++ * HiDPI: Hildon's lengths are the N900's pixels; on a denser screen they
++ * are scaled by HILDON_SCALE from the environment, or else by the factor
++ * the theme was made for (/etc/hildon/theme/.pro1x-theme, written by
++ * pro1x-theme-scale), e.g. 2.25 on 2160x1080 for the N900's proportion.
++ */
++
++#ifndef __HD_SCALE_H__
++#define __HD_SCALE_H__
++
++#include <math.h>
++#include <string.h>
++#include <glib.h>
++
++static inline gdouble
++hd_scale (void)
++{
++  static gdouble scale = 0;
++
++  if (scale == 0)
++    {
++      const gchar *env = g_getenv ("HILDON_SCALE");
++      gchar *theme = NULL;
++
++      /* Else the factor the theme was made for (pro1x-theme-scale) */
++      if (!env && g_file_get_contents ("/etc/hildon/theme/.pro1x-theme",
++                                       &theme, NULL, NULL))
++        env = strchr (theme, '\n') ? strchr (theme, '\n') + 1 : NULL;
++      scale = env ? g_ascii_strtod (env, NULL) : 1;
++      if (!(scale >= 0.5 && scale <= 8))
++        scale = 1;
++      g_free (theme);
++    }
++
++  return scale;
++}
++
++#define HD_S(x) ((gint) floor ((x) * hd_scale () + 0.5))
++
++#endif
+diff --git a/src/hd-shortcut-widgets.c b/src/hd-shortcut-widgets.c
+index 1b1155e..dd99b8c 100644
+--- a/src/hd-shortcut-widgets.c
++++ b/src/hd-shortcut-widgets.c
+@@ -36,6 +36,7 @@
+ #include <ftw.h>
+ 
+ #include "hd-shortcut-widgets.h"
++#include "hd-scale.h"
+ 
+ #define TASK_SHORTCUTS_GCONF_KEY "/apps/osso/hildon-home/task-shortcuts"
+ 
+@@ -736,7 +737,7 @@ hd_shortcut_widgets_setup_column_renderes (HDWidgets     *widgets,
+ 
+   /* Add the label renderer */
+   renderer = gtk_cell_renderer_text_new ();
+-  g_object_set (renderer, "xpad", HILDON_MARGIN_DOUBLE, NULL);
++  g_object_set (renderer, "xpad", HD_S (HILDON_MARGIN_DOUBLE), NULL);
+   gtk_cell_layout_pack_start (column,
+                               renderer,
+                               FALSE);
+diff --git a/src/hd-task-shortcut.c b/src/hd-task-shortcut.c
+index a1cdf39..a797e8c 100644
+--- a/src/hd-task-shortcut.c
++++ b/src/hd-task-shortcut.c
+@@ -32,12 +32,13 @@
+ #include "hd-shortcut-widgets.h"
+ #include "hd-task-shortcut.h"
+ #include "hd-dbus-utils.h"
++#include "hd-scale.h"
+ 
+ /* Layout from Task navigation layout guide 1.2 */
+-#define SHORTCUT_WIDTH 96
+-#define SHORTCUT_HEIGHT 96
+-#define ICON_WIDTH 64
+-#define ICON_HEIGHT 64
++#define SHORTCUT_WIDTH HD_S (96)
++#define SHORTCUT_HEIGHT HD_S (96)
++#define ICON_WIDTH HD_S (64)
++#define ICON_HEIGHT HD_S (64)
+ 
+ #define IMAGES_DIR                   "/etc/hildon/theme/images/"
+ #define BACKGROUND_IMAGE_FILE        IMAGES_DIR "ApplicationShortcutApplet.png"

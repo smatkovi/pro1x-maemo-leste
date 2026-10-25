@@ -1,0 +1,124 @@
+diff --git a/gtk/gtkdialog.c b/gtk/gtkdialog.c
+index 9832134..5369336 100644
+--- a/gtk/gtkdialog.c
++++ b/gtk/gtkdialog.c
+@@ -54,7 +54,7 @@
+ #define GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GTK_TYPE_DIALOG, GtkDialogPrivate))
+ 
+ /* Buttons on a HildonDialog have fixed size */
+-#define HILDON_DIALOG_BUTTON_WIDTH 174
++#define HILDON_DIALOG_BUTTON_WIDTH _hildon_gtk_scale (174)
+ 
+ typedef struct {
+   guint ignore_separator : 1;
+@@ -701,13 +701,13 @@ gtk_dialog_screen_size_changed_cb (GdkScreen *screen,
+   if (portrait)
+     {
+       parent = dialog->vbox;
+-      button_width = width - 16 /* HILDON_MARGIN_DOUBLE */ * 2;
+-      padding = 16 /* HILDON_MARGIN_DOUBLE */;
++      button_width = width - _hildon_gtk_scale (16) /* HILDON_MARGIN_DOUBLE */ * 2;
++      padding = _hildon_gtk_scale (16) /* HILDON_MARGIN_DOUBLE */;
+     }
+   else
+     {
+       parent = gtk_widget_get_parent (dialog->vbox);
+-      button_width = 174 /* HILDON_DIALOG_BUTTON_WIDTH */;
++      button_width = _hildon_gtk_scale (174) /* HILDON_DIALOG_BUTTON_WIDTH */;
+       padding = 0;
+     }
+ 
+diff --git a/gtk/gtkprivate.h b/gtk/gtkprivate.h
+index 6386c32..d816d87 100644
+--- a/gtk/gtkprivate.h
++++ b/gtk/gtkprivate.h
+@@ -152,6 +152,11 @@ gboolean _gtk_translate_keyboard_accel_state     (GdkKeymap       *keymap,
+                                                   GdkModifierType *consumed_modifiers);
+ 
+ 
++/* Hildon's lengths are the N900's pixels; on a denser screen they are
++ * scaled by HILDON_SCALE from the environment, or else by the factor the
++ * theme was made for (/etc/hildon/theme/.pro1x-theme) */
++gint _hildon_gtk_scale (gint pixels);
++
+ G_END_DECLS
+ 
+ #endif /* __GTK_PRIVATE_H__ */
+diff --git a/gtk/gtktreeview.c b/gtk/gtktreeview.c
+index 2101ab3..dcf4e3f 100644
+--- a/gtk/gtktreeview.c
++++ b/gtk/gtktreeview.c
+@@ -1519,7 +1519,7 @@ gtk_tree_view_init (GtkTreeView *tree_view)
+   tree_view->priv->hover_selection = FALSE;
+   tree_view->priv->hover_expand = FALSE;
+ 
+-  tree_view->priv->level_indentation = 10;
++  tree_view->priv->level_indentation = _hildon_gtk_scale (10);
+ 
+   tree_view->priv->queued_select_row = NULL;
+   tree_view->priv->queued_expand_row = NULL;
+@@ -1537,7 +1537,7 @@ gtk_tree_view_init (GtkTreeView *tree_view)
+ 			"hildon-mode", &tree_view->priv->hildon_mode,
+ 			NULL);
+ 
+-  tree_view->priv->level_indentation = 10;
++  tree_view->priv->level_indentation = _hildon_gtk_scale (10);
+ 
+   tree_view->priv->rubber_banding_enable = TRUE;
+ 
+@@ -17081,7 +17081,7 @@ hildon_tree_view_set_action_area_height (GtkTreeView *tree_view)
+        */
+       children = gtk_container_get_children (GTK_CONTAINER (tree_view->priv->action_area_box));
+       hildon_tree_view_set_rows_offset (tree_view,
+-					g_list_length (children) * 90);
++					g_list_length (children) * _hildon_gtk_scale (90));
+       g_list_free (children);
+     }
+ }
+diff --git a/gtk/gtkwidget.c b/gtk/gtkwidget.c
+index 4e1479a..9939312 100644
+--- a/gtk/gtkwidget.c
++++ b/gtk/gtkwidget.c
+@@ -28,6 +28,7 @@
+ #include <stdarg.h>
+ #include <string.h>
+ #include <locale.h>
++#include <math.h>
+ #include "gtkcontainer.h"
+ #include "gtkaccelmap.h"
+ #include "gtkclipboard.h"
+@@ -12168,9 +12169,32 @@ gtk_widget_insensitive_press ( GtkWidget *widget )
+   g_signal_emit(widget, widget_signals[INSENSITIVE_PRESS], 0);
+ }
+ 
+-#define HILDON_HEIGHT_FINGER    70
++gint
++_hildon_gtk_scale (gint pixels)
++{
++  static gdouble scale = 0;
++
++  if (scale == 0)
++    {
++      const gchar *env = g_getenv ("HILDON_SCALE");
++      gchar *theme = NULL;
++
++      /* Else the factor the theme was made for (pro1x-theme-scale) */
++      if (!env && g_file_get_contents ("/etc/hildon/theme/.pro1x-theme",
++                                       &theme, NULL, NULL))
++        env = strchr (theme, '\n') ? strchr (theme, '\n') + 1 : NULL;
++      scale = env ? g_ascii_strtod (env, NULL) : 1;
++      if (!(scale >= 0.5 && scale <= 8))
++        scale = 1;
++      g_free (theme);
++    }
++
++  return (gint) floor (pixels * scale + 0.5);
++}
++
++#define HILDON_HEIGHT_FINGER    _hildon_gtk_scale (70)
+ 
+-#define HILDON_HEIGHT_THUMB     105
++#define HILDON_HEIGHT_THUMB     _hildon_gtk_scale (105)
+ 
+ #define HILDON_WIDTH_FULLSCREEN (gdk_screen_get_width (gdk_screen_get_default ()))
+ 

@@ -5,7 +5,6 @@
 # The status menu and home run beside hildon-desktop and come back when
 # they crash (Leste: dsmetool -t).
 export GTK2_RC_FILES=/etc/hildon/theme/gtk-2.0/gtkrc
-export GDK_DPI_SCALE=${GDK_DPI_SCALE:-1.7}
 export LANG=${LANG:-en_GB.UTF-8}
 export HILDON_DESKTOP_APPS_PRESTART=auto
 export CLUTTER_BACKEND=x11
@@ -15,6 +14,11 @@ export GDK_PIXBUF_MODULE_FILE=/var/db/gdk-pixbuf-loaders.cache
 mkdir -p /tmp/hildon-desktop /tmp/af-piddir
 # As Leste: no key repeat for Return and the hardware keys
 xset -r 36 -r 70 -r 72 -r 9 -r 104 2> /dev/null
+
+# At the N900's size on the full resolution: HILDON_SCALE, GTK 3 and Qt
+# factors, Xft.dpi (pro1x-hidpi)
+eval "$(/usr/local/bin/pro1x-hidpi env)"
+/usr/local/bin/pro1x-hidpi x11
 
 eval "$(dbus-launch --sh-syntax --exit-with-session)"
 

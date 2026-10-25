@@ -10,8 +10,9 @@
 # build when they are installed, built into /var at every boot:
 # gdk-pixbuf's list of image loaders (found through GDK_PIXBUF_MODULE_FILE,
 # ~/.xinitrc), Hildon's GConf defaults from the schemas (found through
-# /usr/local/etc/gconf/2/local-defaults.path) and, in the background,
-# fontconfig's font cache.
+# /usr/local/etc/gconf/2/local-defaults.path), Hildon's theme for the
+# factor in pro1x-display.conf on userdata (pro1x-hidpi: /etc/hildon/theme
+# points into /var) and, in the background, fontconfig's font cache.
 
 . /etc/rc.subr
 
@@ -33,6 +34,10 @@ pro1x_setup_start()
 		GCONF_CONFIG_SOURCE=xml:merged:/var/db/gconf/gconf.xml.defaults \
 		    /usr/local/bin/gconftool-2 --makefile-install-rule \
 		    /usr/local/share/gconf/schemas/*.schemas > /dev/null 2>&1
+	fi
+	if [ -x /usr/local/bin/pro1x-hidpi ]; then
+		GDK_PIXBUF_MODULE_FILE=/var/db/gdk-pixbuf-loaders.cache \
+		    /usr/local/bin/pro1x-hidpi theme
 	fi
 	if [ -x /usr/local/bin/fc-cache ]; then
 		(nice /usr/local/bin/fc-cache -s > /dev/null 2>&1 &)

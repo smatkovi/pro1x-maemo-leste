@@ -109,6 +109,17 @@ for s in m.get("scripts", {}).values():
 		    -e '^\./usr/local/share/man/' -e '^\./usr/local/share/gtk-doc/') |
 		    (cd "$HILDON" && cpio -pdm --quiet "$R")
 		cp -a "$REPO/freebsd/hildon/rootfs/." "$R/"
+		# HiDPI (tools/pro1x-hidpi): the theme for the default factor
+		# made here, other factors at boot into /var
+		s=$(sed -n 's/^DEFAULT=//p' "$REPO/tools/pro1x-hidpi/pro1x-hidpi")
+		# shellcheck disable=SC2046
+		gcc -O2 -o "$WORK/pro1x-theme-scale.host" \
+		    "$REPO/tools/pro1x-hidpi/pro1x-theme-scale.c" \
+		    $(pkg-config --cflags --libs gdk-pixbuf-2.0) -lm
+		rm -rf "$R/usr/local/share/pro1x/hidpi/alpha-$s"
+		mkdir -p "$R/usr/local/share/pro1x/hidpi"
+		"$WORK/pro1x-theme-scale.host" -r "$R" /usr/local/share/themes/alpha \
+		    "/usr/local/share/pro1x/hidpi/alpha-$s" "$s"
 	fi
 
 	log "their users and groups"

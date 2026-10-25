@@ -1,0 +1,839 @@
+diff --git a/hildon/hildon-app-menu.c b/hildon/hildon-app-menu.c
+index ef5b2c1..4f8cf4e 100644
+--- a/hildon/hildon-app-menu.c
++++ b/hildon/hildon-app-menu.c
+@@ -100,6 +100,7 @@
+ #include                                        <gdk/gdkx.h>
+ 
+ #include                                        "hildon-gtk.h"
++#include "hildon-private.h"
+ #include                                        "hildon-app-menu.h"
+ #include                                        "hildon-app-menu-private.h"
+ #include                                        "hildon-window.h"
+@@ -1060,7 +1061,7 @@ hildon_app_menu_class_init                      (HildonAppMenuClass *klass)
+             "horizontal-spacing",
+             "Horizontal spacing on menu items",
+             "Horizontal spacing between each menu item. Does not apply to filter buttons.",
+-            0, G_MAXUINT, 16,
++            0, G_MAXUINT, HILDON_S (16),
+             G_PARAM_READABLE));
+ 
+     gtk_widget_class_install_style_property (
+@@ -1069,7 +1070,7 @@ hildon_app_menu_class_init                      (HildonAppMenuClass *klass)
+             "vertical-spacing",
+             "Vertical spacing on menu items",
+             "Vertical spacing between each menu item. Does not apply to filter buttons.",
+-            0, G_MAXUINT, 16,
++            0, G_MAXUINT, HILDON_S (16),
+             G_PARAM_READABLE));
+ 
+     gtk_widget_class_install_style_property (
+@@ -1079,7 +1080,7 @@ hildon_app_menu_class_init                      (HildonAppMenuClass *klass)
+             "Width of the group of filter buttons",
+             "Total width of the group of filter buttons, "
+             "or -1 to use the natural size request.",
+-            -1, G_MAXINT, 444,
++            -1, G_MAXINT, HILDON_S (444),
+             G_PARAM_READABLE));
+ 
+     gtk_widget_class_install_style_property (
+@@ -1088,7 +1089,7 @@ hildon_app_menu_class_init                      (HildonAppMenuClass *klass)
+             "filter-vertical-spacing",
+             "Vertical spacing between filters and menu items",
+             "Vertical spacing between filters and menu items",
+-            0, G_MAXUINT, 8,
++            0, G_MAXUINT, HILDON_S (8),
+             G_PARAM_READABLE));
+ 
+     gtk_widget_class_install_style_property (
+@@ -1097,7 +1098,7 @@ hildon_app_menu_class_init                      (HildonAppMenuClass *klass)
+             "inner-border",
+             "Border between menu edges and buttons",
+             "Border between menu edges and buttons",
+-            0, G_MAXUINT, 16,
++            0, G_MAXUINT, HILDON_S (16),
+             G_PARAM_READABLE));
+ 
+     gtk_widget_class_install_style_property (
+@@ -1107,7 +1108,7 @@ hildon_app_menu_class_init                      (HildonAppMenuClass *klass)
+             "Border between menu and screen edges (in horizontal mode)",
+             "Border between the right and left edges of the menu and "
+             "the screen edges (in horizontal mode)",
+-            0, G_MAXUINT, 50,
++            0, G_MAXUINT, HILDON_S (50),
+             G_PARAM_READABLE));
+ 
+ 
+diff --git a/hildon/hildon-banner.c b/hildon/hildon-banner.c
+index 8b80236..1449f79 100644
+--- a/hildon/hildon-banner.c
++++ b/hildon/hildon-banner.c
+@@ -91,9 +91,9 @@
+ /* max widths */
+ 
+ #define                                         HILDON_BANNER_LABEL_MAX_TIMED \
+-                                                (gdk_screen_width() - ((HILDON_MARGIN_TRIPLE) * 2))
++                                                (gdk_screen_width() - ((HILDON_S (HILDON_MARGIN_TRIPLE)) * 2))
+ 
+-#define                                         HILDON_BANNER_LABEL_MAX_PROGRESS 375 /*265*/
++#define                                         HILDON_BANNER_LABEL_MAX_PROGRESS HILDON_S (375) /*265*/
+ 
+ /* default timeout */
+ 
+@@ -587,7 +587,7 @@ hildon_banner_map                               (GtkWidget *widget)
+          * being closed by other non-temporary windows */
+         gtk_window_set_is_temporary (GTK_WINDOW (widget), FALSE);
+ 
+-        gtk_window_move (GTK_WINDOW (widget), 0, HILDON_WINDOW_TITLEBAR_HEIGHT);
++        gtk_window_move (GTK_WINDOW (widget), 0, HILDON_S (HILDON_WINDOW_TITLEBAR_HEIGHT));
+     }
+ }
+ #endif
+@@ -825,14 +825,14 @@ hildon_banner_init                              (HildonBanner *self)
+ 
+     /* Initialize the common layout inside banner */
+     priv->alignment = gtk_alignment_new (0.5, 0.5, 0, 0);
+-    priv->layout = gtk_hbox_new (FALSE, HILDON_MARGIN_DEFAULT);
++    priv->layout = gtk_hbox_new (FALSE, HILDON_S (HILDON_MARGIN_DEFAULT));
+ 
+     priv->label = g_object_new (GTK_TYPE_LABEL, NULL);
+     gtk_label_set_line_wrap (GTK_LABEL (priv->label), TRUE);
+     gtk_label_set_line_wrap_mode (GTK_LABEL (priv->label), PANGO_WRAP_WORD_CHAR);
+     gtk_label_set_justify (GTK_LABEL (priv->label), GTK_JUSTIFY_CENTER);
+ 
+-    gtk_container_set_border_width (GTK_CONTAINER (priv->layout), HILDON_MARGIN_DEFAULT);
++    gtk_container_set_border_width (GTK_CONTAINER (priv->layout), HILDON_S (HILDON_MARGIN_DEFAULT));
+     gtk_container_add (GTK_CONTAINER (self), priv->alignment);
+     gtk_container_add (GTK_CONTAINER (priv->alignment), priv->layout);
+     g_object_ref (priv->label);
+diff --git a/hildon/hildon-bread-crumb-widget.c b/hildon/hildon-bread-crumb-widget.c
+index 22e4411..19061d1 100644
+--- a/hildon/hildon-bread-crumb-widget.c
++++ b/hildon/hildon-bread-crumb-widget.c
+@@ -26,6 +26,7 @@
+ #undef HILDON_DISABLE_DEPRECATED
+ 
+ #include "hildon-bread-crumb-widget.h"
++#include "hildon-private.h"
+ #include "hildon-defines.h"
+ 
+ #define HILDON_BREAD_CRUMB_WIDGET_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE ((obj), HILDON_TYPE_BREAD_CRUMB_WIDGET, HildonBreadCrumbWidgetPrivate))
+@@ -177,7 +178,7 @@ hildon_bread_crumb_widget_constructor (GType type,
+   gtk_widget_set_no_show_all (priv->arrow, TRUE);
+ 
+   /* Contents base container */
+-  bread_crumb->contents = gtk_hbox_new (FALSE, HILDON_MARGIN_DEFAULT);
++  bread_crumb->contents = gtk_hbox_new (FALSE, HILDON_S (HILDON_MARGIN_DEFAULT));
+   gtk_container_add (GTK_CONTAINER (priv->hbox), bread_crumb->contents);
+   gtk_widget_show (bread_crumb->contents);
+ 
+@@ -253,9 +254,9 @@ hildon_bread_crumb_widget_set_contents (HildonBreadCrumbWidget *bread_crumb)
+       priv->icon = icon;
+       if (priv->icon_position == GTK_POS_LEFT ||
+           priv->icon_position == GTK_POS_RIGHT)
+-          bread_crumb->contents = gtk_hbox_new (FALSE, HILDON_MARGIN_DEFAULT);
++          bread_crumb->contents = gtk_hbox_new (FALSE, HILDON_S (HILDON_MARGIN_DEFAULT));
+       else
+-          bread_crumb->contents = gtk_vbox_new (FALSE, HILDON_MARGIN_DEFAULT);
++          bread_crumb->contents = gtk_vbox_new (FALSE, HILDON_S (HILDON_MARGIN_DEFAULT));
+ 
+       if (priv->icon_position == GTK_POS_LEFT ||
+           priv->icon_position == GTK_POS_TOP)
+diff --git a/hildon/hildon-button.c b/hildon/hildon-button.c
+index 57416c8..feb0f4e 100644
+--- a/hildon/hildon-button.c
++++ b/hildon/hildon-button.c
+@@ -89,6 +89,7 @@
+  */
+ 
+ #include                                        "hildon-button.h"
++#include "hildon-private.h"
+ #include                                        "hildon-enum-types.h"
+ #include                                        "hildon-gtk.h"
+ 
+@@ -355,7 +356,7 @@ hildon_button_class_init                        (HildonButtonClass *klass)
+             "horizontal-spacing",
+             "Horizontal spacing between labels",
+             "Horizontal spacing between the title and value labels, when in horizontal mode",
+-            0, G_MAXUINT, 25,
++            0, G_MAXUINT, HILDON_S (25),
+             G_PARAM_READABLE));
+ 
+     gtk_widget_class_install_style_property (
+@@ -364,7 +365,7 @@ hildon_button_class_init                        (HildonButtonClass *klass)
+             "vertical-spacing",
+             "Vertical spacing between labels",
+             "Vertical spacing between the title and value labels, when in vertical mode",
+-            0, G_MAXUINT, 5,
++            0, G_MAXUINT, HILDON_S (5),
+             G_PARAM_READABLE));
+ 
+     g_type_class_add_private (klass, sizeof (HildonButtonPrivate));
+diff --git a/hildon/hildon-caption.c b/hildon/hildon-caption.c
+index ed01355..11c67b7 100644
+--- a/hildon/hildon-caption.c
++++ b/hildon/hildon-caption.c
+@@ -41,13 +41,14 @@
+ #include                                        <gtk/gtk.h>
+ 
+ #include                                        "hildon-defines.h"
++#include "hildon-private.h"
+ #include                                        "hildon-caption.h"
+ #include                                        "hildon-caption-private.h"
+ 
+ #define                                         _(String)\
+                                                 dgettext("hildon-libs", String)
+ 
+-#define                                         HILDON_CAPTION_SPACING 6
++#define                                         HILDON_CAPTION_SPACING HILDON_S (6)
+ 
+ static GtkEventBox*                             parent_class = NULL;
+ 
+diff --git a/hildon/hildon-check-button.c b/hildon/hildon-check-button.c
+index 5b46b48..9fb2fb0 100644
+--- a/hildon/hildon-check-button.c
++++ b/hildon/hildon-check-button.c
+@@ -70,6 +70,7 @@
+  */
+ 
+ #include                                        "hildon-enum-types.h"
++#include "hildon-private.h"
+ #include                                        "hildon-check-button.h"
+ 
+ enum {
+@@ -282,7 +283,7 @@ hildon_check_button_class_init                  (HildonCheckButtonClass *klass)
+             "checkbox-size",
+             "Size of the check box",
+             "Size of the check box",
+-            0, G_MAXUINT, 26,
++            0, G_MAXUINT, HILDON_S (26),
+             G_PARAM_READABLE));
+ 
+     g_object_class_install_property (
+diff --git a/hildon/hildon-code-dialog.c b/hildon/hildon-code-dialog.c
+index 44046b7..bb77af3 100644
+--- a/hildon/hildon-code-dialog.c
++++ b/hildon/hildon-code-dialog.c
+@@ -44,14 +44,15 @@
+ #include                                        <gdk/gdkkeysyms.h>
+ 
+ #include                                        "hildon-gtk.h"
++#include "hildon-private.h"
+ #include                                        "hildon-code-dialog.h"
+ #include                                        "hildon-defines.h"
+ #include                                        "hildon-banner.h"
+ #include                                        "hildon-code-dialog-private.h"
+ 
+-#define                                         HEIGHT (48-HILDON_MARGIN_DEFAULT)
++#define                                         HEIGHT HILDON_S (48-HILDON_MARGIN_DEFAULT)
+ 
+-#define                                         WIDTH  (100-HILDON_MARGIN_DEFAULT)
++#define                                         WIDTH  HILDON_S (100-HILDON_MARGIN_DEFAULT)
+ 
+ #define                                         BACKSPACE_ICON "general_backspace"
+ 
+@@ -218,12 +219,12 @@ hildon_code_dialog_init                         (HildonCodeDialog *dialog)
+             GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE);
+ 
+     table = gtk_table_new (4, 3, FALSE);
+-    gtk_table_set_row_spacings (GTK_TABLE (table), HILDON_MARGIN_DEFAULT );
+-    gtk_table_set_col_spacings (GTK_TABLE (table), HILDON_MARGIN_DEFAULT );
++    gtk_table_set_row_spacings (GTK_TABLE (table), HILDON_S (HILDON_MARGIN_DEFAULT) );
++    gtk_table_set_col_spacings (GTK_TABLE (table), HILDON_S (HILDON_MARGIN_DEFAULT) );
+ 
+     dialog_vbox1 = GTK_DIALOG (dialog)->vbox;
+     vbox1 = gtk_vbox_new (FALSE, 0);
+-    gtk_box_set_spacing (GTK_BOX (vbox1), HILDON_MARGIN_DOUBLE);
++    gtk_box_set_spacing (GTK_BOX (vbox1), HILDON_S (HILDON_MARGIN_DOUBLE));
+ 
+     priv->help_text = gtk_label_new ("");
+     alignment = gtk_alignment_new (0.5,0,1,1);
+diff --git a/hildon/hildon-date-editor.c b/hildon/hildon-date-editor.c
+index bfee6dd..89505a1 100644
+--- a/hildon/hildon-date-editor.c
++++ b/hildon/hildon-date-editor.c
+@@ -1276,7 +1276,7 @@ hildon_date_editor_size_request                 (GtkWidget *widget,
+     gtk_widget_size_request (priv->d_button_image, &img_req);
+ 
+     /* calculate our size */
+-    requisition->width = f_req.width + img_req.width + HILDON_MARGIN_DEFAULT;
++    requisition->width = f_req.width + img_req.width + HILDON_S (HILDON_MARGIN_DEFAULT);
+ 
+     /* FIXME: Fixed size is bad! We should use the maximum of our children, but
+        doing so would break current pixel specifications, since
+@@ -1328,14 +1328,14 @@ hildon_date_editor_size_allocate                (GtkWidget *widget,
+         gtk_widget_get_child_requisition (priv->d_button_image,
+                 &req);
+ 
+-        img_alloc.x += f_alloc.width + HILDON_MARGIN_DEFAULT;
++        img_alloc.x += f_alloc.width + HILDON_S (HILDON_MARGIN_DEFAULT);
+         img_alloc.width = req.width;
+         img_alloc.height = max_req.height;
+ 
+         if (rtl)
+         {
+             img_alloc.x = f_alloc.x;
+-            f_alloc.x  += img_alloc.width + HILDON_MARGIN_DEFAULT;
++            f_alloc.x  += img_alloc.width + HILDON_S (HILDON_MARGIN_DEFAULT);
+         }
+ 
+         if (GTK_WIDGET_VISIBLE (priv->d_button_image)) {
+diff --git a/hildon/hildon-edit-toolbar.c b/hildon/hildon-edit-toolbar.c
+index 7db0ecc..3ff0fe5 100644
+--- a/hildon/hildon-edit-toolbar.c
++++ b/hildon/hildon-edit-toolbar.c
+@@ -69,8 +69,8 @@
+ 
+ G_DEFINE_TYPE                                   (HildonEditToolbar, hildon_edit_toolbar, GTK_TYPE_HBOX);
+ 
+-#define                                         TOOLBAR_LEFT_PADDING 24
+-#define                                         TOOLBAR_RIGHT_PADDING 8
++#define                                         TOOLBAR_LEFT_PADDING HILDON_S (24)
++#define                                         TOOLBAR_RIGHT_PADDING HILDON_S (8)
+ 
+ #define                                         HILDON_EDIT_TOOLBAR_ANIMATION_FRAMERATE ((float)1000/150)
+ #define                                         HILDON_EDIT_TOOLBAR_ANIMATION_TMPL "indicator_update%d"
+@@ -154,7 +154,7 @@ hildon_edit_toolbar_class_init                  (HildonEditToolbarClass *klass)
+             "arrow-width",
+             "Width of the arrow button",
+             "Width of the arrow button",
+-            0, G_MAXUINT, 112,
++            0, G_MAXUINT, HILDON_S (112),
+             G_PARAM_READABLE));
+ 
+     gtk_widget_class_install_style_property (
+@@ -163,7 +163,7 @@ hildon_edit_toolbar_class_init                  (HildonEditToolbarClass *klass)
+             "arrow-height",
+             "Height of the arrow button",
+             "Height of the arrow button",
+-            0, G_MAXUINT, 56,
++            0, G_MAXUINT, HILDON_S (56),
+             G_PARAM_READABLE));
+ 
+     /**
+@@ -247,7 +247,7 @@ hildon_edit_toolbar_init                        (HildonEditToolbar *self)
+ 
+     gtk_container_add (GTK_CONTAINER (align), GTK_WIDGET (priv->hbox));
+     gtk_box_pack_start (priv->hbox, GTK_WIDGET (priv->label), TRUE, TRUE, 0);
+-    gtk_box_pack_start (priv->hbox, priv->animation, TRUE, TRUE, 10);
++    gtk_box_pack_start (priv->hbox, priv->animation, TRUE, TRUE, HILDON_S (10));
+     gtk_box_pack_start (priv->hbox, GTK_WIDGET (priv->button), FALSE, FALSE, 0);
+ 
+     gtk_widget_set_no_show_all (priv->animation, TRUE);
+diff --git a/hildon/hildon-find-toolbar.c b/hildon/hildon-find-toolbar.c
+index 1abe60e..212ff32 100644
+--- a/hildon/hildon-find-toolbar.c
++++ b/hildon/hildon-find-toolbar.c
+@@ -43,6 +43,7 @@
+ #include                                        <gdk/gdkkeysyms.h>
+ 
+ #include                                        "hildon-gtk.h"
++#include "hildon-private.h"
+ #include                                        "hildon-find-toolbar.h"
+ #include                                        "hildon-defines.h"
+ #include                                        "hildon-find-toolbar-private.h"
+@@ -55,7 +56,7 @@
+ 
+ #define                                         MAX_SIZE G_MAXUSHORT
+ 
+-#define                                         FIND_LABEL_XPADDING 6
++#define                                         FIND_LABEL_XPADDING HILDON_S (6)
+ 
+ #define                                         FIND_LABEL_YPADDING 0
+ 
+@@ -707,7 +708,7 @@ hildon_find_toolbar_init                        (HildonFindToolbar *self)
+ 
+     /* Separator */
+     priv->separator = gtk_separator_tool_item_new();
+-    gtk_widget_set_size_request (GTK_WIDGET (priv->separator), 72, -1);
++    gtk_widget_set_size_request (GTK_WIDGET (priv->separator), HILDON_S (72), -1);
+     gtk_widget_show(GTK_WIDGET(priv->separator));
+     gtk_toolbar_insert (GTK_TOOLBAR(self), priv->separator, -1);
+ 
+diff --git a/hildon/hildon-live-search.c b/hildon/hildon-live-search.c
+index 4696cc6..e625bce 100644
+--- a/hildon/hildon-live-search.c
++++ b/hildon/hildon-live-search.c
+@@ -37,6 +37,7 @@
+  */
+ 
+ #include                                        "hildon-live-search.h"
++#include "hildon-private.h"
+ 
+ #include                                        <hildon/hildon.h>
+ #include                                        <string.h>
+@@ -775,7 +776,7 @@ hildon_live_search_init                         (HildonLiveSearch *self)
+                          "HildonLiveSearchEntry");
+ 
+     gtk_box_pack_start (GTK_BOX (entry_hbox), priv->entry, TRUE, TRUE,
+-                        HILDON_MARGIN_DEFAULT);
++                        HILDON_S (HILDON_MARGIN_DEFAULT));
+ 
+     gtk_toolbar_insert (GTK_TOOLBAR (self), entry_container, 0);
+     gtk_widget_show_all (GTK_WIDGET (entry_container));
+@@ -789,7 +790,7 @@ hildon_live_search_init                         (HildonLiveSearch *self)
+     close_button_alignment = gtk_alignment_new (0.0f, 0.0f, 1.0f, 1.0f);
+     gtk_alignment_set_padding (GTK_ALIGNMENT (close_button_alignment),
+                                0, 0,
+-                               0, HILDON_MARGIN_DEFAULT);
++                               0, HILDON_S (HILDON_MARGIN_DEFAULT));
+     gtk_container_add (GTK_CONTAINER (close_button_alignment),
+                        GTK_WIDGET (close_button));
+ 
+diff --git a/hildon/hildon-main.c b/hildon/hildon-main.c
+index 3a812a9..54e15f3 100644
+--- a/hildon/hildon-main.c
++++ b/hildon/hildon-main.c
+@@ -65,11 +65,13 @@
+  */
+ 
+ 
++#include <string.h>
+ #include <gtk/gtk.h>
+ #include <glib/gi18n.h>
+ 
+ #include "hildon-main.h"
+ #include "hildon-stock.h"
++#include "hildon-private.h"
+ 
+ #define GETTEXT_PACKAGE "hildon-libs"
+ 
+@@ -94,6 +96,29 @@ static const GtkStockItem hildon_items[] = {
+  *
+  * Since: 2.2
+  **/
++gdouble
++_hildon_scale (void)
++{
++  static gdouble scale = 0;
++
++  if (scale == 0)
++    {
++      const gchar *env = g_getenv ("HILDON_SCALE");
++      gchar *theme = NULL;
++
++      /* Else the factor the theme was made for (pro1x-theme-scale) */
++      if (!env && g_file_get_contents ("/etc/hildon/theme/.pro1x-theme",
++                                       &theme, NULL, NULL))
++        env = strchr (theme, '\n') ? strchr (theme, '\n') + 1 : NULL;
++      scale = env ? g_ascii_strtod (env, NULL) : 1;
++      if (!(scale >= 0.5 && scale <= 8))
++        scale = 1;
++      g_free (theme);
++    }
++
++  return scale;
++}
++
+ void
+ hildon_init (void)
+ {
+@@ -107,13 +132,13 @@ hildon_init (void)
+   }
+ 
+   /* Register icon sizes */
+-  gtk_icon_size_register ("hildon-xsmall", 16, 16);
+-  gtk_icon_size_register ("hildon-small", 24, 24);
+-  gtk_icon_size_register ("hildon-stylus", 32, 32);
+-  gtk_icon_size_register ("hildon-finger", 48, 48);
+-  gtk_icon_size_register ("hildon-thumb", 64, 64);
+-  gtk_icon_size_register ("hildon-large", 96, 96);
+-  gtk_icon_size_register ("hildon-xlarge", 128, 128);
++  gtk_icon_size_register ("hildon-xsmall", HILDON_S (16), HILDON_S (16));
++  gtk_icon_size_register ("hildon-small", HILDON_S (24), HILDON_S (24));
++  gtk_icon_size_register ("hildon-stylus", HILDON_S (32), HILDON_S (32));
++  gtk_icon_size_register ("hildon-finger", HILDON_S (48), HILDON_S (48));
++  gtk_icon_size_register ("hildon-thumb", HILDON_S (64), HILDON_S (64));
++  gtk_icon_size_register ("hildon-large", HILDON_S (96), HILDON_S (96));
++  gtk_icon_size_register ("hildon-xlarge", HILDON_S (128), HILDON_S (128));
+ 
+   /* Add Hildon stock items */
+   gtk_stock_add_static (hildon_items, G_N_ELEMENTS (hildon_items));
+diff --git a/hildon/hildon-note.c b/hildon/hildon-note.c
+index d9b0444..b38d484 100644
+--- a/hildon/hildon-note.c
++++ b/hildon/hildon-note.c
+@@ -94,15 +94,16 @@
+ #undef HILDON_DISABLE_DEPRECATED
+ 
+ #include                                        "hildon-note.h"
++#include "hildon-private.h"
+ #include                                        "hildon-defines.h"
+ #include                                        "hildon-sound.h"
+ #include                                        "hildon-gtk.h"
+ #include                                        "hildon-enum-types.h"
+ #include                                        "hildon-note-private.h"
+ 
+-#define                                         HILDON_INFORMATION_NOTE_MIN_HEIGHT 140
++#define                                         HILDON_INFORMATION_NOTE_MIN_HEIGHT HILDON_S (140)
+ 
+-#define                                         HILDON_INFORMATION_NOTE_MARGIN 100
++#define                                         HILDON_INFORMATION_NOTE_MARGIN HILDON_S (100)
+ 
+ #define                                         CONFIRMATION_SOUND_PATH \
+                                                 "/usr/share/sounds/ui-confirmation_note.wav"
+@@ -531,7 +532,7 @@ label_size_request                              (GtkWidget      *label,
+                                                  GtkRequisition *req,
+                                                  GtkWidget      *note)
+ {
+-    gint note_height = MAX (HILDON_INFORMATION_NOTE_MIN_HEIGHT, req->height + 2*HILDON_MARGIN_DOUBLE);
++    gint note_height = MAX (HILDON_INFORMATION_NOTE_MIN_HEIGHT, req->height + 2*HILDON_S (HILDON_MARGIN_DOUBLE));
+     g_object_set (note, "height-request", note_height, NULL);
+ }
+ 
+@@ -556,8 +557,8 @@ hildon_note_orientation_update (HildonNote *note, GdkScreen *screen)
+ 
+     if (portrait) {
+         parent = dialog->vbox;
+-        button_width = gdk_screen_get_width (screen) - HILDON_MARGIN_DOUBLE * 2;
+-        padding = HILDON_MARGIN_DOUBLE;
++        button_width = gdk_screen_get_width (screen) - HILDON_S (HILDON_MARGIN_DOUBLE) * 2;
++        padding = HILDON_S (HILDON_MARGIN_DOUBLE);
+     } else {
+         parent = gtk_widget_get_parent (dialog->vbox);
+         button_width = priv->button_width;
+@@ -713,8 +714,8 @@ hildon_note_set_padding (HildonNote *note)
+     case HILDON_NOTE_TYPE_INFORMATION:
+     case HILDON_NOTE_TYPE_INFORMATION_THEME:
+         gtk_dialog_set_padding (GTK_DIALOG (note),
+-                                HILDON_MARGIN_DOUBLE,
+-                                HILDON_MARGIN_DOUBLE,
++                                HILDON_S (HILDON_MARGIN_DOUBLE),
++                                HILDON_S (HILDON_MARGIN_DOUBLE),
+                                 0,
+                                 0);
+         break;
+@@ -722,10 +723,10 @@ hildon_note_set_padding (HildonNote *note)
+     case HILDON_NOTE_TYPE_CONFIRMATION:
+     case HILDON_NOTE_TYPE_CONFIRMATION_BUTTON:
+         gtk_dialog_set_padding (GTK_DIALOG (note),
+-                                HILDON_MARGIN_DOUBLE,
+-                                HILDON_MARGIN_DEFAULT,
+-                                HILDON_MARGIN_DOUBLE,
+-                                HILDON_MARGIN_DOUBLE);
++                                HILDON_S (HILDON_MARGIN_DOUBLE),
++                                HILDON_S (HILDON_MARGIN_DEFAULT),
++                                HILDON_S (HILDON_MARGIN_DOUBLE),
++                                HILDON_S (HILDON_MARGIN_DOUBLE));
+         break;
+ 
+     default:
+@@ -781,10 +782,10 @@ hildon_note_rebuild                             (HildonNote *note)
+             gtk_widget_set_no_show_all (priv->cancelButton, FALSE);
+ #ifdef MAEMO_GTK
+ 	    gtk_dialog_set_padding (dialog,
+-				    HILDON_MARGIN_DOUBLE,
+-				    HILDON_MARGIN_DEFAULT,
+-				    HILDON_MARGIN_DOUBLE,
+-				    HILDON_MARGIN_DOUBLE);
++				    HILDON_S (HILDON_MARGIN_DOUBLE),
++				    HILDON_S (HILDON_MARGIN_DEFAULT),
++				    HILDON_S (HILDON_MARGIN_DOUBLE),
++				    HILDON_S (HILDON_MARGIN_DOUBLE));
+ #endif /* MAEMO_GTK */
+             break;
+ 
+@@ -799,8 +800,8 @@ hildon_note_rebuild                             (HildonNote *note)
+         case HILDON_NOTE_TYPE_INFORMATION:
+ #ifdef MAEMO_GTK
+ 	    gtk_dialog_set_padding (dialog,
+-				    HILDON_MARGIN_DOUBLE,
+-				    HILDON_MARGIN_DOUBLE,
++				    HILDON_S (HILDON_MARGIN_DOUBLE),
++				    HILDON_S (HILDON_MARGIN_DOUBLE),
+ 				    0,
+ 				    0);
+ #endif /* MAEMO_GTK */
+@@ -831,7 +832,7 @@ hildon_note_rebuild                             (HildonNote *note)
+     if (priv->progressbar) {
+         gtk_misc_set_alignment (GTK_MISC (priv->label), 0.0, 0.5);
+         gtk_alignment_set_padding (GTK_ALIGNMENT (priv->align),
+-                                   HILDON_MARGIN_DOUBLE, 0, 0, 0);
++                                   HILDON_S (HILDON_MARGIN_DOUBLE), 0, 0, 0);
+         gtk_box_pack_start (GTK_BOX (priv->box), priv->progressbar, FALSE, FALSE, 0);
+     } else {
+         gtk_misc_set_alignment (GTK_MISC (priv->label), 0.5, 0.5);
+diff --git a/hildon/hildon-number-editor.c b/hildon/hildon-number-editor.c
+index 9240670..ff85cd5 100644
+--- a/hildon/hildon-number-editor.c
++++ b/hildon/hildon-number-editor.c
+@@ -698,7 +698,7 @@ hildon_number_editor_size_request               (GtkWidget *widget,
+     gtk_widget_size_request (priv->plus, &req);
+     requisition->width += req.width;
+ 
+-    requisition->width += HILDON_MARGIN_DEFAULT * 2;
++    requisition->width += HILDON_S (HILDON_MARGIN_DEFAULT) * 2;
+ 
+     /* FIXME: XXX Height is fixed */
+     requisition->height = NUMBER_EDITOR_HEIGHT;
+@@ -763,10 +763,10 @@ hildon_number_editor_size_allocate              (GtkWidget *widget,
+ 
+     /* Allocate positions for widgets (left-to-right) */
+     set_widget_allocation(priv->minus, &alloc, &widget->allocation);
+-    alloc.x += HILDON_MARGIN_DEFAULT;
++    alloc.x += HILDON_S (HILDON_MARGIN_DEFAULT);
+ 
+     set_widget_allocation(priv->num_entry, &alloc, &widget->allocation);
+-    alloc.x += HILDON_MARGIN_DEFAULT;
++    alloc.x += HILDON_S (HILDON_MARGIN_DEFAULT);
+ 
+     set_widget_allocation(priv->plus, &alloc, &widget->allocation);
+ }
+diff --git a/hildon/hildon-pannable-area.c b/hildon/hildon-pannable-area.c
+index ea1c36c..abf855c 100644
+--- a/hildon/hildon-pannable-area.c
++++ b/hildon/hildon-pannable-area.c
+@@ -47,22 +47,23 @@
+ #include <gdk/gdkx.h>
+ 
+ #include "hildon-pannable-area.h"
++#include "hildon-private.h"
+ #include "hildon-marshalers.h"
+ #include "hildon-enum-types.h"
+ 
+ #define USE_CAIRO_SCROLLBARS 0
+ 
+-#define SCROLL_BAR_MIN_SIZE 5
++#define SCROLL_BAR_MIN_SIZE HILDON_S (5)
+ #define RATIO_TOLERANCE 0.000001
+ #define SCROLL_FADE_IN_TIMEOUT 50
+ #define SCROLL_FADE_TIMEOUT 100
+ #define MOTION_EVENTS_PER_SECOND 25
+ #define CURSOR_STOPPED_TIMEOUT 200
+-#define MAX_SPEED_THRESHOLD 280
+-#define PANNABLE_MAX_WIDTH 788
+-#define PANNABLE_MAX_HEIGHT 378
+-#define ACCEL_FACTOR 27
+-#define MIN_ACCEL_THRESHOLD 40
++#define MAX_SPEED_THRESHOLD HILDON_S (280)
++#define PANNABLE_MAX_WIDTH HILDON_S (788)
++#define PANNABLE_MAX_HEIGHT HILDON_S (378)
++#define ACCEL_FACTOR HILDON_S (27)
++#define MIN_ACCEL_THRESHOLD HILDON_S (40)
+ #define FAST_CLICK 125
+ 
+ G_DEFINE_TYPE (HildonPannableArea, hildon_pannable_area, GTK_TYPE_BIN)
+@@ -407,7 +408,7 @@ hildon_pannable_area_class_init (HildonPannableAreaClass * klass)
+ 							"Minimum scroll velocity",
+ 							"Minimum distance the child widget should scroll "
+ 							"per 'frame', in pixels per frame.",
+-							0, G_MAXDOUBLE, 10,
++							0, G_MAXDOUBLE, HILDON_S (10),
+ 							G_PARAM_READWRITE |
+ 							G_PARAM_CONSTRUCT));
+ 
+@@ -417,7 +418,7 @@ hildon_pannable_area_class_init (HildonPannableAreaClass * klass)
+ 							"Maximum scroll velocity",
+ 							"Maximum distance the child widget should scroll "
+ 							"per 'frame', in pixels per frame.",
+-							0, G_MAXDOUBLE, 3500,
++							0, G_MAXDOUBLE, HILDON_S (3500),
+ 							G_PARAM_READWRITE |
+ 							G_PARAM_CONSTRUCT));
+ 
+@@ -427,7 +428,7 @@ hildon_pannable_area_class_init (HildonPannableAreaClass * klass)
+ 							"Maximum scroll velocity when overshooting",
+ 							"Maximum distance the child widget should scroll "
+ 							"per 'frame', in pixels per frame when it overshoots after hitting the edge.",
+-							0, G_MAXDOUBLE, 130,
++							0, G_MAXDOUBLE, HILDON_S (130),
+ 							G_PARAM_READWRITE |
+ 							G_PARAM_CONSTRUCT));
+ 
+@@ -478,7 +479,7 @@ hildon_pannable_area_class_init (HildonPannableAreaClass * klass)
+ 						      "Threshold to consider a motion event an scroll",
+ 						      "Amount of pixels to consider a motion event an scroll, if it is less "
+                                                       "it is a click detected incorrectly by the touch screen.",
+-						      0, G_MAXUINT, 25,
++						      0, G_MAXUINT, HILDON_S (25),
+ 						      G_PARAM_READWRITE |
+ 						      G_PARAM_CONSTRUCT));
+ 
+@@ -508,7 +509,7 @@ hildon_pannable_area_class_init (HildonPannableAreaClass * klass)
+ 						      "Multiplier of the calculated speed",
+ 						      "Force applied to the movement, multiplies the calculated speed of the "
+                                                       "user movement the cursor in the screen",
+-						      0, G_MAXUINT, 50,
++						      0, G_MAXUINT, HILDON_S (50),
+ 						      G_PARAM_READWRITE |
+ 						      G_PARAM_CONSTRUCT));
+ 
+@@ -519,7 +520,7 @@ hildon_pannable_area_class_init (HildonPannableAreaClass * klass)
+ 						      "After detecting the direction of the movement (horizontal or "
+                                                       "vertical), we can add this margin of error to allow the movement in "
+                                                       "the other direction even apparently it is not",
+-						      0, G_MAXUINT, 10,
++						      0, G_MAXUINT, HILDON_S (10),
+ 						      G_PARAM_READWRITE |
+ 						      G_PARAM_CONSTRUCT));
+ 
+@@ -529,7 +530,7 @@ hildon_pannable_area_class_init (HildonPannableAreaClass * klass)
+                                                      "Vertical overshoot distance",
+                                                      "Space we allow the widget to pass over its vertical limits when "
+                                                      "hitting the edges, set 0 in order to deactivate overshooting.",
+-                                                     0, G_MAXINT, 150,
++                                                     0, G_MAXINT, HILDON_S (150),
+                                                      G_PARAM_READWRITE |
+                                                      G_PARAM_CONSTRUCT));
+ 
+@@ -539,7 +540,7 @@ hildon_pannable_area_class_init (HildonPannableAreaClass * klass)
+                                                      "Horizontal overshoot distance",
+                                                      "Space we allow the widget to pass over its horizontal limits when "
+                                                      "hitting the edges, set 0 in order to deactivate overshooting.",
+-                                                     0, G_MAXINT, 150,
++                                                     0, G_MAXINT, HILDON_S (150),
+                                                      G_PARAM_READWRITE |
+                                                      G_PARAM_CONSTRUCT));
+ 
+@@ -624,7 +625,7 @@ hildon_pannable_area_class_init (HildonPannableAreaClass * klass)
+ 					   ("indicator-width",
+ 					    "Width of the scroll indicators",
+ 					    "Pixel width used to draw the scroll indicators.",
+-					    0, G_MAXUINT, 8,
++					    0, G_MAXUINT, HILDON_S (8),
+ 					    G_PARAM_READWRITE));
+ 
+  /**
+diff --git a/hildon/hildon-picker-dialog.c b/hildon/hildon-picker-dialog.c
+index 3fb4ce8..88c0eb2 100644
+--- a/hildon/hildon-picker-dialog.c
++++ b/hildon/hildon-picker-dialog.c
+@@ -49,6 +49,7 @@
+ #include <libintl.h>
+ 
+ #include "hildon-touch-selector.h"
++#include "hildon-private.h"
+ #include "hildon-touch-selector-entry.h"
+ #include "hildon-picker-dialog.h"
+ 
+@@ -220,7 +221,7 @@ hildon_picker_dialog_class_init (HildonPickerDialogClass * class)
+                                             "Maximum dialog height on landscape mode",
+                                             0,
+                                             G_MAXUINT,
+-                                            358,
++                                            HILDON_S (358),
+                                             G_PARAM_READWRITE));
+ 
+   /* Using the default height, we get 9 full rows. With the header it sums 684 pixels */
+@@ -231,7 +232,7 @@ hildon_picker_dialog_class_init (HildonPickerDialogClass * class)
+                                             "Maximum dialog height on portrait mode",
+                                             0,
+                                             G_MAXUINT,
+-                                            638,
++                                            HILDON_S (638),
+                                             G_PARAM_READWRITE));
+ 
+   g_type_class_add_private (object_class, sizeof (HildonPickerDialogPrivate));
+diff --git a/hildon/hildon-private.h b/hildon/hildon-private.h
+index 53328e5..a3f49bf 100644
+--- a/hildon/hildon-private.h
++++ b/hildon/hildon-private.h
+@@ -28,6 +28,7 @@
+ #include                                        <gtk/gtk.h>
+ #include <X11/Xatom.h>
+ #include <gdk/gdkx.h>
++#include <math.h>
+ 
+ G_BEGIN_DECLS
+ 
+@@ -53,6 +54,14 @@ hildon_gtk_window_set_clear_window_flag                           (GtkWindow   *
+ 
+ typedef void (*HildonFlagFunc) (GtkWindow *window, gpointer userdata);
+ 
++/* Hildon's lengths are the N900's pixels; on a denser screen they are
++ * scaled by HILDON_SCALE from the environment, or else by the factor the
++ * theme was made for (/etc/hildon/theme/.pro1x-theme) */
++G_GNUC_INTERNAL gdouble
++_hildon_scale                                   (void);
++
++#define HILDON_S(x) ((gint) floor ((x) * _hildon_scale () + 0.5))
++
+ G_GNUC_INTERNAL void
+ hildon_gtk_window_set_flag                                        (GtkWindow      *window,
+                                                                    HildonFlagFunc  func,
+diff --git a/hildon/hildon-sort-dialog.c b/hildon/hildon-sort-dialog.c
+index 3f5b49f..1f788e5 100644
+--- a/hildon/hildon-sort-dialog.c
++++ b/hildon/hildon-sort-dialog.c
+@@ -101,6 +101,7 @@
+ #include                                        <libintl.h>
+ 
+ #include                                        "hildon-sort-dialog.h"
++#include "hildon-private.h"
+ #include                                        "hildon-caption.h"
+ #include                                        "hildon-sort-dialog-private.h"
+ 
+@@ -313,7 +314,7 @@ hildon_sort_dialog_init                         (HildonSortDialog * dialog)
+             _("wdgt_bd_sort"),
+             GTK_RESPONSE_OK);
+     /* FIXME: Hardcoded sizes are bad */
+-    gtk_window_resize (GTK_WINDOW (dialog), 370, 100);
++    gtk_window_resize (GTK_WINDOW (dialog), HILDON_S (370), HILDON_S (100));
+     gtk_widget_show_all (GTK_DIALOG (dialog)->vbox);
+ 
+     g_object_unref (group); /* Captions now own their references to sizegroup */
+diff --git a/hildon/hildon-time-editor.c b/hildon/hildon-time-editor.c
+index c62ca66..ec96b16 100644
+--- a/hildon/hildon-time-editor.c
++++ b/hildon/hildon-time-editor.c
+@@ -1721,7 +1721,7 @@ hildon_time_editor_size_request                 (GtkWidget *widget,
+         gtk_widget_size_request (priv->iconbutton, &req);
+         /* Reserve space for icon */
+         requisition->width += req.width + ICON_PRESSED +
+-            HILDON_MARGIN_DEFAULT;
++            HILDON_S (HILDON_MARGIN_DEFAULT);
+     }
+ 
+     /* FIXME: It's evil to use hardcoded TIME_EDITOR_HEIGHT. For now we'll
+@@ -1770,7 +1770,7 @@ hildon_time_editor_size_allocate                (GtkWidget *widget,
+         else
+             gtk_widget_get_child_requisition (priv->iconbutton, &req);
+ 
+-        alloc.x += alloc.width + HILDON_MARGIN_DEFAULT;
++        alloc.x += alloc.width + HILDON_S (HILDON_MARGIN_DEFAULT);
+         alloc.width = req.width;
+ 
+         if (rtl)
+diff --git a/hildon/hildon-touch-selector.c b/hildon/hildon-touch-selector.c
+index a3b7bc6..1abc526 100644
+--- a/hildon/hildon-touch-selector.c
++++ b/hildon/hildon-touch-selector.c
+@@ -175,6 +175,7 @@
+ #include <glib.h>
+ 
+ #include "hildon-enum-types.h"
++#include "hildon-private.h"
+ #include "hildon-pannable-area.h"
+ #include "hildon-touch-selector.h"
+ #include "hildon-touch-selector-private.h"
+@@ -1548,7 +1549,7 @@ hildon_touch_selector_append_column (HildonTouchSelector * selector,
+                         TRUE, TRUE, 0);
+     gtk_box_pack_start (GTK_BOX (selector->priv->hbox),
+                         new_column->priv->vbox,
+-                        TRUE, TRUE, 6);
++                        TRUE, TRUE, HILDON_S (6));
+ 
+     if (selector->priv->has_live_search) {
+       hildon_touch_selector_add_live_search (selector, new_column);
+diff --git a/hildon/hildon-window.c b/hildon/hildon-window.c
+index 8786d5d..47cfa38 100644
+--- a/hildon/hildon-window.c
++++ b/hildon/hildon-window.c
+@@ -99,7 +99,7 @@
+ 
+ #define                                         _(String) gettext(String)
+ 
+-#define                                         TOOLBAR_HEIGHT 70
++#define                                         TOOLBAR_HEIGHT HILDON_S (70)
+ 
+ #define                                         TOOLBAR_MIDDLE 0
+ 
+@@ -705,7 +705,7 @@ hildon_window_size_request                      (GtkWidget *widget,
+     requisition->height = gdk_screen_get_height (screen);
+ 
+     if (! priv->fullscreen)
+-        requisition->height -= HILDON_WINDOW_TITLEBAR_HEIGHT;
++        requisition->height -= HILDON_S (HILDON_WINDOW_TITLEBAR_HEIGHT);
+ }
+ 
+ static void

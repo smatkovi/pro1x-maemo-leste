@@ -3,7 +3,8 @@
 # cross-compiling: clang for aarch64-unknown-freebsd15.0 against a sysroot
 # made of the release's base system and FreeBSD's packages (the libraries
 # Hildon builds on: gtk2, gconf2, dbus-glib, ...). The Hildon parts come
-# from github.com/maemo-leste, with FreeBSD changes in patches/<part>/.
+# from github.com/maemo-leste, with FreeBSD changes in patches/<part>/
+# and the HiDPI changes Leste gets too in ../../patches/hidpi/<part>.patch.
 #
 #   WORK=/path/to/freebsd-build bash freebsd/hildon/build.sh [part...]
 #
@@ -183,6 +184,9 @@ build_part() {
 	for p in "$REPO"/freebsd/hildon/patches/"$name"/*.patch; do
 		[ -f "$p" ] && patch -s -d "$b" -p1 < "$p"
 	done
+	# HiDPI (tools/pro1x-hidpi), shared with Leste
+	p=$REPO/patches/hidpi/$name.patch
+	[ -f "$p" ] && patch -s -d "$b" -p1 < "$p"
 	if [ "$args" = "!" ]; then
 		(cd "$b" && "custom_${name//-/_}")
 		return
@@ -207,6 +211,20 @@ build_part() {
 	unsysroot "$STAGE"
 	unsysroot "$SYSROOT"
 	find "$STAGE" "$SYSROOT" -name '*.la' -delete
+}
+
+# HiDPI: the theme scaler and its session script (tools/pro1x-hidpi),
+# shared with Leste
+hidpi_tool() {
+	local b=$BUILD/pro1x-hidpi
+	log "pro1x-hidpi"
+	mkdir -p "$b"
+	# shellcheck disable=SC2046
+	$CC $CPPFLAGS $CFLAGS $LDFLAGS -o "$b/pro1x-theme-scale" \
+	    "$REPO/tools/pro1x-hidpi/pro1x-theme-scale.c" \
+	    $(pkg-config --cflags --libs gdk-pixbuf-2.0) -lm
+	install -D -m 755 "$b/pro1x-theme-scale" "$STAGE/usr/local/bin/pro1x-theme-scale"
+	install -D -m 755 "$REPO/tools/pro1x-hidpi/pro1x-hidpi" "$STAGE/usr/local/bin/pro1x-hidpi"
 }
 
 # pkg-config puts the sysroot in front of path variables, which some
@@ -272,5 +290,8 @@ for entry in "${PARTS[@]}"; do
 done
 if [ $# -eq 0 ] || [[ " $* " == *" data "* ]]; then
 	leste_data
+fi
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-hidpi "* ]]; then
+	hidpi_tool
 fi
 log "done: $STAGE"

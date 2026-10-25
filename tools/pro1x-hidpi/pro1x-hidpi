@@ -1,0 +1,130 @@
+#!/bin/sh
+# pro1x-hidpi: Hildon on the F(x)tec Pro1X at the size it had on the N900,
+# with the screen's full resolution (2160x1080: browsers and images stay
+# sharp). One factor for Maemo Leste and FreeBSD, SCALE in
+# pro1x-display.conf on userdata; 2.25 is the N900's proportion, 480 of
+# 1080 lines.
+#
+#   pro1x-hidpi theme        at boot, as root: the Hildon theme scaled by
+#                            SCALE (pro1x-theme-scale, once per factor) as
+#                            /etc/hildon/theme
+#   pro1x-hidpi env          the session's environment, for eval
+#   pro1x-hidpi x11          the X resources (Xft.dpi) for the session
+#   pro1x-hidpi set FACTOR   as root (Leste): a new factor, from the next
+#                            session start on (after 'theme' at boot)
+#   pro1x-hidpi get          the factor
+#
+# Fonts are sized in points and follow the resolution: 96 * SCALE dpi for
+# GTK 2 (Xft.dpi), hildon-desktop (HILDON_SCALE, patches/hildon-desktop),
+# GTK 3 (GDK_SCALE an integer, GDK_DPI_SCALE the rest) and Qt.
+case $(uname -s) in
+FreeBSD)
+	CONF=/dev/pro1x-host/pro1x-display.conf
+	THEMES=/usr/local/share/themes
+	# The read-only root holds the default factor's theme
+	PREBUILT=/usr/local/share/pro1x/hidpi
+	CACHE=/var/db/pro1x-hidpi
+	# /etc/hildon/theme and $THEMES/default point here
+	LINKS="$CACHE/theme"
+	;;
+*)
+	CONF=/host/pro1x-display.conf
+	THEMES=/usr/share/themes
+	PREBUILT=
+	CACHE=/var/cache/pro1x-hidpi
+	LINKS="/etc/hildon/theme $THEMES/default"
+	;;
+esac
+CONF=${PRO1X_DISPLAY_CONF:-$CONF}
+DEFAULT=2.25
+
+factor() {
+	s=
+	[ -r "$CONF" ] && s=$(sed -n 's/^[[:space:]]*SCALE[[:space:]]*=[[:space:]]*\([0-9.]*\).*/\1/p' "$CONF" | tail -1)
+	echo "${s:-$DEFAULT}" | awk '{ s = $1 + 0; if (s < 0.5 || s > 8) s = 1; print s }'
+}
+read_conf() {
+	SCALE=$(factor)
+	DPI=$(awk -v s="$SCALE" 'BEGIN { printf "%d", 96 * s + 0.5 }')
+}
+read_conf
+
+# The theme the user chose: what the links point to, or its source when
+# that is one of ours
+source_theme() {
+	cur=$(readlink "${LINKS%% *}" 2>/dev/null)
+	if [ -n "$cur" ] && [ -f "$cur/.pro1x-theme" ]; then
+		head -1 "$cur/.pro1x-theme"
+	elif [ -n "$cur" ] && [ -d "$cur" ]; then
+		echo "$cur"
+	else
+		echo "$THEMES/alpha"
+	fi
+}
+
+theme() {
+	src=$(source_theme)
+	name=$(basename "$src")-$SCALE
+	dir=
+	if [ "$SCALE" = 1 ]; then
+		dir=$src
+	else
+		for d in $PREBUILT $CACHE; do
+			if [ -f "$d/$name/.pro1x-theme" ]; then
+				dir=$d/$name
+				break
+			fi
+		done
+	fi
+	if [ -z "$dir" ]; then
+		mkdir -p "$CACHE"
+		rm -rf "$CACHE/$name"
+		# One factor kept: the others go
+		for d in "$CACHE"/*-[0-9]*; do
+			[ -d "$d" ] && rm -rf "$d"
+		done
+		"$(dirname "$0")/pro1x-theme-scale" "$src" "$CACHE/$name" "$SCALE" ||
+			return 1
+		dir=$CACHE/$name
+	fi
+	for l in $LINKS; do
+		mkdir -p "$(dirname "$l")"
+		ln -sfn "$dir" "$l"
+	done
+	echo "pro1x-hidpi: x$SCALE ($DPI dpi), theme $dir"
+}
+
+session_env() {
+	gs=$(awk -v s="$SCALE" 'BEGIN { g = int(s + 0.5); print g < 1 ? 1 : g }')
+	cat <<-EOF
+	HILDON_SCALE=$SCALE; export HILDON_SCALE
+	GDK_SCALE=$gs; export GDK_SCALE
+	GDK_DPI_SCALE=$(awk -v g="$gs" 'BEGIN { print 1 / g }'); export GDK_DPI_SCALE
+	QT_ENABLE_HIGHDPI_SCALING=1; export QT_ENABLE_HIGHDPI_SCALING
+	QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough; export QT_SCALE_FACTOR_ROUNDING_POLICY
+	EOF
+}
+
+case $1 in
+theme)	theme ;;
+env)	session_env ;;
+x11)	echo "Xft.dpi: $DPI" | xrdb -merge ;;
+get)	echo "$SCALE" ;;
+set)
+	case $2 in
+	[0-9]*) ;;
+	*) echo "usage: pro1x-hidpi set FACTOR (e.g. 2.25)" >&2; exit 2 ;;
+	esac
+	if [ -f "$CONF" ] && grep -q '^[[:space:]]*SCALE' "$CONF"; then
+		sed -i.bak "s/^[[:space:]]*SCALE.*/SCALE=$2/" "$CONF" && rm -f "$CONF.bak"
+	else
+		echo "SCALE=$2" >> "$CONF"
+	fi || exit 1
+	read_conf
+	theme
+	;;
+*)
+	sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0" >&2
+	exit 2
+	;;
+esac

@@ -16,7 +16,8 @@ if [ -n "$(kenv -q pro1x.test)" ]; then
 		sleep 40
 		grep -E "\((EE|WW)\)|scfb|libinput|Rotate" /var/log/Xorg.0.log | head -40
 		tail -5 /var/log/startx.log
-		ps ax | grep -E "Xorg|xfce|xfwm|panel" | grep -v grep
+		ps ax | grep -E "Xorg|xfce|xfwm|panel|hildon" | grep -v grep
+		ls -la /etc/hildon/theme /var/db/pro1x-hidpi 2>&1
 		# The screen for Linux to fetch after the reboot (/dev/pro1xshot)
 		XAUTHORITY=/root/.Xauthority xwd -root -silent -display :0 |
 		    gzip -9 > /dev/pro1xshot && echo "screenshot kept"

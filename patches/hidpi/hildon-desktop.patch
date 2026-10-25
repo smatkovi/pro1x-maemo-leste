@@ -1,0 +1,798 @@
+diff --git a/src/home/hd-home-view-layout.c b/src/home/hd-home-view-layout.c
+index a44bda5..89fdafe 100644
+--- a/src/home/hd-home-view-layout.c
++++ b/src/home/hd-home-view-layout.c
+@@ -25,7 +25,7 @@
+ /* Padding between applets - Just enough to get 5 contacts onto the screen.
+  * See bug 137601
+  */
+-#define PADDING 13
++#define PADDING HD_S (13)
+ #define MIN_SIZE (2 * PADDING + 1)
+ 
+ typedef struct rect_t rect_t;
+diff --git a/src/home/hd-home-view.c b/src/home/hd-home-view.c
+index 803ca90..eda58da 100644
+--- a/src/home/hd-home-view.c
++++ b/src/home/hd-home-view.c
+@@ -63,7 +63,7 @@
+ #define MAX_VIEWS 9
+ 
+ /* Maximal pixel movement for a tap (before it is a move) */
+-#define MAX_TAP_DISTANCE 20
++#define MAX_TAP_DISTANCE HD_S (20)
+ 
+ #define HD_HOME_VIEW_PARALLAX_AMOUNT (hd_transition_get_double("home", "parallax", 1.3))
+ 
+@@ -275,9 +275,9 @@ is_button_press_in_gesture_start_area (ClutterEvent *event)
+            event->button.x, event->button.y);
+ 
+ 	if(!STATE_IS_PORTRAIT (hd_render_manager_get_state()))
+-	  return event->button.x <= 15 || event->button.x >= HD_COMP_MGR_LANDSCAPE_WIDTH - 15;
++	  return event->button.x <= HD_S (15) || event->button.x >= HD_COMP_MGR_LANDSCAPE_WIDTH - HD_S (15);
+ 	else
+-		return event->button.x <= 15 || event->button.x >= HD_COMP_MGR_PORTRAIT_WIDTH - 15;
++		return event->button.x <= HD_S (15) || event->button.x >= HD_COMP_MGR_PORTRAIT_WIDTH - HD_S (15);
+ }
+ 
+ static gboolean stop_pan_gesture (HdHomeView *view);
+@@ -293,17 +293,17 @@ pan_gesture_motion (ClutterActor *actor,
+            __FUNCTION__,
+            event->motion.x, event->motion.y);
+ 
+-  if (ABS (priv->pan_gesture_start_y - event->motion.y) > 25)
++  if (ABS (priv->pan_gesture_start_y - event->motion.y) > HD_S (25))
+     {
+       stop_pan_gesture (view);
+     }
+   else
+     {
+-      if (ABS (priv->pan_gesture_start_x - event->motion.x) > 50)
++      if (ABS (priv->pan_gesture_start_x - event->motion.x) > HD_S (50))
+         {
+           stop_pan_gesture (view);
+ 
+-          if (priv->pan_gesture_start_x <= 15)
++          if (priv->pan_gesture_start_x <= HD_S (15))
+             hd_home_view_container_scroll_to_previous (HD_HOME_VIEW_CONTAINER (priv->view_container), 0);
+           else
+             hd_home_view_container_scroll_to_next (HD_HOME_VIEW_CONTAINER (priv->view_container), 0);
+@@ -1090,6 +1090,7 @@ snap_coordinate_to_grid (gint coordinate)
+   /* Avoid hildon-desktop crash, when snap_grid_size == 0 */
+   if(snap_grid_size < 1)
+     snap_grid_size = SNAP_GRID_SIZE_DEFAULT;
++  snap_grid_size = HD_S (snap_grid_size);
+ 
+   offset = coordinate % snap_grid_size;
+ 
+diff --git a/src/home/hd-home.c b/src/home/hd-home.c
+index 15e9d1a..96d6cf5 100644
+--- a/src/home/hd-home.c
++++ b/src/home/hd-home.c
+@@ -68,11 +68,11 @@
+ #define HDH_EDIT_BUTTON_TIMEOUT 3000
+ 
+ #define HDH_LAYOUT_TOP_SCALE 0.5
+-#define HDH_LAYOUT_Y_OFFSET 60
++#define HDH_LAYOUT_Y_OFFSET HD_S (60)
+ 
+ /* FIXME -- match spec */
+-#define HDH_PAN_THRESHOLD 20     // threshold for panning
+-#define HDH_CLICK_THRESHOLD 40   // threshold for detecting a click
++#define HDH_PAN_THRESHOLD HD_S (20)     // threshold for panning
++#define HDH_CLICK_THRESHOLD HD_S (40)   // threshold for detecting a click
+ #define PAN_NEXT_PREVIOUS_PERCENTAGE 0.25
+ /* Time in secs to look back when finding average velocity */
+ #define HDH_PAN_VELOCITY_HISTORY 0.125
+@@ -87,7 +87,7 @@
+ #define ADDRESSBOOK_GCONF_KEY \
+            "/apps/osso/hildon-desktop/addressbook_dbus_interface"
+ 
+-#define INDICATION_WIDTH 50
++#define INDICATION_WIDTH HD_S (50)
+ #define HD_EDGE_INDICATION_COLOR "SelectionColor"
+ 
+ #define MAX_VIEWS 9
+diff --git a/src/home/hd-home.h b/src/home/hd-home.h
+index 1d6c206..f3cf6e3 100644
+--- a/src/home/hd-home.h
++++ b/src/home/hd-home.h
+@@ -31,9 +31,11 @@
+ #include <clutter/clutter-group.h>
+ #include <matchbox/core/mb-wm.h>
+ 
++#include "util/hd-util.h"
++
+ #include "hd-home-view.h"
+ 
+-#define HD_EDGE_INDICATION_WIDTH 50
++#define HD_EDGE_INDICATION_WIDTH HD_S (50)
+ 
+ G_BEGIN_DECLS
+ 
+diff --git a/src/home/hd-scrollable-group.c b/src/home/hd-scrollable-group.c
+index bb06e7d..2219b90 100644
+--- a/src/home/hd-scrollable-group.c
++++ b/src/home/hd-scrollable-group.c
+@@ -60,6 +60,7 @@
+ #include <tidy/tidy-adjustment.h>
+ 
+ #include "hd-scrollable-group.h"
++#include "util/hd-util.h"
+ 
+ /*
+  * This is based on the UX Guidance.
+@@ -67,11 +68,11 @@
+  * %MAX_CLICK_DRIFT:  How many pixels may the user drag the pointer
+  *                    until we consider it a purely scrolling motion.
+  */
+-#define MAX_CLICK_DRIFT                      15
++#define MAX_CLICK_DRIFT                      HD_S (15)
+ 
+ /* The average speed of hd_scrollable_group_scroll() in pixels per second.
+  * Tunable. */
+-#define MANUAL_SCROLL_PPS                   200
++#define MANUAL_SCROLL_PPS                   HD_S (200)
+ 
+ #define HD_SCROLLABLE_GROUP_GET_PRIVATE(obj)  \
+   hd_scrollable_group_get_instance_private (HD_SCROLLABLE_GROUP (obj))
+diff --git a/src/home/hd-task-navigator.c b/src/home/hd-task-navigator.c
+index 49c7a3a..fb0c326 100644
+--- a/src/home/hd-task-navigator.c
++++ b/src/home/hd-task-navigator.c
+@@ -94,10 +94,10 @@
+ #define DESKTOP_WIDTH (IS_PORTRAIT?SCREEN_HEIGHT:SCREEN_WIDTH)
+ #define DESKTOP_HEIGHT (IS_PORTRAIT?SCREEN_WIDTH:SCREEN_HEIGHT)
+ 
+-#define MARGIN_DEFAULT             8
+-#define MARGIN_HALF                4
+-#define ICON_FINGER               48
+-#define ICON_STYLUS               32
++#define MARGIN_DEFAULT             HD_S (8)
++#define MARGIN_HALF                HD_S (4)
++#define ICON_FINGER               HD_S (48)
++#define ICON_STYLUS               HD_S (32)
+ 
+ /*
+  * %GRID_TOP_MARGIN:              Space not considered at the top of the
+@@ -106,8 +106,8 @@
+  * %GRID_VERTICAL_GAP:            How much gap to leave between thumbnails.
+  */
+ #define GRID_TOP_MARGIN           HD_COMP_MGR_TOP_MARGIN
+-#define GRID_HORIZONTAL_GAP       16
+-#define GRID_VERTICAL_GAP         16
++#define GRID_HORIZONTAL_GAP       HD_S (16)
++#define GRID_VERTICAL_GAP         HD_S (16)
+ 
+ /*
+  * Application thumbnail dimensions, depending on the number of
+@@ -142,21 +142,21 @@
+  *                                and the graphics are centered at the same
+  *                                point.
+  */
+-#define CLOSE_ICON_SIZE           32
+-#define CLOSE_AREA_SIZE           64
++#define CLOSE_ICON_SIZE           HD_S (32)
++#define CLOSE_AREA_SIZE           HD_S (64)
+ #define TITLE_LEFT_MARGIN         MARGIN_DEFAULT
+ #define TITLE_RIGHT_MARGIN        MARGIN_HALF
+-#define TITLE_HEIGHT              32
++#define TITLE_HEIGHT              HD_S (32)
+ 
+ /* These are NOT the dimensions of the frame graphics but marings. */
+ #define FRAME_TOP_HEIGHT          TITLE_HEIGHT
+-#define FRAME_WIDTH                2
+-#define FRAME_BOTTOM_HEIGHT        2
++#define FRAME_WIDTH                HD_S (2)
++#define FRAME_BOTTOM_HEIGHT        HD_S (2)
+ #define PRISON_XPOS               FRAME_WIDTH
+ #define PRISON_YPOS               FRAME_TOP_HEIGHT
+ 
+ /* Read: reduce by 4 pixels; only relevant if the time(label) wraps. */
+-#define NOTE_TIME_LINESPACING     pango_units_from_double(-4)
++#define NOTE_TIME_LINESPACING     pango_units_from_double(-HD_S (4))
+ #define NOTE_MARGINS              MARGIN_DEFAULT
+ #define NOTE_BOTTOM_MARGIN        MARGIN_HALF
+ #define NOTE_ICON_GAP             MARGIN_HALF
+@@ -1600,7 +1600,7 @@ turnoff_effect_frame (ClutterTimeline * timeline, gint frame,
+       gdouble t, all_rad;
+ 
+       t = 2*now-1;
+-      all_rad = turnoff_fun (0.5, 8, 1, 72, now);
++      all_rad = turnoff_fun (0.5, HD_S (8), 1, HD_S (72), now);
+       for (i = 0; i < G_N_ELEMENTS (closure->particles); i++)
+         {
+           gdouble ang, rad;
+diff --git a/src/home/hd-title-bar.c b/src/home/hd-title-bar.c
+index 56badcd..327173a 100644
+--- a/src/home/hd-title-bar.c
++++ b/src/home/hd-title-bar.c
+@@ -230,9 +230,9 @@ static void hd_title_bar_set_title (HdTitleBar *bar,
+ #define HD_TITLE_BAR_SWITCHER_PULSE_NPULSES  5
+ 
+ /* margin to left of the app title */
+-#define HD_TITLE_BAR_TITLE_MARGIN 24
+-#define HD_TITLE_BAR_TEXT_MARGIN 24
+-#define HD_TITLE_BAR_TITLE_MARGIN_SMALL 8
++#define HD_TITLE_BAR_TITLE_MARGIN HD_S (24)
++#define HD_TITLE_BAR_TEXT_MARGIN HD_S (24)
++#define HD_TITLE_BAR_TITLE_MARGIN_SMALL HD_S (8)
+ 
+ #define HD_TITLE_BAR_TITLE_FONT "SystemFont"
+ 
+@@ -255,7 +255,7 @@ hd_title_bar_init (HdTitleBar *bar)
+ {
+   ClutterActor *actor = CLUTTER_ACTOR(bar);
+   ClutterColor title_color;
+-  ClutterGeometry title_bg_size = {0,0,112,56}; /* size of theme image */
++  ClutterGeometry title_bg_size = {0,0,HD_S (112),HD_S (56)}; /* size of theme image */
+   gchar *font_name;
+   HdTitleBarPrivate *priv = bar->priv = HD_TITLE_BAR_GET_PRIVATE(bar);
+   gint i;
+@@ -787,13 +787,13 @@ hd_title_bar_set_full_width(HdTitleBar *bar, gboolean full_size)
+                   clutter_actor_set_x(priv->buttons[BTN_SEPARATOR_LEFT],
+                                       clutter_actor_get_width(priv->buttons[BTN_MENU]) -
+                                       clutter_actor_get_width(priv->buttons[BTN_SEPARATOR_LEFT]) -
+-                                      offset + 2);
++                                      offset + HD_S (2));
+                 }
+               else
+                 {
+                   clutter_actor_set_x(priv->buttons[BTN_SEPARATOR_LEFT],
+                                       clutter_actor_get_width(priv->buttons[BTN_MENU]) -
+-                                      clutter_actor_get_width(priv->buttons[BTN_SEPARATOR_LEFT]) + 2);
++                                      clutter_actor_get_width(priv->buttons[BTN_SEPARATOR_LEFT]) + HD_S (2));
+                 }
+             }
+           else
+@@ -1527,7 +1527,7 @@ hd_title_bar_get_xy (HdTitleBar *bar, int *x, int *y)
+ {
+   ClutterActor *titlebar;
+   /* 'adj' depends on title bar font and legacy menu padding */
+-  static const int adj = 14;
++  const int adj = HD_S (14);
+ 
+   if (!HD_IS_TITLE_BAR(bar) || !x || !y)
+     return;
+@@ -1539,8 +1539,8 @@ hd_title_bar_get_xy (HdTitleBar *bar, int *x, int *y)
+     int tmp = clutter_actor_get_x (titlebar);
+ 
+     /* check that it's a sensible value */
+-    if (tmp < 2 * 112 + adj)
+-      *x = 2 * 112 + adj;
++    if (tmp < 2 * HD_S (112) + adj)
++      *x = 2 * HD_S (112) + adj;
+     else
+       *x = tmp - adj;
+ 
+@@ -1548,7 +1548,7 @@ hd_title_bar_get_xy (HdTitleBar *bar, int *x, int *y)
+   }
+   else
+   {
+-    *x = 2 * 112 + adj;
+-    *y = 56;
++    *x = 2 * HD_S (112) + adj;
++    *y = HD_S (56);
+   }
+ }
+diff --git a/src/home/hd-title-bar.h b/src/home/hd-title-bar.h
+index e37d575..223324e 100644
+--- a/src/home/hd-title-bar.h
++++ b/src/home/hd-title-bar.h
+@@ -28,6 +28,8 @@
+ #include <matchbox/theme-engines/mb-wm-theme.h>
+ #include <matchbox/core/mb-wm-decor.h>
+ 
++#include "util/hd-util.h"
++
+ typedef struct _HdTitleBar        HdTitleBar;
+ typedef struct _HdTitleBarClass   HdTitleBarClass;
+ typedef struct _HdTitleBarPrivate HdTitleBarPrivate;
+@@ -76,7 +78,7 @@ typedef enum {
+                              HDTB_VIS_BTN_DONE,
+ } HdTitleBarVisEnum;
+ 
+-#define HD_TITLE_BAR_PROGRESS_MARGIN (8)
++#define HD_TITLE_BAR_PROGRESS_MARGIN HD_S (8)
+ 
+ GType hd_title_bar_get_type (void) G_GNUC_CONST;
+ 
+diff --git a/src/launcher/hd-launcher-editor.c b/src/launcher/hd-launcher-editor.c
+index ea0b794..923a850 100644
+--- a/src/launcher/hd-launcher-editor.c
++++ b/src/launcher/hd-launcher-editor.c
+@@ -61,7 +61,7 @@ enum
+ #define LAYOUT_END      "\t\t<Merge type=\"all\"/>\n" \
+                         "\t</Layout>\n\n"
+ 
+-#define DRAG_THRESHOLD (25)
++#define DRAG_THRESHOLD HD_S (25)
+ 
+ #define I_(str) (g_intern_static_string ((str)))
+ #define HD_LAUNCHER_EDITOR_GET_PRIVATE(object) \
+@@ -545,8 +545,8 @@ hd_launcher_editor_init (HdLauncherEditor *editor)
+   g_object_set (G_OBJECT (renderer),
+                 "xalign", 0.5,
+                 "yalign", 0.5,
+-                "width", 64,
+-                "height", 64,
++                "width", HD_S (64),
++                "height", HD_S (64),
+                 NULL);
+   gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (priv->icon_view),
+                               renderer,
+@@ -558,11 +558,11 @@ hd_launcher_editor_init (HdLauncherEditor *editor)
+   /* Add the label renderer */
+   renderer = gtk_cell_renderer_text_new ();
+   g_object_set (G_OBJECT (renderer),
+-                "width", 142,
+-                "height", 96 - (64 + HILDON_MARGIN_HALF),
++                "width", HD_S (142),
++                "height", HD_S (96 - (64 + HILDON_MARGIN_HALF)),
+                 "alignment", PANGO_ALIGN_CENTER,
+                 "ellipsize", PANGO_ELLIPSIZE_END,
+-                "wrap-width", 142,
++                "wrap-width", HD_S (142),
+                 "wrap-mode", PANGO_WRAP_WORD_CHAR,
+                 "font", "Nokia Sans 15",
+                 NULL);
+@@ -584,12 +584,12 @@ hd_launcher_editor_init (HdLauncherEditor *editor)
+   else
+     gtk_icon_view_set_columns (GTK_ICON_VIEW (priv->icon_view), 5);
+ 
+-  gtk_icon_view_set_item_width (GTK_ICON_VIEW (priv->icon_view), 142);
++  gtk_icon_view_set_item_width (GTK_ICON_VIEW (priv->icon_view), HD_S (142));
+   gtk_icon_view_set_column_spacing (GTK_ICON_VIEW (priv->icon_view),
+-                                    HILDON_MARGIN_DEFAULT);
+-  gtk_icon_view_set_row_spacing (GTK_ICON_VIEW (priv->icon_view), 40);
++                                    HD_S (HILDON_MARGIN_DEFAULT));
++  gtk_icon_view_set_row_spacing (GTK_ICON_VIEW (priv->icon_view), HD_S (40));
+   gtk_icon_view_set_spacing (GTK_ICON_VIEW (priv->icon_view),
+-                             HILDON_MARGIN_HALF);
++                             HD_S (HILDON_MARGIN_HALF));
+ 
+   gtk_icon_view_set_selection_mode (GTK_ICON_VIEW (priv->icon_view),
+                                     GTK_SELECTION_SINGLE);
+diff --git a/src/launcher/hd-launcher-grid.c b/src/launcher/hd-launcher-grid.c
+index 127085f..53cbe59 100644
+--- a/src/launcher/hd-launcher-grid.c
++++ b/src/launcher/hd-launcher-grid.c
+@@ -116,13 +116,13 @@ static gboolean _hd_launcher_grid_blocker_release_cb (ClutterActor *actor,
+                                         gpointer *data);
+ 
+ static gboolean      hd_launcher_grid_is_portrait (HdLauncherGrid *self);
+-#define HD_LAUNCHER_GRID_MAX_COLUMNS_LANDSCAPE (int)(HD_COMP_MGR_LANDSCAPE_WIDTH/160)
+-#define HD_LAUNCHER_GRID_MAX_COLUMNS_PORTRAIT (int)(HD_COMP_MGR_PORTRAIT_WIDTH/160)
++#define HD_LAUNCHER_GRID_MAX_COLUMNS_LANDSCAPE (int)(HD_COMP_MGR_LANDSCAPE_WIDTH/HD_S (160))
++#define HD_LAUNCHER_GRID_MAX_COLUMNS_PORTRAIT (int)(HD_COMP_MGR_PORTRAIT_WIDTH/HD_S (160))
+ 
+ #define HD_LAUNCHER_GRID_LEFT_DISMISSAL_AREA_LANDSCAPE (HD_LAUNCHER_LEFT_MARGIN)
+ #define HD_LAUNCHER_GRID_RIGHT_DISMISSAL_AREA_LANDSCAPE (HD_LAUNCHER_RIGHT_MARGIN)
+-#define HD_LAUNCHER_GRID_LEFT_DISMISSAL_AREA_PORTRAIT (64)
+-#define HD_LAUNCHER_GRID_RIGHT_DISMISSAL_AREA_PORTRAIT (64)
++#define HD_LAUNCHER_GRID_LEFT_DISMISSAL_AREA_PORTRAIT HD_S (64)
++#define HD_LAUNCHER_GRID_RIGHT_DISMISSAL_AREA_PORTRAIT HD_S (64)
+ 
+ 
+ G_DEFINE_TYPE_WITH_CODE (HdLauncherGrid,
+diff --git a/src/launcher/hd-launcher-grid.h b/src/launcher/hd-launcher-grid.h
+index da3a51d..3a35f8d 100644
+--- a/src/launcher/hd-launcher-grid.h
++++ b/src/launcher/hd-launcher-grid.h
+@@ -84,8 +84,8 @@ void          hd_launcher_grid_set_portrait (HdLauncherGrid *self,
+ void hd_launcher_grid_activate(ClutterActor *actor, int p);
+ 
+ /* Fixed sizes */
+-#define HD_LAUNCHER_GRID_ICON_MARGIN_LANDSCAPE (HILDON_MARGIN_DEFAULT)
+-#define HD_LAUNCHER_GRID_ICON_MARGIN_PORTRAIT (HILDON_MARGIN_DEFAULT/3)
++#define HD_LAUNCHER_GRID_ICON_MARGIN_LANDSCAPE HD_S (HILDON_MARGIN_DEFAULT)
++#define HD_LAUNCHER_GRID_ICON_MARGIN_PORTRAIT (HD_S (HILDON_MARGIN_DEFAULT)/3)
+ #define HD_LAUNCHER_GRID_MIN_HEIGHT_LANDSCAPE \
+                 (HD_LAUNCHER_PAGE_HEIGHT - HD_LAUNCHER_PAGE_YMARGIN)
+ #define HD_LAUNCHER_GRID_MIN_HEIGHT_PORTRAIT \
+@@ -93,8 +93,8 @@ void hd_launcher_grid_activate(ClutterActor *actor, int p);
+ #define HD_LAUNCHER_GRID_WIDTH_LANDSCAPE  (HD_LAUNCHER_PAGE_WIDTH)
+ #define HD_LAUNCHER_GRID_WIDTH_PORTRAIT  (HD_LAUNCHER_PAGE_HEIGHT)
+ 
+-#define HD_LAUNCHER_GRID_ROW_SPACING_LANDSCAPE 40
+-#define HD_LAUNCHER_GRID_ROW_SPACING_PORTRAIT 50
++#define HD_LAUNCHER_GRID_ROW_SPACING_LANDSCAPE HD_S (40)
++#define HD_LAUNCHER_GRID_ROW_SPACING_PORTRAIT HD_S (50)
+ 
+ G_END_DECLS
+ 
+diff --git a/src/launcher/hd-launcher-page.h b/src/launcher/hd-launcher-page.h
+index da98190..053a261 100644
+--- a/src/launcher/hd-launcher-page.h
++++ b/src/launcher/hd-launcher-page.h
+@@ -93,8 +93,8 @@ void hd_launcher_page_update_emptylabel (HdLauncherPage *page, gboolean is_portr
+  */
+ #define HD_LAUNCHER_PAGE_WIDTH  (HD_COMP_MGR_LANDSCAPE_WIDTH)
+ #define HD_LAUNCHER_PAGE_HEIGHT (HD_COMP_MGR_LANDSCAPE_HEIGHT)
+-#define HD_LAUNCHER_PAGE_YMARGIN (72)
+-#define HD_LAUNCHER_PAGE_XMARGIN (72)
++#define HD_LAUNCHER_PAGE_YMARGIN HD_S (72)
++#define HD_LAUNCHER_PAGE_XMARGIN HD_S (72)
+ 
+ G_END_DECLS
+ 
+diff --git a/src/launcher/hd-launcher-tile.c b/src/launcher/hd-launcher-tile.c
+index 64ec8fb..a21162e 100644
+--- a/src/launcher/hd-launcher-tile.c
++++ b/src/launcher/hd-launcher-tile.c
+@@ -465,7 +465,7 @@ hd_launcher_tile_set_text (HdLauncherTile *tile,
+   clutter_label_set_line_wrap_mode (CLUTTER_LABEL (priv->label),
+                                     PANGO_WRAP_CHAR);
+ 
+-  label_height = HD_LAUNCHER_TILE_HEIGHT - (64 + HILDON_MARGIN_HALF);
++  label_height = HD_LAUNCHER_TILE_HEIGHT - HD_S (64 + HILDON_MARGIN_HALF);
+ 
+   clutter_actor_get_preferred_width (priv->label,
+     CLUTTER_UNITS_FROM_DEVICE(label_height),
+@@ -702,8 +702,8 @@ hd_launcher_tile_allocate (ClutterActor          *self,
+   gint box_x2 = CLUTTER_UNITS_TO_INT(box->x2);
+   /* Set our default click area - we position our icons HILDON_MARGIN_DEFAULT
+    * apart, so make us extend sideways a bit so there are no gaps */
+-  gint xmin = -HILDON_MARGIN_DEFAULT/2;
+-  gint xmax = HD_LAUNCHER_TILE_WIDTH + HILDON_MARGIN_DEFAULT/2;
++  gint xmin = -HD_S (HILDON_MARGIN_DEFAULT)/2;
++  gint xmax = HD_LAUNCHER_TILE_WIDTH + HD_S (HILDON_MARGIN_DEFAULT)/2;
+ 
+   /* When this tile is moved around, set our click area up so that
+    * it is clipped to the margins */
+diff --git a/src/launcher/hd-launcher-tile.h b/src/launcher/hd-launcher-tile.h
+index fabb31a..e3136de 100644
+--- a/src/launcher/hd-launcher-tile.h
++++ b/src/launcher/hd-launcher-tile.h
+@@ -34,6 +34,8 @@
+ 
+ #include <clutter/clutter.h>
+ 
++#include "util/hd-util.h"
++
+ G_BEGIN_DECLS
+ 
+ #define HD_TYPE_LAUNCHER_TILE            (hd_launcher_tile_get_type ())
+@@ -79,19 +81,19 @@ void hd_launcher_tile_reset(HdLauncherTile *tile, gboolean hard);
+ void hd_launcher_tile_activate(ClutterActor       *actor);
+ 
+ /* Fixed size */
+-#define HD_LAUNCHER_TILE_HEIGHT (96)
+-#define HD_LAUNCHER_TILE_WIDTH  (142)
++#define HD_LAUNCHER_TILE_HEIGHT HD_S (96)
++#define HD_LAUNCHER_TILE_WIDTH  HD_S (142)
+ /* For the glow, we unfortunately have to have a 1px transparent border
+  * around the icons. */
+-#define HD_LAUNCHER_TILE_ICON_REAL_SIZE (64)
++#define HD_LAUNCHER_TILE_ICON_REAL_SIZE HD_S (64)
+ #define HD_LAUNCHER_TILE_ICON_SIZE (HD_LAUNCHER_TILE_ICON_REAL_SIZE+2)
+ /* For compatibility with the Harmattan icons (80x80). */
+-#define HD_LAUNCHER_TILE_ICON_REAL_SIZE_HARMATTAN_COMP (80)
++#define HD_LAUNCHER_TILE_ICON_REAL_SIZE_HARMATTAN_COMP HD_S (80)
+ /* The glow is a little bigger than the icon, so we don't get clipped edges*/
+-#define HD_LAUNCHER_TILE_GLOW_SIZE (80)
++#define HD_LAUNCHER_TILE_GLOW_SIZE HD_S (80)
+ /* Maximum amount we can drag without deselecting the currently
+  * pressed tile */
+-#define HD_LAUNCHER_TILE_MAX_DRAG (40)
++#define HD_LAUNCHER_TILE_MAX_DRAG HD_S (40)
+ 
+ G_END_DECLS
+ 
+diff --git a/src/launcher/hd-launcher.h b/src/launcher/hd-launcher.h
+index b6c3d3d..18de195 100644
+--- a/src/launcher/hd-launcher.h
++++ b/src/launcher/hd-launcher.h
+@@ -98,10 +98,10 @@ gboolean hd_launcher_is_editor_in_landscape (void);
+ gboolean hd_launcher_is_portrait (void);
+ 
+ /* left/right/top/bottom margin that is clicked on to go back */
+-#define HD_LAUNCHER_LEFT_MARGIN (68) /* layout guide F */
+-#define HD_LAUNCHER_RIGHT_MARGIN (68) /* layout guide F */
+-#define HD_LAUNCHER_TOP_MARGIN (72) /* layout guide A */
+-#define HD_LAUNCHER_BOTTOM_MARGIN (40) /* layout guide G */
++#define HD_LAUNCHER_LEFT_MARGIN HD_S (68) /* layout guide F */
++#define HD_LAUNCHER_RIGHT_MARGIN HD_S (68) /* layout guide F */
++#define HD_LAUNCHER_TOP_MARGIN HD_S (72) /* layout guide A */
++#define HD_LAUNCHER_BOTTOM_MARGIN HD_S (40) /* layout guide G */
+ 
+ 
+ G_END_DECLS
+diff --git a/src/main.c b/src/main.c
+index 74f5bf3..35f9d99 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -412,6 +412,10 @@ main (int argc, char **argv)
+    * assumptions about the number of benign UnmapNotifies the window
+    * manager will see when reparenting "client" windows. */
+   clutter_init (&argc, &argv);
++  /* Fonts in points as large as the N900's, relative to the screen */
++  if (hd_util_scale () != 1)
++    clutter_backend_set_resolution (clutter_get_default_backend (),
++                                    96 * hd_util_scale ());
+   /* Disable mipmapping of text, as it is seldom scaled down and this
+    * saves us memory/bandwidth/update speed */
+   clutter_set_use_mipmapped_text(FALSE);
+diff --git a/src/mb/hd-comp-mgr.h b/src/mb/hd-comp-mgr.h
+index 8048ce6..3fca3c6 100644
+--- a/src/mb/hd-comp-mgr.h
++++ b/src/mb/hd-comp-mgr.h
+@@ -46,15 +46,15 @@ G_BEGIN_DECLS
+ #define HD_COMP_MGR_SCREEN_RATIO ((double)HD_COMP_MGR_LANDSCAPE_WIDTH/HD_COMP_MGR_LANDSCAPE_HEIGHT)
+ 
+ /* The title bar height + HALF_MARGIN border. */
+-#define HD_COMP_MGR_TOP_MARGIN         56
++#define HD_COMP_MGR_TOP_MARGIN         HD_S (56)
+ /* task button width */
+-#define HD_COMP_MGR_TOP_LEFT_BTN_WIDTH          112
++#define HD_COMP_MGR_TOP_LEFT_BTN_WIDTH          HD_S (112)
+ #define HD_COMP_MGR_TOP_LEFT_BTN_HEIGHT         HD_COMP_MGR_TOP_MARGIN
+-#define HD_COMP_MGR_TOP_RIGHT_BTN_WIDTH         112
+-#define HD_COMP_MGR_TOP_RIGHT_BTN_WIDTH_SMALL   80
++#define HD_COMP_MGR_TOP_RIGHT_BTN_WIDTH         HD_S (112)
++#define HD_COMP_MGR_TOP_RIGHT_BTN_WIDTH_SMALL   HD_S (80)
+ #define HD_COMP_MGR_TOP_RIGHT_BTN_HEIGHT        HD_COMP_MGR_TOP_MARGIN
+-#define HD_COMP_MGR_STATUS_MENU_WIDTH           688
+-#define HD_COMP_MGR_OPERATOR_PADDING            16 /* specs v2.2 */
++#define HD_COMP_MGR_STATUS_MENU_WIDTH           HD_S (688)
++#define HD_COMP_MGR_OPERATOR_PADDING            HD_S (16) /* specs v2.2 */
+ 
+ typedef struct HdCompMgrClientClass   HdCompMgrClientClass;
+ typedef struct HdCompMgrClient        HdCompMgrClient;
+diff --git a/src/mb/hd-decor.c b/src/mb/hd-decor.c
+index 8126867..d62c537 100644
+--- a/src/mb/hd-decor.c
++++ b/src/mb/hd-decor.c
+@@ -35,7 +35,7 @@
+ #include <matchbox/theme-engines/mb-wm-theme-png.h>
+ #include <matchbox/theme-engines/mb-wm-theme-xml.h>
+ 
+-#define HD_DECOR_TITLE_MARGIN 24
++#define HD_DECOR_TITLE_MARGIN HD_S (24)
+ 
+ 
+ static void
+diff --git a/src/mb/hd-dialog.c b/src/mb/hd-dialog.c
+index 882f1bb..90aa552 100644
+--- a/src/mb/hd-dialog.c
++++ b/src/mb/hd-dialog.c
+@@ -278,7 +278,7 @@ hd_dialog_request_geometry (MBWindowManagerClient *client,
+   /* adjust the height to fit */
+   maxheight = wm->xdpy_height;
+   if (!(client->window->ewmh_state & MBWMClientWindowEWMHStateFullscreen))
+-    maxheight -= 56; /* HD_COMP_MGR_TOP_MARGIN? */
++    maxheight -= HD_S (56); /* HD_COMP_MGR_TOP_MARGIN? */
+   diff = client->frame_geometry.height - maxheight;
+   if (diff > 0)
+     {
+diff --git a/src/mb/hd-note.c b/src/mb/hd-note.c
+index f31048d..46d4501 100644
+--- a/src/mb/hd-note.c
++++ b/src/mb/hd-note.c
+@@ -95,7 +95,7 @@ resize_note (XConfigureEvent *xev, MBWindowManagerClient *client)
+                                                  MBWMClientTypeApp)) != NULL
+           && (d = mb_wm_xml_decor_find_by_type (c->decors,
+                                                 MBWMDecorTypeNorth)) != NULL
+-        ? d->height : 40;
++        ? d->height : HD_S (40);
+     }
+   else if (HD_NOTE (client)->note_type == HdNoteTypeInfo)
+     /* Center vertically. */
+diff --git a/src/mb/hd-status-area.c b/src/mb/hd-status-area.c
+index d948c55..8cbac5b 100644
+--- a/src/mb/hd-status-area.c
++++ b/src/mb/hd-status-area.c
+@@ -74,7 +74,7 @@ hd_status_area_init (MBWMObject *this, va_list vap)
+       & HDTB_VIS_BTN_LEFT_MASK)
+     geom.x = HD_COMP_MGR_TOP_LEFT_BTN_WIDTH;
+   geom.y      = 0;
+-  geom.width  = 112;
++  geom.width  = HD_S (112);
+   geom.height = HD_COMP_MGR_TOP_MARGIN;
+ 
+   hd_status_area_request_geometry (client, &geom, MBWMClientReqGeomForced);
+diff --git a/src/mb/hd-theme.h b/src/mb/hd-theme.h
+index 8aa3c4c..f8567c3 100644
+--- a/src/mb/hd-theme.h
++++ b/src/mb/hd-theme.h
+@@ -28,6 +28,8 @@
+ #include <matchbox/mb-wm-config.h>
+ #include <matchbox/theme-engines/mb-wm-theme.h>
+ 
++#include "util/hd-util.h"
++
+ /* ------------------------------------------------------------------------- */
+ #define HD_THEME_IMG_TASK_LAUNCHER "wmTaskLauncherIcon.png"
+ #define HD_THEME_IMG_TASK_SWITCHER "wmTaskSwitcherIcon.png"
+@@ -52,9 +54,9 @@
+ #define HD_THEME_IMG_SEPARATOR "wmSeparator.png"
+ 
+ #define HD_THEME_IMG_MENU_INDICATOR "wmMenuIndicator.png"
+-#define HD_THEME_IMG_MENU_INDICATOR_SIZE 48 /* width/height of indicator */
++#define HD_THEME_IMG_MENU_INDICATOR_SIZE HD_S (48) /* width/height of indicator */
+ #define HD_THEME_IMG_PROGRESS "wmProgressIndicator.png"
+-#define HD_THEME_IMG_PROGRESS_SIZE 48 /* width/height of frame */
++#define HD_THEME_IMG_PROGRESS_SIZE HD_S (48) /* width/height of frame */
+ #define HD_THEME_IMG_PROGRESS_FRAMES 8 /*frames in animation */
+ #define HD_THEME_IMG_PROGRESS_FPS 5 /*frames per second */
+ 
+diff --git a/src/tidy/tidy-finger-scroll.c b/src/tidy/tidy-finger-scroll.c
+index e4574e6..264d0d5 100644
+--- a/src/tidy/tidy-finger-scroll.c
++++ b/src/tidy/tidy-finger-scroll.c
+@@ -33,11 +33,12 @@
+ #include "tidy-scroll-view.h"
+ 
+ #include "util/hd-transition.h"
++#include "util/hd-util.h"
+ 
+ #define TIDY_FINGER_SCROLL_INITIAL_SCROLLBAR_DELAY (2000)
+ #define TIDY_FINGER_SCROLL_FADE_SCROLLBAR_IN_TIME (250)
+ #define TIDY_FINGER_SCROLL_FADE_SCROLLBAR_OUT_TIME (500)
+-#define TIDY_FINGER_SCROLL_DRAG_TRASHOLD (25)
++#define TIDY_FINGER_SCROLL_DRAG_TRASHOLD HD_S (25)
+ 
+ typedef struct {
+   /* Units to store the origin of a click when scrolling */
+diff --git a/src/tidy/tidy-scroll-bar.c b/src/tidy/tidy-scroll-bar.c
+index a83d9b7..fc02339 100644
+--- a/src/tidy/tidy-scroll-bar.c
++++ b/src/tidy/tidy-scroll-bar.c
+@@ -31,6 +31,7 @@
+ #include "tidy-stylable.h"
+ #include "tidy-enum-types.h"
+ #include "tidy-private.h"
++#include "util/hd-util.h"
+ 
+ static void tidy_stylable_iface_init (TidyStylableIface *iface);
+ static void on_style_change (TidyStyle     *style,
+@@ -374,7 +375,7 @@ tidy_stylable_iface_init (TidyStylableIface *iface)
+       pspec = g_param_spec_uint ("min-size",
+                                  "Minimum grabber size",
+                                  "Minimum size of the scroll grabber, in px",
+-                                 0, G_MAXUINT, 32,
++                                 0, G_MAXUINT, HD_S (32),
+                                  G_PARAM_READWRITE);
+       tidy_stylable_iface_install_property (iface, 
+                                             TIDY_TYPE_SCROLL_BAR, pspec);
+diff --git a/src/tidy/tidy-scroll-view.c b/src/tidy/tidy-scroll-view.c
+index a399812..28a20e6 100644
+--- a/src/tidy/tidy-scroll-view.c
++++ b/src/tidy/tidy-scroll-view.c
+@@ -25,6 +25,7 @@
+ #include "tidy-scroll-bar.h"
+ #include "tidy-scrollable.h"
+ #include "tidy-stylable.h"
++#include "util/hd-util.h"
+ #include <clutter/clutter.h>
+ 
+ static void clutter_container_iface_init (ClutterContainerIface *iface);
+@@ -364,14 +365,14 @@ tidy_stylable_iface_init (TidyStylableIface *iface)
+       pspec = g_param_spec_uint ("xthickness",
+                                   "Vertical scroll-bar thickness",
+                                   "Thickness of vertical scrollbar, in px",
+-                                  0, G_MAXUINT, 8,
++                                  0, G_MAXUINT, HD_S (8),
+                                   G_PARAM_READWRITE);
+       tidy_stylable_iface_install_property (iface, TIDY_TYPE_SCROLL_VIEW, pspec);
+ 
+       pspec = g_param_spec_uint ("ythickness",
+                                   "Horizontal scroll-bar thickness",
+                                   "Thickness of horizontal scrollbar, in px",
+-                                  0, G_MAXUINT, 8,
++                                  0, G_MAXUINT, HD_S (8),
+                                   G_PARAM_READWRITE);
+       tidy_stylable_iface_install_property (iface, TIDY_TYPE_SCROLL_VIEW, pspec);
+     }
+@@ -453,7 +454,7 @@ child_vadjustment_notify_cb (GObject *gobject,
+ static void
+ tidy_scroll_view_init (TidyScrollView *self)
+ {
+-  static const TidyPadding padding = { .right = CLUTTER_UNITS_FROM_INT (8) };
++  const TidyPadding padding = { .right = CLUTTER_UNITS_FROM_INT (HD_S (8)) };
+   TidyScrollViewPrivate *priv = self->priv = SCROLL_VIEW_PRIVATE (self);
+   GValue transparent = { 0 };
+ 
+diff --git a/src/util/hd-transition.c b/src/util/hd-transition.c
+index 0251030..86fe25a 100644
+--- a/src/util/hd-transition.c
++++ b/src/util/hd-transition.c
+@@ -533,7 +533,7 @@ on_close_timeline_new_frame(ClutterTimeline *timeline,
+   amtx = (1-cos(amtx * 3.141592)) * 0.45f + 0.1f;
+   amty = (1-cos(amty * 3.141592)) * 0.45f + 0.1f;
+   particle_opacity = sin(amtp * 3.141592);
+-  particle_radius = 8 + (1-cos(amtp * 3.141592)) * 32.0f;
++  particle_radius = HD_S (8) + (1-cos(amtp * 3.141592)) * 32.0f * hd_util_scale ();
+ 
+   centrex =  data->geo.x + data->geo.width / 2 ;
+   centrey =  data->geo.y + data->geo.height / 2 ;
+@@ -628,9 +628,11 @@ on_notification_timeline_new_frame(ClutterTimeline *timeline,
+       curve = data->event == MBWMCompMgrClientEventUnmap ? cpout : cpin;
+       clutter_actor_set_anchor_pointu(actor,
+                CLUTTER_FLOAT_TO_FIXED(-bezier(now,
+-                        curve[0].x, curve[1].x, curve[2].x, curve[3].x)),
++                        curve[0].x, curve[1].x, curve[2].x, curve[3].x)
++                        * hd_util_scale ()),
+                CLUTTER_FLOAT_TO_FIXED(-bezier(now,
+-                        curve[0].y, curve[1].y, curve[2].y, curve[3].y)));
++                        curve[0].y, curve[1].y, curve[2].y, curve[3].y)
++                        * hd_util_scale ()));
+ 
+       /* We should restore the opacity and scaling of @actor in case
+        * we were switched orientation during the transition somehow
+@@ -667,7 +669,7 @@ on_notification_timeline_new_frame(ClutterTimeline *timeline,
+ 
+           /* It's probably best to count it with your fingers to follow
+            * this mumble-jumbo. */
+-          dx = 32;
++          dx = HD_S (32);
+           dw = tbw - 2*dx;
+           dh = (float)dw/width * height;
+           dy = (HD_COMP_MGR_TOP_LEFT_BTN_HEIGHT - dh) / 2;
+diff --git a/src/util/hd-util.c b/src/util/hd-util.c
+index 1711a89..439982e 100644
+--- a/src/util/hd-util.c
++++ b/src/util/hd-util.c
+@@ -1,5 +1,7 @@
+ #include "hd-util.h"
+ 
++#include <string.h>
++
+ #include <matchbox/core/mb-wm.h>
+ #include <clutter/x11/clutter-x11.h>
+ #include <cogl/cogl.h>
+@@ -960,6 +962,29 @@ hd_util_display_height()
+   return height;
+ }
+ 
++gdouble
++hd_util_scale(void)
++{
++  static gdouble scale = 0;
++
++  if (scale == 0)
++    {
++      const gchar *env = g_getenv("HILDON_SCALE");
++      gchar *theme = NULL;
++
++      /* Else the factor the theme was made for (pro1x-theme-scale) */
++      if (!env && g_file_get_contents("/etc/hildon/theme/.pro1x-theme",
++                                      &theme, NULL, NULL))
++        env = strchr(theme, '\n') ? strchr(theme, '\n') + 1 : NULL;
++      scale = env ? g_ascii_strtod(env, NULL) : 1;
++      if (!(scale >= 0.5 && scale <= 8))
++        scale = 1;
++      g_free(theme);
++    }
++
++  return scale;
++}
++
+ gchar *hd_util_get_default_terminal(void)
+ {
+   gchar *term = NULL;
+diff --git a/src/util/hd-util.h b/src/util/hd-util.h
+index 59ba916..7a17a57 100644
+--- a/src/util/hd-util.h
++++ b/src/util/hd-util.h
+@@ -4,6 +4,7 @@
+ 
+ #include <X11/Xlib.h>
+ #include <X11/Xatom.h>
++#include <math.h>
+ #include <glib.h>
+ #include <clutter/clutter.h>
+ #include <matchbox/core/mb-wm.h>
+@@ -58,4 +59,12 @@ guint hd_util_display_height(void);
+ 
+ gchar *hd_util_get_default_terminal(void);
+ 
++/* Lengths of the Hildon UI are the N900's pixels. On a denser screen they
++ * are scaled by HILDON_SCALE from the environment, or else by the factor
++ * the theme was made for (/etc/hildon/theme/.pro1x-theme, written by
++ * pro1x-theme-scale), e.g. 2.25 on 2160x1080 for the N900's proportion:
++ * HD_S (56) is the title bar's height there. */
++gdouble hd_util_scale(void);
++#define HD_S(x) ((int) lround ((x) * hd_util_scale ()))
++
+ #endif

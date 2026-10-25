@@ -1,0 +1,8 @@
+# Hildon at the N900's size on the full resolution (tools/pro1x-hidpi):
+# HILDON_SCALE and the GTK 3 and Qt factors for everything the session
+# starts, Xft.dpi among the X resources. After 00settings, whose profile's
+# GDK_DPI_SCALE this replaces; before maemo-launcher.
+if [ -x /usr/local/bin/pro1x-hidpi ]; then
+	eval "$(/usr/local/bin/pro1x-hidpi env)"
+	/usr/local/bin/pro1x-hidpi x11
+fi

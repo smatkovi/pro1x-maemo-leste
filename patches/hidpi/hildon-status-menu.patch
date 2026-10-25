@@ -1,0 +1,195 @@
+diff --git a/src/hd-scale.h b/src/hd-scale.h
+new file mode 100644
+index 0000000..3a52dee
+--- /dev/null
++++ b/src/hd-scale.h
+@@ -0,0 +1,40 @@
++/*
++ * HiDPI: Hildon's lengths are the N900's pixels; on a denser screen they
++ * are scaled by HILDON_SCALE from the environment, or else by the factor
++ * the theme was made for (/etc/hildon/theme/.pro1x-theme, written by
++ * pro1x-theme-scale), e.g. 2.25 on 2160x1080 for the N900's proportion.
++ */
++
++#ifndef __HD_SCALE_H__
++#define __HD_SCALE_H__
++
++#include <math.h>
++#include <string.h>
++#include <glib.h>
++
++static inline gdouble
++hd_scale (void)
++{
++  static gdouble scale = 0;
++
++  if (scale == 0)
++    {
++      const gchar *env = g_getenv ("HILDON_SCALE");
++      gchar *theme = NULL;
++
++      /* Else the factor the theme was made for (pro1x-theme-scale) */
++      if (!env && g_file_get_contents ("/etc/hildon/theme/.pro1x-theme",
++                                       &theme, NULL, NULL))
++        env = strchr (theme, '\n') ? strchr (theme, '\n') + 1 : NULL;
++      scale = env ? g_ascii_strtod (env, NULL) : 1;
++      if (!(scale >= 0.5 && scale <= 8))
++        scale = 1;
++      g_free (theme);
++    }
++
++  return scale;
++}
++
++#define HD_S(x) ((gint) floor ((x) * hd_scale () + 0.5))
++
++#endif
+diff --git a/src/hd-status-area-box.c b/src/hd-status-area-box.c
+index c6421bd..eae207c 100644
+--- a/src/hd-status-area-box.c
++++ b/src/hd-status-area-box.c
+@@ -24,18 +24,19 @@
+ #endif
+ 
+ #include "hd-status-area-box.h"
++#include "hd-scale.h"
+ 
+ #include <hildon/hildon.h>
+ 
+ /* Status Area UI Style guide */
+-#define ITEM_HEIGHT 18
+-#define ITEM_WIDTH 18
++#define ITEM_HEIGHT HD_S (18)
++#define ITEM_WIDTH HD_S (18)
+ 
+-#define CUSTOM_MARGIN_9 9
++#define CUSTOM_MARGIN_9 HD_S (9)
+ 
+-#define SPACING 2
++#define SPACING HD_S (2)
+ 
+-#define PADDING_LEFT HILDON_MARGIN_HALF
++#define PADDING_LEFT HD_S (HILDON_MARGIN_HALF)
+ 
+ #define MAX_VISIBLE_CHILDREN_PORTRAIT 6
+ #define MAX_VISIBLE_CHILDREN_LANDSCAPE 8
+diff --git a/src/hd-status-area.c b/src/hd-status-area.c
+index 11b9897..bab8d70 100644
+--- a/src/hd-status-area.c
++++ b/src/hd-status-area.c
+@@ -39,16 +39,17 @@
+ #include "hd-status-menu-config.h"
+ 
+ #include "hd-status-area.h"
++#include "hd-scale.h"
+ 
+ /* UI Style guide */
+-#define STATUS_AREA_HEIGHT 56
+-#define MINIMUM_STATUS_AREA_WIDTH 112
++#define STATUS_AREA_HEIGHT HD_S (56)
++#define MINIMUM_STATUS_AREA_WIDTH HD_S (112)
+ 
+-#define SPECIAL_ICON_WIDTH 18
+-#define SPECIAL_ICON_HEIGHT 36
++#define SPECIAL_ICON_WIDTH HD_S (18)
++#define SPECIAL_ICON_HEIGHT HD_S (36)
+ 
+-#define CUSTOM_MARGIN_9 9
+-#define CUSTOM_MARGIN_10 10
++#define CUSTOM_MARGIN_9 HD_S (9)
++#define CUSTOM_MARGIN_10 HD_S (10)
+ 
+ /* Configuration file keys */
+ 
+@@ -201,10 +202,10 @@ hd_status_area_init (HDStatusArea *status_area)
+   main_hbox = gtk_hbox_new (FALSE, 0);
+   gtk_widget_show (main_hbox);
+ 
+-  left_hbox = gtk_hbox_new (FALSE, HILDON_MARGIN_DOUBLE);
++  left_hbox = gtk_hbox_new (FALSE, HD_S (HILDON_MARGIN_DOUBLE));
+   gtk_widget_show (left_hbox);
+ 
+-  special_hbox = gtk_hbox_new (FALSE, HILDON_MARGIN_HALF);
++  special_hbox = gtk_hbox_new (FALSE, HD_S (HILDON_MARGIN_HALF));
+   gtk_widget_show (special_hbox);
+ 
+   priv->clock_box = gtk_alignment_new (0.5, 0.5, 0.0, 0.0);
+@@ -316,6 +317,20 @@ status_area_icon_changed (HDStatusPluginItem *plugin,
+                 "status-area-icon", &pixbuf,
+                 NULL);
+ 
++  /* Plugins draw their icons at the N900's size (18 pixels, special
++   * items 36 high) */
++  if (pixbuf && hd_scale () != 1 && gdk_pixbuf_get_height (pixbuf) <= 36)
++    {
++      GdkPixbuf *scaled;
++
++      scaled = gdk_pixbuf_scale_simple (pixbuf,
++                                        HD_S (gdk_pixbuf_get_width (pixbuf)),
++                                        HD_S (gdk_pixbuf_get_height (pixbuf)),
++                                        GDK_INTERP_BILINEAR);
++      g_object_unref (pixbuf);
++      pixbuf = scaled;
++    }
++
+ 
+   for (i = 0; i < HD_STATUS_AREA_NUM_SPECIAL_ITEMS; i++)
+     {
+@@ -600,9 +615,9 @@ update_alignemnt_padding (HDStatusArea *status_area)
+   guint left_right_padding;
+ 
+   if (portrait)
+-    left_right_padding = HILDON_MARGIN_DEFAULT;
++    left_right_padding = HD_S (HILDON_MARGIN_DEFAULT);
+   else
+-    left_right_padding = HILDON_MARGIN_DOUBLE;
++    left_right_padding = HD_S (HILDON_MARGIN_DOUBLE);
+ 
+   gtk_alignment_set_padding (GTK_ALIGNMENT (priv->main_alignment),
+                              CUSTOM_MARGIN_9, CUSTOM_MARGIN_9,
+diff --git a/src/hd-status-menu-box.c b/src/hd-status-menu-box.c
+index 87c61bf..c083339 100644
+--- a/src/hd-status-menu-box.c
++++ b/src/hd-status-menu-box.c
+@@ -24,10 +24,11 @@
+ #endif
+ 
+ #include "hd-status-menu-box.h"
++#include "hd-scale.h"
+ 
+ /* UI Style guide */
+-#define ITEM_HEIGHT 70
+-#define ITEM_WIDTH 328
++#define ITEM_HEIGHT HD_S (70)
++#define ITEM_WIDTH HD_S (328)
+ 
+ struct _HDStatusMenuBoxPrivate
+ {
+diff --git a/src/hd-status-menu.c b/src/hd-status-menu.c
+index 1cda728..ffcb1ed 100644
+--- a/src/hd-status-menu.c
++++ b/src/hd-status-menu.c
+@@ -41,6 +41,7 @@
+ #include "hd-status-menu.h"
+ #include "hd-status-menu-box.h"
+ #include "hd-status-menu-config.h"
++#include "hd-scale.h"
+ 
+ /**
+  * SECTION:hdstatusmenu
+@@ -55,11 +56,11 @@
+  *
+  **/
+ 
+-#define STATUS_MENU_ITEM_HEIGHT 70 /* Master Layout Guide */
+-#define STATUS_MENU_ITEM_WIDTH 332 /* menu items (Master Layout Guide) */
++#define STATUS_MENU_ITEM_HEIGHT HD_S (70) /* Master Layout Guide */
++#define STATUS_MENU_ITEM_WIDTH HD_S (332) /* menu items (Master Layout Guide) */
+ 
+-#define STATUS_MENU_PANNABLE_WIDTH_LANDSCAPE 656
+-#define STATUS_MENU_PANNABLE_WIDTH_PORTRAIT 448
++#define STATUS_MENU_PANNABLE_WIDTH_LANDSCAPE HD_S (656)
++#define STATUS_MENU_PANNABLE_WIDTH_PORTRAIT HD_S (448)
+ 
+ #define DSME_SIGNAL_INTERFACE "com.nokia.dsme.signal"
+ #define DSME_SHUTDOWN_SIGNAL_NAME "shutdown_ind"

@@ -9,8 +9,10 @@ FreeBSD/arm64 on a Linux PC, for the root image of `freebsd/rootfs.sh`.
 `build.sh` builds a sysroot from the release's base system and FreeBSD's
 packages (`deps.sh`: gtk2, gconf2, dbus-glib, mesa, ...), then each part
 from `github.com/maemo-leste/<part>` with clang for
-`aarch64-unknown-freebsd15.0`, Debian's own patches (`debian/patches`)
-and the FreeBSD changes in `patches/<part>/`. The results go to
+`aarch64-unknown-freebsd15.0`, Debian's own patches (`debian/patches`),
+the FreeBSD changes in `patches/<part>/` and the HiDPI changes Leste
+gets too (`../../patches/hidpi/<part>.patch`, see
+`tools/pro1x-hidpi/README.md`). The results go to
 `$WORK/hildon/stage` and into the sysroot for the parts after them.
 Leste's theme, icons and sounds come from Leste's archive (InRelease
 checked with `keys/`, packages with the checksums it signs).
@@ -39,6 +41,14 @@ Adreno GPU).
 (`startx /usr/local/bin/hildon-session`: status menu and home beside
 hildon-desktop, as Leste's Xsession.post starts them), links for the
 paths Hildon has built in (`/etc/hildon/theme`, `/usr/share/themes`, ...)
-and the GConf defaults, made from the schemas at boot.
+and the GConf defaults, made from the schemas at boot. The session is
+Xfce unless `pro1x.desktop=hildon` is in `freebsd/cmdline`.
+
+Hildon is scaled to the N900's size at the full resolution
+(`tools/pro1x-hidpi`): `build.sh` also builds `pro1x-theme-scale` and
+`pro1x-hidpi`, `rootfs.sh` makes the theme for the default factor into the
+image (`/usr/local/share/pro1x/hidpi`), and at boot `pro1x_setup` points
+`/etc/hildon/theme` at it, or at one made into `/var` for another factor
+in `pro1x-display.conf`.
 
 Untested on the phone so far.

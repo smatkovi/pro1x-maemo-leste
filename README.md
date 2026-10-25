@@ -258,6 +258,7 @@ would otherwise lose its slot after seven starts.
 | `scripts/47-libcal.sh` | inside the rootfs, root | libcal that accepts the block2mtd CAL (lock code) |
 | `scripts/48-camera-stack.sh` | inside the rootfs, root | libcamera 0.7.2 with the Pro1X sensors |
 | `scripts/49-apps.sh` | inside the rootfs, root | `pro1x-camera` |
+| `scripts/49-hidpi.sh` | inside the rootfs, root | Hildon at the N900's size on 2160x1080 (`tools/pro1x-hidpi`) |
 | `scripts/50-build-bootimg.sh` | build host | pack the Android boot image (v0, DTB appended) |
 | `scripts/55-deploy-rootfs.sh` | device, root | first deployment: shrink, stream, grow again (additive) |
 | `scripts/56-update-rootfs.sh` | device, root | updates as rsync delta (`--inplace`) |

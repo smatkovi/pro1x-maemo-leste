@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+# Hildon at the N900's size on the full resolution (tools/pro1x-hidpi):
+# the theme scaled by the factor in pro1x-display.conf on userdata, made
+# once per factor, as /etc/hildon/theme before X starts.
+
+description="Hildon theme for the screen's density"
+
+depend() {
+	need localmount
+	after hildon-control-panel-personalisation
+	before xorg
+}
+
+start() {
+	ebegin "Hildon theme for the display factor"
+	/usr/local/bin/pro1x-hidpi theme > /dev/null
+	eend $?
+}
