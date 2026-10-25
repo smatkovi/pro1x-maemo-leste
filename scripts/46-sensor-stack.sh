@@ -109,6 +109,13 @@ gcc -O2 -Wall -fPIC -shared -fvisibility=hidden -o /usr/local/lib/aarch64-linux-
 install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-rtc" /etc/init.d/
 install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/alarmd-pro1x" /usr/local/sbin/
 install -m 644 "$REPO/rootfs-overlay/etc/udev/rules.d/84-pro1x-rtc.rules" /etc/udev/rules.d/
+
+log "pro1x-autosuspend (suspend while the display is off; not enabled)"
+gcc -O2 -Wall -o /usr/local/sbin/pro1x-autosuspend "$REPO/tools/pro1x-autosuspend/pro1x-autosuspend.c" \
+  $(pkg-config --cflags --libs gio-unix-2.0)
+install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-autosuspend" /etc/init.d/
+[ -e /etc/pro1x-autosuspend.conf ] ||
+  install -m 644 "$REPO/tools/pro1x-autosuspend/pro1x-autosuspend.conf" /etc/
 # alarmd (started by dsme) runs through that wrapper; only DAEMON changes
 sed -i 's|^DAEMON=.*|DAEMON="/usr/local/sbin/alarmd-pro1x"|' /etc/conf.d/alarmd
 # gpsd-clients recommends matplotlib and friends; gpspipe/cgps need none of it.

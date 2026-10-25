@@ -33,18 +33,19 @@ else
   echo "patches already applied"
 fi
 
-# Our own patches for Maemo Leste on top (device/kernel/patches, in order).
-if [ ! -f .leste-patches-applied ]; then
-  for p in "$REPO"/device/kernel/patches/*.patch; do
-    echo ">> patch $(basename "$p")"
-    git apply -v "$p"
-  done
+# Our own patches for Maemo Leste on top (device/kernel/patches, in order),
+# each committed on its own; a tree from an earlier run gets the new ones.
+# (Trees from before the per-patch marks have .leste-patches-applied: mark
+# 0001 and 0002 as applied there by hand.)
+for p in "$REPO"/device/kernel/patches/*.patch; do
+  mark=.leste-applied-$(basename "$p" .patch)
+  [ -f "$mark" ] && continue
+  echo ">> patch $(basename "$p")"
+  git apply -v "$p"
   git add -A && git -c user.name=build -c user.email=build@local commit -qm \
-    "Maemo Leste patches on top of the Pro1X device patches"
-  touch .leste-patches-applied
-else
-  echo "Leste patches already applied"
-fi
+    "Maemo Leste: $(basename "$p" .patch)"
+  touch "$mark"
+done
 
 # Take over the NixOS port's config plus our fragment; olddefconfig drops
 # GCC-specific options, because we build with clang/lld (no aarch64 GCC on

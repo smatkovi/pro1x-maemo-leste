@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+# Suspends the Pro1X while the display is off and nothing needs it
+# (tools/pro1x-autosuspend). Not in a runlevel by default; once suspend and
+# resume are known to work on the device:
+#   rc-update add pro1x-autosuspend default
+
+description="Pro1X autosuspend"
+command=/usr/local/sbin/pro1x-autosuspend
+supervisor=supervise-daemon
+respawn_delay=10
+respawn_max=0
+
+depend() {
+	need dbus
+	after mce
+}

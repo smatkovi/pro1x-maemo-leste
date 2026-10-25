@@ -65,6 +65,24 @@ for p in linux-image-arm64 linux-headers-arm64; do
   if dpkg -s "$p" > /dev/null 2>&1; then apt-get remove -y -q "$p"; fi
 done
 
+# upower without battery polling: pro1x-adc-battery measures every 5 s and
+# sends a uevent itself whenever capacity or status change (at most every
+# 30 s), while upowerd read the ADC again every few seconds. UPower.conf
+# belongs to leste-config-common (a diversion), so upowerd gets its own copy
+# through a D-Bus service file, which takes precedence over the package's.
+log "upower: no battery polling"
+sed 's/^NoPollBatteries=.*/NoPollBatteries=true/' /etc/UPower/UPower.conf > /etc/UPower/UPower-pro1x.conf
+mkdir -p /usr/local/share/dbus-1/system-services
+cat > /usr/local/share/dbus-1/system-services/org.freedesktop.UPower.service <<'EOF'
+# Pro1X: upowerd with /etc/UPower/UPower-pro1x.conf (no battery polling);
+# this directory takes precedence over /usr/share/dbus-1/system-services
+[D-BUS Service]
+Name=org.freedesktop.UPower
+Exec=/usr/bin/env UPOWER_CONF_FILE_NAME=/etc/UPower/UPower-pro1x.conf /usr/libexec/upowerd
+User=root
+SystemdService=upower.service
+EOF
+
 # --- Overlay: init scripts, mce configuration ------------------------------
 log "overlay from $REPO/rootfs-overlay"
 cp -a "$REPO/rootfs-overlay/." /
