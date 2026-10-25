@@ -19,9 +19,11 @@
  * Leste's mce skips input devices with that name, so these events neither
  * count as user activity nor as its own keyboard slide.
  *
- * Axes: libssc reports in the frame of the panel in portrait (x right,
- * y up, z out of the screen), which in the landscape screen of the MeeGo
- * session is x up, y left - the N950's own frame, so only the unit changes.
+ * Axes: corrected with the Pro1X's mount matrix (x and y flipped, as
+ * verified by the NixOS port and set for iio-sensor-proxy in
+ * 81-pro1x-sensors.rules), the readings are in the frame of the panel in
+ * portrait (x right, y up, z out of the screen). In the landscape screen of
+ * the MeeGo session that is x up, y left - the N950's own frame.
  * sensord's acc_trans_matrix and orientation_offset of the N950 rootfs then
  * give Screen.TopEdge "top" with the keyboard towards the user.
  *
@@ -102,6 +104,9 @@ static void accel_cb(SSCSensorAccelerometer *s, gfloat x, gfloat y, gfloat z, gp
 {
 	(void)s;
 	(void)data;
+	/* mount matrix: -1 0 0; 0 -1 0; 0 0 1 */
+	x = -x;
+	y = -y;
 	if (g_get_monotonic_time() - start_us < LANDSCAPE_START_US &&
 	    fabsf(z) > 0.9f * sqrtf(x * x + y * y + z * z)) {
 		x = 9.80665f;
