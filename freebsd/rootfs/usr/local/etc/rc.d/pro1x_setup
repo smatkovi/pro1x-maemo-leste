@@ -9,7 +9,9 @@
 # filled here from /usr/local/share/pro1x/root; and the caches packages
 # build when they are installed, built into /var at every boot:
 # gdk-pixbuf's list of image loaders (found through GDK_PIXBUF_MODULE_FILE,
-# ~/.xinitrc) and, in the background, fontconfig's font cache.
+# ~/.xinitrc), Hildon's GConf defaults from the schemas (found through
+# /usr/local/etc/gconf/2/local-defaults.path) and, in the background,
+# fontconfig's font cache.
 
 . /etc/rc.subr
 
@@ -24,6 +26,13 @@ pro1x_setup_start()
 	if [ -x /usr/local/bin/gdk-pixbuf-query-loaders ]; then
 		/usr/local/bin/gdk-pixbuf-query-loaders \
 		    > /var/db/gdk-pixbuf-loaders.cache 2>/dev/null
+	fi
+	if [ -x /usr/local/bin/gconftool-2 ] &&
+	    [ -d /usr/local/share/gconf/schemas ]; then
+		mkdir -p /var/db/gconf
+		GCONF_CONFIG_SOURCE=xml:merged:/var/db/gconf/gconf.xml.defaults \
+		    /usr/local/bin/gconftool-2 --makefile-install-rule \
+		    /usr/local/share/gconf/schemas/*.schemas > /dev/null 2>&1
 	fi
 	if [ -x /usr/local/bin/fc-cache ]; then
 		(nice /usr/local/bin/fc-cache -s > /dev/null 2>&1 &)

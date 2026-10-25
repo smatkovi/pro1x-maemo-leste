@@ -1,0 +1,3 @@
+# Hildon's GConf defaults, made from the schemas at boot (rc.d/pro1x_setup):
+# the root filesystem is read only
+xml:readonly:/var/db/gconf/gconf.xml.defaults

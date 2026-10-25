@@ -1,0 +1,13 @@
+FreeBSD/Pro1X: PATH_MAX from <limits.h>, not Linux's <linux/limits.h>.
+
+--- a/src/osso-cp-plugin.c	2026-10-25 19:53:23.298614017 +0100
++++ b/src/osso-cp-plugin.c	2026-10-25 20:07:20.336484028 +0100
+@@ -25,7 +25,7 @@
+ #include "osso-internal.h"
+ #include "osso-cp-plugin.h"
+ #include "osso-log.h"
+-#include <linux/limits.h>
++#include <limits.h>
+ #include <errno.h>
+ 
+ /* hildon-control-panel RPC */

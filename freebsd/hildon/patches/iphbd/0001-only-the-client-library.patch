@@ -1,0 +1,23 @@
+FreeBSD/Pro1X: only libiphb, the client library hildon's libraries link;
+the daemon serves Linux's heartbeat, there is none to serve here (the
+library then reports the daemon as missing).
+
+--- a/iphbd/Makefile.am	2026-10-25 19:53:26.132678527 +0100
++++ b/iphbd/Makefile.am	2026-10-25 20:08:08.130180805 +0100
+@@ -15,8 +15,6 @@
+ #
+ # Build targets
+ #
+-bin_PROGRAMS = iphbd
+-noinst_PROGRAMS = hbtest
+ lib_LTLIBRARIES = libiphb.la
+ 
+ iphbd_SOURCES = iphbd.c
+--- a/iphbd/Makefile.am	2026-10-25 19:53:26.132678527 +0100
++++ b/iphbd/Makefile.am	2026-10-25 20:08:08.131111136 +0100
+@@ -34,5 +34,3 @@
+ pkgconfigdir = ${libdir}/pkgconfig
+ pkgconfig_DATA = libiphb.pc
+ 
+-iphbdconfdbusdir=$(sysconfdir)/dbus-1/system.d
+-iphbdconfdbus_DATA = ../etc/dbus-1/system.d/iphbd.conf

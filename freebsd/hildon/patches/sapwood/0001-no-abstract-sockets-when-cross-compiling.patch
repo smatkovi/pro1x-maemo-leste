@@ -1,0 +1,13 @@
+FreeBSD/Pro1X: the abstract socket namespace is Linux's; when
+cross-compiling the test cannot run: then there is none.
+
+--- a/configure.ac	2026-10-25 19:58:24.663059880 +0100
++++ b/configure.ac	2026-10-25 20:04:50.206916046 +0100
+@@ -60,6 +60,7 @@
+     exit (0);
+ ]])],
+   [have_abstract_sockets=yes],
++  [have_abstract_sockets=no],
+   [have_abstract_sockets=no])
+ AC_MSG_RESULT($have_abstract_sockets)
+ 

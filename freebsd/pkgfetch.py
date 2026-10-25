@@ -17,11 +17,12 @@ import fnmatch
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import urllib.parse
-import urllib.request
 
 B32 = "ybndrfg8ejkmcpqxot1uwisza345h769"
+CHUNK = 64 << 20
 
 
 def base32_legacy(data):
@@ -53,6 +54,20 @@ def base32_legacy(data):
     if remain >= 0:
         out.append(B32[remain])
     return "".join(out)
+
+
+def download(src, dest, size):
+    """src to dest with curl, large files in ranges of CHUNK bytes (the
+    mirrors' CDN may refuse large objects whole)"""
+    if size <= CHUNK:
+        subprocess.run(["curl", "-sSfL", "--retry", "3", "-o", dest, src], check=True)
+        return
+    with open(dest, "wb") as f:
+        for start in range(0, size, CHUNK):
+            end = min(start + CHUNK, size) - 1
+            r = subprocess.run(["curl", "-sSfL", "--retry", "3", "-r", f"{start}-{end}", src],
+                               check=True, capture_output=True)
+            f.write(r.stdout)
 
 
 def checksum_ok(path, want):
@@ -104,9 +119,9 @@ def main():
         p = pkgs[name]
         dest = os.path.join(cache, os.path.basename(p["repopath"]))
         if not (os.path.exists(dest) and checksum_ok(dest, p["sum"])):
-            src = url.rstrip("/") + "/" + urllib.parse.quote(p["repopath"])
-            with urllib.request.urlopen(src) as r, open(dest + ".part", "wb") as f:
-                f.write(r.read())
+            # "$" as is: the CDN fetches "%24" names as other, too large objects
+            src = url.rstrip("/") + "/" + urllib.parse.quote(p["repopath"], safe="/~$")
+            download(src, dest + ".part", p.get("pkgsize", 0))
             os.replace(dest + ".part", dest)
             if not checksum_ok(dest, p["sum"]):
                 os.unlink(dest)

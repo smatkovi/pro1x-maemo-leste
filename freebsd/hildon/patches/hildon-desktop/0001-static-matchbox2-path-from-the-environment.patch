@@ -1,0 +1,15 @@
+FreeBSD/Pro1X: the static libmatchbox2 at a path the build may set
+(cross-compiling: in the sysroot); /usr/lib/libmatchbox2-0.1.a stays the
+default.
+
+--- a/configure.ac	2026-10-25 19:53:30.118639322 +0100
++++ b/configure.ac	2026-10-25 20:13:49.128587750 +0100
+@@ -115,7 +115,7 @@
+ 
+ if test "$ac_cv_enable_static_mb2" = yes; then
+         PKG_CHECK_MODULES([MB2], [libmatchbox2-0.1])
+-        MB2_STATIC_LIB=/usr/lib/libmatchbox2-0.1.a
++        MB2_STATIC_LIB=${MB2_STATIC_LIB:-/usr/lib/libmatchbox2-0.1.a}
+ 
+         PKG_CHECK_MODULES(HD, [clutter-0.8 dnl
+ 		       glib-2.0 >= 2.12 dnl

@@ -1,0 +1,15 @@
+FreeBSD/Pro1X: build only the libraries and modules (after Debian's
+patches); the demos, tests and perf programs are not installed, and
+gtk-demo's generated table does not come out right when cross-compiling.
+
+--- a/Makefile.am	2026-10-25 20:02:59.747854647 +0100
++++ b/Makefile.am	2026-10-25 20:02:59.751473904 +0100
+@@ -6,7 +6,7 @@
+ MAYBE_PERF = perf
+ endif
+ 
+-SRC_SUBDIRS = gdk gtk modules demos tests $(MAYBE_PERF)
++SRC_SUBDIRS = gdk gtk modules
+ SUBDIRS = po po-properties $(SRC_SUBDIRS) docs m4macros build
+ 
+ # require automake 1.4

@@ -1,0 +1,15 @@
+FreeBSD/Pro1X: <linux/sched.h> on Linux only (the I/O priority code that
+would use it is compiled out anyway).
+
+--- a/daemon/hildon-thumbnail-daemon.c	2026-10-25 19:53:33.941986002 +0100
++++ b/daemon/hildon-thumbnail-daemon.c	2026-10-25 20:21:12.342039632 +0100
+@@ -24,7 +24,9 @@
+  */
+ 
+ #include "config.h"
++#ifdef __linux__
+ #include <linux/sched.h>
++#endif
+ #include <sched.h>
+ 
+ #ifdef HAVE_OSSO

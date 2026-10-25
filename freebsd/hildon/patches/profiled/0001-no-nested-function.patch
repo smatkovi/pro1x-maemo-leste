@@ -1,0 +1,28 @@
+FreeBSD/Pro1X: clang has no nested functions (a GCC extension): the
+comparison for qsort() as a function of its own.
+
+--- a/unique.c	2026-10-25 19:53:29.185338546 +0100
++++ b/unique.c	2026-10-25 20:10:29.284437651 +0100
+@@ -112,16 +112,15 @@
+  * unique_final
+  * ------------------------------------------------------------------------- */
+ 
++static int
++cmp(const void *a, const void *b)
++{
++  return strcmp(*(const char **)a, *(const char **)b);
++}
++
+ char **
+ unique_final(unique_t *self, size_t *pcount)
+ {
+-  auto int cmp(const void *a, const void *b);
+-
+-  auto int cmp(const void *a, const void *b)
+-  {
+-    return strcmp(*(const char **)a, *(const char **)b);
+-  }
+-
+   if( self->un_dirty != 0 )
+   {
+     qsort(self->un_string, self->un_count, sizeof *self->un_string, cmp);

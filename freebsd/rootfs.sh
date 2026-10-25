@@ -25,6 +25,14 @@ PKGS=${PKGS-xorg-minimal xf86-video-scfb xf86-input-libinput xinit xfce xfce4-te
 # and llvmpipe, 1.8 GiB), Samba (gvfs's SMB backend), Qt and bsdisks
 # (automounting), Python and Perl (scripts)
 PRUNE=${PRUNE-llvm* spirv-llvm-translator* samba* qt6-* bsdisks python3* py3*-* perl5*}
+# Hildon (freebsd/hildon/build.sh), when built: HILDON= leaves it out
+HILDON=${HILDON-$WORK/hildon/stage}
+if [ -n "$HILDON" ] && [ -d "$HILDON" ]; then
+	. "$REPO/freebsd/hildon/deps.sh"
+	PKGS="$PKGS $HILDON_PKGS"
+else
+	HILDON=
+fi
 OUT=$WORK/out
 B=$WORK/dl/base.txz
 R=$WORK/rootfs
@@ -85,6 +93,23 @@ for s in m.get("scripts", {}).values():
 	done < "$P/list"
 	specs+=("$WORK/spec.pkgs")
 	log "$n packages unpacked"
+
+	if [ -n "$HILDON" ]; then
+		# Mesa's software renderer (hildon-desktop draws with GLES)
+		# needs LLVM's library, not the 1.8 GiB of the package
+		f=$(python3 -I "$REPO/freebsd/pkgfetch.py" -x libedit -x 'lua5*' \
+		    -x 'perl5*' -x 'python3*' -x zstd "$P/site" "$P/cache" \
+		    "$PKGURL" llvm19 2> /dev/null)
+		bsdtar -xf "$f" -C "$R" '/usr/local/llvm19/lib/libLLVM*.so*' 2> /dev/null
+		log "Hildon ($HILDON) and libLLVM from $(basename "$f")"
+		# What the image needs of the build: no headers, static
+		# libraries, pkg-config files or manuals
+		(cd "$HILDON" && find . -type f -o -type l | grep -v \
+		    -e '^\./usr/local/include/' -e '\.a$' -e '/pkgconfig/' \
+		    -e '^\./usr/local/share/man/' -e '^\./usr/local/share/gtk-doc/') |
+		    (cd "$HILDON" && cpio -pdm --quiet "$R")
+		cp -a "$REPO/freebsd/hildon/rootfs/." "$R/"
+	fi
 
 	log "their users and groups"
 	sort -u "$P/users" | while IFS=$'\t' read -r kind name id gid home shell gecos; do

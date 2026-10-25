@@ -1,0 +1,29 @@
+#!/bin/sh
+# Hildon on FreeBSD (F(x)tec Pro1X): what Leste's Xsession.d and
+# Xsession.post scripts do, for startx:
+#   startx /usr/local/bin/hildon-session
+# The status menu and home run beside hildon-desktop and come back when
+# they crash (Leste: dsmetool -t).
+export GTK2_RC_FILES=/etc/hildon/theme/gtk-2.0/gtkrc
+export GDK_DPI_SCALE=${GDK_DPI_SCALE:-1.7}
+export LANG=${LANG:-en_GB.UTF-8}
+export HILDON_DESKTOP_APPS_PRESTART=auto
+export CLUTTER_BACKEND=x11
+# The image loaders' list, built at boot (rc.d/pro1x_setup)
+export GDK_PIXBUF_MODULE_FILE=/var/db/gdk-pixbuf-loaders.cache
+
+mkdir -p /tmp/hildon-desktop /tmp/af-piddir
+# As Leste: no key repeat for Return and the hardware keys
+xset -r 36 -r 70 -r 72 -r 9 -r 104 2> /dev/null
+
+eval "$(dbus-launch --sh-syntax --exit-with-session)"
+
+respawn() {
+	while :; do
+		"$@"
+		sleep 2
+	done
+}
+respawn /usr/local/bin/hildon-status-menu &
+respawn /usr/local/bin/hildon-home &
+exec /usr/local/bin/hildon-desktop

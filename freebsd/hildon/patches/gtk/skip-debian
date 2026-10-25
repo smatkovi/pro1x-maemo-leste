@@ -1,0 +1,2 @@
+# Debian's multiarch module directory (/usr/lib/<triplet>/gtk-2.0)
+098_multiarch_module_path.patch

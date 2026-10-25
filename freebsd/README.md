@@ -61,6 +61,8 @@ from the tarballs' mtrees (`mkspec.py`); the packages' users and groups,
 GSettings schemas and MIME database are set up at build time, the image
 loader list and font cache at boot (`rootfs/usr/local/etc/rc.d/pro1x_setup`,
 which also fills root's home, a tmpfs, from `/usr/local/share/pro1x/root`).
+Hildon, Leste's desktop, is in the image too when `hildon/build.sh` has
+built it (`hildon/README.md`): `startx /usr/local/bin/hildon-session`.
 As root on the console: `startx` (`~/.xinitrc` starts Xfce, scaled twice for
 the 400 dpi screen, the battery in the panel through genmon, black after
 3 minutes since scfb has no DPMS).
@@ -114,6 +116,7 @@ after boot (`patches/0013`), so that unattended tests always end.
 | `patches/0017-*` | `qcom_dpu`, the display handed over from Linux |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `pkgfetch.py`, `mkspec.py` | packages with dependencies, checked; the image's owners and modes |
+| `hildon/` | Leste's Hildon desktop cross-compiled for FreeBSD |
 
 The root filesystem is the release's `/rescue` (one static binary for sh,
 init, mount, ifconfig...) from `base.txz`, built into the kernel
