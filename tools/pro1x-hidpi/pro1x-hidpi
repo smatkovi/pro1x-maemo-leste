@@ -108,7 +108,7 @@ session_env() {
 case $1 in
 theme)	theme ;;
 env)	session_env ;;
-x11)	echo "Xft.dpi: $DPI" | xrdb -merge ;;
+x11)	echo "Xft.dpi: $DPI" | xrdb -nocpp -merge ;;
 get)	echo "$SCALE" ;;
 set)
 	case $2 in
