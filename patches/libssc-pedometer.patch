@@ -97,6 +97,18 @@ index 5560862..00f3cb6 100644
  		SSCSensorProximity *proximity = ssc_sensor_proximity_new_sync (NULL, &err);
  		if (!proximity) {
  			g_printf ("Unable to initialize proximity sensor: %s\n", err ? err->message : "UNKNOWN");
+diff --git a/src/libssc-common-private.h b/src/libssc-common-private.h
+index e427c11..ba9ab12 100644
+--- a/src/libssc-common-private.h
++++ b/src/libssc-common-private.h
+@@ -35,6 +35,7 @@
+ #define SSC_MSG_RESPONSE_GET_ATTRIBUTES			128
+ #define SSC_MSG_REPORT_MEASUREMENT_PROXIMITY		769
+ #define SSC_MSG_REPORT_MEASUREMENT			1025
++#define SSC_MSG_REPORT_PEDOMETER			775	/* step count (Pro1X, SM6115) */
+ 
+ #define SSC_ACCURACY_UNRELIABLE				0
+ #define SSC_ACCURACY_LOW				1
 diff --git a/src/libssc-sensor-pedometer.c b/src/libssc-sensor-pedometer.c
 new file mode 100644
 index 0000000..f05b054
@@ -537,6 +549,20 @@ index 0000000..81150d6
 +gboolean		 ssc_sensor_pedometer_close_sync (SSCSensorPedometer *self, GCancellable *cancellable, GError **error);
 +
 +#endif /* _LIBSSC_SENSOR_PEDOMETER_H_ */
+diff --git a/src/libssc-sensor.c b/src/libssc-sensor.c
+index 2cf686f..9618164 100644
+--- a/src/libssc-sensor.c
++++ b/src/libssc-sensor.c
+@@ -483,7 +483,8 @@ report_received (SSCClient *self, guint32 msg_id, guint64 uid_high, guint64 uid_
+ 	 * Apply this for any sensor to cover new sensors in the future as well.
+ 	 * Either a configuration update or measurement will complete the task and disconnect the listener.
+ 	 */
+-	} else if (uid_high == priv->uid_high && uid_low == priv->uid_low && (msg_id == SSC_MSG_REPORT_MEASUREMENT || msg_id == SSC_MSG_REPORT_MEASUREMENT_PROXIMITY)) {
++	} else if (uid_high == priv->uid_high && uid_low == priv->uid_low && (msg_id == SSC_MSG_REPORT_MEASUREMENT || msg_id == SSC_MSG_REPORT_MEASUREMENT_PROXIMITY ||
++										      msg_id == SSC_MSG_REPORT_PEDOMETER)) {
+ 		g_debug ("Measurement received for '%s' sensor (%" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT "), assuming enabled", priv->data_type, priv->uid_high, priv->uid_low);
+ 
+ 		if (ctx->task) {
 diff --git a/src/libssc.h b/src/libssc.h
 index 4b42241..cd77b57 100644
 --- a/src/libssc.h

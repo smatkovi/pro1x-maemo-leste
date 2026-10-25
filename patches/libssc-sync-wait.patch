@@ -1,0 +1,33 @@
+diff --git a/src/libssc-common.c b/src/libssc-common.c
+index 3648f47..b9a7873 100644
+--- a/src/libssc-common.c
++++ b/src/libssc-common.c
+@@ -50,11 +50,24 @@ ssc_common_init_sync_context (SyncContext *ctx) {
+ 
+ void
+ ssc_common_wait_sync_context (SyncContext *ctx) {
++	GMainContext *main_context = g_main_context_default ();
++
+ 	g_mutex_lock (&ctx->mutex);
+-	while (!ctx->finished) {
+-		g_mutex_unlock (&ctx->mutex);
+-		g_main_context_iteration (g_main_context_default (), FALSE);
+-		g_mutex_lock (&ctx->mutex);
++	if (g_main_context_acquire (main_context)) {
++		/* The callback runs in this context: sleep in poll() until it is
++		 * dispatched instead of spinning through non-blocking iterations,
++		 * which kept a CPU core busy for as long as the reply took (forever
++		 * if it never came). */
++		while (!ctx->finished) {
++			g_mutex_unlock (&ctx->mutex);
++			g_main_context_iteration (main_context, TRUE);
++			g_mutex_lock (&ctx->mutex);
++		}
++		g_main_context_release (main_context);
++	} else {
++		/* Another thread runs the context and calls back from there */
++		while (!ctx->finished)
++			g_cond_wait (&ctx->condition, &ctx->mutex);
+ 	}
+ 	g_mutex_unlock (&ctx->mutex);
+ }

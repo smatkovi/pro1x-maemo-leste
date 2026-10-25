@@ -76,6 +76,9 @@ build libqmi -Dmbim_qmux=false -Dqrtr=true -Dgtk_doc=false -Dintrospection=false
 log "libssc $LIBSSC_TAG"
 fetch libssc https://codeberg.org/DylanVanAssche/libssc.git "$LIBSSC_TAG" "$LIBSSC_TAG"
 git -C "$SRC/libssc" apply "$REPO/patches/libssc-pedometer.patch"
+# libssc waited for its own replies by spinning through non-blocking main
+# loop iterations: a busy core for as long as a reply took
+git -C "$SRC/libssc" apply "$REPO/patches/libssc-sync-wait.patch"
 build libssc
 
 log "iio-sensor-proxy $IIO_SENSOR_PROXY_TAG"

@@ -28,6 +28,7 @@
 #define NAME "org.pro1x.Steps"
 #define PATH "/org/pro1x/Steps"
 #define RETRY_S 30
+#define OPEN_TIMEOUT_S 20
 #define COALESCE_S 5
 #define STATE "/run/pro1x-steps"
 
@@ -87,23 +88,77 @@ static void measurement_cb(SSCSensorPedometer *s, guint steps, gpointer data)
 		emit_id = g_timeout_add((guint)(due / 1000) + 1, emit_cb, NULL);
 }
 
-static gboolean open_sensor(gpointer data)
+/*
+ * Opening the sensor is asynchronous with a time limit: the ADSP does not
+ * always answer (hexagonrpcd and the ADSP come up late in boot, and once an
+ * open never got a reply at all), and a waiting daemon must neither hang
+ * nor spin. An attempt that runs out of time is dropped, sensor object and
+ * all; its late callbacks find a newer attempt number and do nothing.
+ */
+static guint attempt;		/* the current opening attempt */
+static guint attempt_timeout;	/* its time limit */
+
+static gboolean open_sensor(gpointer data);
+
+static void retry(const char *why)
+{
+	if (attempt_timeout)
+		g_source_remove(attempt_timeout);
+	attempt_timeout = 0;
+	attempt++;
+	g_clear_object(&sensor);
+	g_warning("step counter: %s, again in %d s", why, RETRY_S);
+	g_timeout_add_seconds(RETRY_S, open_sensor, NULL);
+}
+
+static void opened_cb(GObject *src, GAsyncResult *res, gpointer data)
 {
 	g_autoptr(GError) err = NULL;
+	gboolean ok = ssc_sensor_pedometer_open_finish(SSC_SENSOR_PEDOMETER(src), res, &err);
 
+	if (GPOINTER_TO_UINT(data) != attempt)
+		return;
+	if (!ok) {
+		retry(err->message);
+		return;
+	}
+	g_source_remove(attempt_timeout);
+	attempt_timeout = 0;
+	g_message("step counter enabled");
+}
+
+static void created_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(GError) err = NULL;
+	SSCSensorPedometer *s = ssc_sensor_pedometer_new_finish(res, &err);
+
+	(void)src;
+	if (GPOINTER_TO_UINT(data) != attempt) {
+		g_clear_object(&s);
+		return;
+	}
+	if (!s) {
+		retry(err->message);
+		return;
+	}
+	sensor = s;
+	g_signal_connect(sensor, "measurement", G_CALLBACK(measurement_cb), NULL);
+	ssc_sensor_pedometer_open(sensor, NULL, opened_cb, data);
+}
+
+static gboolean attempt_timeout_cb(gpointer data)
+{
 	(void)data;
-	if (!sensor) {
-		sensor = ssc_sensor_pedometer_new_sync(NULL, &err);
-		if (sensor)
-			g_signal_connect(sensor, "measurement", G_CALLBACK(measurement_cb), NULL);
-	}
-	if (sensor && ssc_sensor_pedometer_open_sync(sensor, NULL, &err)) {
-		g_message("step counter enabled");
-		return G_SOURCE_REMOVE;
-	}
-	/* hexagonrpcd and the ADSP come up late in boot */
-	g_warning("step counter: %s, again in %d s", err ? err->message : "?", RETRY_S);
-	g_timeout_add_seconds(RETRY_S, open_sensor, NULL);
+	attempt_timeout = 0;
+	retry("no answer from the ADSP");
+	return G_SOURCE_REMOVE;
+}
+
+static gboolean open_sensor(gpointer data)
+{
+	(void)data;
+	attempt_timeout = g_timeout_add_seconds(OPEN_TIMEOUT_S, attempt_timeout_cb, NULL);
+	ssc_sensor_pedometer_new(NULL, created_cb, GUINT_TO_POINTER(attempt));
 	return G_SOURCE_REMOVE;
 }
 
@@ -146,6 +201,12 @@ static gboolean quit_cb(gpointer loop)
 	return G_SOURCE_REMOVE;
 }
 
+static void closed_cb(GObject *src, GAsyncResult *res, gpointer loop)
+{
+	ssc_sensor_pedometer_close_finish(SSC_SENSOR_PEDOMETER(src), res, NULL);
+	g_main_loop_quit(loop);
+}
+
 int main(void)
 {
 	GMainLoop *loop = g_main_loop_new(NULL, FALSE);
@@ -160,7 +221,11 @@ int main(void)
 	g_unix_signal_add(SIGTERM, quit_cb, loop);
 	g_unix_signal_add(SIGINT, quit_cb, loop);
 	g_main_loop_run(loop);
-	if (sensor)
-		ssc_sensor_pedometer_close_sync(sensor, NULL, NULL);
+	if (sensor) {
+		/* switch the counter off, without waiting long for the ADSP */
+		ssc_sensor_pedometer_close(sensor, NULL, closed_cb, loop);
+		g_timeout_add_seconds(2, quit_cb, loop);
+		g_main_loop_run(loop);
+	}
 	return 0;
 }
