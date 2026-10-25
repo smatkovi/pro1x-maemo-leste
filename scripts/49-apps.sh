@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds and installs the Pro1X apps from apps/: the camera and the
-# pedometer home widget, headphoned; and printing (CUPS).
+# pedometer home widget, headphoned, gPodder; and printing (CUPS).
 #
 # Runs as root INSIDE the target (chroot or the running phone), after
 # 48-camera-stack.sh. Needs network for the build dependencies.
@@ -30,6 +30,9 @@ make -C "$SRC/pedometer-home-widget" install
 # headphoned: pauses the players when the headphones are unplugged
 make -C "$REPO/apps/headphoned" install
 make -C "$REPO/apps/headphoned" clean
+
+# gPodder 4 with the touch QML UI
+bash "$REPO/apps/gpodder/install.sh"
 
 # Printing: CUPS with the command line tools (lp, lpr). No recommends, so no
 # cups-browsed or avahi listening on the network; browsing stays off.

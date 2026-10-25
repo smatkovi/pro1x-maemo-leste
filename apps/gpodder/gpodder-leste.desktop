@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=gPodder
+Comment=Podcast client
+Exec=/usr/local/bin/gpodder-leste
+Icon=gpodder-leste
+X-Osso-Type=application/x-executable
