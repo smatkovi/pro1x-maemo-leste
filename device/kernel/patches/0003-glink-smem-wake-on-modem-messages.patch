@@ -1,5 +1,5 @@
 diff --git a/drivers/rpmsg/qcom_glink_smem.c b/drivers/rpmsg/qcom_glink_smem.c
-index 62adc4db23..c09d9f0409 100644
+index 62adc4db23..c30638e08c 100644
 --- a/drivers/rpmsg/qcom_glink_smem.c
 +++ b/drivers/rpmsg/qcom_glink_smem.c
 @@ -22,6 +22,7 @@
@@ -10,19 +10,22 @@ index 62adc4db23..c09d9f0409 100644
  
  #include <linux/rpmsg/qcom_glink.h>
  
-@@ -45,8 +46,38 @@ struct qcom_glink_smem {
+@@ -45,6 +46,65 @@ struct qcom_glink_smem {
  	struct mbox_chan *mbox_chan;
  
  	u32 remote_pid;
 +	bool wakeup;
- };
- 
++	bool wakeup_armed;
++};
++
 +/*
 + * Messages from these remote processors (glink-edge labels) are wake-up
 + * events: the modem's carry incoming calls and SMS, which would otherwise
 + * wait in the FIFO until something else woke the system. The interrupt is
 + * IRQF_NO_SUSPEND, so it keeps firing in s2idle; reporting a wake-up event
-+ * resumes the system and also aborts a suspend about to start.
++ * resumes the system. Only once the devices are suspended (noirq phase):
++ * suspending them makes the modem talk (Wi-Fi firmware, IPA), which would
++ * otherwise abort every suspend.
 + */
 +static char *wakeup_edges = "mpss";
 +module_param(wakeup_edges, charp, 0444);
@@ -46,19 +49,51 @@ index 62adc4db23..c09d9f0409 100644
 +	return false;
 +}
 +
- struct glink_smem_pipe {
- 	struct qcom_glink_pipe native;
++static int qcom_glink_smem_suspend_noirq(struct device *dev)
++{
++	struct qcom_glink_smem *smem = container_of(dev, struct qcom_glink_smem, dev);
++
++	WRITE_ONCE(smem->wakeup_armed, smem->wakeup);
++	return 0;
++}
++
++static int qcom_glink_smem_resume_noirq(struct device *dev)
++{
++	struct qcom_glink_smem *smem = container_of(dev, struct qcom_glink_smem, dev);
++
++	WRITE_ONCE(smem->wakeup_armed, false);
++	return 0;
++}
++
++static const struct dev_pm_ops qcom_glink_smem_pm_ops = {
++	NOIRQ_SYSTEM_SLEEP_PM_OPS(qcom_glink_smem_suspend_noirq,
++				  qcom_glink_smem_resume_noirq)
++};
++
++static const struct device_type qcom_glink_smem_type = {
++	.name = "glink-smem",
++	.pm = &qcom_glink_smem_pm_ops,
+ };
  
-@@ -205,6 +236,8 @@ static irqreturn_t qcom_glink_smem_intr(int irq, void *data)
+ struct glink_smem_pipe {
+@@ -205,6 +265,8 @@ static irqreturn_t qcom_glink_smem_intr(int irq, void *data)
  {
  	struct qcom_glink_smem *smem = data;
  
-+	if (smem->wakeup)
++	if (READ_ONCE(smem->wakeup_armed))
 +		pm_wakeup_dev_event(&smem->dev, 0, true);
  	qcom_glink_native_rx(smem->glink);
  
  	return IRQ_HANDLED;
-@@ -256,6 +289,11 @@ struct qcom_glink_smem *qcom_glink_smem_register(struct device *parent,
+@@ -239,6 +301,7 @@ struct qcom_glink_smem *qcom_glink_smem_register(struct device *parent,
+ 	dev->parent = parent;
+ 	dev->of_node = node;
+ 	dev->release = qcom_glink_smem_release;
++	dev->type = &qcom_glink_smem_type;
+ 	dev_set_name(dev, "%s:%pOFn", dev_name(parent->parent), node);
+ 	ret = device_register(dev);
+ 	if (ret) {
+@@ -256,6 +319,11 @@ struct qcom_glink_smem *qcom_glink_smem_register(struct device *parent,
  
  	smem->remote_pid = remote_pid;
  
@@ -70,7 +105,7 @@ index 62adc4db23..c09d9f0409 100644
  	rx_pipe = devm_kzalloc(dev, sizeof(*rx_pipe), GFP_KERNEL);
  	tx_pipe = devm_kzalloc(dev, sizeof(*tx_pipe), GFP_KERNEL);
  	if (!rx_pipe || !tx_pipe) {
-@@ -369,6 +407,8 @@ void qcom_glink_smem_unregister(struct qcom_glink_smem *smem)
+@@ -369,6 +437,8 @@ void qcom_glink_smem_unregister(struct qcom_glink_smem *smem)
  	qcom_glink_native_remove(glink);
  
  	mbox_free_channel(smem->mbox_chan);

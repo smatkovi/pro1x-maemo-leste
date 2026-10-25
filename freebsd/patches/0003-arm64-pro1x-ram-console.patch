@@ -1,0 +1,159 @@
+diff --git a/sys/arm64/arm64/machdep.c b/sys/arm64/arm64/machdep.c
+index 2addc5af9..f048c584d 100644
+--- a/sys/arm64/arm64/machdep.c
++++ b/sys/arm64/arm64/machdep.c
+@@ -890,6 +890,14 @@ initarm(struct arm64_bootparams *abp)
+ 
+ 	valid = bus_probe();
+ 
++#ifdef PRO1X_RAMCONS
++	/*
++	 * Pro1X bring-up: the RAM console next to the framebuffer console
++	 * (multiple consoles), and verbose messages, whatever started the
++	 * kernel (the phone's bootloader passes no usable command line).
++	 */
++	boothowto |= RB_MULTIPLE | RB_VERBOSE;
++#endif
+ 	cninit();
+ 	set_ttbr0(abp->kern_ttbr0);
+ 	pmap_s1_invalidate_all_kernel();
+diff --git a/sys/arm64/arm64/machdep_boot.c b/sys/arm64/arm64/machdep_boot.c
+index 742622879..3b022b614 100644
+--- a/sys/arm64/arm64/machdep_boot.c
++++ b/sys/arm64/arm64/machdep_boot.c
+@@ -30,6 +30,7 @@
+ #include "opt_ddb.h"
+ 
+ #include <sys/param.h>
++#include <sys/kenv.h>
+ #include <sys/systm.h>
+ #include <sys/ctype.h>
+ #include <sys/linker.h>
+@@ -163,6 +164,23 @@ parse_fdt_bootargs(void)
+ 	if (loader_envp == NULL && fdt_get_chosen_bootargs(linux_command_line,
+ 	    LBABI_MAX_COMMAND_LINE) == 0) {
+ 		init_static_kenv(static_kenv, sizeof(static_kenv));
++#ifdef PRO1X_RAMCONS
++		/*
++		 * Pro1X bring-up: keep the kernel config's static environment
++		 * (config(8) "env"), which the empty buffer just replaced; the
++		 * command line can only add to it.
++		 */
++		for (const char *cp = static_env; *cp != '\0';
++		    cp += strlen(cp) + 1) {
++			const char *eq = strchr(cp, '=');
++			char name[64];
++
++			if (eq == NULL || (size_t)(eq - cp) >= sizeof(name))
++				continue;
++			strlcpy(name, cp, eq - cp + 1);
++			kern_setenv(name, eq + 1);
++		}
++#endif
+ 		cmdline_set_env(linux_command_line, CMDLINE_GUARD);
+ 	}
+ }
+diff --git a/sys/arm64/pro1x/ramcons.c b/sys/arm64/pro1x/ramcons.c
+new file mode 100644
+index 000000000..eef542721
+--- /dev/null
++++ b/sys/arm64/pro1x/ramcons.c
+@@ -0,0 +1,86 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * F(x)tec Pro1X bring-up: a console that keeps everything written to the
++ * console - kernel messages, panics, the output of rc - in a spare part of
++ * the bootloader's splash memory behind the framebuffer (reserved, no-map),
++ * written uncached so that it is in the DRAM when the system resets. Linux
++ * reads it after the next boot; the phone has no serial console FreeBSD can
++ * drive and no network.
++ *
++ * Built with -DPRO1X_RAMCONS (kernel config PRO1X), which also turns on
++ * multiple consoles, so that the framebuffer console stays on as well.
++ */
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/kernel.h>
++#include <sys/cons.h>
++
++#include <vm/vm.h>
++#include <vm/pmap.h>
++
++#include <machine/atomic.h>
++
++#ifdef PRO1X_RAMCONS
++
++#define	RAMCONS_PA	0x5ca01000UL
++#define	RAMCONS_SIZE	(1024 * 1024)
++#define	RAMCONS_MAGIC	"PRO1X-FBSD-CONSOLE\n"
++
++static char *ramcons_buf;
++static size_t ramcons_pos;
++
++static void
++ramcons_cnprobe(struct consdev *cp)
++{
++	cp->cn_pri = CN_LOW;
++	strlcpy(cp->cn_name, "ramcons", sizeof(cp->cn_name));
++}
++
++static void
++ramcons_cninit(struct consdev *cp)
++{
++	/* Device memory: no write gathering, every byte reaches the DRAM */
++	ramcons_buf = pmap_mapdev_attr(RAMCONS_PA, RAMCONS_SIZE,
++	    VM_MEMATTR_DEVICE_nGnRnE);
++	if (ramcons_buf == NULL)
++		return;
++	memcpy(ramcons_buf, RAMCONS_MAGIC, sizeof(RAMCONS_MAGIC) - 1);
++	ramcons_pos = sizeof(RAMCONS_MAGIC) - 1;
++	ramcons_buf[ramcons_pos] = '\0';
++}
++
++static void
++ramcons_cnterm(struct consdev *cp)
++{
++}
++
++static int
++ramcons_cngetc(struct consdev *cp)
++{
++	return (-1);
++}
++
++static void
++ramcons_cnputc(struct consdev *cp, int c)
++{
++	if (ramcons_buf == NULL || ramcons_pos >= RAMCONS_SIZE - 1)
++		return;
++	ramcons_buf[ramcons_pos++] = c;
++	ramcons_buf[ramcons_pos] = '\0';
++	dsb(sy);
++}
++
++static void
++ramcons_cngrab(struct consdev *cp)
++{
++}
++
++static void
++ramcons_cnungrab(struct consdev *cp)
++{
++}
++
++CONSOLE_DRIVER(ramcons);
++
++#endif /* PRO1X_RAMCONS */
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index 1f3a072fe..c6acaa2a1 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -58,6 +58,7 @@ arm64/arm64/hyp_stub.S				standard
+ arm64/arm64/identcpu.c				standard
+ arm64/arm64/locore.S				standard no-obj
+ arm64/arm64/machdep.c				standard
++arm64/pro1x/ramcons.c				standard
+ arm64/arm64/machdep_boot.c			standard
+ arm64/arm64/mem.c				standard
+ arm64/arm64/memcmp.S				standard

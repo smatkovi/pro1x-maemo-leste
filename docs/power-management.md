@@ -79,3 +79,28 @@ Open after that: Wi-Fi WoWLAN (the chip supports magic packet and pattern
 wake-ups; without it mac80211 disconnects at every suspend, hence
 `StayAwake=45`), the Bluetooth UART clock while awake, and sensor batching
 for the step counter during suspend.
+
+## First suspends (2026-10-25)
+
+`pro1x-autosuspend --test N` on the device, on USB:
+
+1. Within the first minutes after boot every suspend was aborted by the
+   modem's glink edge: oFono's start-up talks to the modem. Quiet after
+   about 4 minutes (0 messages a minute).
+2. Suspending itself made the modem talk too (Wi-Fi firmware and IPA go
+   down over QMI), which aborted every suspend: the glink edge now raises
+   wake-up events only from the noirq phase on (patch 0003).
+3. The next suspend succeeded, but:
+   - the Bluetooth UART's wake-up interrupt (`4a8c000.serial:wakeup`)
+     woke the system at once (0.0 s asleep, vlow/vmin +0);
+   - the ADSP's `sensor_process` crashed on the way (fatal error over
+     FastRPC, remoteproc restarted the ADSP) and the audio services were
+     left timing out (q6afe/q6asm -110) until the next boot; probably the
+     ADSP calling into the frozen hexagonrpcd;
+   - the USB gadget did not come back ("HS-PHY not in L2" from
+     dwc3-qcom-legacy, UDC "not attached"; neither rebinding the gadget nor
+     toggling the USB role helped). Only a reboot brings USB back; Wi-Fi
+     came back by itself.
+
+So pro1x-autosuspend stays disabled until the sensor stack survives a
+suspend, Bluetooth is no longer an immediate wake-up and USB resumes.

@@ -19,6 +19,10 @@ options 	MD_ROOT_READONLY
 # "FreeBSD:" and fit 512 bytes.
 env		"@ENV_FILE@"
 
-# Green stripe at the top of the screen as soon as the kernel is entered
-# (patches/0001-arm64-pro1x-proof-of-life.patch)
-makeoptions	CONF_CFLAGS=-DPRO1X_PROOF_OF_LIFE
+# Green stripe at the top of the screen and a marker as soon as the kernel
+# is entered (patches/0001), and the RAM console that keeps the console
+# output for Linux to read after the next boot (patches/0003)
+makeoptions	CONF_CFLAGS="-DPRO1X_PROOF_OF_LIFE -DPRO1X_RAMCONS"
+
+# Every SYSINIT step on the console, to see how far the boot gets
+options 	VERBOSE_SYSINIT=1
