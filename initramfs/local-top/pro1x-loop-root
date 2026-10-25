@@ -27,21 +27,24 @@ done
 [ -n "$BACKING" ] || panic "pro1x-loop-root: pro1x.backing= missing from the cmdline"
 [ -n "$IMAGE" ] || IMAGE=/maemo-leste.img
 
-# Resolve the backing device; UFS takes a moment to appear.
-dev=""
-i=0
-while [ $i -lt 120 ]; do
-  case "$BACKING" in
-    UUID=*)     dev=$(blkid -U "${BACKING#UUID=}" 2>/dev/null) ;;
-    PARTUUID=*) dev=$(blkid -t "PARTUUID=${BACKING#PARTUUID=}" -o device 2>/dev/null | head -1) ;;
-    *)          [ -b "$BACKING" ] && dev="$BACKING" ;;
-  esac
-  [ -n "$dev" ] && [ -b "$dev" ] && break
+# Resolve the backing device into $dev; UFS takes a moment to appear.
+find_backing() {
   dev=""
-  i=$((i + 1))
-  sleep 0.25
-done
-[ -n "$dev" ] || panic "pro1x-loop-root: backing device $BACKING not found"
+  i=0
+  while [ $i -lt 120 ]; do
+    case "$BACKING" in
+      UUID=*)     dev=$(blkid -U "${BACKING#UUID=}" 2>/dev/null) ;;
+      PARTUUID=*) dev=$(blkid -t "PARTUUID=${BACKING#PARTUUID=}" -o device 2>/dev/null | head -1) ;;
+      *)          [ -b "$BACKING" ] && dev="$BACKING" ;;
+    esac
+    [ -n "$dev" ] && [ -b "$dev" ] && return 0
+    dev=""
+    i=$((i + 1))
+    sleep 0.25
+  done
+  return 1
+}
+find_backing || panic "pro1x-loop-root: backing device $BACKING not found"
 
 mkdir -p /host
 mount -t ext4 -o rw,noatime "$dev" /host \
@@ -81,12 +84,28 @@ EOF
     # FreeBSD (freebsd/ in the repo) runs its own kernel: load it with
     # kexec_file, which hands over the device tree this kernel booted with,
     # and jump. Linux ends here; FreeBSD reads only bootargs that start
-    # with "FreeBSD:".
+    # with "FreeBSD:", and freebsd/cmdline next to the kernel adds to them
+    # (kernel environment, e.g. hint.ufshci.0.disabled=1).
     log_begin_msg "Starting FreeBSD"
     pro1x-boot set-current freebsd
-    if kexec -s -l "/host$image" --command-line="FreeBSD:"; then
+    args=$(cat "/host${image%/*}/cmdline" 2>/dev/null)
+    if kexec -s -l "/host$image" --command-line="FreeBSD:$args"; then
       sync
       umount /host
+      # FreeBSD has no driver for the SMMU in front of UFS and gives the
+      # controller physical addresses: rebind UFS with an identity
+      # mapping. This also starts UFS over, and the kernel keeps it
+      # powered across kexec (device/kernel/patches/0004).
+      ufs=/sys/bus/platform/devices/4804000.ufshc
+      grp=$(readlink "$ufs/iommu_group")
+      if [ -n "$grp" ]; then
+        echo 4804000.ufshc > $ufs/driver/unbind
+        echo identity > "/sys/kernel/iommu_groups/${grp##*/}/type" ||
+          log_warning_msg "UFS stays behind the SMMU"
+        echo 4804000.ufshc > /sys/bus/platform/drivers/ufshcd-qcom/bind
+        # back once its partitions are
+        find_backing
+      fi
       # The APSS watchdog (0x0f017000, kpss layout, 32 kHz) armed for its
       # longest time, about 32 s: FreeBSD's qcom_wdt keeps feeding it, and a
       # FreeBSD that hangs before or after that resets the phone into this
@@ -101,7 +120,7 @@ EOF
       fi
       kexec -e
       command -v devmem > /dev/null && devmem 0x0f017008 32 0
-      mount -t ext4 -o rw,noatime "$dev" /host
+      find_backing && mount -t ext4 -o rw,noatime "$dev" /host
     fi
     log_failure_msg "kexec failed, booting $IMAGE"
     key=leste

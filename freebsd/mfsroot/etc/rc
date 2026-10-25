@@ -1,5 +1,5 @@
 #!/bin/sh
-# First FreeBSD on the Pro1X: a root filesystem in RAM, no keyboard yet.
+# FreeBSD on the Pro1X: a root filesystem in RAM, no keyboard yet.
 # Reports what the kernel found on the console (the screen and the RAM
 # console, which Linux reads after the next boot), then reboots into the
 # boot menu.
@@ -9,6 +9,20 @@ uname -a
 sysctl hw.model hw.machine_arch hw.ncpu hw.physmem kern.bootfile
 echo "--- devices:"
 echo /dev/*
+echo "--- disks:"
+camcontrol devlist
+gpart show -p
+sysctl dev.ufshci 2>/dev/null | head -40
+# userdata, where the system images live: read only, a look is enough
+if [ -e /dev/gpt/userdata ]; then
+	mount -t tmpfs tmpfs /tmp
+	mkdir /tmp/host
+	if mount -t ext2fs -o ro /dev/gpt/userdata /tmp/host; then
+		df -h /tmp/host
+		ls -la /tmp/host /tmp/host/freebsd
+		umount /tmp/host
+	fi
+fi
 echo "=== rc done, rebooting into the boot menu in 10 s"
 sleep 10
 reboot

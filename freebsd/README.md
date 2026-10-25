@@ -3,8 +3,8 @@
 A real FreeBSD kernel (15.1) on the F(x)tec Pro1X: its own kernel, not
 Linux's. First milestone: the kernel boots on the screen, the root
 filesystem is in RAM, a shell runs. FreeBSD has no drivers for most of the
-phone (storage, keyboard, touchscreen, Wi-Fi, modem, battery); this is a
-bring-up project.
+phone (keyboard, touchscreen, Wi-Fi, modem, battery); this is a bring-up
+project, with the drivers added one by one (see Drivers).
 
 ## How it starts
 
@@ -30,20 +30,35 @@ FreeBSD has no network here either, so it also leaves traces where Linux
 can read them after the next boot: the spare part of the bootloader's
 splash memory behind the framebuffer, which nobody else writes and which
 survives the reboot. The kernel puts `PRO1X-FBSD:ENTERED` at 0x5ca00000 on
-entry; `rc` writes its report with the full `dmesg` to 0x5ca01000 and
-reboots after 30 s. In Linux:
-`dd if=/dev/mem bs=4096 skip=$((0x5ca00000/4096)) count=16 | strings`.
+entry, and the RAM console (`patches/0003`) keeps everything FreeBSD
+prints from 0x5ca01000 on. `rc` reports what it found and reboots after
+10 s. In Linux the region has to be read with `mmap` in aligned 8-byte
+words (`read()` on `/dev/mem` fails there).
+
+`freebsd/cmdline` next to the kernel on userdata adds kernel environment
+to the command line, e.g. `hint.ufshci.0.disabled=1`.
+
+## Drivers
+
+| | |
+| --- | --- |
+| console | `vt_simplefb` on the bootloader's framebuffer; RAM console (`0003`) |
+| watchdog | `qcom_wdt` (`0004`): the boot menu arms the APSS watchdog before the jump, FreeBSD feeds it; a hang resets the phone into the boot menu |
+| UFS | `ufshci` (`0005`), on the link Linux left up: the controller's PHY, clocks and regulators need Qualcomm drivers FreeBSD lacks. Linux keeps UFS powered across kexec (`device/kernel/patches/0004`), and the boot menu rebinds it with an identity mapping first, since FreeBSD does not drive the SMMU in front of it and hands the controller physical addresses. The attach reports the SMMU's view of the stream |
 
 ## Files
 
 | File | |
 | --- | --- |
 | `build.sh` | builds everything on a Linux PC (clang, lld, libarchive): sources, cross toolchain, root filesystem, kernel, boot image |
-| `PRO1X` | kernel config: GENERIC plus the root filesystem image and the static environment |
+| `PRO1X` | kernel config: only what the start needs, the frameworks for the SoC drivers and the Pro1X drivers (a GENERIC-based kernel hung early; its drivers for blocks without clocks are the suspects) |
 | `pro1x.env` | static kernel environment: one CPU (PSCI under Qualcomm's hypervisor is untested), verbose boot |
-| `mfsroot/etc/rc` | shows what the kernel found and leaves it in the splash memory, then reboots into the boot menu after 30 s (no keyboard yet) |
+| `mfsroot/etc/rc` | shows what the kernel found (devices, disks, a read-only look at userdata), then reboots into the boot menu after 10 s (no keyboard yet) |
 | `patches/0001-*` | proof of life: the green stripe and the entry marker |
 | `patches/0002-*` | building on an Arch Linux host: glibc 2.43 (two bootstrap fixes) and a clang that reports more than one "version" line |
+| `patches/0003-*` | RAM console in the splash memory; keeps the kernel config's environment when the bootloader passes bootargs |
+| `patches/0004-*` | `qcom_wdt`, the APSS watchdog |
+| `patches/0005-*` | `ufshci` from the device tree, reusing the link Linux brought up |
 
 The root filesystem is the release's `/rescue` (one static binary for sh,
 init, mount, ifconfig...) from `base.txz`, built into the kernel
@@ -57,4 +72,6 @@ init, mount, ifconfig...) from `base.txz`, built into the kernel
   `fastboot boot` way shows whether FreeBSD itself is fine.
 - The bootloader appends its own arguments to the command line, which
   FreeBSD then ignores; settings go into `pro1x.env`.
-- No input: `rc` only reports, and the system reboots after 30 s.
+- No input: `rc` only reports, and the system reboots after 10 s.
+- UFS only works when Linux started FreeBSD (kexec from the boot menu);
+  after `fastboot boot` nobody has set up the controller.

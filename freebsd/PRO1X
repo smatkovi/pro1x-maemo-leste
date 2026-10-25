@@ -31,6 +31,15 @@ device		kbdmux
 
 # Pro1X drivers (patches/0004 on)
 device		qcom_wdt		# APSS watchdog: a hang resets the phone
+device		ufshci			# UFS, on the link Linux left up (0005)
+
+# Disks and file systems: CAM, GPT, ext4 (userdata, where the system
+# images live)
+device		scbus
+device		da
+device		pass
+options 	GEOM_PART_GPT
+options 	EXT2FS
 
 # Frameworks for the SoC drivers to come
 device		clk

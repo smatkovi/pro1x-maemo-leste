@@ -1,5 +1,5 @@
 diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
-index c3f08957d1..dd583eb727 100644
+index c3f08957d1..8430855a65 100644
 --- a/drivers/ufs/core/ufshcd.c
 +++ b/drivers/ufs/core/ufshcd.c
 @@ -20,6 +20,7 @@
@@ -10,7 +10,7 @@ index c3f08957d1..dd583eb727 100644
  #include <linux/module.h>
  #include <linux/pm_opp.h>
  #include <linux/regulator/consumer.h>
-@@ -10766,6 +10767,16 @@ static void ufshcd_wl_shutdown(struct scsi_device *sdev)
+@@ -10766,6 +10767,21 @@ static void ufshcd_wl_shutdown(struct scsi_device *sdev)
  	hba->shutting_down = true;
  	up(&hba->host_sem);
  
@@ -19,10 +19,15 @@ index c3f08957d1..dd583eb727 100644
 +	 * clocked, so that the next kernel finds UFS working. A Linux kernel
 +	 * starts it over anyway; another OS without drivers for this SoC's
 +	 * clocks, PHY and regulators (FreeBSD on the F(x)tec Pro1X) could not
-+	 * bring it back up.
++	 * bring it back up. Resume it and take the clocks out of gating, which
++	 * would also park the link in hibern8, for good: nothing releases
++	 * them any more.
 +	 */
-+	if (kexec_in_progress)
++	if (kexec_in_progress) {
++		ufshcd_rpm_get_sync(hba);
++		ufshcd_hold(hba);
 +		return;
++	}
 +
  	/* Turn on everything while shutting down */
  	ufshcd_rpm_get_sync(hba);

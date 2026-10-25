@@ -1,0 +1,469 @@
+From 8fc1a355e6b5cb6410064636241aa34494a23b23 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 18:06:37 +0100
+Subject: [PATCH] ufshci: attach to Qualcomm UFS controllers from the device
+ tree
+
+Qualcomm's controller needs vendor setup (PHY, clocks, regulators) that
+FreeBSD has no drivers for. Linux, starting FreeBSD with kexec, leaves it
+running with the link up; UFSHCI_QUIRK_KEEP_LINK reuses that link and its
+power mode instead of resetting the controller. The attach reports how
+the MMU-500 in front of the controller treats its stream. The bus
+address limit now follows CAP.64AS.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/conf/files.arm64            |   1 +
+ sys/dev/ufshci/ufshci_ctrlr.c   |  73 +++++++---
+ sys/dev/ufshci/ufshci_fdt.c     | 239 ++++++++++++++++++++++++++++++++
+ sys/dev/ufshci/ufshci_private.h |   9 ++
+ sys/dev/ufshci/ufshci_req_sdb.c |   6 +-
+ 5 files changed, 307 insertions(+), 21 deletions(-)
+ create mode 100644 sys/dev/ufshci/ufshci_fdt.c
+
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index f92d36049..2cc35e62c 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -733,6 +733,7 @@ dev/flash/flexspi/flex_spi.c    		optional clk flex_spi soc_nxp_ls fdt
+ # Qualcomm
+ arm64/qualcomm/qcom_gcc.c			optional qcom_gcc fdt
+ dev/qcom_wdt/qcom_wdt.c				optional qcom_wdt fdt
++dev/ufshci/ufshci_fdt.c				optional ufshci fdt
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ 
+ # RockChip Drivers
+diff --git a/sys/dev/ufshci/ufshci_ctrlr.c b/sys/dev/ufshci/ufshci_ctrlr.c
+index 36be94b8b..e536ebbc2 100644
+--- a/sys/dev/ufshci/ufshci_ctrlr.c
++++ b/sys/dev/ufshci/ufshci_ctrlr.c
+@@ -61,7 +61,7 @@ ufshci_ctrlr_enable_host_ctrlr(struct ufshci_controller *ctrlr)
+ int
+ ufshci_ctrlr_construct(struct ufshci_controller *ctrlr, device_t dev)
+ {
+-	uint32_t ver, cap, hcs, ie, ahit;
++	uint32_t ver, cap, hce, hcs, ie, ahit;
+ 	uint32_t timeout_period, retry_count;
+ 	int error;
+ 
+@@ -96,6 +96,8 @@ ufshci_ctrlr_construct(struct ufshci_controller *ctrlr, device_t dev)
+ 	ctrlr->is_mcq_supported = false;
+ 	if (!(ctrlr->is_single_db_supported == 0 || ctrlr->is_mcq_supported))
+ 		return (ENXIO);
++	ctrlr->dma_maxaddr = UFSHCIV(UFSHCI_CAP_REG_64AS, cap) ?
++	    BUS_SPACE_MAXADDR : BUS_SPACE_MAXADDR_32BIT;
+ 	/*
+ 	 * The maximum transfer size supported by UFSHCI spec is 65535 * 256 KiB
+ 	 * However, we limit the maximum transfer size to 1MiB(256 * 4KiB) for
+@@ -117,22 +119,44 @@ ufshci_ctrlr_construct(struct ufshci_controller *ctrlr, device_t dev)
+ 	/* Disable all interrupts */
+ 	ufshci_mmio_write_4(ctrlr, ie, 0);
+ 
+-	/* Enable Host Controller */
+-	error = ufshci_ctrlr_enable_host_ctrlr(ctrlr);
+-	if (error)
+-		return (error);
+-
+-	/* Send DME_LINKSTARTUP command to start the link startup procedure */
+-	error = ufshci_uic_send_dme_link_startup(ctrlr);
+-	if (error)
+-		return (error);
+-
+-	/* Read the UECPA register to clear */
+-	ufshci_mmio_read_4(ctrlr, uecpa);
+-
+-	/* Diable Auto-hibernate */
+-	ahit = 0;
+-	ufshci_mmio_write_4(ctrlr, ahit, ahit);
++	hce = ufshci_mmio_read_4(ctrlr, hce);
++	hcs = ufshci_mmio_read_4(ctrlr, hcs);
++	if ((ctrlr->quirks & UFSHCI_QUIRK_KEEP_LINK) &&
++	    UFSHCIV(UFSHCI_HCE_REG_HCE, hce) && UFSHCIV(UFSHCI_HCS_REG_DP, hcs)) {
++		/*
++		 * The controller needs vendor setup (PHY, clocks) that this
++		 * driver does not do, and the previous kernel left it running
++		 * with the link up: keep the link and its power mode, stop
++		 * the request lists so that they can be given new memory, and
++		 * clear what is still pending.
++		 */
++		ufshci_printf(ctrlr, "keeping the link that is up\n");
++		ctrlr->is_link_kept = true;
++		ctrlr->kept_ahit = ufshci_mmio_read_4(ctrlr, ahit);
++		ufshci_mmio_write_4(ctrlr, utmrlrsr, 0);
++		ufshci_mmio_write_4(ctrlr, utrlrsr, 0);
++		ufshci_mmio_write_4(ctrlr, is, ufshci_mmio_read_4(ctrlr, is));
++	} else {
++		/* Enable Host Controller */
++		error = ufshci_ctrlr_enable_host_ctrlr(ctrlr);
++		if (error)
++			return (error);
++
++		/*
++		 * Send DME_LINKSTARTUP command to start the link startup
++		 * procedure
++		 */
++		error = ufshci_uic_send_dme_link_startup(ctrlr);
++		if (error)
++			return (error);
++
++		/* Read the UECPA register to clear */
++		ufshci_mmio_read_4(ctrlr, uecpa);
++
++		/* Diable Auto-hibernate */
++		ahit = 0;
++		ufshci_mmio_write_4(ctrlr, ahit, ahit);
++	}
+ 
+ 	/*
+ 	 * The device_present(UFSHCI_HCS_REG_DP) bit becomes true if the host
+@@ -318,6 +342,13 @@ ufshci_ctrlr_start(struct ufshci_controller *ctrlr)
+ 		return;
+ 	}
+ 
++	/*
++	 * A kept link may have been in Auto-Hibernate, which the NOP just
++	 * ended: keep it awake while the UIC commands below run.
++	 */
++	if (ctrlr->is_link_kept)
++		ufshci_mmio_write_4(ctrlr, ahit, 0);
++
+ 	/* Initialize UFS target drvice */
+ 	if (ufshci_dev_init(ctrlr) != 0) {
+ 		ufshci_ctrlr_fail(ctrlr, false);
+@@ -338,9 +369,11 @@ ufshci_ctrlr_start(struct ufshci_controller *ctrlr)
+ 
+ 	/*
+ 	 * Initialize UIC Power Mode
+-	 * QEMU UFS devices do not support unipro and power mode.
++	 * QEMU UFS devices do not support unipro and power mode; a kept link
++	 * keeps the power mode it has.
+ 	 */
+ 	if (!(ctrlr->quirks & UFSHCI_QUIRK_IGNORE_UIC_POWER_MODE) &&
++	    !ctrlr->is_link_kept &&
+ 	    ufshci_dev_init_uic_power_mode(ctrlr) != 0) {
+ 		ufshci_ctrlr_fail(ctrlr, false);
+ 		return;
+@@ -365,6 +398,10 @@ ufshci_ctrlr_start(struct ufshci_controller *ctrlr)
+ 
+ 	/* TODO: Configure Background Operations */
+ 
++	/* Hand the kept link its Auto-Hibernate back */
++	if (ctrlr->is_link_kept)
++		ufshci_mmio_write_4(ctrlr, ahit, ctrlr->kept_ahit);
++
+ 	if (ufshci_sim_attach(ctrlr) != 0) {
+ 		ufshci_ctrlr_fail(ctrlr, false);
+ 		return;
+diff --git a/sys/dev/ufshci/ufshci_fdt.c b/sys/dev/ufshci/ufshci_fdt.c
+new file mode 100644
+index 000000000..372517f7e
+--- /dev/null
++++ b/sys/dev/ufshci/ufshci_fdt.c
+@@ -0,0 +1,239 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * UFS host controllers described by the device tree.
++ *
++ * So far the Qualcomm controller (SM6115, F(x)tec Pro1X). Its PHY, clocks
++ * and regulators need vendor drivers that FreeBSD does not have, so it only
++ * works when the previous kernel (Linux, starting FreeBSD with kexec) left it
++ * running with the link up: UFSHCI_QUIRK_KEEP_LINK reuses that link. The
++ * controller sits behind an ARM MMU-500 that this kernel does not drive
++ * either; the attach reports how the SMMU treats the controller's stream,
++ * since the controller is handed physical addresses.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/conf.h>
++#include <sys/kernel.h>
++#include <sys/module.h>
++#include <sys/rman.h>
++
++#include <vm/vm.h>
++#include <vm/pmap.h>
++
++#include <machine/bus.h>
++
++#include <dev/ofw/openfirm.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++#include <dev/ofw/ofw_subr.h>
++
++#include "ufshci_private.h"
++#include "ufshci_reg.h"
++
++static struct ofw_compat_data compat_data[] = {
++	{ "qcom,ufshc",		UFSHCI_QUIRK_KEEP_LINK },
++	{ NULL,			0 }
++};
++
++/* ARM SMMUv2 (MMU-500) registers, read only */
++#define	SMMU_SCR0		0x000
++#define	 SMMU_SCR0_CLIENTPD	(1u << 0)
++#define	 SMMU_SCR0_USFCFG	(1u << 10)
++#define	SMMU_IDR0		0x020
++#define	 SMMU_IDR0_NUMSMRG(x)	((x) & 0xff)
++#define	SMMU_IDR1		0x024
++#define	 SMMU_IDR1_PAGESIZE	(1u << 31)
++#define	 SMMU_IDR1_NUMPAGENDXB(x) (((x) >> 28) & 0x7)
++#define	SMMU_SMR(n)		(0x800 + 4 * (n))
++#define	 SMMU_SMR_VALID		(1u << 31)
++#define	 SMMU_SMR_ID(x)		((x) & 0x7fff)
++#define	 SMMU_SMR_MASK(x)	(((x) >> 16) & 0x7fff)
++#define	SMMU_S2CR(n)		(0xc00 + 4 * (n))
++#define	 SMMU_S2CR_TYPE(x)	(((x) >> 16) & 0x3)
++#define	 SMMU_S2CR_CBNDX(x)	((x) & 0xff)
++#define	SMMU_CBAR(n)		(4 * (n))	/* in global space 1 */
++#define	SMMU_CB_SCTLR		0x000
++#define	 SMMU_CB_SCTLR_M	(1u << 0)
++
++static const char *const s2cr_types[] = { "translate", "bypass", "fault",
++	"reserved" };
++
++static uint32_t
++smmu_read(vm_offset_t va, vm_size_t size, vm_size_t off)
++{
++	if (off + 4 > size)
++		return (0xffffffff);
++	return (*(volatile uint32_t *)(va + off));
++}
++
++/*
++ * Report what the SMMU does with the controller's stream: bypass (all of
++ * the SMMU off, or the stream's entry), or translation through a context
++ * bank, which then has to have its MMU off (Linux's identity mapping on
++ * Qualcomm, where the hypervisor turns S2CR bypass into a fault).
++ */
++static void
++ufshci_fdt_report_iommu(device_t dev)
++{
++	pcell_t cells[3];
++	phandle_t smmu;
++	bus_addr_t pa;
++	bus_size_t size;
++	vm_offset_t va;
++	uint32_t scr0, idr0, idr1, smr, s2cr, cbar, sctlr, sid;
++	u_int i, nsmr, pgshift, numpage, cb;
++	bool found;
++
++	if (OF_hasprop(ofw_bus_get_node(dev), "dma-coherent"))
++		device_printf(dev, "DMA is coherent\n");
++	if (OF_getencprop(ofw_bus_get_node(dev), "iommus", cells,
++	    sizeof(cells)) < (ssize_t)(2 * sizeof(pcell_t))) {
++		device_printf(dev, "not behind an IOMMU\n");
++		return;
++	}
++	sid = cells[1];
++	smmu = OF_node_from_xref(cells[0]);
++	if (smmu <= 0 || (!ofw_bus_node_is_compatible(smmu, "arm,mmu-500") &&
++	    !ofw_bus_node_is_compatible(smmu, "arm,smmu-v2")) ||
++	    ofw_reg_to_paddr(smmu, 0, &pa, &size, NULL) != 0) {
++		device_printf(dev, "IOMMU of an unknown kind, stream %#x\n",
++		    sid);
++		return;
++	}
++
++	va = (vm_offset_t)pmap_mapdev(pa, size);
++	scr0 = smmu_read(va, size, SMMU_SCR0);
++	idr0 = smmu_read(va, size, SMMU_IDR0);
++	idr1 = smmu_read(va, size, SMMU_IDR1);
++	device_printf(dev, "SMMU at %#jx: sCR0 %#x (%s, unmatched streams %s)\n",
++	    (uintmax_t)pa, scr0,
++	    (scr0 & SMMU_SCR0_CLIENTPD) ? "off: bypass" : "on",
++	    (scr0 & SMMU_SCR0_USFCFG) ? "fault" : "bypass");
++
++	nsmr = SMMU_IDR0_NUMSMRG(idr0);
++	pgshift = (idr1 & SMMU_IDR1_PAGESIZE) ? 16 : 12;
++	numpage = 1u << (SMMU_IDR1_NUMPAGENDXB(idr1) + 1);
++	found = false;
++	for (i = 0; i < nsmr; i++) {
++		smr = smmu_read(va, size, SMMU_SMR(i));
++		if (!(smr & SMMU_SMR_VALID) ||
++		    ((SMMU_SMR_ID(smr) ^ sid) & ~SMMU_SMR_MASK(smr)) != 0)
++			continue;
++		found = true;
++		s2cr = smmu_read(va, size, SMMU_S2CR(i));
++		device_printf(dev, "stream %#x: SMR%u %#x, S2CR %#x (%s)\n",
++		    sid, i, smr, s2cr, s2cr_types[SMMU_S2CR_TYPE(s2cr)]);
++		if (SMMU_S2CR_TYPE(s2cr) != 0)
++			continue;
++		cb = SMMU_S2CR_CBNDX(s2cr);
++		cbar = smmu_read(va, size, (1u << pgshift) + SMMU_CBAR(cb));
++		sctlr = smmu_read(va, size,
++		    ((vm_size_t)(numpage + cb) << pgshift) + SMMU_CB_SCTLR);
++		device_printf(dev, "context bank %u: CBAR %#x, SCTLR %#x (%s)\n",
++		    cb, cbar, sctlr, (sctlr & SMMU_CB_SCTLR_M) ?
++		    "translates: DMA to physical addresses fails" :
++		    "MMU off: identity");
++	}
++	if (!found)
++		device_printf(dev, "stream %#x: no stream match\n", sid);
++	pmap_unmapdev((void *)va, size);
++}
++
++static int
++ufshci_fdt_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (ofw_bus_search_compatible(dev, compat_data)->ocd_str == NULL)
++		return (ENXIO);
++
++	device_set_desc(dev, "UFS host controller");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++ufshci_fdt_attach(device_t dev)
++{
++	struct ufshci_controller *ctrlr = device_get_softc(dev);
++	int error;
++
++	ctrlr->dev = dev;
++	ctrlr->quirks = ofw_bus_search_compatible(dev, compat_data)->ocd_data;
++	ctrlr->ref_clk = UFSHCI_REF_CLK_19_2MHz;
++
++	ctrlr->resource_id = 0;
++	ctrlr->resource = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
++	    &ctrlr->resource_id, RF_ACTIVE);
++	if (ctrlr->resource == NULL) {
++		device_printf(dev, "unable to allocate the registers\n");
++		return (ENXIO);
++	}
++	ctrlr->bus_tag = rman_get_bustag(ctrlr->resource);
++	ctrlr->bus_handle = rman_get_bushandle(ctrlr->resource);
++	ctrlr->regs = (struct ufshci_registers *)ctrlr->bus_handle;
++
++	ufshci_fdt_report_iommu(dev);
++
++	/*
++	 * The first access to the controller: it hangs the bus if nobody
++	 * left the controller's clocks on.
++	 */
++	device_printf(dev, "registers at %#jx\n",
++	    (uintmax_t)rman_get_start(ctrlr->resource));
++
++	/*
++	 * A previous kernel may have left interrupts enabled; the handler
++	 * must not run before the request queues exist.
++	 */
++	ufshci_mmio_write_4(ctrlr, ie, 0);
++
++	ctrlr->num_io_queues = 1;
++	ctrlr->rid = 0;
++	ctrlr->res = bus_alloc_resource_any(dev, SYS_RES_IRQ, &ctrlr->rid,
++	    RF_ACTIVE);
++	if (ctrlr->res == NULL) {
++		device_printf(dev, "unable to allocate the interrupt\n");
++		error = ENXIO;
++		goto bad;
++	}
++	error = bus_setup_intr(dev, ctrlr->res, INTR_TYPE_BIO | INTR_MPSAFE,
++	    NULL, ufshci_ctrlr_shared_handler, ctrlr, &ctrlr->tag);
++	if (error != 0) {
++		device_printf(dev, "unable to set up the interrupt\n");
++		goto bad;
++	}
++
++	return (ufshci_attach(dev));
++bad:
++	if (ctrlr->tag != NULL)
++		bus_teardown_intr(dev, ctrlr->res, ctrlr->tag);
++	if (ctrlr->res != NULL)
++		bus_release_resource(dev, SYS_RES_IRQ, ctrlr->rid, ctrlr->res);
++	bus_release_resource(dev, SYS_RES_MEMORY, ctrlr->resource_id,
++	    ctrlr->resource);
++	return (error);
++}
++
++static int
++ufshci_fdt_detach(device_t dev)
++{
++	return (ufshci_detach(dev));
++}
++
++static device_method_t ufshci_fdt_methods[] = {
++	DEVMETHOD(device_probe,		ufshci_fdt_probe),
++	DEVMETHOD(device_attach,	ufshci_fdt_attach),
++	DEVMETHOD(device_detach,	ufshci_fdt_detach),
++	DEVMETHOD_END
++};
++
++static driver_t ufshci_fdt_driver = {
++	"ufshci",
++	ufshci_fdt_methods,
++	sizeof(struct ufshci_controller),
++};
++
++DRIVER_MODULE(ufshci, simplebus, ufshci_fdt_driver, 0, 0);
+diff --git a/sys/dev/ufshci/ufshci_private.h b/sys/dev/ufshci/ufshci_private.h
+index 2e033f84c..c6e5c0bf1 100644
+--- a/sys/dev/ufshci/ufshci_private.h
++++ b/sys/dev/ufshci/ufshci_private.h
+@@ -242,6 +242,8 @@ struct ufshci_controller {
+ 	4 /* Need to wait 1250us after power mode change */
+ #define UFSHCI_QUIRK_CHANGE_LANE_AND_GEAR_SEPARATELY \
+ 	8 /* Need to change the number of lanes before changing HS-GEAR. */
++#define UFSHCI_QUIRK_KEEP_LINK \
++	16 /* Reuse the link a previous kernel brought up (vendor PHY setup) */
+ 	uint32_t ref_clk;
+ 
+ 	struct cam_sim *ufshci_sim;
+@@ -284,6 +286,9 @@ struct ufshci_controller {
+ 	/* Controller capacity */
+ 	uint32_t cap;
+ 
++	/* Highest bus address the controller reaches (CAP.64AS) */
++	bus_addr_t dma_maxaddr;
++
+ 	/* Page size and log2(page_size) - 12 that we're currently using */
+ 	uint32_t page_size;
+ 
+@@ -318,6 +323,10 @@ struct ufshci_controller {
+ 	uint32_t max_tx_lanes;
+ 	uint32_t max_rx_lanes;
+ 
++	/* UFSHCI_QUIRK_KEEP_LINK: the link was kept, with this Auto-Hibernate */
++	bool is_link_kept;
++	uint32_t kept_ahit;
++
+ 	bool is_failed;
+ };
+ 
+diff --git a/sys/dev/ufshci/ufshci_req_sdb.c b/sys/dev/ufshci/ufshci_req_sdb.c
+index 834a459d4..92884dc80 100644
+--- a/sys/dev/ufshci/ufshci_req_sdb.c
++++ b/sys/dev/ufshci/ufshci_req_sdb.c
+@@ -87,7 +87,7 @@ ufshci_req_sdb_cmd_desc_construct(struct ufshci_req_queue *req_queue,
+ 	 * Note: UFSHCI UCD format is restricted to 128-byte alignment.
+ 	 */
+ 	error = bus_dma_tag_create(bus_get_dma_tag(ctrlr->dev), 128, 0,
+-	    BUS_SPACE_MAXADDR, BUS_SPACE_MAXADDR, NULL, NULL, ucd_allocsz,
++	    ctrlr->dma_maxaddr, BUS_SPACE_MAXADDR, NULL, NULL, ucd_allocsz,
+ 	    howmany(ucd_allocsz, sizeof(struct ufshci_utp_cmd_desc)),
+ 	    sizeof(struct ufshci_utp_cmd_desc), 0, NULL, NULL,
+ 	    &req_queue->dma_tag_ucd);
+@@ -118,7 +118,7 @@ ufshci_req_sdb_cmd_desc_construct(struct ufshci_req_queue *req_queue,
+ 	 * Note: UFSHCI PRDT format is restricted to 8-byte alignment.
+ 	 */
+ 	error = bus_dma_tag_create(bus_get_dma_tag(ctrlr->dev), 8,
+-	    ctrlr->page_size, BUS_SPACE_MAXADDR, BUS_SPACE_MAXADDR, NULL, NULL,
++	    ctrlr->page_size, ctrlr->dma_maxaddr, BUS_SPACE_MAXADDR, NULL, NULL,
+ 	    payload_allocsz, howmany(payload_allocsz, ctrlr->page_size) + 1,
+ 	    ctrlr->page_size, 0, NULL, NULL, &req_queue->dma_tag_payload);
+ 	if (error != 0) {
+@@ -185,7 +185,7 @@ ufshci_req_sdb_construct(struct ufshci_controller *ctrlr,
+ 	    sizeof(struct ufshci_utp_xfer_req_desc);
+ 	alloc_size = num_entries * desc_size;
+ 	error = bus_dma_tag_create(bus_get_dma_tag(ctrlr->dev), 1024,
+-	    ctrlr->page_size, BUS_SPACE_MAXADDR, BUS_SPACE_MAXADDR, NULL, NULL,
++	    ctrlr->page_size, ctrlr->dma_maxaddr, BUS_SPACE_MAXADDR, NULL, NULL,
+ 	    alloc_size, 1, alloc_size, 0, NULL, NULL, &hwq->dma_tag_queue);
+ 	if (error != 0) {
+ 		ufshci_printf(ctrlr, "request queue tag create failed %d\n",
+-- 
+2.56.0
+
