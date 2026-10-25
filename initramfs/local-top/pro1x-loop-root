@@ -87,7 +87,20 @@ EOF
     if kexec -s -l "/host$image" --command-line="FreeBSD:"; then
       sync
       umount /host
+      # The APSS watchdog (0x0f017000, kpss layout, 32 kHz) armed for its
+      # longest time, about 32 s: FreeBSD's qcom_wdt keeps feeding it, and a
+      # FreeBSD that hangs before or after that resets the phone into this
+      # menu again. Linux's qcom_wdt is not loaded here, so nothing stops
+      # it on the way out.
+      if command -v devmem > /dev/null; then
+        devmem 0x0f017008 32 0
+        devmem 0x0f017004 32 1
+        devmem 0x0f017010 32 0xfffff
+        devmem 0x0f017014 32 0xfffff
+        devmem 0x0f017008 32 1
+      fi
       kexec -e
+      command -v devmem > /dev/null && devmem 0x0f017008 32 0
       mount -t ext4 -o rw,noatime "$dev" /host
     fi
     log_failure_msg "kexec failed, booting $IMAGE"

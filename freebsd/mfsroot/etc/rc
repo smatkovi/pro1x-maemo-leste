@@ -9,6 +9,6 @@ uname -a
 sysctl hw.model hw.machine_arch hw.ncpu hw.physmem kern.bootfile
 echo "--- devices:"
 echo /dev/*
-echo "=== rc done, rebooting into the boot menu in 30 s"
-sleep 30
+echo "=== rc done, rebooting into the boot menu in 10 s"
+sleep 10
 reboot

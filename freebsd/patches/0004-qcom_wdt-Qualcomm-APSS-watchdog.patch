@@ -1,0 +1,146 @@
+From bd95f69e4c3a299b72cf221f8eef35059aa2d98a Mon Sep 17 00:00:00 2001
+From: build <build@local>
+Date: Sun, 25 Oct 2026 17:38:32 +0100
+Subject: [PATCH] qcom_wdt: Qualcomm APSS watchdog (SM6115)
+
+Keeps a watchdog left running by whoever started the kernel fed from a
+callout, or starts it with the longest timeout (about 32 s): a hung system
+resets the phone.
+---
+ sys/conf/files.arm64        |   1 +
+ sys/dev/qcom_wdt/qcom_wdt.c | 111 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 112 insertions(+)
+ create mode 100644 sys/dev/qcom_wdt/qcom_wdt.c
+
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index c6acaa2a1..f92d36049 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -732,6 +732,7 @@ dev/flash/flexspi/flex_spi.c    		optional clk flex_spi soc_nxp_ls fdt
+ 
+ # Qualcomm
+ arm64/qualcomm/qcom_gcc.c			optional qcom_gcc fdt
++dev/qcom_wdt/qcom_wdt.c				optional qcom_wdt fdt
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ 
+ # RockChip Drivers
+diff --git a/sys/dev/qcom_wdt/qcom_wdt.c b/sys/dev/qcom_wdt/qcom_wdt.c
+new file mode 100644
+index 000000000..56268534b
+--- /dev/null
++++ b/sys/dev/qcom_wdt/qcom_wdt.c
+@@ -0,0 +1,111 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Qualcomm APSS ("KPSS") watchdog, as on the SM6115 (F(x)tec Pro1X).
++ *
++ * The timer counts the 32 kHz sleep clock; when the count reaches the bark
++ * time it raises an interrupt, at the bite time it resets the SoC. The counts
++ * are 20 bits wide, so the longest timeout is about 32 s.
++ *
++ * The Pro1X's boot menu arms it before it kexecs FreeBSD, so that a hang
++ * resets the phone instead of leaving it dead until someone holds the power
++ * key. This driver keeps it running (or starts it, when the bootloader
++ * started FreeBSD) and resets the count from a callout: a system that still
++ * runs its timers keeps the phone up, a hung one is reset.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/callout.h>
++#include <sys/kernel.h>
++#include <sys/module.h>
++#include <sys/rman.h>
++
++#include <machine/bus.h>
++
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++#define	WDT_RST		0x04
++#define	WDT_EN		0x08
++#define	WDT_BARK_TIME	0x10
++#define	WDT_BITE_TIME	0x14
++#define	WDT_ENABLE	(1u << 0)
++#define	WDT_MAX_TICKS	0xfffff		/* about 32 s of the 32 kHz clock */
++#define	WDT_FEED_S	5
++
++static struct ofw_compat_data compat_data[] = {
++	{ "qcom,apss-wdt-sm6115",	1 },
++	{ "qcom,kpss-wdt",		1 },
++	{ NULL,				0 }
++};
++
++struct qcom_wdt_softc {
++	device_t		dev;
++	struct resource		*res;
++	struct callout		feed;
++};
++
++static void
++qcom_wdt_feed(void *arg)
++{
++	struct qcom_wdt_softc *sc = arg;
++
++	bus_write_4(sc->res, WDT_RST, 1);
++	callout_reset(&sc->feed, WDT_FEED_S * hz, qcom_wdt_feed, sc);
++}
++
++static int
++qcom_wdt_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data == 0)
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm APSS watchdog");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++qcom_wdt_attach(device_t dev)
++{
++	struct qcom_wdt_softc *sc = device_get_softc(dev);
++	int rid = 0;
++	bool running;
++
++	sc->dev = dev;
++	sc->res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid, RF_ACTIVE);
++	if (sc->res == NULL) {
++		device_printf(dev, "cannot map registers\n");
++		return (ENXIO);
++	}
++	callout_init(&sc->feed, 1);
++
++	running = (bus_read_4(sc->res, WDT_EN) & WDT_ENABLE) != 0;
++	if (!running) {
++		bus_write_4(sc->res, WDT_RST, 1);
++		bus_write_4(sc->res, WDT_BARK_TIME, WDT_MAX_TICKS);
++		bus_write_4(sc->res, WDT_BITE_TIME, WDT_MAX_TICKS);
++		bus_write_4(sc->res, WDT_EN, WDT_ENABLE);
++	}
++	device_printf(dev, "%s; fed every %d s, bites after about %d s\n",
++	    running ? "left running" : "started", WDT_FEED_S,
++	    bus_read_4(sc->res, WDT_BITE_TIME) / 32768);
++	qcom_wdt_feed(sc);
++	return (0);
++}
++
++static device_method_t qcom_wdt_methods[] = {
++	DEVMETHOD(device_probe,		qcom_wdt_probe),
++	DEVMETHOD(device_attach,	qcom_wdt_attach),
++	DEVMETHOD_END
++};
++
++static driver_t qcom_wdt_driver = {
++	"qcom_wdt",
++	qcom_wdt_methods,
++	sizeof(struct qcom_wdt_softc),
++};
++
++DRIVER_MODULE(qcom_wdt, simplebus, qcom_wdt_driver, 0, 0);
+-- 
+2.56.0
+
