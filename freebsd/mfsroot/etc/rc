@@ -3,12 +3,14 @@
 #
 # Reports what the kernel found on the console (the screen and the RAM
 # console, which Linux reads after the next boot). Then, as Leste's boot
-# does with its loop image: userdata read only below /dev (the kernel keeps
-# filesystems there across a reroot, patches/0012), the root image
-# freebsd/root.ufs from it (rootfs.sh) as md1, and a reroot into it.
+# does with its loop image: userdata read only at /dev/pro1x-host (below
+# /dev, which the kernel keeps across a reroot: patches/0012, 0016), the
+# root image freebsd/root.ufs from it (rootfs.sh) as md1, and a reroot
+# into it.
 #
 # Kernel environment (freebsd/cmdline next to the kernel):
-#   pro1x.root=ram   stay here: report, then Enter for a shell or reboot
+#   pro1x.root=ram   stay here: report (userdata and the image attached
+#                    and released again), then Enter for a shell or reboot
 #   pro1x.test=1     unattended test: the full system reports and reboots
 PATH=/rescue; export PATH
 HOST=/dev/pro1x-host
@@ -24,22 +26,30 @@ camcontrol devlist
 gpart show -p
 echo "--- input:"
 ls /dev/input /dev/kbd* 2>/dev/null
+sysctl dev.pro1x_battery hw.acpi dev.cpu.0.freq dev.cpu.0.freq_levels \
+    2>/dev/null
 
-if [ "$(kenv -q pro1x.root)" != ram ] && [ -e /dev/gpt/userdata ]; then
-	mkdir -p $HOST
-	if mount -t ext2fs -o ro /dev/gpt/userdata $HOST; then
-		if [ -f $IMAGE ] && mdconfig -a -t vnode -o readonly -f $IMAGE -u 1
-		then
+if [ -e /dev/gpt/userdata ] && [ -d $HOST ] &&
+    mount -t ext2fs -o ro /dev/gpt/userdata $HOST; then
+	echo "--- userdata at $HOST:"
+	df -h $HOST
+	ls -la $HOST/freebsd
+	if [ -f $IMAGE ] && mdconfig -a -t vnode -o readonly -f $IMAGE -u 1
+	then
+		if [ "$(kenv -q pro1x.root)" != ram ]; then
 			kenv vfs.root.mountfrom=ufs:/dev/md1
 			kenv vfs.root.mountfrom.options=ro
 			echo "=== rerooting into $IMAGE"
 			reboot -r
 			exit 0
 		fi
-		echo "--- no root image, userdata has:"
-		ls -la $HOST/freebsd
-		umount $HOST
+		# Staying: the image's filesystem once, then everything back
+		mkdir -p /tmp && mount -t tmpfs tmpfs /tmp && mkdir /tmp/r &&
+		    mount -t ufs -o ro /dev/md1 /tmp/r && ls /tmp/r &&
+		    umount /tmp/r
+		mdconfig -d -u 1
 	fi
+	umount $HOST
 fi
 
 # No root image: with the keyboard (gpiokeys, pro1xkbd behind kbdmux)

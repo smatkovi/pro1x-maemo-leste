@@ -46,7 +46,7 @@ from an mtree of the tarball). On the phone it goes to
 `/host/freebsd/root.ufs`. The RAM root (`mfsroot/etc/rc`) mounts userdata
 read only at `/dev/pro1x-host`, attaches the image as `md1` and reroots
 into it (`reboot -r`; `patches/0012` keeps filesystems below `/dev` across
-the reroot). The root stays read only, `/var` and `/tmp` are in memory
+the reroot, `0016` makes the mount point). The root stays read only, `/var` and `/tmp` are in memory
 (`rootfs/etc/rc.conf`): FreeBSD does not write to userdata. Login on the
 console as root (no password). devd powers the phone off when the power
 key is held for 2 s; powerd scales the CPU frequency.
@@ -106,6 +106,7 @@ after boot (`patches/0013`), so that unattended tests always end.
 | `patches/0013-*` | `qcom_wdt` lifetime for unattended tests |
 | `patches/0014-*` | `/dev/pro1xshot`, data for Linux behind the RAM console |
 | `patches/0015-*` | `pro1x_battery`, the battery's state of charge |
+| `patches/0016-*` | `/dev/pro1x-host`, the mount point below `/dev` (devfs has no mkdir) |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `pkgfetch.py`, `mkspec.py` | packages with dependencies, checked; the image's owners and modes |
 

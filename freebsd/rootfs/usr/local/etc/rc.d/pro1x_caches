@@ -1,7 +1,8 @@
 #!/bin/sh
 #
 # PROVIDE: pro1x_caches
-# REQUIRE: LOGIN ldconfig
+# REQUIRE: DAEMON ldconfig
+# BEFORE: local LOGIN
 # KEYWORD: nojail
 #
 # The caches packages build when they are installed, on the read-only root
