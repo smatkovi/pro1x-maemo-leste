@@ -1,0 +1,17 @@
+#!/bin/sh
+# First FreeBSD on the Pro1X: a root filesystem in RAM, no keyboard yet.
+# Show what the kernel found, then reboot into the boot menu.
+PATH=/rescue; export PATH
+echo
+echo "=== FreeBSD on the F(x)tec Pro1X ==="
+uname -a
+sysctl hw.model hw.machine_arch hw.ncpu hw.physmem kern.bootfile 2>/dev/null
+echo "--- devices:"
+ls /dev | tr '\n' ' '
+echo
+echo "--- attached (dmesg):"
+dmesg | grep -E ' at | on ' | tail -40
+echo
+echo "rebooting into the boot menu in 120 s"
+sleep 120
+reboot

@@ -1,0 +1,28 @@
+diff --git a/sys/arm64/arm64/locore.S b/sys/arm64/arm64/locore.S
+index 39eb762a4..946098c9d 100644
+--- a/sys/arm64/arm64/locore.S
++++ b/sys/arm64/arm64/locore.S
+@@ -87,6 +87,23 @@
+  */
+ 
+ ENTRY(_start)
++#ifdef PRO1X_PROOF_OF_LIFE
++	/*
++	 * F(x)tec Pro1X bring-up: paint the top 120 lines of the bootloader's
++	 * framebuffer (0x5c000000, 1080 pixels of 4 bytes) green before
++	 * anything else, while the MMU is still off and the stores go straight
++	 * to memory: the kernel was entered. x0 (the DTB) is left alone.
++	 */
++	movz	x9, #0x5c00, lsl #16
++	movz	x10, #0x0007, lsl #16
++	movk	x10, #0xe900		/* 1080 * 4 * 120 bytes */
++	movz	w11, #0xff00, lsl #16
++	movk	w11, #0xff00		/* a8r8g8b8 opaque green */
++1:	str	w11, [x9], #4
++	subs	x10, x10, #4
++	b.ne	1b
++	dsb	sy
++#endif
+ 	/* Enter the kernel exception level */
+ 	bl	enter_kernel_el
+ 

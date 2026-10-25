@@ -50,6 +50,15 @@ apt-get install -y -q \
   iw bluez gdisk mesa-utils \
   xinput debootstrap debian-archive-keyring
 
+# kexec for the boot menu (systems with a kernel of their own: FreeBSD).
+# The package would otherwise take over every reboot with kexec (its debconf
+# default), bypassing the bootloader.
+log "kexec-tools (only for the boot menu)"
+printf 'kexec-tools kexec-tools/load_kexec boolean false\nkexec-tools kexec-tools/use_grub_config boolean false\n' |
+  debconf-set-selections
+apt-get install -y -q --no-install-recommends kexec-tools
+grep -qx 'LOAD_KEXEC=false' /etc/default/kexec
+
 # --- Upgrades ----------------------------------------------------------------
 # apt upgrade / dist-upgrade must not undo the port: configuration files it
 # changed stay (dpkg would otherwise ask, or a front end would replace them),

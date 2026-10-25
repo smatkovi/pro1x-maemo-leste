@@ -1,0 +1,43 @@
+diff --git a/contrib/mtree/specspec.c b/contrib/mtree/specspec.c
+index 8e1187b4c..3f6290221 100644
+--- a/contrib/mtree/specspec.c
++++ b/contrib/mtree/specspec.c
+@@ -42,6 +42,7 @@ __RCSID("$NetBSD: specspec.c,v 1.5 2023/12/02 13:24:00 christos Exp $");
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
++#include <sys/stat.h>	/* before mtree.h: the Linux bootstrap renames st_mtimespec */
+ #include "mtree.h"
+ #include "extern.h"
+ 
+diff --git a/sys/conf/newvers.sh b/sys/conf/newvers.sh
+index 4926891ae..f05eb7b54 100644
+--- a/sys/conf/newvers.sh
++++ b/sys/conf/newvers.sh
+@@ -202,7 +202,9 @@ else
+ 	t=$(date)
+ fi
+ i=$(${MAKE:-make} -V KERN_IDENT)
+-compiler_v=$($(${MAKE:-make} -V CC) -v 2>&1 | grep -w 'version')
++# the first line only: clang -v may add more lines with "version" (e.g.
++# "Found HIP installation: ..., version ..."), which would break the C string
++compiler_v=$($(${MAKE:-make} -V CC) -v 2>&1 | grep -w 'version' | head -n 1)
+ 
+ for dir in /usr/bin /usr/local/bin; do
+ 	if [ ! -z "${svnversion}" ] ; then
+diff --git a/tools/build/mk/Makefile.boot b/tools/build/mk/Makefile.boot
+index 43246f3ce..522086060 100644
+--- a/tools/build/mk/Makefile.boot
++++ b/tools/build/mk/Makefile.boot
+@@ -38,7 +38,10 @@ CWARNFLAGS.clang+=-Wno-typedef-redefinition
+ # bsd.sys.mk explicitly turns on -Wsystem-headers, but that's extremely
+ # noisy when building on Linux.
+ CWARNFLAGS+=	-Wno-system-headers
+-CWARNFLAGS.clang+=-Werror=incompatible-pointer-types-discards-qualifiers
++# glibc 2.43 returns const char * from strchr() and friends for const
++# arguments, which bootstrap sources such as libc's getopt assign to char *:
++# a warning there, not an error.
++CWARNFLAGS.clang+=-Wno-error=incompatible-pointer-types-discards-qualifiers
+ 
+ # b64_pton and b64_ntop is in libresolv on MacOS and Linux:
+ # TODO: only needed for uuencode and uudecode

@@ -17,6 +17,10 @@ if [ -x /usr/local/sbin/pro1x-bootmenu ]; then
   copy_exec /usr/local/sbin/pro1x-bootmenu /sbin
   copy_file script /usr/local/sbin/pro1x-boot /sbin/pro1x-boot
   copy_exec /sbin/sgdisk /sbin
+  # kexec starts the systems with a kernel of their own (FreeBSD)
+  if [ -x /sbin/kexec ]; then
+    copy_exec /sbin/kexec /sbin
+  fi
   # Touchscreen for choosing by tap; everything else is built in.
   manual_add_modules goodix_ts
 fi

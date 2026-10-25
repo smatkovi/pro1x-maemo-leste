@@ -1,0 +1,24 @@
+#
+# PRO1X -- FreeBSD for the F(x)tec Pro1X (Qualcomm SM6115), first bring-up.
+#
+# GENERIC already has what the start needs: LINUX_BOOT_ABI (the Linux arm64
+# Image header, so that the phone's bootloader or Linux kexec can start the
+# kernel and hand it the device tree) and vt_simplefb (the console on the
+# framebuffer the bootloader leaves running). There is no driver for the
+# phone's storage, so the root filesystem is an image built into the kernel.
+#
+include		GENERIC
+ident		PRO1X
+
+# Root filesystem in RAM (freebsd/build.sh fills in the path)
+makeoptions	MFS_IMAGE=@MFS_IMAGE@
+options 	MD_ROOT_READONLY
+
+# Settings that cannot come from the command line: the bootloader appends
+# its own arguments, and FreeBSD reads bootargs only when they start with
+# "FreeBSD:" and fit 512 bytes.
+env		"@ENV_FILE@"
+
+# Green stripe at the top of the screen as soon as the kernel is entered
+# (patches/0001-arm64-pro1x-proof-of-life.patch)
+makeoptions	CONF_CFLAGS=-DPRO1X_PROOF_OF_LIFE
