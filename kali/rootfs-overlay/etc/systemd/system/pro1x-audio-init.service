@@ -1,0 +1,13 @@
+# Mixer routes and gains the UCM profile does not set reliably, before the
+# audio server opens the card (pro1x-audio-init from the NixOS port).
+[Unit]
+Description=Pro1X audio mixer setup
+After=sound.target
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/pro1x-audio-init
+
+[Install]
+WantedBy=multi-user.target

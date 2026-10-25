@@ -1,0 +1,14 @@
+[Unit]
+Description=Hexagon RPC daemon (ADSP sensor configuration)
+Before=pro1x-sensors.service
+
+[Service]
+ExecStartPre=/usr/lib/pro1x/hexagonrpcd-prepare
+ExecStart=/usr/lib/pro1x/hexagonrpcd -f /dev/fastrpc-adsp -d adsp -s -R /var/lib/hexagonrpcd
+Environment=LD_LIBRARY_PATH=/usr/lib/pro1x
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

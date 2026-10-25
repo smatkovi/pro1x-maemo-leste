@@ -1,0 +1,14 @@
+# The modem's GNSS engine over QMI, as NMEA to gpsd (udp://127.0.0.1:29470).
+[Unit]
+Description=Pro1X GNSS (modem LOC service to gpsd)
+After=rmtfs.service gpsd.service
+Wants=gpsd.service
+
+[Service]
+ExecStart=/usr/lib/pro1x/pro1x-gnss -p 29470
+Environment=LD_LIBRARY_PATH=/usr/lib/pro1x
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

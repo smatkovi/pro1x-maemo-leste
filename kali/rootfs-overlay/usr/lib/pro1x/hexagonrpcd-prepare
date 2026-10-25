@@ -1,0 +1,35 @@
+#!/bin/sh
+# Prepares hexagonrpcd's state directory (from Leste's pro1x-hexagonrpcd).
+set -e
+SRC=/usr/share/pro1x/hexagonfs
+STATE=/var/lib/hexagonrpcd
+[ -d "$SRC/sensors" ] || { echo "$SRC missing" >&2; exit 1; }
+mkdir -p "$STATE/sensors"
+# config and sns_reg.conf are static: refresh them on every start.
+rm -rf "$STATE/sensors/config"
+cp -r "$SRC/sensors/config" "$STATE/sensors/config"
+cp -f "$SRC/sensors/sns_reg.conf" "$STATE/sensors/sns_reg.conf"
+rm -rf "$STATE/dsp"
+[ -d "$SRC/dsp" ] && cp -r "$SRC/dsp" "$STATE/dsp"
+# The ADSP rewrites its registry, so it needs a writable copy, seeded once.
+reg="$STATE/sensors/persist/registry"
+if [ ! -d "$reg/registry" ]; then
+	mkdir -p "$reg"
+	cp -r "$SRC/sensors/registry/." "$reg/registry/"
+fi
+# "QRD" selects the bengal_qrd_* configuration that lists this phone's chips.
+rm -rf "$STATE/properties"
+mkdir -p "$STATE/properties"
+echo QRD > "$STATE/properties/hw_platform"
+ln -sfn /sys/devices/soc0 "$STATE/socinfo"
+# A crashing ADSP must not restart in a loop: that can freeze the phone.
+for rp in /sys/class/remoteproc/*; do
+	[ "$(cat "$rp/name" 2>/dev/null)" = adsp ] && echo disabled > "$rp/recovery"
+done
+# The ADSP remoteproc registers late in boot; wait for its FastRPC node.
+i=0
+while [ "$i" -lt 120 ] && [ ! -e /dev/fastrpc-adsp ]; do
+	i=$((i + 1))
+	sleep 1
+done
+[ -e /dev/fastrpc-adsp ]

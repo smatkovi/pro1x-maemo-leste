@@ -1,0 +1,8 @@
+#!/bin/sh
+# Doubles the size of the Xfce user interface once per user: the Pro1X
+# panel has about 400 dpi. Settings changed later are kept.
+mark=${XDG_CONFIG_HOME:-$HOME/.config}/pro1x-xfce-scale
+[ -e "$mark" ] && exit 0
+xfconf-query -c xsettings -p /Gdk/WindowScalingFactor -n -t int -s 2 || exit 0
+xfconf-query -c xfwm4 -p /general/theme -n -t string -s Default-xhdpi
+mkdir -p "$(dirname "$mark")" && touch "$mark"

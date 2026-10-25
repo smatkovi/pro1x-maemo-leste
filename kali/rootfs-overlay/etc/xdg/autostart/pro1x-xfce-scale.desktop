@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Pro1X display scale
+Exec=/usr/lib/pro1x/xfce-scale
+OnlyShowIn=XFCE;
+NoDisplay=true

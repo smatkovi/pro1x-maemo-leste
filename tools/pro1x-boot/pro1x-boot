@@ -9,10 +9,11 @@
 #   pro1x-boot reboot <system>      next <system> + reboot
 #   pro1x-boot current              the system that is running now
 #
-# Systems: leste, meego (started from slot b through the boot menu in the
-# initramfs) and sailfish (slot a, its own kernel). MeeGo is Harmattan
+# Systems: leste, meego, kali (started from slot b through the boot menu in
+# the initramfs) and sailfish (slot a, its own kernel). MeeGo is Harmattan
 # (/harmattan.img) running on Maemo Leste's hardware layer, so both boot
 # the Leste image; the initramfs records the choice in pro1x-boot/current.
+# Kali (/kali.img, kali/ in the repo) boots Leste's kernel from its own image.
 # Works in the initramfs, in Maemo Leste/MeeGo (userdata on /host) and in
 # Sailfish OS (userdata on /userdata), so the choice never depends on keys:
 # pick the next system from the running one, then reboot.
@@ -33,6 +34,7 @@ die() { echo "pro1x-boot: $*" >&2; exit 1; }
 all_entries() {
 	echo "leste|Maemo Leste|/maemo-leste.img|"
 	echo "meego|MeeGo Harmattan|/maemo-leste.img|/harmattan.img"
+	echo "kali|Kali Linux|/kali.img|"
 	echo "sailfish|Sailfish OS||"
 }
 
@@ -49,7 +51,7 @@ entries() {
 }
 
 valid_key() {
-	all_entries | cut -d'|' -f1 | grep -qx "$1" || die "unknown system '$1' (leste, meego, sailfish)"
+	all_entries | cut -d'|' -f1 | grep -qx "$1" || die "unknown system '$1' (leste, meego, kali, sailfish)"
 }
 
 # "disk partition-number" for a partition label
@@ -155,7 +157,7 @@ set-current)
 	;;
 get-timeout) cat "$CONF/timeout" 2>/dev/null || echo 5 ;;
 *)
-	sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
 	exit 1
 	;;
 esac

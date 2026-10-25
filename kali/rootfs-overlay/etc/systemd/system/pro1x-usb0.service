@@ -1,0 +1,15 @@
+# USB link to the build host, as on Leste (host side 172.16.42.2/24).
+# NetworkManager leaves USB gadget interfaces unmanaged.
+[Unit]
+Description=USB network link (172.16.42.1)
+BindsTo=sys-subsystem-net-devices-usb0.device
+After=sys-subsystem-net-devices-usb0.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ip link set usb0 up
+ExecStart=/usr/sbin/ip addr replace 172.16.42.1/24 dev usb0
+
+[Install]
+WantedBy=multi-user.target

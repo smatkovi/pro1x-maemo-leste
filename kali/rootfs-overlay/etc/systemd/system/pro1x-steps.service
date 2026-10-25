@@ -1,0 +1,16 @@
+# The ADSP's hardware step counter on the system bus (org.pro1x.Steps,
+# tools/pro1x-steps).
+[Unit]
+Description=Pro1X step counter (org.pro1x.Steps)
+After=pro1x-hexagonrpcd.service dbus.service
+
+[Service]
+Type=dbus
+BusName=org.pro1x.Steps
+ExecStart=/usr/lib/pro1x/pro1x-steps
+Environment=LD_LIBRARY_PATH=/usr/lib/pro1x
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
