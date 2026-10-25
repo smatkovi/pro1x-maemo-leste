@@ -44,6 +44,9 @@ to the command line, e.g. `hint.ufshci.0.disabled=1`.
 | --- | --- |
 | console | `vt_simplefb` on the bootloader's framebuffer; RAM console (`0003`) |
 | watchdog | `qcom_wdt` (`0004`): the boot menu arms the APSS watchdog before the jump, FreeBSD feeds it; a hang resets the phone into the boot menu |
+| GPIOs | `qcom_tlmm_sm6115` (`0006`): GPIOs and their interrupts; on them `gpiokeys` (Shift, Ctrl, Alt, Fn, Home, camera key, the slider switch), `gpioiic` (the touchscreen's bus), `gpioled` (keyboard backlight) |
+| touchscreen | `goodix` (`0007`), GT9286, multi-touch through evdev |
+| keyboard | `geniiic` (`0008`: device tree attachment of FreeBSD's GENI I2C driver, QUP wrapper bus) and `pro1xkbd` (`0009`): the 8x8 matrix behind the AW9523B, console keyboard and evdev; the boot menu keeps the I2C engine's clocks on before the jump |
 | UFS | `ufshci` (`0005`), on the link Linux left up: the controller's PHY, clocks and regulators need Qualcomm drivers FreeBSD lacks. Linux keeps UFS powered across kexec (`device/kernel/patches/0004`), and the boot menu rebinds it with an identity mapping first, since FreeBSD does not drive the SMMU in front of it and hands the controller physical addresses. The attach reports the SMMU's view of the stream |
 
 ## Files
@@ -59,6 +62,10 @@ to the command line, e.g. `hint.ufshci.0.disabled=1`.
 | `patches/0003-*` | RAM console in the splash memory; keeps the kernel config's environment when the bootloader passes bootargs |
 | `patches/0004-*` | `qcom_wdt`, the APSS watchdog |
 | `patches/0005-*` | `ufshci` from the device tree, reusing the link Linux brought up |
+| `patches/0006-*` | `qcom_tlmm_sm6115`, GPIO and GPIO interrupt controller |
+| `patches/0007-*` | `goodix`, the touchscreen |
+| `patches/0008-*` | `geniiic` from the device tree, the QUP v3 wrapper as a bus |
+| `patches/0009-*` | `pro1xkbd`, the keyboard matrix |
 
 The root filesystem is the release's `/rescue` (one static binary for sh,
 init, mount, ifconfig...) from `base.txz`, built into the kernel
@@ -72,6 +79,9 @@ init, mount, ifconfig...) from `base.txz`, built into the kernel
   `fastboot boot` way shows whether FreeBSD itself is fine.
 - The bootloader appends its own arguments to the command line, which
   FreeBSD then ignores; settings go into `pro1x.env`.
-- No input: `rc` only reports, and the system reboots after 10 s.
+- `rc` reports and reboots after 10 s unless Enter is pressed, which
+  starts a shell on the console (keyboard drivers untested so far).
+- Every driver can be switched off for a test with a hint in
+  `freebsd/cmdline`, e.g. `hint.ufshci.0.disabled=1`.
 - UFS only works when Linux started FreeBSD (kexec from the boot menu);
   after `fastboot boot` nobody has set up the controller.

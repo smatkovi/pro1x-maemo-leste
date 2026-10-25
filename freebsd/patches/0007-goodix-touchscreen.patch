@@ -1,0 +1,368 @@
+From 7cee4fd5ab2b95c69c5a6ce1175dfb94a08db261 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 18:19:57 +0100
+Subject: [PATCH 2/2] goodix: Goodix GT9xx/GT1x I2C touchscreens
+
+Multi-touch through evdev, after Linux's goodix driver: configuration at
+0x8047 (GT9xx) or 0x8050 (GT1x, GT9286), reports at 0x814E. The
+interrupt comes from irq-gpios with the configuration's trigger, the
+report is read in a task.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/conf/files.arm64    |   1 +
+ sys/dev/iicbus/goodix.c | 330 ++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 331 insertions(+)
+ create mode 100644 sys/dev/iicbus/goodix.c
+
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index c92c019af..57cc871b7 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -735,6 +735,7 @@ arm64/qualcomm/qcom_gcc.c			optional qcom_gcc fdt
+ dev/qcom_wdt/qcom_wdt.c				optional qcom_wdt fdt
+ dev/ufshci/ufshci_fdt.c				optional ufshci fdt
+ dev/qcom_tlmm/qcom_tlmm_sm6115.c		optional qcom_tlmm_sm6115 fdt gpio
++dev/iicbus/goodix.c				optional goodix fdt gpio evdev
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ 
+ # RockChip Drivers
+diff --git a/sys/dev/iicbus/goodix.c b/sys/dev/iicbus/goodix.c
+new file mode 100644
+index 000000000..e251a152e
+--- /dev/null
++++ b/sys/dev/iicbus/goodix.c
+@@ -0,0 +1,330 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Goodix GT9xx/GT1x I2C touchscreens (the GT9286 of the F(x)tec Pro1X),
++ * reported through evdev as a multi-touch device.
++ *
++ * The register map follows Linux's goodix driver: product ID at 0x8140, the
++ * configuration (resolution, contacts, interrupt trigger) at 0x8047 or, for
++ * the GT1x generation and the GT9286, at 0x8050, and the touch report at
++ * 0x814E: a status byte (bit 7: buffer ready, bits 3-0: contacts) followed
++ * by 8 bytes per contact (id, x, y, size). Writing 0 to the status hands
++ * the buffer back to the controller.
++ *
++ * The controller is used as the boot left it (powered, reset released, its
++ * configuration loaded). Its interrupt pulses per report; the interrupt is
++ * taken from irq-gpios with the trigger the configuration names, and the
++ * report is read in a task, since an I2C transfer sleeps.
++ */
++
++#include "opt_evdev.h"
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/endian.h>
++#include <sys/gpio.h>
++#include <sys/intr.h>
++#include <sys/kernel.h>
++#include <sys/lock.h>
++#include <sys/malloc.h>
++#include <sys/module.h>
++#include <sys/mutex.h>
++#include <sys/rman.h>
++#include <sys/taskqueue.h>
++
++#include <dev/evdev/evdev.h>
++#include <dev/evdev/input.h>
++#include <dev/gpio/gpiobusvar.h>
++#include <dev/iicbus/iicbus.h>
++#include <dev/iicbus/iiconf.h>
++#include <dev/ofw/openfirm.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++#include "iicbus_if.h"
++
++#define	GOODIX_REG_CONFIG_GT9X	0x8047
++#define	GOODIX_REG_CONFIG_GT1X	0x8050
++#define	GOODIX_REG_ID		0x8140
++#define	GOODIX_REG_COOR		0x814e
++#define	 COOR_READY		0x80
++#define	 COOR_NUM(s)		((s) & 0x0f)
++#define	GOODIX_CONTACT_SIZE	8
++#define	GOODIX_MAX_CONTACTS	10
++#define	GOODIX_READY_POLLS	20	/* status ready lags the pulse, ~10 ms */
++
++/* configuration bytes */
++#define	CFG_X_MAX		1	/* little endian 16 bit */
++#define	CFG_Y_MAX		3
++#define	CFG_CONTACTS		5
++#define	CFG_TRIGGER		6
++#define	CFG_LEN			7
++
++#define	GT1X			1
++
++static struct ofw_compat_data compat_data[] = {
++	{ "goodix,gt9286",	GT1X },
++	{ "goodix,gt1151",	GT1X },
++	{ "goodix,gt911",	2 },
++	{ "goodix,gt9110",	2 },
++	{ "goodix,gt912",	2 },
++	{ "goodix,gt927",	2 },
++	{ "goodix,gt9271",	2 },
++	{ "goodix,gt928",	2 },
++	{ "goodix,gt967",	2 },
++	{ NULL,			0 }
++};
++
++struct goodix_softc {
++	device_t		dev;
++	struct mtx		mtx;
++	struct evdev_dev	*evdev;
++	gpio_pin_t		irq_pin;
++	struct resource		*irq;
++	int			irq_rid;
++	void			*ih;
++	struct task		task;
++	struct intr_config_hook	hook;
++	u_int			x_max;
++	u_int			y_max;
++	u_int			contacts;
++	bool			detaching;
++};
++
++static int
++goodix_read(struct goodix_softc *sc, uint16_t reg, void *buf, uint16_t len)
++{
++	uint8_t a[2] = { reg >> 8, reg & 0xff };
++	struct iic_msg msgs[2] = {
++		{ iicbus_get_addr(sc->dev), IIC_M_WR | IIC_M_NOSTOP, 2, a },
++		{ iicbus_get_addr(sc->dev), IIC_M_RD, len, buf },
++	};
++
++	return (iicbus_transfer_excl(sc->dev, msgs, 2, IIC_WAIT));
++}
++
++static int
++goodix_write1(struct goodix_softc *sc, uint16_t reg, uint8_t val)
++{
++	uint8_t b[3] = { reg >> 8, reg & 0xff, val };
++	struct iic_msg msg = { iicbus_get_addr(sc->dev), IIC_M_WR, 3, b };
++
++	return (iicbus_transfer_excl(sc->dev, &msg, 1, IIC_WAIT));
++}
++
++static void
++goodix_task(void *arg, int pending)
++{
++	struct goodix_softc *sc = arg;
++	uint8_t data[1 + GOODIX_CONTACT_SIZE * GOODIX_MAX_CONTACTS];
++	uint8_t *c;
++	u_int i, n;
++	int tries;
++
++	/* Ready shows up a little after the pulse. */
++	for (tries = 0; tries < GOODIX_READY_POLLS; tries++) {
++		if (goodix_read(sc, GOODIX_REG_COOR, data,
++		    1 + GOODIX_CONTACT_SIZE) != 0)
++			return;
++		if (data[0] & COOR_READY)
++			break;
++		pause("gdxrdy", MAX(1, hz / 1000));
++	}
++	if (!(data[0] & COOR_READY))
++		return;		/* the pulse after the last finger lifted */
++	n = COOR_NUM(data[0]);
++	if (n > sc->contacts)
++		n = 0;
++	if (n > 1 && goodix_read(sc, GOODIX_REG_COOR + 1 + GOODIX_CONTACT_SIZE,
++	    data + 1 + GOODIX_CONTACT_SIZE, GOODIX_CONTACT_SIZE * (n - 1)) != 0)
++		n = 1;
++	goodix_write1(sc, GOODIX_REG_COOR, 0);
++
++	mtx_lock(&sc->mtx);
++	for (i = 0; i < n; i++) {
++		c = data + 1 + GOODIX_CONTACT_SIZE * i;
++		if ((c[0] & 0x0f) >= GOODIX_MAX_CONTACTS)
++			continue;
++		evdev_push_abs(sc->evdev, ABS_MT_SLOT, c[0] & 0x0f);
++		evdev_push_abs(sc->evdev, ABS_MT_TRACKING_ID, c[0] & 0x0f);
++		evdev_push_abs(sc->evdev, ABS_MT_POSITION_X, le16dec(c + 1));
++		evdev_push_abs(sc->evdev, ABS_MT_POSITION_Y, le16dec(c + 3));
++		evdev_push_abs(sc->evdev, ABS_MT_TOUCH_MAJOR, le16dec(c + 5));
++	}
++	/* Contacts missing from the report have lifted (MT_AUTOREL). */
++	evdev_sync(sc->evdev);
++	mtx_unlock(&sc->mtx);
++}
++
++static void
++goodix_intr(void *arg)
++{
++	struct goodix_softc *sc = arg;
++
++	if (!sc->detaching)
++		taskqueue_enqueue(taskqueue_thread, &sc->task);
++}
++
++/* The interrupt of irq-gpios, with the trigger the configuration names */
++static int
++goodix_setup_irq(struct goodix_softc *sc, u_int trigger)
++{
++	static const uint32_t modes[] = { GPIO_INTR_EDGE_RISING,
++	    GPIO_INTR_EDGE_FALLING, GPIO_INTR_EDGE_FALLING /* low */,
++	    GPIO_INTR_EDGE_RISING /* high */ };
++	struct intr_map_data_gpio *gd;
++	u_int irq;
++	int error;
++
++	error = gpio_pin_get_by_ofw_property(sc->dev,
++	    ofw_bus_get_node(sc->dev), "irq-gpios", &sc->irq_pin);
++	if (error != 0) {
++		device_printf(sc->dev, "no irq-gpios\n");
++		return (error);
++	}
++	gpio_pin_setflags(sc->irq_pin, GPIO_PIN_INPUT);
++	gd = (struct intr_map_data_gpio *)intr_alloc_map_data(
++	    INTR_MAP_DATA_GPIO, sizeof(*gd), M_WAITOK | M_ZERO);
++	gd->gpio_pin_num = sc->irq_pin->pin;
++	gd->gpio_pin_flags = sc->irq_pin->flags;
++	gd->gpio_intr_mode = modes[trigger & 3];
++	irq = intr_map_irq(sc->irq_pin->dev, 0, (struct intr_map_data *)gd);
++
++	/* After the device tree's interrupt (rid 0), which has a fixed type */
++	sc->irq_rid = 1;
++	bus_set_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid, irq, 1);
++	sc->irq = bus_alloc_resource_any(sc->dev, SYS_RES_IRQ, &sc->irq_rid,
++	    RF_ACTIVE);
++	if (sc->irq == NULL) {
++		device_printf(sc->dev, "unable to allocate the interrupt\n");
++		return (ENXIO);
++	}
++	return (bus_setup_intr(sc->dev, sc->irq, INTR_TYPE_MISC | INTR_MPSAFE,
++	    NULL, goodix_intr, sc, &sc->ih));
++}
++
++static void
++goodix_start(void *arg)
++{
++	struct goodix_softc *sc = arg;
++	uint8_t id[5], cfg[CFG_LEN];
++	uint16_t cfg_reg;
++	int error;
++
++	config_intrhook_disestablish(&sc->hook);
++
++	cfg_reg = ofw_bus_search_compatible(sc->dev, compat_data)->ocd_data ==
++	    GT1X ? GOODIX_REG_CONFIG_GT1X : GOODIX_REG_CONFIG_GT9X;
++	id[4] = '\0';
++	if ((error = goodix_read(sc, GOODIX_REG_ID, id, 4)) != 0 ||
++	    (error = goodix_read(sc, cfg_reg, cfg, sizeof(cfg))) != 0) {
++		device_printf(sc->dev, "no answer at %#x: %d\n",
++		    iicbus_get_addr(sc->dev) >> 1, error);
++		return;
++	}
++	sc->x_max = le16dec(cfg + CFG_X_MAX);
++	sc->y_max = le16dec(cfg + CFG_Y_MAX);
++	sc->contacts = MIN(COOR_NUM(cfg[CFG_CONTACTS]), GOODIX_MAX_CONTACTS);
++	if (sc->x_max == 0 || sc->y_max == 0 || sc->contacts == 0) {
++		device_printf(sc->dev, "GT%s with an empty configuration\n",
++		    id);
++		return;
++	}
++	device_printf(sc->dev, "GT%s, %ux%u, %u contacts, trigger %u\n", id,
++	    sc->x_max, sc->y_max, sc->contacts, cfg[CFG_TRIGGER] & 3);
++
++	sc->evdev = evdev_alloc();
++	evdev_set_name(sc->evdev, device_get_desc(sc->dev));
++	evdev_set_phys(sc->evdev, device_get_nameunit(sc->dev));
++	evdev_set_id(sc->evdev, BUS_I2C, 0x0416, 0, 0);
++	evdev_set_flag(sc->evdev, EVDEV_FLAG_MT_STCOMPAT);
++	evdev_set_flag(sc->evdev, EVDEV_FLAG_MT_AUTOREL);
++	evdev_support_prop(sc->evdev, INPUT_PROP_DIRECT);
++	evdev_support_event(sc->evdev, EV_SYN);
++	evdev_support_event(sc->evdev, EV_ABS);
++	evdev_support_abs(sc->evdev, ABS_MT_SLOT, 0, GOODIX_MAX_CONTACTS - 1,
++	    0, 0, 0);
++	evdev_support_abs(sc->evdev, ABS_MT_TRACKING_ID, -1,
++	    GOODIX_MAX_CONTACTS - 1, 0, 0, 0);
++	evdev_support_abs(sc->evdev, ABS_MT_POSITION_X, 0, sc->x_max - 1,
++	    0, 0, 0);
++	evdev_support_abs(sc->evdev, ABS_MT_POSITION_Y, 0, sc->y_max - 1,
++	    0, 0, 0);
++	evdev_support_abs(sc->evdev, ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0, 0);
++	if (evdev_register_mtx(sc->evdev, &sc->mtx) != 0) {
++		evdev_free(sc->evdev);
++		sc->evdev = NULL;
++		return;
++	}
++
++	TASK_INIT(&sc->task, 0, goodix_task, sc);
++	if (goodix_setup_irq(sc, cfg[CFG_TRIGGER] & 3) != 0)
++		return;
++	/* A report may be waiting since before the interrupt was set up. */
++	goodix_write1(sc, GOODIX_REG_COOR, 0);
++}
++
++static int
++goodix_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data == 0)
++		return (ENXIO);
++	device_set_desc(dev, "Goodix touchscreen");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++goodix_attach(device_t dev)
++{
++	struct goodix_softc *sc = device_get_softc(dev);
++
++	sc->dev = dev;
++	mtx_init(&sc->mtx, device_get_nameunit(dev), NULL, MTX_DEF);
++	/* The I2C bus and the GPIO interrupts work once interrupts run. */
++	sc->hook.ich_func = goodix_start;
++	sc->hook.ich_arg = sc;
++	if (config_intrhook_establish(&sc->hook) != 0)
++		return (ENOMEM);
++	return (0);
++}
++
++static int
++goodix_detach(device_t dev)
++{
++	struct goodix_softc *sc = device_get_softc(dev);
++
++	config_intrhook_drain(&sc->hook);
++	sc->detaching = true;
++	if (sc->ih != NULL)
++		bus_teardown_intr(dev, sc->irq, sc->ih);
++	if (sc->irq != NULL)
++		bus_release_resource(dev, SYS_RES_IRQ, sc->irq_rid, sc->irq);
++	if (sc->evdev != NULL) {
++		taskqueue_drain(taskqueue_thread, &sc->task);
++		evdev_free(sc->evdev);
++	}
++	if (sc->irq_pin != NULL)
++		gpio_pin_release(sc->irq_pin);
++	mtx_destroy(&sc->mtx);
++	return (0);
++}
++
++static device_method_t goodix_methods[] = {
++	DEVMETHOD(device_probe,		goodix_probe),
++	DEVMETHOD(device_attach,	goodix_attach),
++	DEVMETHOD(device_detach,	goodix_detach),
++	DEVMETHOD_END
++};
++
++static driver_t goodix_driver = {
++	"goodix",
++	goodix_methods,
++	sizeof(struct goodix_softc),
++};
++
++DRIVER_MODULE(goodix, iicbus, goodix_driver, 0, 0);
++MODULE_DEPEND(goodix, iicbus, IICBUS_MINVER, IICBUS_PREFVER, IICBUS_MAXVER);
++MODULE_DEPEND(goodix, evdev, 1, 1, 1);
+-- 
+2.56.0
+

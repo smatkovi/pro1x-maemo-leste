@@ -1,0 +1,738 @@
+From 0f9953c7ca1931da9db21a273f41088d3a89b11d Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 18:19:57 +0100
+Subject: [PATCH 1/2] qcom_tlmm_sm6115: SM6115 TLMM GPIO and interrupt
+ controller
+
+GPIOs over the three register tiles, and the GPIO interrupts behind the
+summary interrupt, after Linux's pinctrl-msm (level interrupts drop
+RAW_STATUS_EN while masked, edge interrupts keep it). Pin functions stay
+as the boot set them; gpio-reserved-ranges are never touched.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/conf/files.arm64                 |   1 +
+ sys/dev/qcom_tlmm/qcom_tlmm_sm6115.c | 699 +++++++++++++++++++++++++++
+ 2 files changed, 700 insertions(+)
+ create mode 100644 sys/dev/qcom_tlmm/qcom_tlmm_sm6115.c
+
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index 2cc35e62c..c92c019af 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -734,6 +734,7 @@ dev/flash/flexspi/flex_spi.c    		optional clk flex_spi soc_nxp_ls fdt
+ arm64/qualcomm/qcom_gcc.c			optional qcom_gcc fdt
+ dev/qcom_wdt/qcom_wdt.c				optional qcom_wdt fdt
+ dev/ufshci/ufshci_fdt.c				optional ufshci fdt
++dev/qcom_tlmm/qcom_tlmm_sm6115.c		optional qcom_tlmm_sm6115 fdt gpio
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ 
+ # RockChip Drivers
+diff --git a/sys/dev/qcom_tlmm/qcom_tlmm_sm6115.c b/sys/dev/qcom_tlmm/qcom_tlmm_sm6115.c
+new file mode 100644
+index 000000000..36614651c
+--- /dev/null
++++ b/sys/dev/qcom_tlmm/qcom_tlmm_sm6115.c
+@@ -0,0 +1,699 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Qualcomm SM6115 TLMM: GPIO controller and GPIO interrupt controller.
++ *
++ * The TLMM has 113 GPIOs spread over three register tiles ("west",
++ * "south", "east"); every GPIO has a 4 KiB block in its tile with the
++ * registers CTL (function, pull, drive, output enable), IO (input, output),
++ * INTR_CFG and INTR_STATUS. All GPIO interrupts reach the CPU through one
++ * summary interrupt.
++ *
++ * Pin functions (pinctrl) are left as the bootloader or Linux set them; a
++ * pin becomes a GPIO only when its interrupt is used. GPIOs that the device
++ * tree reserves (gpio-reserved-ranges: owned by the secure world) are
++ * never touched.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/gpio.h>
++#include <sys/intr.h>
++#include <sys/kernel.h>
++#include <sys/lock.h>
++#include <sys/module.h>
++#include <sys/mutex.h>
++#include <sys/proc.h>
++#include <sys/rman.h>
++
++#include <machine/bus.h>
++#include <machine/intr.h>
++
++#include <dev/gpio/gpiobusvar.h>
++#include <dev/ofw/openfirm.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++#include "gpio_if.h"
++#include "pic_if.h"
++
++#define	TLMM_NPINS		113
++
++#define	TLMM_CTL(p)		(0x1000 * (p))
++#define	 CTL_PULL_MASK		0x3
++#define	 CTL_PULL_NONE		0x0
++#define	 CTL_PULL_DOWN		0x1
++#define	 CTL_PULL_KEEPER	0x2
++#define	 CTL_PULL_UP		0x3
++#define	 CTL_FUNC_MASK		(0xf << 2)
++#define	 CTL_OE			(1u << 9)
++#define	 CTL_EGPIO_PRESENT	(1u << 11)
++#define	 CTL_EGPIO_ENABLE	(1u << 12)
++#define	TLMM_IO(p)		(0x1000 * (p) + 0x4)
++#define	 IO_IN			(1u << 0)
++#define	 IO_OUT			(1u << 1)
++#define	TLMM_INTR_CFG(p)	(0x1000 * (p) + 0x8)
++#define	 INTR_ENABLE		(1u << 0)
++#define	 INTR_POL_HIGH		(1u << 1)
++#define	 INTR_DECT_MASK		(0x3 << 2)
++#define	 INTR_DECT_LEVEL	(0x0 << 2)
++#define	 INTR_DECT_RISING	(0x1 << 2)
++#define	 INTR_DECT_FALLING	(0x2 << 2)
++#define	 INTR_DECT_BOTH		(0x3 << 2)
++#define	 INTR_RAW_STATUS_EN	(1u << 4)
++#define	 INTR_TARGET_MASK	(0x7 << 5)
++#define	 INTR_TARGET_KPSS	(0x3 << 5)	/* the application CPUs */
++#define	TLMM_INTR_STATUS(p)	(0x1000 * (p) + 0xc)
++#define	 INTR_STATUS		(1u << 0)
++
++#define	GPIO_CAPS	(GPIO_PIN_INPUT | GPIO_PIN_OUTPUT | GPIO_PIN_OPENDRAIN | \
++	GPIO_PIN_PULLUP | GPIO_PIN_PULLDOWN | GPIO_INTR_LEVEL_LOW | \
++	GPIO_INTR_LEVEL_HIGH | GPIO_INTR_EDGE_RISING | \
++	GPIO_INTR_EDGE_FALLING | GPIO_INTR_EDGE_BOTH)
++
++enum { WEST, SOUTH, EAST, NTILES };	/* the order of "reg" */
++
++/* Tile of each GPIO (Linux, drivers/pinctrl/qcom/pinctrl-sm6115.c) */
++static const uint8_t sm6115_tile[TLMM_NPINS] = {
++	/*   0 */ WEST, WEST, WEST, WEST, WEST, WEST, WEST, WEST,
++	/*   8 */ EAST, EAST, EAST, EAST, WEST, WEST, WEST, WEST,
++	/*  16 */ WEST, WEST, EAST, EAST, EAST, EAST, EAST, EAST,
++	/*  24 */ EAST, EAST, EAST, EAST, EAST, EAST, EAST, EAST,
++	/*  32 */ EAST, EAST, EAST, EAST, EAST, EAST, EAST, EAST,
++	/*  40 */ EAST, EAST, EAST, EAST, EAST, EAST, EAST, EAST,
++	/*  48 */ EAST, EAST, EAST, EAST, EAST, EAST, EAST, EAST,
++	/*  56 */ EAST, EAST, EAST, EAST, EAST, EAST, EAST, EAST,
++	/*  64 */ EAST, WEST, WEST, WEST, WEST, WEST, WEST, WEST,
++	/*  72 */ SOUTH, SOUTH, SOUTH, SOUTH, SOUTH, SOUTH, SOUTH, SOUTH,
++	/*  80 */ WEST, WEST, WEST, WEST, WEST, WEST, WEST, EAST,
++	/*  88 */ EAST, WEST, EAST, EAST, WEST, WEST, WEST, WEST,
++	/*  96 */ WEST, WEST, SOUTH, SOUTH, SOUTH, SOUTH, SOUTH, SOUTH,
++	/* 104 */ SOUTH, SOUTH, SOUTH, SOUTH, SOUTH, SOUTH, SOUTH, SOUTH,
++	/* 112 */ SOUTH,
++};
++
++struct tlmm_isrc {
++	struct intr_irqsrc	isrc;
++	u_int			pin;
++	uint32_t		mode;		/* GPIO_INTR_* */
++};
++
++struct tlmm_softc {
++	device_t		dev;
++	device_t		busdev;
++	struct mtx		mtx;		/* spin: the filter takes it */
++	struct resource		*mem[NTILES];
++	struct resource		*irq;
++	void			*ih;
++	struct tlmm_isrc	isrcs[TLMM_NPINS];
++	uint32_t		reserved[howmany(TLMM_NPINS, 32)];
++	uint32_t		enabled[howmany(TLMM_NPINS, 32)];
++};
++
++#define	TLMM_LOCK(sc)		mtx_lock_spin(&(sc)->mtx)
++#define	TLMM_UNLOCK(sc)		mtx_unlock_spin(&(sc)->mtx)
++
++#define	BIT_ISSET(map, p)	(((map)[(p) / 32] & (1u << ((p) % 32))) != 0)
++#define	BIT_SET1(map, p)	((map)[(p) / 32] |= (1u << ((p) % 32)))
++#define	BIT_CLR1(map, p)	((map)[(p) / 32] &= ~(1u << ((p) % 32)))
++
++static struct ofw_compat_data compat_data[] = {
++	{ "qcom,sm6115-tlmm",	1 },
++	{ NULL,			0 }
++};
++
++static uint32_t
++tlmm_read(struct tlmm_softc *sc, u_int pin, bus_size_t off)
++{
++	return (bus_read_4(sc->mem[sm6115_tile[pin]], off));
++}
++
++static void
++tlmm_write(struct tlmm_softc *sc, u_int pin, bus_size_t off, uint32_t val)
++{
++	bus_write_4(sc->mem[sm6115_tile[pin]], off, val);
++}
++
++static bool
++tlmm_pin_valid(struct tlmm_softc *sc, uint32_t pin)
++{
++	return (pin < TLMM_NPINS && !BIT_ISSET(sc->reserved, pin));
++}
++
++/* --- GPIO ------------------------------------------------------------ */
++
++static device_t
++tlmm_get_bus(device_t dev)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++
++	return (sc->busdev);
++}
++
++static int
++tlmm_pin_max(device_t dev, int *maxpin)
++{
++	*maxpin = TLMM_NPINS - 1;
++	return (0);
++}
++
++static int
++tlmm_pin_getname(device_t dev, uint32_t pin, char *name)
++{
++	if (pin >= TLMM_NPINS)
++		return (EINVAL);
++	snprintf(name, GPIOMAXNAME, "gpio%u", pin);
++	return (0);
++}
++
++static int
++tlmm_pin_getcaps(device_t dev, uint32_t pin, uint32_t *caps)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++
++	if (pin >= TLMM_NPINS)
++		return (EINVAL);
++	*caps = tlmm_pin_valid(sc, pin) ? GPIO_CAPS : 0;
++	return (0);
++}
++
++static int
++tlmm_pin_getflags(device_t dev, uint32_t pin, uint32_t *flags)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++	uint32_t ctl;
++
++	if (!tlmm_pin_valid(sc, pin))
++		return (EINVAL);
++	TLMM_LOCK(sc);
++	ctl = tlmm_read(sc, pin, TLMM_CTL(pin));
++	TLMM_UNLOCK(sc);
++	*flags = (ctl & CTL_OE) ? GPIO_PIN_OUTPUT : GPIO_PIN_INPUT;
++	if ((ctl & CTL_PULL_MASK) == CTL_PULL_UP)
++		*flags |= GPIO_PIN_PULLUP;
++	else if ((ctl & CTL_PULL_MASK) == CTL_PULL_DOWN)
++		*flags |= GPIO_PIN_PULLDOWN;
++	return (0);
++}
++
++/*
++ * The pull stays as the boot set it (pinctrl, which this driver does not
++ * do, chose it) unless the flags ask for one. The TLMM has no open-drain
++ * mode: an open-drain output is driven low or released (gpioiic switches
++ * between input and output low), so the output latch goes low before the
++ * driver turns on.
++ */
++static int
++tlmm_pin_setflags(device_t dev, uint32_t pin, uint32_t flags)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++	uint32_t ctl, io;
++
++	if (!tlmm_pin_valid(sc, pin) || (flags & ~GPIO_CAPS) != 0)
++		return (EINVAL);
++	TLMM_LOCK(sc);
++	ctl = tlmm_read(sc, pin, TLMM_CTL(pin));
++	if (flags & GPIO_PIN_PULLUP)
++		ctl = (ctl & ~CTL_PULL_MASK) | CTL_PULL_UP;
++	else if (flags & GPIO_PIN_PULLDOWN)
++		ctl = (ctl & ~CTL_PULL_MASK) | CTL_PULL_DOWN;
++	if (flags & GPIO_PIN_OUTPUT) {
++		if (flags & GPIO_PIN_OPENDRAIN) {
++			io = tlmm_read(sc, pin, TLMM_IO(pin));
++			tlmm_write(sc, pin, TLMM_IO(pin), io & ~IO_OUT);
++		}
++		ctl |= CTL_OE;
++	} else if (flags & GPIO_PIN_INPUT)
++		ctl &= ~CTL_OE;
++	tlmm_write(sc, pin, TLMM_CTL(pin), ctl);
++	TLMM_UNLOCK(sc);
++	return (0);
++}
++
++static int
++tlmm_pin_get(device_t dev, uint32_t pin, unsigned int *val)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++
++	if (!tlmm_pin_valid(sc, pin))
++		return (EINVAL);
++	*val = (tlmm_read(sc, pin, TLMM_IO(pin)) & IO_IN) ? 1 : 0;
++	return (0);
++}
++
++static int
++tlmm_pin_set(device_t dev, uint32_t pin, unsigned int val)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++	uint32_t io;
++
++	if (!tlmm_pin_valid(sc, pin))
++		return (EINVAL);
++	TLMM_LOCK(sc);
++	io = tlmm_read(sc, pin, TLMM_IO(pin));
++	io = val ? (io | IO_OUT) : (io & ~IO_OUT);
++	tlmm_write(sc, pin, TLMM_IO(pin), io);
++	TLMM_UNLOCK(sc);
++	return (0);
++}
++
++static int
++tlmm_pin_toggle(device_t dev, uint32_t pin)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++
++	if (!tlmm_pin_valid(sc, pin))
++		return (EINVAL);
++	TLMM_LOCK(sc);
++	tlmm_write(sc, pin, TLMM_IO(pin),
++	    tlmm_read(sc, pin, TLMM_IO(pin)) ^ IO_OUT);
++	TLMM_UNLOCK(sc);
++	return (0);
++}
++
++/* --- interrupts ------------------------------------------------------ */
++
++/*
++ * As Linux's pinctrl-msm: RAW_STATUS_EN latches the line into
++ * INTR_STATUS, INTR_ENABLE forwards a latched status to the summary
++ * interrupt. A masked level interrupt also loses RAW_STATUS_EN, or the
++ * still active line latches again right after the ack; a masked edge
++ * interrupt keeps it, so that an edge while masked is not lost (toggling
++ * it can latch a spurious edge).
++ */
++static void
++tlmm_intr_mask(struct tlmm_softc *sc, struct tlmm_isrc *ti)
++{
++	uint32_t cfg;
++
++	cfg = tlmm_read(sc, ti->pin, TLMM_INTR_CFG(ti->pin)) & ~INTR_ENABLE;
++	if (ti->mode & (GPIO_INTR_LEVEL_LOW | GPIO_INTR_LEVEL_HIGH))
++		cfg &= ~INTR_RAW_STATUS_EN;
++	tlmm_write(sc, ti->pin, TLMM_INTR_CFG(ti->pin), cfg);
++}
++
++static void
++tlmm_intr_unmask(struct tlmm_softc *sc, struct tlmm_isrc *ti)
++{
++	tlmm_write(sc, ti->pin, TLMM_INTR_CFG(ti->pin),
++	    tlmm_read(sc, ti->pin, TLMM_INTR_CFG(ti->pin)) |
++	    INTR_RAW_STATUS_EN | INTR_ENABLE);
++}
++
++static void
++tlmm_intr_ack(struct tlmm_softc *sc, struct tlmm_isrc *ti)
++{
++	tlmm_write(sc, ti->pin, TLMM_INTR_STATUS(ti->pin), 0);
++}
++
++static bool
++tlmm_is_level(struct tlmm_isrc *ti)
++{
++	return ((ti->mode & (GPIO_INTR_LEVEL_LOW | GPIO_INTR_LEVEL_HIGH)) != 0);
++}
++
++static int
++tlmm_summary_intr(void *arg)
++{
++	struct tlmm_softc *sc = arg;
++	struct tlmm_isrc *ti;
++	u_int pin;
++
++	for (pin = 0; pin < TLMM_NPINS; pin++) {
++		if (!BIT_ISSET(sc->enabled, pin))
++			continue;
++		/* Masked while its handler thread runs: a level still latched */
++		if (!(tlmm_read(sc, pin, TLMM_INTR_CFG(pin)) & INTR_ENABLE))
++			continue;
++		if (!(tlmm_read(sc, pin, TLMM_INTR_STATUS(pin)) & INTR_STATUS))
++			continue;
++		ti = &sc->isrcs[pin];
++		/* An edge is acked before its handlers run, a level after. */
++		if (!tlmm_is_level(ti)) {
++			TLMM_LOCK(sc);
++			tlmm_intr_ack(sc, ti);
++			TLMM_UNLOCK(sc);
++		}
++		if (intr_isrc_dispatch(&ti->isrc,
++		    curthread->td_intr_frame) != 0) {
++			TLMM_LOCK(sc);
++			tlmm_intr_mask(sc, ti);
++			tlmm_intr_ack(sc, ti);
++			BIT_CLR1(sc->enabled, pin);
++			TLMM_UNLOCK(sc);
++			device_printf(sc->dev, "stray interrupt on gpio%u, "
++			    "masked\n", pin);
++		}
++	}
++	return (FILTER_HANDLED);
++}
++
++static int
++tlmm_map_fdt(struct intr_map_data_fdt *daf, u_int *pin, uint32_t *mode)
++{
++	if (daf->ncells != 2)
++		return (EINVAL);
++	*pin = daf->cells[0];
++	switch (daf->cells[1]) {	/* IRQ_TYPE_* of the device tree */
++	case 1:
++		*mode = GPIO_INTR_EDGE_RISING;
++		break;
++	case 2:
++		*mode = GPIO_INTR_EDGE_FALLING;
++		break;
++	case 3:
++		*mode = GPIO_INTR_EDGE_BOTH;
++		break;
++	case 4:
++		*mode = GPIO_INTR_LEVEL_HIGH;
++		break;
++	case 8:
++		*mode = GPIO_INTR_LEVEL_LOW;
++		break;
++	default:
++		return (EINVAL);
++	}
++	return (0);
++}
++
++static int
++tlmm_map(struct tlmm_softc *sc, struct intr_map_data *data, u_int *pin,
++    uint32_t *mode)
++{
++	struct intr_map_data_gpio *dag;
++	int error;
++
++	switch (data->type) {
++	case INTR_MAP_DATA_FDT:
++		error = tlmm_map_fdt((struct intr_map_data_fdt *)data, pin,
++		    mode);
++		break;
++	case INTR_MAP_DATA_GPIO:
++		dag = (struct intr_map_data_gpio *)data;
++		*pin = dag->gpio_pin_num;
++		*mode = dag->gpio_intr_mode;
++		error = 0;
++		break;
++	default:
++		return (ENOTSUP);
++	}
++	if (error == 0 && !tlmm_pin_valid(sc, *pin))
++		error = EINVAL;
++	return (error);
++}
++
++static int
++tlmm_pic_map_intr(device_t dev, struct intr_map_data *data,
++    struct intr_irqsrc **isrcp)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++	uint32_t mode;
++	u_int pin;
++	int error;
++
++	error = tlmm_map(sc, data, &pin, &mode);
++	if (error == 0)
++		*isrcp = &sc->isrcs[pin].isrc;
++	return (error);
++}
++
++static int
++tlmm_pic_setup_intr(device_t dev, struct intr_irqsrc *isrc,
++    struct resource *res, struct intr_map_data *data)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++	struct tlmm_isrc *ti = (struct tlmm_isrc *)isrc;
++	uint32_t cfg, ctl, mode;
++	u_int pin;
++
++	if (data == NULL || tlmm_map(sc, data, &pin, &mode) != 0 ||
++	    pin != ti->pin)
++		return (EINVAL);
++	mode &= GPIO_INTR_MASK & ~GPIO_INTR_ATTACHED;
++	if (isrc->isrc_handlers != 0)
++		return (ti->mode == mode ? 0 : EINVAL);
++
++	switch (mode) {
++	case GPIO_INTR_LEVEL_LOW:
++		cfg = INTR_DECT_LEVEL;
++		break;
++	case GPIO_INTR_LEVEL_HIGH:
++		cfg = INTR_DECT_LEVEL | INTR_POL_HIGH;
++		break;
++	case GPIO_INTR_EDGE_RISING:
++		cfg = INTR_DECT_RISING | INTR_POL_HIGH;
++		break;
++	case GPIO_INTR_EDGE_FALLING:
++		cfg = INTR_DECT_FALLING | INTR_POL_HIGH;
++		break;
++	case GPIO_INTR_EDGE_BOTH:
++		cfg = INTR_DECT_BOTH | INTR_POL_HIGH;
++		break;
++	default:
++		return (EINVAL);
++	}
++	ti->mode = mode;
++
++	TLMM_LOCK(sc);
++	/* An input in the GPIO function, owned by the TLMM (not an eGPIO) */
++	ctl = tlmm_read(sc, pin, TLMM_CTL(pin));
++	ctl &= ~(CTL_FUNC_MASK | CTL_OE);
++	if (ctl & CTL_EGPIO_PRESENT)
++		ctl |= CTL_EGPIO_ENABLE;
++	tlmm_write(sc, pin, TLMM_CTL(pin), ctl);
++	tlmm_write(sc, pin, TLMM_INTR_CFG(pin), cfg | INTR_TARGET_KPSS |
++	    (tlmm_is_level(ti) ? 0 : INTR_RAW_STATUS_EN));
++	tlmm_intr_ack(sc, ti);
++	BIT_SET1(sc->enabled, pin);
++	tlmm_intr_unmask(sc, ti);
++	TLMM_UNLOCK(sc);
++	return (0);
++}
++
++static int
++tlmm_pic_teardown_intr(device_t dev, struct intr_irqsrc *isrc,
++    struct resource *res, struct intr_map_data *data)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++	struct tlmm_isrc *ti = (struct tlmm_isrc *)isrc;
++
++	if (isrc->isrc_handlers == 0) {
++		TLMM_LOCK(sc);
++		BIT_CLR1(sc->enabled, ti->pin);
++		tlmm_write(sc, ti->pin, TLMM_INTR_CFG(ti->pin), 0);
++		tlmm_intr_ack(sc, ti);
++		TLMM_UNLOCK(sc);
++	}
++	return (0);
++}
++
++static void
++tlmm_pic_enable_intr(device_t dev, struct intr_irqsrc *isrc)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++
++	TLMM_LOCK(sc);
++	tlmm_intr_unmask(sc, (struct tlmm_isrc *)isrc);
++	TLMM_UNLOCK(sc);
++}
++
++static void
++tlmm_pic_disable_intr(device_t dev, struct intr_irqsrc *isrc)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++
++	TLMM_LOCK(sc);
++	tlmm_intr_mask(sc, (struct tlmm_isrc *)isrc);
++	TLMM_UNLOCK(sc);
++}
++
++static void
++tlmm_pic_pre_ithread(device_t dev, struct intr_irqsrc *isrc)
++{
++	tlmm_pic_disable_intr(dev, isrc);
++}
++
++static void
++tlmm_pic_post_ithread(device_t dev, struct intr_irqsrc *isrc)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++	struct tlmm_isrc *ti = (struct tlmm_isrc *)isrc;
++
++	TLMM_LOCK(sc);
++	if (tlmm_is_level(ti))
++		tlmm_intr_ack(sc, ti);
++	tlmm_intr_unmask(sc, ti);
++	TLMM_UNLOCK(sc);
++}
++
++static void
++tlmm_pic_post_filter(device_t dev, struct intr_irqsrc *isrc)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++	struct tlmm_isrc *ti = (struct tlmm_isrc *)isrc;
++
++	if (tlmm_is_level(ti)) {
++		TLMM_LOCK(sc);
++		tlmm_intr_ack(sc, ti);
++		TLMM_UNLOCK(sc);
++	}
++}
++
++/* --- device ---------------------------------------------------------- */
++
++static phandle_t
++tlmm_get_node(device_t bus, device_t dev)
++{
++	/* The GPIO bus, our only child, describes itself with our node. */
++	return (ofw_bus_get_node(bus));
++}
++
++static void
++tlmm_read_reserved(struct tlmm_softc *sc)
++{
++	pcell_t *cells;
++	ssize_t n;
++	u_int i, p;
++
++	n = OF_getencprop_alloc_multi(ofw_bus_get_node(sc->dev),
++	    "gpio-reserved-ranges", sizeof(pcell_t), (void **)&cells);
++	if (n <= 0)
++		return;
++	for (i = 0; i + 1 < n; i += 2) {
++		for (p = cells[i]; p < cells[i] + cells[i + 1] &&
++		    p < TLMM_NPINS; p++)
++			BIT_SET1(sc->reserved, p);
++		device_printf(sc->dev, "gpio%u-%u reserved\n", cells[i],
++		    cells[i] + cells[i + 1] - 1);
++	}
++	OF_prop_free(cells);
++}
++
++static int
++tlmm_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data == 0)
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm SM6115 TLMM");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++tlmm_detach(device_t dev)
++{
++	/* The interrupt controller cannot go away. */
++	return (EBUSY);
++}
++
++static int
++tlmm_attach(device_t dev)
++{
++	struct tlmm_softc *sc = device_get_softc(dev);
++	phandle_t node = ofw_bus_get_node(dev);
++	uint32_t cfg;
++	u_int pin;
++	int rid, error;
++
++	sc->dev = dev;
++	mtx_init(&sc->mtx, device_get_nameunit(dev), NULL, MTX_SPIN);
++	for (rid = 0; rid < NTILES; rid++) {
++		sc->mem[rid] = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
++		    &rid, RF_ACTIVE);
++		if (sc->mem[rid] == NULL) {
++			device_printf(dev, "unable to allocate tile %d\n", rid);
++			return (ENXIO);
++		}
++	}
++	rid = 0;
++	sc->irq = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid, RF_ACTIVE);
++	if (sc->irq == NULL) {
++		device_printf(dev, "unable to allocate the interrupt\n");
++		return (ENXIO);
++	}
++	tlmm_read_reserved(sc);
++
++	/*
++	 * Interrupts the previous kernel left enabled for the CPUs would keep
++	 * the summary interrupt asserted with nobody to ack them; pins that
++	 * interrupt other processors stay as they are.
++	 */
++	for (pin = 0; pin < TLMM_NPINS; pin++) {
++		sc->isrcs[pin].pin = pin;
++		error = intr_isrc_register(&sc->isrcs[pin].isrc, dev, 0,
++		    "%s,%u", device_get_nameunit(dev), pin);
++		if (error != 0) {
++			device_printf(dev, "unable to register gpio%u\n", pin);
++			return (error);
++		}
++		if (!tlmm_pin_valid(sc, pin))
++			continue;
++		cfg = tlmm_read(sc, pin, TLMM_INTR_CFG(pin));
++		if ((cfg & INTR_TARGET_MASK) == INTR_TARGET_KPSS &&
++		    (cfg & (INTR_ENABLE | INTR_RAW_STATUS_EN)) != 0) {
++			tlmm_write(sc, pin, TLMM_INTR_CFG(pin),
++			    cfg & ~(INTR_ENABLE | INTR_RAW_STATUS_EN));
++			tlmm_write(sc, pin, TLMM_INTR_STATUS(pin), 0);
++		}
++	}
++	if (intr_pic_register(dev, OF_xref_from_node(node)) == NULL) {
++		device_printf(dev, "unable to register the interrupt "
++		    "controller\n");
++		return (ENXIO);
++	}
++	error = bus_setup_intr(dev, sc->irq, INTR_TYPE_MISC | INTR_MPSAFE,
++	    tlmm_summary_intr, NULL, sc, &sc->ih);
++	if (error != 0) {
++		device_printf(dev, "unable to set up the summary interrupt\n");
++		return (error);
++	}
++
++	sc->busdev = gpiobus_add_bus(dev);
++	if (sc->busdev == NULL)
++		return (ENXIO);
++	bus_attach_children(dev);
++	return (0);
++}
++
++static device_method_t tlmm_methods[] = {
++	DEVMETHOD(device_probe,		tlmm_probe),
++	DEVMETHOD(device_attach,	tlmm_attach),
++	DEVMETHOD(device_detach,	tlmm_detach),
++
++	DEVMETHOD(bus_setup_intr,	bus_generic_setup_intr),
++	DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
++
++	DEVMETHOD(gpio_get_bus,		tlmm_get_bus),
++	DEVMETHOD(gpio_pin_max,		tlmm_pin_max),
++	DEVMETHOD(gpio_pin_getname,	tlmm_pin_getname),
++	DEVMETHOD(gpio_pin_getcaps,	tlmm_pin_getcaps),
++	DEVMETHOD(gpio_pin_getflags,	tlmm_pin_getflags),
++	DEVMETHOD(gpio_pin_setflags,	tlmm_pin_setflags),
++	DEVMETHOD(gpio_pin_get,		tlmm_pin_get),
++	DEVMETHOD(gpio_pin_set,		tlmm_pin_set),
++	DEVMETHOD(gpio_pin_toggle,	tlmm_pin_toggle),
++
++	DEVMETHOD(pic_map_intr,		tlmm_pic_map_intr),
++	DEVMETHOD(pic_setup_intr,	tlmm_pic_setup_intr),
++	DEVMETHOD(pic_teardown_intr,	tlmm_pic_teardown_intr),
++	DEVMETHOD(pic_enable_intr,	tlmm_pic_enable_intr),
++	DEVMETHOD(pic_disable_intr,	tlmm_pic_disable_intr),
++	DEVMETHOD(pic_pre_ithread,	tlmm_pic_pre_ithread),
++	DEVMETHOD(pic_post_ithread,	tlmm_pic_post_ithread),
++	DEVMETHOD(pic_post_filter,	tlmm_pic_post_filter),
++
++	DEVMETHOD(ofw_bus_get_node,	tlmm_get_node),
++
++	DEVMETHOD_END
++};
++
++static driver_t tlmm_driver = {
++	"gpio",
++	tlmm_methods,
++	sizeof(struct tlmm_softc),
++};
++
++EARLY_DRIVER_MODULE(qcom_tlmm_sm6115, simplebus, tlmm_driver, 0, 0,
++    BUS_PASS_INTERRUPT + BUS_PASS_ORDER_LATE);
+-- 
+2.56.0
+

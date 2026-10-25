@@ -23,6 +23,14 @@ if [ -e /dev/gpt/userdata ]; then
 		umount /tmp/host
 	fi
 fi
-echo "=== rc done, rebooting into the boot menu in 10 s"
-sleep 10
+echo "--- input:"
+sysctl -n kern.evdev.input 2>/dev/null; ls /dev/input /dev/kbd* 2>/dev/null
+# With the keyboard (gpiokeys, pro1xkbd behind kbdmux) Enter starts a
+# shell on the console; otherwise back to the boot menu, which also ends
+# unattended tests.
+echo "=== rc done: Enter within 10 s for a shell, else reboot"
+if read -t 10 key < /dev/console; then
+	echo "shell; 'reboot' returns to the boot menu"
+	exec sh < /dev/console > /dev/console 2>&1
+fi
 reboot

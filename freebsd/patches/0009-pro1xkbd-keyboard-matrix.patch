@@ -1,0 +1,911 @@
+From d3df56658ca166c11fde00b05cd6f84eb58366b4 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 18:28:27 +0100
+Subject: [PATCH 2/2] pro1xkbd: F(x)tec Pro1X keyboard matrix behind an AW9523B
+
+A console keyboard (kbd, behind kbdmux) and an evdev device. The scan
+follows the Pro1X port's Linux driver: one column driven low at a time
+with the others pre-charged, two agreeing scans, ghost suppression,
+polling while a key is held. INT is taken as a falling edge, the scan
+runs in a task.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/conf/files.arm64       |   1 +
+ sys/dev/iicbus/pro1x_kbd.c | 872 +++++++++++++++++++++++++++++++++++++
+ 2 files changed, 873 insertions(+)
+ create mode 100644 sys/dev/iicbus/pro1x_kbd.c
+
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index 600ddb8e9..338001344 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -739,6 +739,7 @@ dev/iicbus/goodix.c				optional goodix fdt gpio evdev
+ arm64/qualcomm/qcom_geni_qup.c			optional geniiic fdt
+ dev/iicbus/controller/qcom/geni_iic.c		optional geniiic
+ dev/iicbus/controller/qcom/geni_iic_fdt.c	optional geniiic fdt
++dev/iicbus/pro1x_kbd.c				optional pro1xkbd fdt gpiokeys
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ 
+ # RockChip Drivers
+diff --git a/sys/dev/iicbus/pro1x_kbd.c b/sys/dev/iicbus/pro1x_kbd.c
+new file mode 100644
+index 000000000..687efbc32
+--- /dev/null
++++ b/sys/dev/iicbus/pro1x_kbd.c
+@@ -0,0 +1,872 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * F(x)tec Pro1X keyboard: an 8x8 matrix behind an Awinic AW9523B I2C GPIO
++ * expander ("fxtec,pro1x-aw9523-keypad"), as a console keyboard (kbd(4),
++ * behind kbdmux) and an evdev device. The modifier keys are TLMM GPIOs
++ * (gpio-keys, gpiokeys(4)); kbdmux combines both.
++ *
++ * The scan follows the Pro1X port's Linux driver (pro1x-aw9523-kbd.c):
++ * port 1 drives the columns, port 0 reads the rows. Only one column is
++ * driven low at a time, the others pre-charged high and floating; the
++ * matrix is scanned twice and again until two scans agree; ghost
++ * combinations (the corners of a rectangle) are suppressed; while a key is
++ * held the matrix is polled. Between scans all columns are driven low, so
++ * that any key pulls its row low and the expander's INT fires.
++ *
++ * INT is a TLMM GPIO; it is taken as a falling edge (not the device tree's
++ * level), since the I2C transfers of a scan sleep and run in a task: a
++ * level interrupt would fire again until the task ran.
++ */
++
++#include "opt_evdev.h"
++#include "opt_kbd.h"
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/callout.h>
++#include <sys/kbio.h>
++#include <sys/kdb.h>
++#include <sys/kernel.h>
++#include <sys/lock.h>
++#include <sys/module.h>
++#include <sys/mutex.h>
++#include <sys/proc.h>
++#include <sys/rman.h>
++#include <sys/taskqueue.h>
++
++#include <dev/evdev/evdev.h>
++#include <dev/evdev/input.h>
++#include <dev/gpio/gpiokeys.h>
++#include <dev/iicbus/iicbus.h>
++#include <dev/iicbus/iiconf.h>
++#include <dev/kbd/kbdreg.h>
++#include <dev/kbd/kbdtables.h>
++#include <dev/ofw/openfirm.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++#define	AW_INPUT_P0	0x00
++#define	AW_INPUT_P1	0x01
++#define	AW_OUTPUT_P1	0x03
++#define	AW_CONFIG_P0	0x04	/* 1 = input */
++#define	AW_CONFIG_P1	0x05
++#define	AW_INT_P0	0x06	/* 0 = interrupt enabled */
++#define	AW_INT_P1	0x07
++#define	AW_ID		0x10
++#define	 AW_ID_VALUE	0x23
++#define	AW_SOFT_RESET	0x7f
++
++#define	NLINES		8
++#define	POLL_MS		15
++#define	SCAN_RETRIES	10
++#define	SETTLE_US	20
++
++#define	KBD_DRIVER_NAME	"pro1xkbd"
++#define	IN_BUF_SIZE	64
++#define	NFKEY		nitems(fkey_tab)
++#define	REPEAT_DELAY	250	/* ms */
++#define	REPEAT_RATE	34	/* ms */
++
++#define	KEY_RELEASE	0x80
++#define	SCAN_RELEASE	0x80
++#define	SCAN_CHAR(c)	((c) & 0x7f)
++
++struct pro1x_kbd_softc {
++	device_t		dev;
++	struct mtx		mtx;
++	struct resource		*irq;
++	int			irq_rid;
++	void			*ih;
++	struct task		task;
++	struct timeout_task	poll_task;
++	struct intr_config_hook	hook;
++	bool			detaching;
++
++	uint16_t		linux_code[NLINES * NLINES];	/* row * 8 + col */
++	uint8_t			down[NLINES];	/* per column: rows sent down */
++
++	struct evdev_dev	*evdev;
++
++	keyboard_t		kbd;
++	keymap_t		keymap;
++	accentmap_t		accmap;
++	fkeytab_t		fkeymap[NFKEY];
++	uint32_t		input[IN_BUF_SIZE];
++	u_int			inputs, inhead, intail;
++	int			mode;		/* K_XLATE, K_RAW, K_CODE */
++	int			state;		/* shift/lock state */
++	int			accents;
++	bool			polling;
++	struct callout		repeat;
++	uint32_t		repeat_code;	/* scancode, GPIOKEY_NONE */
++};
++
++static int	pro1x_kbd_write(struct pro1x_kbd_softc *, uint8_t, uint8_t);
++
++/* --- kbd(4): a queue of AT scancodes, as gpiokeys(4) ---------------- */
++
++static void
++kbd_put(struct pro1x_kbd_softc *sc, uint32_t c)
++{
++	mtx_assert(&sc->mtx, MA_OWNED);
++	if (sc->inputs >= IN_BUF_SIZE)
++		return;
++	sc->input[sc->intail] = c;
++	sc->intail = (sc->intail + 1) % IN_BUF_SIZE;
++	sc->inputs++;
++}
++
++static int32_t
++kbd_get(struct pro1x_kbd_softc *sc)
++{
++	int32_t c;
++
++	mtx_assert(&sc->mtx, MA_OWNED);
++	if (sc->inputs == 0)
++		return (-1);
++	c = sc->input[sc->inhead];
++	sc->inhead = (sc->inhead + 1) % IN_BUF_SIZE;
++	sc->inputs--;
++	return (c);
++}
++
++static void
++kbd_put_scancode(struct pro1x_kbd_softc *sc, uint32_t code, bool pressed)
++{
++	if (code == GPIOKEY_NONE)
++		return;
++	if (code & SCAN_PREFIX_E0)
++		kbd_put(sc, 0xe0);
++	else if (code & SCAN_PREFIX_E1)
++		kbd_put(sc, 0xe1);
++	kbd_put(sc, (code & SCAN_KEYCODE_MASK) | (pressed ? 0 : KEY_RELEASE));
++}
++
++static uint32_t pro1x_kbd_read_char(keyboard_t *, int);
++
++/* Hand new input to kbdmux, or drop it when nobody listens. */
++static void
++kbd_deliver(struct pro1x_kbd_softc *sc)
++{
++	keyboard_t *kbd = &sc->kbd;
++
++	if (sc->polling)
++		return;
++	if (KBD_IS_ACTIVE(kbd) && KBD_IS_BUSY(kbd))
++		kbd->kb_callback.kc_func(kbd, KBDIO_KEYINPUT,
++		    kbd->kb_callback.kc_arg);
++	else
++		while (pro1x_kbd_read_char(kbd, 0) != NOKEY)
++			;
++}
++
++static void
++kbd_repeat(void *arg)
++{
++	struct pro1x_kbd_softc *sc = arg;
++
++	mtx_assert(&sc->mtx, MA_OWNED);
++	if (sc->repeat_code == GPIOKEY_NONE)
++		return;
++	kbd_put_scancode(sc, sc->repeat_code, true);
++	callout_reset(&sc->repeat, MAX(1, hz * REPEAT_RATE / 1000),
++	    kbd_repeat, sc);
++	mtx_unlock(&sc->mtx);
++	kbd_deliver(sc);
++	mtx_lock(&sc->mtx);
++}
++
++static int
++pro1x_kbd_configure(int flags)
++{
++	return (0);
++}
++
++static int
++pro1x_kbd__probe(int unit, void *arg, int flags)
++{
++	return (ENXIO);
++}
++
++static int
++pro1x_kbd_init(int unit, keyboard_t **kbdp, void *arg, int flags)
++{
++	return (ENXIO);
++}
++
++static int
++pro1x_kbd_term(keyboard_t *kbd)
++{
++	return (ENXIO);
++}
++
++static int
++pro1x_kbd_intr(keyboard_t *kbd, void *arg)
++{
++	return (0);
++}
++
++static int
++pro1x_kbd_test_if(keyboard_t *kbd)
++{
++	return (0);
++}
++
++static int
++pro1x_kbd_lock(keyboard_t *kbd, int lock)
++{
++	return (1);
++}
++
++static int
++pro1x_kbd_enable(keyboard_t *kbd)
++{
++	struct pro1x_kbd_softc *sc = kbd->kb_data;
++
++	mtx_lock(&sc->mtx);
++	KBD_ACTIVATE(kbd);
++	mtx_unlock(&sc->mtx);
++	return (0);
++}
++
++static int
++pro1x_kbd_disable(keyboard_t *kbd)
++{
++	struct pro1x_kbd_softc *sc = kbd->kb_data;
++
++	mtx_lock(&sc->mtx);
++	KBD_DEACTIVATE(kbd);
++	mtx_unlock(&sc->mtx);
++	return (0);
++}
++
++static int
++pro1x_kbd_check(keyboard_t *kbd)
++{
++	struct pro1x_kbd_softc *sc = kbd->kb_data;
++
++	return (KBD_IS_ACTIVE(kbd) && sc->inputs > 0);
++}
++
++static int
++pro1x_kbd_check_char(keyboard_t *kbd)
++{
++	struct pro1x_kbd_softc *sc = kbd->kb_data;
++	int ret;
++
++	mtx_lock(&sc->mtx);
++	ret = pro1x_kbd_check(kbd);
++	mtx_unlock(&sc->mtx);
++	return (ret);
++}
++
++/* Raw bytes; the matrix is not polled (no scan from kdb or a panic). */
++static int
++pro1x_kbd_read(keyboard_t *kbd, int wait)
++{
++	struct pro1x_kbd_softc *sc = kbd->kb_data;
++	int32_t c;
++
++	if (!KBD_IS_ACTIVE(kbd))
++		return (-1);
++	mtx_lock(&sc->mtx);
++	c = kbd_get(sc);
++	mtx_unlock(&sc->mtx);
++	if (c != -1)
++		kbd->kb_count++;
++	return (c);
++}
++
++static uint32_t
++pro1x_kbd_read_char(keyboard_t *kbd, int wait)
++{
++	struct pro1x_kbd_softc *sc = kbd->kb_data;
++	uint32_t action;
++	int32_t c;
++
++	if (!KBD_IS_ACTIVE(kbd))
++		return (NOKEY);
++	mtx_lock(&sc->mtx);
++	for (;;) {
++		c = kbd_get(sc);
++		if (c == -1) {
++			action = NOKEY;
++			break;
++		}
++		kbd->kb_count++;
++		if (sc->mode == K_RAW || sc->mode == K_CODE) {
++			action = c;
++			break;
++		}
++		action = genkbd_keyaction(kbd, SCAN_CHAR(c), c & SCAN_RELEASE,
++		    &sc->state, &sc->accents);
++		if (action != NOKEY)
++			break;
++	}
++	mtx_unlock(&sc->mtx);
++	return (action);
++}
++
++static void
++pro1x_kbd_clear_state(keyboard_t *kbd)
++{
++	struct pro1x_kbd_softc *sc = kbd->kb_data;
++
++	sc->polling = false;
++	sc->state &= LOCK_MASK;
++	sc->accents = 0;
++}
++
++static int
++pro1x_kbd_ioctl_locked(keyboard_t *kbd, u_long cmd, caddr_t arg)
++{
++	struct pro1x_kbd_softc *sc = kbd->kb_data;
++
++	switch (cmd) {
++	case KDGKBMODE:
++		*(int *)arg = sc->mode;
++		break;
++	case KDSKBMODE:
++		switch (*(int *)arg) {
++		case K_XLATE:
++			if (sc->mode != K_XLATE) {
++				sc->state &= ~LOCK_MASK;
++				sc->state |= KBD_LED_VAL(kbd);
++			}
++			/* FALLTHROUGH */
++		case K_RAW:
++		case K_CODE:
++			if (sc->mode != *(int *)arg) {
++				if (!sc->polling)
++					pro1x_kbd_clear_state(kbd);
++				sc->mode = *(int *)arg;
++			}
++			break;
++		default:
++			return (EINVAL);
++		}
++		break;
++	case KDGETLED:
++		*(int *)arg = KBD_LED_VAL(kbd);
++		break;
++	case KDSETLED:
++		KBD_LED_VAL(kbd) = *(int *)arg;
++		break;
++	case KDGKBSTATE:
++		*(int *)arg = sc->state & LOCK_MASK;
++		break;
++	case KDSKBSTATE:
++		if (*(int *)arg & ~LOCK_MASK)
++			return (EINVAL);
++		sc->state &= ~LOCK_MASK;
++		sc->state |= *(int *)arg;
++		break;
++	case KDSETREPEAT:
++	case KDSETRAD:
++		/* The repeat is fixed (REPEAT_DELAY, REPEAT_RATE). */
++		break;
++	case PIO_KEYMAP:
++	case PIO_KEYMAPENT:
++	case PIO_DEADKEYMAP:
++#ifdef COMPAT_FREEBSD13
++	case OPIO_KEYMAP:
++	case OPIO_DEADKEYMAP:
++#endif
++		sc->accents = 0;
++		/* FALLTHROUGH */
++	default:
++		return (genkbd_commonioctl(kbd, cmd, arg));
++	}
++	return (0);
++}
++
++static int
++pro1x_kbd_ioctl(keyboard_t *kbd, u_long cmd, caddr_t arg)
++{
++	struct pro1x_kbd_softc *sc = kbd->kb_data;
++	int ret;
++
++	if (curthread->td_critnest != 0)
++		return (EDEADLK);
++	mtx_lock(&sc->mtx);
++	ret = pro1x_kbd_ioctl_locked(kbd, cmd, arg);
++	mtx_unlock(&sc->mtx);
++	return (ret);
++}
++
++static int
++pro1x_kbd_get_state(keyboard_t *kbd, void *buf, size_t len)
++{
++	return (len == 0 ? 1 : -1);
++}
++
++static int
++pro1x_kbd_set_state(keyboard_t *kbd, void *buf, size_t len)
++{
++	return (EINVAL);
++}
++
++static int
++pro1x_kbd_poll(keyboard_t *kbd, int on)
++{
++	struct pro1x_kbd_softc *sc = kbd->kb_data;
++
++	mtx_lock(&sc->mtx);
++	sc->polling = on != 0;
++	mtx_unlock(&sc->mtx);
++	return (0);
++}
++
++static keyboard_switch_t pro1x_kbd_sw = {
++	.probe = pro1x_kbd__probe,
++	.init = pro1x_kbd_init,
++	.term = pro1x_kbd_term,
++	.intr = pro1x_kbd_intr,
++	.test_if = pro1x_kbd_test_if,
++	.enable = pro1x_kbd_enable,
++	.disable = pro1x_kbd_disable,
++	.read = pro1x_kbd_read,
++	.check = pro1x_kbd_check,
++	.read_char = pro1x_kbd_read_char,
++	.check_char = pro1x_kbd_check_char,
++	.ioctl = pro1x_kbd_ioctl,
++	.lock = pro1x_kbd_lock,
++	.clear_state = pro1x_kbd_clear_state,
++	.get_state = pro1x_kbd_get_state,
++	.set_state = pro1x_kbd_set_state,
++	.poll = pro1x_kbd_poll,
++};
++
++KEYBOARD_DRIVER(pro1xkbd, pro1x_kbd_sw, pro1x_kbd_configure);
++
++/* --- the matrix ------------------------------------------------------ */
++
++static int
++pro1x_kbd_write(struct pro1x_kbd_softc *sc, uint8_t reg, uint8_t val)
++{
++	return (iicdev_writeto(sc->dev, reg, &val, 1, IIC_WAIT));
++}
++
++static int
++pro1x_kbd_read_reg(struct pro1x_kbd_softc *sc, uint8_t reg, uint8_t *val)
++{
++	return (iicdev_readfrom(sc->dev, reg, val, 1, IIC_WAIT));
++}
++
++/* All columns driven low: any key pulls its row low and raises INT. */
++static int
++pro1x_kbd_idle(struct pro1x_kbd_softc *sc)
++{
++	int error;
++
++	error = pro1x_kbd_write(sc, AW_OUTPUT_P1, 0x00);
++	if (error == 0)
++		error = pro1x_kbd_write(sc, AW_CONFIG_P1, 0x00);
++	return (error);
++}
++
++/* One scan: state[col] gets the rows that read low with that column low. */
++static int
++pro1x_kbd_scan_once(struct pro1x_kbd_softc *sc, uint8_t state[NLINES])
++{
++	uint8_t rows;
++	int col, error;
++
++	/* Every column driven high first: no stale low on the next one. */
++	error = pro1x_kbd_write(sc, AW_OUTPUT_P1, 0xff);
++	if (error == 0)
++		error = pro1x_kbd_write(sc, AW_CONFIG_P1, 0x00);
++	for (col = 0; error == 0 && col < NLINES; col++) {
++		/*
++		 * The previous column back to high (the only output), the
++		 * next one an output (still high), then low; the others float
++		 * at their pre-charged level.
++		 */
++		error = pro1x_kbd_write(sc, AW_OUTPUT_P1, 0xff);
++		if (error == 0)
++			error = pro1x_kbd_write(sc, AW_CONFIG_P1,
++			    (uint8_t)~(1u << col));
++		if (error == 0)
++			error = pro1x_kbd_write(sc, AW_OUTPUT_P1,
++			    (uint8_t)~(1u << col));
++		if (error == 0) {
++			DELAY(SETTLE_US);
++			error = pro1x_kbd_read_reg(sc, AW_INPUT_P0, &rows);
++		}
++		if (error == 0)
++			state[col] = (uint8_t)~rows;
++	}
++	return (error);
++}
++
++static int
++pro1x_kbd_scan(struct pro1x_kbd_softc *sc, uint8_t state[NLINES])
++{
++	uint8_t again[NLINES];
++	int i, error;
++
++	for (i = 0; i < SCAN_RETRIES; i++) {
++		if ((error = pro1x_kbd_scan_once(sc, state)) != 0 ||
++		    (error = pro1x_kbd_scan_once(sc, again)) != 0)
++			return (error);
++		if (memcmp(state, again, NLINES) == 0)
++			break;
++		pause_sbt("p1xscan", SBT_1MS / 2, 0, C_PREL(1));
++	}
++	memcpy(state, again, NLINES);
++	return (0);
++}
++
++/* Another column has the row down and shares a second row with this one. */
++static bool
++pro1x_kbd_ghost(const uint8_t state[NLINES], int col, int row)
++{
++	int k;
++
++	for (k = 0; k < NLINES; k++)
++		if (k != col && (state[k] & (1u << row)) &&
++		    ((state[col] & state[k]) & ~(1u << row)))
++			return (true);
++	return (false);
++}
++
++static void
++pro1x_kbd_report(struct pro1x_kbd_softc *sc, const uint8_t state[NLINES])
++{
++	uint32_t code;
++	uint16_t lc;
++	bool pressed, changed;
++	int col, row;
++
++	changed = false;
++	mtx_lock(&sc->mtx);
++	for (col = 0; col < NLINES; col++) {
++		for (row = 0; row < NLINES; row++) {
++			pressed = (state[col] & (1u << row)) != 0;
++			if (pressed == ((sc->down[col] & (1u << row)) != 0))
++				continue;
++			if (pressed && pro1x_kbd_ghost(state, col, row))
++				continue;
++			if (pressed)
++				sc->down[col] |= 1u << row;
++			else
++				sc->down[col] &= ~(1u << row);
++			lc = sc->linux_code[row * NLINES + col];
++			if (lc == KEY_RESERVED)
++				continue;
++			changed = true;
++#ifdef EVDEV_SUPPORT
++			if (evdev_rcpt_mask & EVDEV_RCPT_HW_KBD)
++				evdev_push_key(sc->evdev, lc, pressed);
++			if (evdev_is_grabbed(sc->evdev))
++				continue;
++#endif
++			code = gpiokey_map_linux_code(lc);
++			kbd_put_scancode(sc, code, pressed);
++			if (pressed && code != GPIOKEY_NONE) {
++				sc->repeat_code = code;
++				callout_reset(&sc->repeat,
++				    MAX(1, hz * REPEAT_DELAY / 1000),
++				    kbd_repeat, sc);
++			} else if (!pressed && code == sc->repeat_code) {
++				sc->repeat_code = GPIOKEY_NONE;
++				callout_stop(&sc->repeat);
++			}
++		}
++	}
++#ifdef EVDEV_SUPPORT
++	if (changed)
++		evdev_sync(sc->evdev);
++#endif
++	mtx_unlock(&sc->mtx);
++	if (changed)
++		kbd_deliver(sc);
++}
++
++static void
++pro1x_kbd_task(void *arg, int pending)
++{
++	struct pro1x_kbd_softc *sc = arg;
++	uint8_t state[NLINES], held, dummy;
++	int i;
++
++	if (sc->detaching)
++		return;
++	held = 0;
++	if (pro1x_kbd_scan(sc, state) != 0) {
++		device_printf(sc->dev, "matrix scan failed\n");
++		memset(state, 0, sizeof(state));
++	}
++	for (i = 0; i < NLINES; i++)
++		held |= state[i];
++	pro1x_kbd_report(sc, state);
++
++	/* Back to idle; reading the ports releases INT. */
++	pro1x_kbd_idle(sc);
++	pro1x_kbd_read_reg(sc, AW_INPUT_P0, &dummy);
++	pro1x_kbd_read_reg(sc, AW_INPUT_P1, &dummy);
++
++	/* A held key hides keys on its lines from INT: poll meanwhile. */
++	if (held != 0 && !sc->detaching)
++		taskqueue_enqueue_timeout(taskqueue_thread, &sc->poll_task,
++		    MAX(1, hz * POLL_MS / 1000));
++}
++
++static void
++pro1x_kbd_poll_task(void *arg, int pending)
++{
++	pro1x_kbd_task(arg, pending);
++}
++
++static void
++pro1x_kbd_intr_handler(void *arg)
++{
++	struct pro1x_kbd_softc *sc = arg;
++
++	if (!sc->detaching)
++		taskqueue_enqueue(taskqueue_thread, &sc->task);
++}
++
++/* --- device ------------------------------------------------------------ */
++
++static int
++pro1x_kbd_read_keymap(struct pro1x_kbd_softc *sc)
++{
++	pcell_t *cells;
++	ssize_t n;
++	u_int i, row, col;
++
++	n = OF_getencprop_alloc_multi(ofw_bus_get_node(sc->dev),
++	    "linux,keymap", sizeof(pcell_t), (void **)&cells);
++	if (n <= 0)
++		return (ENXIO);
++	for (i = 0; i < n; i++) {
++		/* MATRIX_KEY(row, col, code) */
++		row = (cells[i] >> 24) & 0xff;
++		col = (cells[i] >> 16) & 0xff;
++		if (row < NLINES && col < NLINES)
++			sc->linux_code[row * NLINES + col] =
++			    cells[i] & 0xffff;
++	}
++	OF_prop_free(cells);
++	return (0);
++}
++
++/* INT as a falling edge on the device tree's interrupt pin */
++static int
++pro1x_kbd_setup_irq(struct pro1x_kbd_softc *sc)
++{
++	phandle_t node = ofw_bus_get_node(sc->dev), iparent;
++	pcell_t cells[2];
++	u_int irq;
++
++	iparent = ofw_bus_find_iparent(node);
++	if (iparent == 0 || OF_getencprop(node, "interrupts", cells,
++	    sizeof(cells)) != sizeof(cells)) {
++		device_printf(sc->dev, "no interrupt\n");
++		return (ENXIO);
++	}
++	cells[1] = 2;		/* IRQ_TYPE_EDGE_FALLING */
++	irq = ofw_bus_map_intr(sc->dev, iparent, 2, cells);
++	sc->irq_rid = 1;	/* after the device tree's (rid 0) */
++	bus_set_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid, irq, 1);
++	sc->irq = bus_alloc_resource_any(sc->dev, SYS_RES_IRQ, &sc->irq_rid,
++	    RF_ACTIVE);
++	if (sc->irq == NULL) {
++		device_printf(sc->dev, "unable to allocate the interrupt\n");
++		return (ENXIO);
++	}
++	return (bus_setup_intr(sc->dev, sc->irq, INTR_TYPE_TTY | INTR_MPSAFE,
++	    NULL, pro1x_kbd_intr_handler, sc, &sc->ih));
++}
++
++static int
++pro1x_kbd_hw_init(struct pro1x_kbd_softc *sc)
++{
++	uint8_t id, dummy;
++	int error;
++
++	if ((error = pro1x_kbd_read_reg(sc, AW_ID, &id)) != 0)
++		return (error);
++	if (id != AW_ID_VALUE) {
++		device_printf(sc->dev, "unexpected chip id %#x\n", id);
++		return (ENXIO);
++	}
++	if ((error = pro1x_kbd_write(sc, AW_SOFT_RESET, 0)) != 0)
++		return (error);
++	pause_sbt("p1xrst", SBT_1MS * 2, 0, 0);
++	/* P0: the rows, inputs with interrupts; P1: the columns, outputs */
++	if ((error = pro1x_kbd_write(sc, AW_CONFIG_P0, 0xff)) != 0 ||
++	    (error = pro1x_kbd_write(sc, AW_INT_P0, 0x00)) != 0 ||
++	    (error = pro1x_kbd_write(sc, AW_INT_P1, 0xff)) != 0 ||
++	    (error = pro1x_kbd_idle(sc)) != 0)
++		return (error);
++	pro1x_kbd_read_reg(sc, AW_INPUT_P0, &dummy);
++	pro1x_kbd_read_reg(sc, AW_INPUT_P1, &dummy);
++	return (0);
++}
++
++static void
++pro1x_kbd_start(void *arg)
++{
++	struct pro1x_kbd_softc *sc = arg;
++	keyboard_t *kbd = &sc->kbd;
++	int error;
++
++	config_intrhook_disestablish(&sc->hook);
++
++	if ((error = pro1x_kbd_hw_init(sc)) != 0) {
++		device_printf(sc->dev, "expander init failed: %d\n", error);
++		return;
++	}
++
++	kbd_init_struct(kbd, KBD_DRIVER_NAME, KB_OTHER,
++	    device_get_unit(sc->dev), 0, 0, 0);
++	kbd->kb_data = sc;
++	sc->mode = K_XLATE;
++	sc->keymap = key_map;
++	sc->accmap = accent_map;
++	memcpy(sc->fkeymap, fkey_tab, sizeof(sc->fkeymap));
++	kbd_set_maps(kbd, &sc->keymap, &sc->accmap, sc->fkeymap, NFKEY);
++	KBD_FOUND_DEVICE(kbd);
++	pro1x_kbd_clear_state(kbd);
++	KBD_PROBE_DONE(kbd);
++	KBD_INIT_DONE(kbd);
++	if (kbd_register(kbd) < 0) {
++		device_printf(sc->dev, "unable to register the keyboard\n");
++		return;
++	}
++	KBD_CONFIG_DONE(kbd);
++	pro1x_kbd_enable(kbd);
++#ifdef KBD_INSTALL_CDEV
++	kbd_attach(kbd);
++#endif
++
++#ifdef EVDEV_SUPPORT
++	sc->evdev = evdev_alloc();
++	evdev_set_name(sc->evdev, "Pro1X keyboard");
++	evdev_set_phys(sc->evdev, device_get_nameunit(sc->dev));
++	evdev_set_id(sc->evdev, BUS_I2C, 0x0001, 0x0001, 0x0100);
++	evdev_support_event(sc->evdev, EV_SYN);
++	evdev_support_event(sc->evdev, EV_KEY);
++	evdev_support_event(sc->evdev, EV_REP);
++	evdev_set_flag(sc->evdev, EVDEV_FLAG_SOFTREPEAT);
++	for (u_int i = 0; i < nitems(sc->linux_code); i++)
++		if (sc->linux_code[i] != KEY_RESERVED)
++			evdev_support_key(sc->evdev, sc->linux_code[i]);
++	if (evdev_register_mtx(sc->evdev, &sc->mtx) != 0) {
++		evdev_free(sc->evdev);
++		sc->evdev = NULL;
++		device_printf(sc->dev, "unable to register with evdev\n");
++		return;
++	}
++#endif
++
++	if (pro1x_kbd_setup_irq(sc) != 0)
++		return;
++	device_printf(sc->dev, "Pro1X keyboard ready\n");
++	/* A key may be down already. */
++	taskqueue_enqueue(taskqueue_thread, &sc->task);
++}
++
++static int
++pro1x_kbd_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (!ofw_bus_is_compatible(dev, "fxtec,pro1x-aw9523-keypad"))
++		return (ENXIO);
++	device_set_desc(dev, "F(x)tec Pro1X keyboard (AW9523B)");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++pro1x_kbd_attach(device_t dev)
++{
++	struct pro1x_kbd_softc *sc = device_get_softc(dev);
++
++	sc->dev = dev;
++	mtx_init(&sc->mtx, device_get_nameunit(dev), "pro1xkbd", MTX_DEF);
++	callout_init_mtx(&sc->repeat, &sc->mtx, 0);
++	sc->repeat_code = GPIOKEY_NONE;
++	TASK_INIT(&sc->task, 0, pro1x_kbd_task, sc);
++	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->poll_task, 0,
++	    pro1x_kbd_poll_task, sc);
++	if (pro1x_kbd_read_keymap(sc) != 0) {
++		device_printf(dev, "no linux,keymap\n");
++		mtx_destroy(&sc->mtx);
++		return (ENXIO);
++	}
++	/* The I2C controller works once interrupts run. */
++	sc->hook.ich_func = pro1x_kbd_start;
++	sc->hook.ich_arg = sc;
++	if (config_intrhook_establish(&sc->hook) != 0) {
++		mtx_destroy(&sc->mtx);
++		return (ENOMEM);
++	}
++	return (0);
++}
++
++static int
++pro1x_kbd_detach(device_t dev)
++{
++	struct pro1x_kbd_softc *sc = device_get_softc(dev);
++
++	config_intrhook_drain(&sc->hook);
++	sc->detaching = true;
++	if (sc->ih != NULL)
++		bus_teardown_intr(dev, sc->irq, sc->ih);
++	if (sc->irq != NULL)
++		bus_release_resource(dev, SYS_RES_IRQ, sc->irq_rid, sc->irq);
++	taskqueue_drain(taskqueue_thread, &sc->task);
++	taskqueue_drain_timeout(taskqueue_thread, &sc->poll_task);
++	callout_drain(&sc->repeat);
++	if (KBD_IS_CONFIGURED(&sc->kbd)) {
++#ifdef KBD_INSTALL_CDEV
++		kbd_detach(&sc->kbd);
++#endif
++		kbd_unregister(&sc->kbd);
++	}
++#ifdef EVDEV_SUPPORT
++	if (sc->evdev != NULL)
++		evdev_free(sc->evdev);
++#endif
++	mtx_destroy(&sc->mtx);
++	return (0);
++}
++
++static int
++pro1x_kbd_driver_load(module_t mod, int what, void *arg)
++{
++	switch (what) {
++	case MOD_LOAD:
++		kbd_add_driver(&pro1xkbd_kbd_driver);
++		break;
++	case MOD_UNLOAD:
++		kbd_delete_driver(&pro1xkbd_kbd_driver);
++		break;
++	}
++	return (0);
++}
++
++static device_method_t pro1x_kbd_methods[] = {
++	DEVMETHOD(device_probe,		pro1x_kbd_probe),
++	DEVMETHOD(device_attach,	pro1x_kbd_attach),
++	DEVMETHOD(device_detach,	pro1x_kbd_detach),
++	DEVMETHOD_END
++};
++
++static driver_t pro1x_kbd_driver = {
++	"pro1xkbd",
++	pro1x_kbd_methods,
++	sizeof(struct pro1x_kbd_softc),
++};
++
++DRIVER_MODULE(pro1xkbd, iicbus, pro1x_kbd_driver, pro1x_kbd_driver_load,
++    NULL);
++MODULE_DEPEND(pro1xkbd, iicbus, IICBUS_MINVER, IICBUS_PREFVER, IICBUS_MAXVER);
++#ifdef EVDEV_SUPPORT
++MODULE_DEPEND(pro1xkbd, evdev, 1, 1, 1);
++#endif
+-- 
+2.56.0
+

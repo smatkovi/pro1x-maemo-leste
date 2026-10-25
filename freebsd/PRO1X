@@ -32,6 +32,19 @@ device		kbdmux
 # Pro1X drivers (patches/0004 on)
 device		qcom_wdt		# APSS watchdog: a hang resets the phone
 device		ufshci			# UFS, on the link Linux left up (0005)
+device		qcom_tlmm_sm6115	# GPIOs and their interrupts (0006)
+
+# On the GPIOs: modifier keys and switches (gpio-keys), the touchscreen's
+# bit-banged I2C bus, the keyboard backlight
+device		gpiokeys
+device		gpioiic
+device		iicbb
+device		gpioled
+device		goodix			# the touchscreen (0007)
+
+# The QUP serial engines: I2C (the keyboard's bus), on the setup Linux left
+device		geniiic			# FDT attachment (0008)
+device		pro1xkbd		# the keyboard matrix on it (0009)
 
 # Disks and file systems: CAM, GPT, ext4 (userdata, where the system
 # images live)

@@ -1,0 +1,298 @@
+From 2712ff741f0edb93e8b1cd6c18cd3c2b5194446f Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 18:28:27 +0100
+Subject: [PATCH 1/2] geniiic: device tree attachment, QUP v3 wrapper bus
+
+The GENI I2C driver had only an ACPI attachment and no build entries.
+geni_iic_fdt.c attaches it to qcom,geni-i2c nodes, refuses serial
+engines without FIFO access (GPI DMA only) and leaves the engine's DMA
+mode; qcom_geni_qup.c makes the serial engines under a
+qcom,geni-se-qup wrapper visible. The ACPI iicbus attachment is built
+only with ACPI.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/arm64/qualcomm/qcom_geni_qup.c            |  46 +++++
+ sys/conf/files.arm64                          |   3 +
+ sys/dev/iicbus/controller/qcom/geni_iic.c     |   2 +
+ sys/dev/iicbus/controller/qcom/geni_iic_fdt.c | 188 ++++++++++++++++++
+ 4 files changed, 239 insertions(+)
+ create mode 100644 sys/arm64/qualcomm/qcom_geni_qup.c
+ create mode 100644 sys/dev/iicbus/controller/qcom/geni_iic_fdt.c
+
+diff --git a/sys/arm64/qualcomm/qcom_geni_qup.c b/sys/arm64/qualcomm/qcom_geni_qup.c
+new file mode 100644
+index 000000000..fd526b2ca
+--- /dev/null
++++ b/sys/arm64/qualcomm/qcom_geni_qup.c
+@@ -0,0 +1,46 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Qualcomm QUP v3 wrapper ("qcom,geni-se-qup"): the common block in front
++ * of a group of GENI serial engines (I2C, SPI, UART), whose nodes are its
++ * children. Its clocks are left as the boot set them; as a bus it only
++ * makes the serial engines visible.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/kernel.h>
++#include <sys/module.h>
++
++#include <dev/fdt/simplebus.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++static int
++qcom_geni_qup_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (!ofw_bus_is_compatible(dev, "qcom,geni-se-qup"))
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm QUP v3 wrapper");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++qcom_geni_qup_attach(device_t dev)
++{
++	return (simplebus_attach(dev));
++}
++
++static device_method_t qcom_geni_qup_methods[] = {
++	DEVMETHOD(device_probe,		qcom_geni_qup_probe),
++	DEVMETHOD(device_attach,	qcom_geni_qup_attach),
++	DEVMETHOD_END
++};
++
++DEFINE_CLASS_1(qcom_geni_qup, qcom_geni_qup_driver, qcom_geni_qup_methods,
++    sizeof(struct simplebus_softc), simplebus_driver);
++EARLY_DRIVER_MODULE(qcom_geni_qup, simplebus, qcom_geni_qup_driver, 0, 0,
++    BUS_PASS_BUS + BUS_PASS_ORDER_MIDDLE);
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index 57cc871b7..600ddb8e9 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -736,6 +736,9 @@ dev/qcom_wdt/qcom_wdt.c				optional qcom_wdt fdt
+ dev/ufshci/ufshci_fdt.c				optional ufshci fdt
+ dev/qcom_tlmm/qcom_tlmm_sm6115.c		optional qcom_tlmm_sm6115 fdt gpio
+ dev/iicbus/goodix.c				optional goodix fdt gpio evdev
++arm64/qualcomm/qcom_geni_qup.c			optional geniiic fdt
++dev/iicbus/controller/qcom/geni_iic.c		optional geniiic
++dev/iicbus/controller/qcom/geni_iic_fdt.c	optional geniiic fdt
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ 
+ # RockChip Drivers
+diff --git a/sys/dev/iicbus/controller/qcom/geni_iic.c b/sys/dev/iicbus/controller/qcom/geni_iic.c
+index f53fc1d3f..459278696 100644
+--- a/sys/dev/iicbus/controller/qcom/geni_iic.c
++++ b/sys/dev/iicbus/controller/qcom/geni_iic.c
+@@ -603,6 +603,8 @@ int geniiic_resume(geniiic_softc_t *sc)
+ }
+ 
+ DRIVER_MODULE(iicbus, geniiic, iicbus_driver, NULL, NULL);
++#ifdef DEV_ACPI
+ DRIVER_MODULE(acpi_iicbus, geniiic, acpi_iicbus_driver, NULL, NULL);
++#endif
+ MODULE_DEPEND(geniiic, iicbus, IICBUS_MINVER, IICBUS_PREFVER, IICBUS_MAXVER);
+ MODULE_VERSION(geniiic, 1);
+diff --git a/sys/dev/iicbus/controller/qcom/geni_iic_fdt.c b/sys/dev/iicbus/controller/qcom/geni_iic_fdt.c
+new file mode 100644
+index 000000000..59ff00ca6
+--- /dev/null
++++ b/sys/dev/iicbus/controller/qcom/geni_iic_fdt.c
+@@ -0,0 +1,188 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Device tree attachment of the Qualcomm GENI I2C controller.
++ *
++ * As with the ACPI attachment, the serial engine is used as the boot left
++ * it: firmware loaded, clocks on, the bus timing programmed (on the F(x)tec
++ * Pro1X, Linux before kexec). The driver works the FIFOs; an engine that
++ * the firmware set up for GPI DMA only (no FIFO access) is refused.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/kernel.h>
++#include <sys/lock.h>
++#include <sys/module.h>
++#include <sys/mutex.h>
++#include <sys/rman.h>
++#include <sys/sx.h>
++
++#include <machine/bus.h>
++#include <machine/resource.h>
++
++#include <dev/iicbus/iicbus.h>
++#include <dev/iicbus/iiconf.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++#include <dev/iicbus/controller/qcom/geni_iic_var.h>
++
++#include "ofw_bus_if.h"
++
++#define	GENI_IF_DISABLE_RO	0x064
++#define	 FIFO_IF_DISABLE	(1u << 0)
++#define	GENI_FW_REVISION_RO	0x068
++#define	 FW_REV_PROTOCOL(x)	(((x) >> 8) & 0xff)
++#define	 GENI_SE_I2C		3
++#define	GENI_DMA_MODE_EN	0x258
++#define	 DMA_MODE_EN		(1u << 0)
++
++static struct ofw_compat_data compat_data[] = {
++	{ "qcom,geni-i2c",	1 },
++	{ NULL,			0 }
++};
++
++static int geniiic_fdt_detach(device_t dev);
++
++static int
++geniiic_fdt_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data == 0)
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm GENI I2C Controller");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++geniiic_fdt_attach(device_t dev)
++{
++	geniiic_softc_t *sc = device_get_softc(dev);
++	uint32_t fw;
++	int error;
++
++	sc->dev = dev;
++	sc->regs_rid = 0;
++	sc->regs_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
++	    &sc->regs_rid, RF_ACTIVE);
++	if (sc->regs_res == NULL) {
++		device_printf(dev, "unable to map registers\n");
++		return (ENXIO);
++	}
++
++	/* The first access: it hangs the bus if the engine's clocks are off. */
++	device_printf(dev, "registers at %#jx\n",
++	    (uintmax_t)rman_get_start(sc->regs_res));
++	fw = bus_read_4(sc->regs_res, GENI_FW_REVISION_RO);
++	if (FW_REV_PROTOCOL(fw) != GENI_SE_I2C) {
++		device_printf(dev, "serial engine runs protocol %u, not I2C\n",
++		    FW_REV_PROTOCOL(fw));
++		geniiic_fdt_detach(dev);
++		return (ENXIO);
++	}
++	if (bus_read_4(sc->regs_res, GENI_IF_DISABLE_RO) & FIFO_IF_DISABLE) {
++		device_printf(dev, "FIFOs disabled (GPI DMA only), "
++		    "not supported\n");
++		geniiic_fdt_detach(dev);
++		return (ENXIO);
++	}
++	/* Linux may have left the engine in its DMA mode. */
++	bus_write_4(sc->regs_res, GENI_DMA_MODE_EN,
++	    bus_read_4(sc->regs_res, GENI_DMA_MODE_EN) & ~DMA_MODE_EN);
++
++	sc->intr_rid = 0;
++	sc->intr_res = bus_alloc_resource_any(dev, SYS_RES_IRQ, &sc->intr_rid,
++	    RF_ACTIVE);
++	if (sc->intr_res == NULL) {
++		device_printf(dev, "unable to map interrupt\n");
++		geniiic_fdt_detach(dev);
++		return (ENXIO);
++	}
++	sc->platform_attached = true;
++
++	error = geniiic_attach(sc);
++	if (error != 0)
++		geniiic_fdt_detach(dev);
++	return (error);
++}
++
++static int
++geniiic_fdt_detach(device_t dev)
++{
++	geniiic_softc_t *sc = device_get_softc(dev);
++	int error;
++
++	if (sc->platform_attached) {
++		error = geniiic_detach(sc);
++		if (error != 0)
++			return (error);
++		sc->platform_attached = false;
++	}
++	if (sc->intr_res != NULL) {
++		bus_release_resource(dev, SYS_RES_IRQ, sc->intr_rid,
++		    sc->intr_res);
++		sc->intr_res = NULL;
++	}
++	if (sc->regs_res != NULL) {
++		bus_release_resource(dev, SYS_RES_MEMORY, sc->regs_rid,
++		    sc->regs_res);
++		sc->regs_res = NULL;
++	}
++	return (0);
++}
++
++static int
++geniiic_fdt_suspend(device_t dev)
++{
++	return (geniiic_suspend(device_get_softc(dev)));
++}
++
++static int
++geniiic_fdt_resume(device_t dev)
++{
++	return (geniiic_resume(device_get_softc(dev)));
++}
++
++static phandle_t
++geniiic_fdt_get_node(device_t bus, device_t dev)
++{
++	/* The iicbus child describes the bus with our node. */
++	return (ofw_bus_get_node(bus));
++}
++
++static device_method_t geniiic_fdt_methods[] = {
++	DEVMETHOD(device_probe,		geniiic_fdt_probe),
++	DEVMETHOD(device_attach,	geniiic_fdt_attach),
++	DEVMETHOD(device_detach,	geniiic_fdt_detach),
++	DEVMETHOD(device_suspend,	geniiic_fdt_suspend),
++	DEVMETHOD(device_resume,	geniiic_fdt_resume),
++
++	DEVMETHOD(bus_setup_intr,	bus_generic_setup_intr),
++	DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
++	DEVMETHOD(bus_alloc_resource,	bus_generic_alloc_resource),
++	DEVMETHOD(bus_release_resource,	bus_generic_release_resource),
++	DEVMETHOD(bus_activate_resource, bus_generic_activate_resource),
++	DEVMETHOD(bus_deactivate_resource, bus_generic_deactivate_resource),
++	DEVMETHOD(bus_adjust_resource,	bus_generic_adjust_resource),
++
++	DEVMETHOD(iicbus_transfer,	geniiic_transfer),
++	DEVMETHOD(iicbus_reset,		geniiic_reset),
++	DEVMETHOD(iicbus_callback,	geniiic_callback),
++
++	DEVMETHOD(ofw_bus_get_node,	geniiic_fdt_get_node),
++
++	DEVMETHOD_END
++};
++
++static driver_t geniiic_fdt_driver = {
++	"geniiic",
++	geniiic_fdt_methods,
++	sizeof(struct geniiic_softc),
++};
++
++DRIVER_MODULE(geniiic, simplebus, geniiic_fdt_driver, 0, 0);
++DRIVER_MODULE(ofw_iicbus, geniiic, ofw_iicbus_driver, 0, 0);
++MODULE_DEPEND(geniiic, iicbus, IICBUS_MINVER, IICBUS_PREFVER, IICBUS_MAXVER);
+-- 
+2.56.0
+

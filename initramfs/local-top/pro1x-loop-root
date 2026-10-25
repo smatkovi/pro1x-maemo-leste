@@ -106,6 +106,13 @@ EOF
         # back once its partitions are
         find_backing
       fi
+      # FreeBSD drives these on the setup Linux leaves (it has no clock
+      # drivers yet): runtime-active from here on, their clocks stay on.
+      # 4a84000.i2c: the keyboard's I2C bus.
+      for d in 4a84000.i2c; do
+        pm=/sys/bus/platform/devices/$d/power/control
+        [ -e $pm ] && echo on > $pm
+      done
       # The APSS watchdog (0x0f017000, kpss layout, 32 kHz) armed for its
       # longest time, about 32 s: FreeBSD's qcom_wdt keeps feeding it, and a
       # FreeBSD that hangs before or after that resets the phone into this
