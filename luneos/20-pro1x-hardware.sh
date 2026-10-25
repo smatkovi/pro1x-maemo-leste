@@ -65,16 +65,21 @@ log "configuration"
 # The PinePhone's boot partition does not exist; systemd would wait for it.
 sed -i '/[[:space:]]\/boot[[:space:]]/d' "$MNT/etc/fstab"
 echo luneos > "$MNT/etc/hostname"
-# LuneOS's USB gadget takes 172.16.42.2, the computer's address on this link
-# under Leste and Kali; the phone is 172.16.42.1 there, so here too.
-G=$MNT/usr/sbin/luneos-usb-gadget.sh
-sed -i -e 's|^IP=172\.16\.42\.2/16$|IP=172.16.42.1/24|' \
-       -e 's|(ECM network at 172\.16\.42\.2)|(ECM network at 172.16.42.1)|' "$G"
-grep -qx 'IP=172.16.42.1/24' "$G" || { echo "$G: address not changed"; exit 1; }
+# The USB link: the kernel's built-in CDC composite gadget (g_cdc, as under
+# Leste) holds the controller from boot on, so LuneOS's configfs gadget
+# never binds (its service fails after five attempts). Kali's unit gives the
+# gadget's usb0 the phone's address on this link, 172.16.42.1/24.
+install -m 644 "$REPO/kali/rootfs-overlay/etc/systemd/system/pro1x-usb0.service" \
+	"$MNT/etc/systemd/system/"
+# PinePhone line: sets card 0's profile before audiod has loaded any card,
+# and PulseAudio exits on the error. audiod loads the devices (see the file).
+sed -i 's/^set-card-profile 0 /# Pro1X: no card yet at this point\n#&/' "$MNT/etc/pulse/webos-system.pa"
 chroot "$MNT" /bin/sh -e <<'EOF'
 # eg25-manager drives the PinePhone's modem over its GPIOs
-systemctl mask eg25-manager.service
-systemctl enable pro1x-rmtfs.service pro1x-tqftpserv.service pro1x-audio-init.service
+# serial-getty@ttyS0: the PinePhone's serial console; waits 90 s for it
+systemctl mask eg25-manager.service luneos-usb-gadget.service serial-getty@ttyS0.service
+systemctl enable pro1x-rmtfs.service pro1x-tqftpserv.service pro1x-audio-init.service \
+	pro1x-usb0.service
 EOF
 # luneos-device-config writes its results into configd's layers; a stale cache
 # from the PinePhone build would outlive the new deviceinfo.

@@ -29,10 +29,9 @@ LuneOS's `luneos-device-config` reads
 `/usr/share/luneos/adaptations/pro1x/deviceinfo` at boot (the name comes from
 the device tree's `fxtec,pro1x`):
 
-- `deviceinfo_compositor_geometry="1080x2160+0+0r270s1"`: the portrait panel
-  turned to landscape with the keyboard towards the user, like Leste's X
-  screen ("right"); the touchscreen follows. If the picture comes up upside
-  down, `r90` is the other way round.
+- `deviceinfo_compositor_geometry="1080x2160+0+0r90s1"`: the portrait panel
+  turned to landscape with the keyboard towards the user (r270 was upside
+  down on the device); the touchscreen follows.
 - the touchscreen and the keys by name, since the PinePhone's input links
   shipped in the image do not exist here.
 
@@ -45,5 +44,16 @@ the device tree's `fxtec,pro1x`):
 - Wi-Fi: connman; mobile data and calls: oFono (LuneOS's telephony only
   speaks oFono), with Leste's rmtfs and tqftpserv for the modem.
 
-Not booted yet: the first boot, rotation direction, touch, keyboard layout,
-sound and the modem are untested.
+Booted (2026-10-25): the compositor and the lock screen come up in
+landscape, reachable over the USB link. Untested so far: touch, keyboard
+layout, sound (PulseAudio and audiod start; routing for the Pro1X's card
+not done), Wi-Fi, the modem. The clock starts at the RTC's raw time (no
+offset as on Leste yet).
+
+Screenshots without a camera, from an SSH session with a terminal (`ssh -t`;
+without one luna-send prints nothing):
+
+    luna-send -n 1 -f luna://com.webos.surfacemanager/captureCompositorOutput \
+      '{"output":"/tmp/capture.png","format":"PNG"}'
+
+The PNG is in the panel's portrait orientation (turn it 90° counter-clockwise).

@@ -7,10 +7,11 @@ deviceinfo_name="F(x)tec Pro1X"
 deviceinfo_name_short="Pro1X"
 
 # The 1080x2160 panel scans out in portrait; the Pro1X is held in landscape
-# with the keyboard towards the user, which Maemo Leste gets by turning the X
-# screen "right" (RandR's 270). The touchscreen follows the compositor's
-# rotation. Should the picture come up upside down, r90 is the other way.
-deviceinfo_compositor_geometry="1080x2160+0+0r270s1"
+# with the keyboard towards the user: the landscape top lies along the
+# panel's right edge (as in tools/pro1x-bootmenu). In webOS's terms that is
+# r90 (r270 came up upside down on the device). The touchscreen follows the
+# compositor's rotation.
+deviceinfo_compositor_geometry="1080x2160+0+0r90s1"
 
 # 5.99" at 1080x2160
 deviceinfo_display_dpi="403"
