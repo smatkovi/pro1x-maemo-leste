@@ -1,0 +1,21 @@
+diff --git a/src/modules/lock-tklock.c b/src/modules/lock-tklock.c
+index 467dd0e..b5d0430 100644
+--- a/src/modules/lock-tklock.c
++++ b/src/modules/lock-tklock.c
+@@ -617,6 +617,16 @@ static gboolean close_tklock_ui(const dbus_bool_t silent)
+ 				     DBUS_TYPE_BOOLEAN, &silent,
+ 				     DBUS_TYPE_INVALID);
+ 
++	/* A Harmattan (MeeGo 1.2) system UI takes the silent flag only */
++	if (reply == NULL)
++		reply = dbus_send_with_block(SYSTEMUI_SERVICE,
++					     SYSTEMUI_REQUEST_PATH,
++					     SYSTEMUI_REQUEST_IF,
++					     SYSTEMUI_TKLOCK_CLOSE_REQ,
++					     DEFAULT_DBUS_REPLY_TIMEOUT,
++					     DBUS_TYPE_BOOLEAN, &silent,
++					     DBUS_TYPE_INVALID);
++
+ 	if (reply == NULL)
+ 		goto EXIT;
+ 
