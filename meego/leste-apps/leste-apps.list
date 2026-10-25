@@ -1,5 +1,5 @@
-# Leste applications shown in the MeeGo session's application grid
-# (Leste desktop ids, from /usr/share/applications or its hildon/ directory)
-pro1x-camera
-firefox-esr
-gpodder-leste
+# Leste applications in the MeeGo session's application grid.
+# Every Leste application a menu would show is in the grid by itself; one
+# desktop id per line (from /usr/share/applications or its hildon/
+# directory) adjusts that: "-id" leaves an application out, "id" adds one
+# that has no menu entry of its own.

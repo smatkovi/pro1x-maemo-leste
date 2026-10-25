@@ -34,7 +34,8 @@ gcc -O2 -Wall -o /usr/lib/pro1x-meego/iphbd "$SRC/iphb/iphbd.c"
 gcc -O2 -Wall -o /usr/lib/pro1x-meego/mainvolumed "$SRC/mainvolume/mainvolumed.c" \
 	$(pkg-config --cflags --libs gio-unix-2.0 libpulse-mainloop-glib) -lm
 gcc -O2 -Wall -DBMED -o /usr/lib/pro1x-meego/bmed "$SRC/bme/bmeipc.c"
-apt-get install -y -q --no-install-recommends python3-dbus python3-gi > /dev/null
+apt-get install -y -q --no-install-recommends python3-dbus python3-gi \
+	gir1.2-gdkpixbuf-2.0 librsvg2-common > /dev/null
 install -m 755 "$SRC/positioning/positioningd.py" /usr/lib/pro1x-meego/positioningd
 install -m 755 "$SRC/leste-apps/leste-apps.py" /usr/lib/pro1x-meego/leste-apps
 install -m 644 "$SRC/leste-apps/org.pro1x.LesteLauncher.conf" /etc/dbus-1/system.d/

@@ -248,11 +248,12 @@ do_start() {
 	start-stop-daemon --start --quiet --background --make-pidfile \
 		--pidfile /run/pro1x-positioningd.pid --exec /usr/bin/python3 -- \
 		/usr/lib/pro1x-meego/positioningd "$H" || true
-	# Leste's own applications (camera, Firefox...) in the application grid
+	# Leste's own applications (camera, Firefox...) in the application grid;
+	# the service keeps the grid in step with installed packages
 	/usr/lib/pro1x-meego/leste-apps sync "$H" || true
 	start-stop-daemon --start --quiet --background --make-pidfile \
 		--pidfile /run/pro1x-leste-apps.pid --exec /usr/bin/python3 -- \
-		/usr/lib/pro1x-meego/leste-apps serve || true
+		/usr/lib/pro1x-meego/leste-apps serve "$H" || true
 	ln -sf /var/run/m.mthemedaemon "$H/tmp/m.mthemedaemon"
 	start_bg nok-image-broker /usr/libexec/nok-image-broker
 	run_job timed

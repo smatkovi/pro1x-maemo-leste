@@ -57,9 +57,11 @@ In this order:
 6. GPS (QtLocation through `positioning/` and Leste's gpsd; gpsd only starts
    once Leste's location disclaimer is accepted; tested with injected NMEA)
 7. Cameras: Leste's camera app (pro1x-camera on libcamera) starts from
-   Harmattan's application grid, like the other Leste applications listed
-   in /etc/pro1x-meego/leste-apps (Firefox ESR, gPodder); `leste-apps/`
-   writes their entries and starts them on Harmattan's request. Harmattan's
+   Harmattan's application grid, like every other Leste application with a
+   menu entry (Firefox ESR, gPodder, the Hildon applications...);
+   `leste-apps/` writes their entries, keeps them in step with installed
+   packages and starts them on Harmattan's request
+   (/etc/pro1x-meego/leste-apps leaves some out or adds others). Harmattan's
    own camera application needs the N9's camera stack and stays out
 
 Open details: the edge swipe's "sneak peek" animation renders black
