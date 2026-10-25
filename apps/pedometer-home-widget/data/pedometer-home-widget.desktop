@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Pedometer
+Comment=Steps, distance and calories from the Pro1X's step counter
+Type=default
+X-Path=pedometer-home-widget.so

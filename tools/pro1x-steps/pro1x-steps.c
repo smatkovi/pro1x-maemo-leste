@@ -9,7 +9,8 @@
  *
  *   org.pro1x.Steps  /org/pro1x/Steps  org.pro1x.Steps
  *     GetSteps () -> (t steps)       steps since the daemon started (boot)
- *     signal StepsChanged (t steps)
+ *     signal StepsChanged (t steps)  at most every COALESCE_S seconds while
+ *                                     walking, so listeners wake up rarely
  *
  * Like Android's step counter the count only grows and starts over at boot;
  * clients keep their own day totals from the differences. When the ADSP
@@ -27,6 +28,7 @@
 #define NAME "org.pro1x.Steps"
 #define PATH "/org/pro1x/Steps"
 #define RETRY_S 30
+#define COALESCE_S 5
 #define STATE "/run/pro1x-steps"
 
 static const char introspection[] =
@@ -41,6 +43,8 @@ static GDBusConnection *bus;
 static SSCSensorPedometer *sensor;
 static guint64 base;	/* steps before the ADSP's counter last started over */
 static guint last;	/* the ADSP's counter */
+static gint64 emitted_us;	/* when StepsChanged was last sent */
+static guint emit_id;	/* pending, coalesced StepsChanged */
 
 static guint64 total(void)
 {
@@ -53,16 +57,34 @@ static void save(void)
 	g_file_set_contents(STATE, s, -1, NULL);
 }
 
-static void measurement_cb(SSCSensorPedometer *s, guint steps, gpointer data)
+static gboolean emit_cb(gpointer data)
 {
-	(void)s, (void)data;
-	if (steps < last)
-		base += last;
-	last = steps;
+	(void)data;
+	emit_id = 0;
+	emitted_us = g_get_monotonic_time();
 	save();
 	if (bus)
 		g_dbus_connection_emit_signal(bus, NULL, PATH, NAME, "StepsChanged",
 					      g_variant_new("(t)", total()), NULL);
+	return G_SOURCE_REMOVE;
+}
+
+static void measurement_cb(SSCSensorPedometer *s, guint steps, gpointer data)
+{
+	gint64 due;
+
+	(void)s, (void)data;
+	if (steps < last)
+		base += last;
+	last = steps;
+	/* the ADSP reports every step: pass them on in batches */
+	if (emit_id)
+		return;
+	due = emitted_us + COALESCE_S * G_USEC_PER_SEC - g_get_monotonic_time();
+	if (due <= 0)
+		emit_cb(NULL);
+	else
+		emit_id = g_timeout_add((guint)(due / 1000) + 1, emit_cb, NULL);
 }
 
 static gboolean open_sensor(gpointer data)
