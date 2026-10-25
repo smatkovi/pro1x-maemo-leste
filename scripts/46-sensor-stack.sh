@@ -13,7 +13,9 @@
 #                 (linux-msm/hexagonrpc pull request 27 + the NixOS port's
 #                 sns-registry patch); QRTR service 400 appears.
 #   libssc        talks to that service (needs libqmi >= 1.33.4; daedalus has
-#                 1.32, so libqmi 1.34 is built too).
+#                 1.32, so libqmi 1.34 is built too). patches/libssc-pedometer
+#                 adds the ADSP's step counter ("pedometer"; ssccli --sensor
+#                 pedometer), which pro1x-steps serves on D-Bus.
 #   iio-sensor-proxy 3.9, the first release with SSC support; built with a
 #                 tiny g_autofd shim because daedalus has GLib 2.74, not 2.76.
 #                 It replaces Leste's 3.0 through a dpkg diversion, so mce's
@@ -73,6 +75,7 @@ build libqmi -Dmbim_qmux=false -Dqrtr=true -Dgtk_doc=false -Dintrospection=false
 
 log "libssc $LIBSSC_TAG"
 fetch libssc https://codeberg.org/DylanVanAssche/libssc.git "$LIBSSC_TAG" "$LIBSSC_TAG"
+git -C "$SRC/libssc" apply "$REPO/patches/libssc-pedometer.patch"
 build libssc
 
 log "iio-sensor-proxy $IIO_SENSOR_PROXY_TAG"
@@ -91,6 +94,11 @@ ln -sfn /usr/local/libexec/iio-sensor-proxy /usr/sbin/iio-sensor-proxy
 log "pro1x-gnss (modem GNSS -> NMEA -> gpsd)"
 gcc -O2 -Wall -o /usr/local/bin/pro1x-gnss "$REPO/tools/pro1x-gnss/pro1x-gnss.c" \
   $(pkg-config --cflags --libs qmi-glib qrtr-glib)
+log "pro1x-steps (the ADSP's step counter on D-Bus)"
+gcc -O2 -Wall -o /usr/local/sbin/pro1x-steps "$REPO/tools/pro1x-steps/pro1x-steps.c" \
+  $(PKG_CONFIG_PATH=/usr/local/lib/aarch64-linux-gnu/pkgconfig pkg-config --cflags --libs libssc gio-unix-2.0)
+install -m 644 "$REPO/rootfs-overlay/etc/dbus-1/system.d/org.pro1x.Steps.conf" /etc/dbus-1/system.d/
+install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-steps" /etc/init.d/
 # gpsd-clients recommends matplotlib and friends; gpspipe/cgps need none of it.
 apt-get install -y -q --no-install-recommends gpsd gpsd-clients
 
@@ -101,4 +109,5 @@ cp -r "$NIXOS/device/hexagonfs" /usr/share/pro1x/hexagonfs
 rm -f /usr/share/pro1x/hexagonfs/README.md
 
 rc-update add pro1x-hexagonrpcd default
+rc-update add pro1x-steps default
 log "done"

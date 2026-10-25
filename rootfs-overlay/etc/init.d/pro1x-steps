@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+# The ADSP's hardware step counter on the system bus (org.pro1x.Steps),
+# for Leste and the MeeGo session (tools/pro1x-steps).
+
+description="Pro1X step counter (org.pro1x.Steps)"
+command=/usr/local/sbin/pro1x-steps
+supervisor=supervise-daemon
+respawn_delay=5
+respawn_max=0
+
+depend() {
+	need dbus
+	after pro1x-hexagonrpcd
+}

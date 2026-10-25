@@ -20,6 +20,7 @@ there, every boot image variant that was tested: [docs/HANDOFF.md](docs/HANDOFF.
 | Earpiece, headphones | untested | |
 | Battery, charging | works | upower |
 | Accelerometer, light, proximity, compass | works | ADSP sensors: hexagonrpcd + libssc + iio-sensor-proxy 3.9 |
+| Step counter | works (count while walking untested) | the ADSP's pedometer: libssc patch + `pro1x-steps` on D-Bus (`org.pro1x.Steps`) |
 | GPS | engine runs, positions arrive | `pro1x-gnss` (QMI LOC -> NMEA -> gpsd); outdoor fix untested |
 | Cameras (12 MP rear, 8 MP front) | works | libcamera 0.7.2 + soft ISP on the GPU; `pro1x-camera` app with autofocus |
 | Device lock code (CAL) | works | block2mtd file as `/dev/mtd1`, patched libcal |
@@ -252,7 +253,7 @@ would otherwise lose its slot after seven starts.
 | `scripts/30-build-kernel.sh` | build host | apply patches, build kernel + modules |
 | `scripts/40-make-rootfs.sh` | build host, sudo | build the rootfs image, generate the initramfs |
 | `scripts/45-pro1x-hardware.sh` | inside the rootfs, root | Mesa, firmware, modem services, mce/audio configuration, boot menu tools |
-| `scripts/46-sensor-stack.sh` | inside the rootfs, root | hexagonrpcd, libqmi 1.34, libssc, iio-sensor-proxy 3.9, pro1x-gnss |
+| `scripts/46-sensor-stack.sh` | inside the rootfs, root | hexagonrpcd, libqmi 1.34, libssc, iio-sensor-proxy 3.9, pro1x-gnss, pro1x-steps |
 | `scripts/47-libcal.sh` | inside the rootfs, root | libcal that accepts the block2mtd CAL (lock code) |
 | `scripts/48-camera-stack.sh` | inside the rootfs, root | libcamera 0.7.2 with the Pro1X sensors |
 | `scripts/49-apps.sh` | inside the rootfs, root | `pro1x-camera` |
