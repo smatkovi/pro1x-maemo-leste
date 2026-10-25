@@ -23,13 +23,14 @@ make install
 
 # Ports of Maemo 5 apps, each in its own repository with release packages
 # (Pedometer Home Widget on tools/pro1x-steps, headphoned, gPodder 4,
-# WiFi Assistant).
+# WiFi Assistant, Petrovich).
 GH=https://github.com/smatkovi
 for deb in \
 	pedometerhomewidget/releases/download/v0.4.0/pedometerhomewidget_0.4.0_arm64.deb \
 	headphoned/releases/download/v2.0.0/headphoned_2.0.0_arm64.deb \
 	gpodder-leste/releases/download/v4.17.2%2Bleste1/gpodder-leste_4.17.2+leste1_all.deb \
-	wifi-assistant/releases/download/v1.0.0/wifi-assistant_1.0.0_all.deb; do
+	wifi-assistant/releases/download/v1.0.0/wifi-assistant_1.0.0_all.deb \
+	petrovich/releases/download/v0.3.0/petrovich_0.3.0_arm64.deb; do
 	curl -sfL -o "/tmp/${deb##*/}" "$GH/$deb"
 	apt-get install -y -q "/tmp/${deb##*/}"
 	rm -f "/tmp/${deb##*/}"
