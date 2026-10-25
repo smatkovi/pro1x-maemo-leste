@@ -13,11 +13,13 @@
 #   OUT=/dir   also copy the built packages there
 #   DEBS=/dir  install packages built earlier (OUT of a run in a chroot of
 #              the image) instead of building
+#   ONLY="hildon-desktop ..."  build only these parts (the others are in)
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 SRC=${SRC:-/root/src}
 OUT=${OUT:-}
 DEBS=${DEBS:-}
+ONLY=${ONLY:-}
 export DEBIAN_FRONTEND=noninteractive
 export DEB_BUILD_OPTIONS="nocheck nodoc parallel=$(nproc)"
 log() { echo ">> $*"; }
@@ -30,6 +32,13 @@ PARTS=(
   "hildon-home|0d34886acdc2"
   "hildon-desktop|1273f9eee252"
 )
+if [ -n "$ONLY" ]; then
+  sel=()
+  for entry in "${PARTS[@]}"; do
+    case " $ONLY " in *" ${entry%%|*} "*) sel+=("$entry") ;; esac
+  done
+  PARTS=("${sel[@]}")
+fi
 
 apt-get update -q || log "apt-get update had errors: going on with the lists it got"
 apt-get install -y -q --no-install-recommends gcc libc6-dev pkg-config \

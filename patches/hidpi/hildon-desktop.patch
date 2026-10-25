@@ -354,7 +354,7 @@ index ea0b794..923a850 100644
    gtk_icon_view_set_selection_mode (GTK_ICON_VIEW (priv->icon_view),
                                      GTK_SELECTION_SINGLE);
 diff --git a/src/launcher/hd-launcher-grid.c b/src/launcher/hd-launcher-grid.c
-index 127085f..53cbe59 100644
+index 127085f..6585e83 100644
 --- a/src/launcher/hd-launcher-grid.c
 +++ b/src/launcher/hd-launcher-grid.c
 @@ -116,13 +116,13 @@ static gboolean _hd_launcher_grid_blocker_release_cb (ClutterActor *actor,
@@ -375,6 +375,16 @@ index 127085f..53cbe59 100644
  
  
  G_DEFINE_TYPE_WITH_CODE (HdLauncherGrid,
+@@ -167,7 +167,8 @@ hd_launcher_grid_refresh_h_adjustment (HdLauncherGrid *grid)
+                                page_width);
+ }
+ 
+-static inline void
++/* Not inline: the scaled margins (HD_S) are calls now */
++static void
+ hd_launcher_grid_refresh_v_adjustment (HdLauncherGrid *grid)
+ {
+   HdLauncherGridPrivate *priv = grid->priv;
 diff --git a/src/launcher/hd-launcher-grid.h b/src/launcher/hd-launcher-grid.h
 index da3a51d..3a35f8d 100644
 --- a/src/launcher/hd-launcher-grid.h
@@ -730,7 +740,7 @@ index 0251030..86fe25a 100644
            dh = (float)dw/width * height;
            dy = (HD_COMP_MGR_TOP_LEFT_BTN_HEIGHT - dh) / 2;
 diff --git a/src/util/hd-util.c b/src/util/hd-util.c
-index 1711a89..439982e 100644
+index 1711a89..51a9366 100644
 --- a/src/util/hd-util.c
 +++ b/src/util/hd-util.c
 @@ -1,5 +1,7 @@
@@ -741,7 +751,7 @@ index 1711a89..439982e 100644
  #include <matchbox/core/mb-wm.h>
  #include <clutter/x11/clutter-x11.h>
  #include <cogl/cogl.h>
-@@ -960,6 +962,29 @@ hd_util_display_height()
+@@ -960,6 +962,36 @@ hd_util_display_height()
    return height;
  }
  
@@ -768,11 +778,18 @@ index 1711a89..439982e 100644
 +  return scale;
 +}
 +
++/* Pixels on the N900, rounded to the screen's */
++gint
++hd_util_scaled(gdouble pixels)
++{
++  return (gint) lround(pixels * hd_util_scale());
++}
++
  gchar *hd_util_get_default_terminal(void)
  {
    gchar *term = NULL;
 diff --git a/src/util/hd-util.h b/src/util/hd-util.h
-index 59ba916..7a17a57 100644
+index 59ba916..1d571e3 100644
 --- a/src/util/hd-util.h
 +++ b/src/util/hd-util.h
 @@ -4,6 +4,7 @@
@@ -783,7 +800,7 @@ index 59ba916..7a17a57 100644
  #include <glib.h>
  #include <clutter/clutter.h>
  #include <matchbox/core/mb-wm.h>
-@@ -58,4 +59,12 @@ guint hd_util_display_height(void);
+@@ -58,4 +59,13 @@ guint hd_util_display_height(void);
  
  gchar *hd_util_get_default_terminal(void);
  
@@ -793,6 +810,7 @@ index 59ba916..7a17a57 100644
 + * pro1x-theme-scale), e.g. 2.25 on 2160x1080 for the N900's proportion:
 + * HD_S (56) is the title bar's height there. */
 +gdouble hd_util_scale(void);
-+#define HD_S(x) ((int) lround ((x) * hd_util_scale ()))
++gint hd_util_scaled(gdouble pixels);
++#define HD_S(x) hd_util_scaled (x)
 +
  #endif
