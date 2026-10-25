@@ -103,7 +103,9 @@ h_pids() {
 
 do_stop() {
 	local pids
-	start-stop-daemon --stop --quiet --pidfile /run/pro1x-n9-sensors.pid --remove-pidfile || true
+	for d in n9-sensors iphbd; do
+		start-stop-daemon --stop --quiet --pidfile /run/pro1x-$d.pid --remove-pidfile || true
+	done
 	pids=$(h_pids)
 	if [ -n "$pids" ]; then
 		kill $pids 2>/dev/null || true
@@ -131,6 +133,47 @@ start_root() {
 		/bin/sh -c "exec $* > /var/log/pro1x-session/$name.log 2>&1" &
 }
 
+# Harmattan's own upstart jobs (/etc/init/xsession/<job>.conf, or
+# /etc/init/<job>.conf for system services): their env lines, pre-start
+# script and exec line or script, run as root in the chroot the way upstart
+# ran them; the jobs switch to "user" through aegis-exec
+# (36-aegis-permissive.sh), with the groups in PRO1X_GROUPS. Upstart's own
+# commands are stubs. Extra arguments are environment settings (PAR1=...).
+JOBS=/var/run/pro1x-jobs
+run_job() {
+	local job=$1 conf
+	shift
+	conf=$H/etc/init/xsession/$job.conf
+	[ -f "$conf" ] || conf=$H/etc/init/$job.conf
+	[ -f "$conf" ] || { echo "no job $job"; return 0; }
+	if [ ! -d "$H$JOBS/bin" ]; then
+		mkdir -p "$H$JOBS/bin"
+		for c in initctl start stop status waitdbus sysinfoclient; do
+			printf '#!/bin/sh\nexit 0\n' > "$H$JOBS/bin/$c"
+			chmod 755 "$H$JOBS/bin/$c"
+		done
+	fi
+	awk '
+		/^env / { sub(/^env /, "export "); env = env $0 "\n"; next }
+		/^pre-start script/ { mode = "pre"; next }
+		/^script/ { mode = "main"; next }
+		/^(post-start|pre-stop|post-stop) script/ { mode = "skip"; next }
+		/^end script/ { mode = ""; next }
+		mode == "pre" { pre = pre $0 "\n"; next }
+		mode == "main" { main = main $0 "\n"; next }
+		mode == "skip" { next }
+		/^exec / { main = $0 "\n" }
+		END { printf "%s(\n:\n%s)\n%s", env, pre, main }
+	' "$conf" > "$H$JOBS/$job.sh"
+	chroot "$H" /usr/bin/env -i PATH=$JOBS/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+		HOME=/root LANG=en_US.utf8 TMPDIR=/var/tmp QT_IM_MODULE=MInputContext \
+		DISPLAY=:0 XAUTHORITY=/home/user/.Xauthority \
+		PULSE_SERVER=unix:/run/user/$HUID/pulse/native \
+		DBUS_SESSION_BUS_ADDRESS="$(cat "$H/var/run/pro1x-session-bus")" \
+		PRO1X_GROUPS=$GROUPS_H,$GROUPS_L "$@" \
+		/bin/sh -c "exec /bin/sh $JOBS/$job.sh > /var/log/pro1x-session/$job.log 2>&1" &
+}
+
 do_start() {
 	do_mount
 	clear_qt_ipc
@@ -151,7 +194,7 @@ do_start() {
 
 	start_root gconfd /usr/lib/gconf2/gconfd-2
 	# The Pro1X's accelerometer, proximity sensor and keyboard slide as the
-	# N9's input device (41-leste-n9-sensors.sh), read by Harmattan's
+	# N9's input device (41-leste-helpers.sh), read by Harmattan's
 	# sensord (orientation, Screen.TopEdge) and contextkit (keyboard open).
 	start-stop-daemon --start --quiet --background --make-pidfile \
 		--pidfile /run/pro1x-n9-sensors.pid --exec /usr/lib/pro1x-meego/n9-sensors || true
@@ -162,10 +205,16 @@ do_start() {
 		i=$((i + 1))
 	done
 	start_root sensord /usr/sbin/sensord
+	# dsme's IP heartbeat service, which Leste's dsme lacks: Harmattan's
+	# periodic wakeups (the status bar clock among them) depend on it.
+	start-stop-daemon --start --quiet --background --make-pidfile \
+		--pidfile /run/pro1x-iphbd.pid --exec /usr/lib/pro1x-meego/iphbd || true
 	as_user /usr/bin/dbus-daemon --session --fork --print-address \
 		> "$H/var/run/pro1x-session-bus"
 	ln -sf /var/run/m.mthemedaemon "$H/tmp/m.mthemedaemon"
 	start_bg nok-image-broker /usr/libexec/nok-image-broker
+	run_job timed
+	run_job ohmd
 
 	start_bg mthemedaemon /usr/bin/mthemedaemon
 	sleep 3
@@ -174,6 +223,16 @@ do_start() {
 	start_bg sysuid /usr/bin/sysuid -graphicssystem meego
 	start_bg meegotouchhome /usr/bin/meegotouchhome -remote-theme -graphicssystem meego
 	start_bg applauncherd /usr/bin/applauncherd
+	# Harmattan's group-desktop and group-load-launcher jobs, as far as the
+	# Pro1X has their hardware.
+	for job in qmkeyd meego-im-uiserver ngfd mfeedbackd ohm-session-agent; do
+		run_job $job
+	done
+	# Leste's mce keeps the display on until the desktop reports ready
+	# (its startup-hildon module), which hildon-desktop does in a Leste boot.
+	# Without it the screen never blanks, and sysuid, which only runs its
+	# status bar clock across display state changes, shows the start time.
+	dbus-send --system --type=signal /com/nokia/hildon_desktop com.nokia.HildonDesktop.ready || true
 	echo "Harmattan session started, logs in ${LOG#$H}"
 }
 
