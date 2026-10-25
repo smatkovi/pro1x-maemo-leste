@@ -30,12 +30,12 @@ patch_string() {
 	fi
 }
 
-# Build touch/<name>.c into /usr/lib/pro1x/lib<name>.so.
+# Build <dir>/<name>.c into /usr/lib/pro1x/lib<name>.so.
 build_lib() {
-	local name=$1; shift
+	local dir=$1 name=$2; shift 2
 	local B=$D/tmp/pro1x-build
 	rm -rf "$B"
-	cp -r "$SRC/touch" "$B"
+	cp -r "$SRC/$dir" "$B"
 	chroot "$D" sh -c "cd /tmp/pro1x-build &&
 		gcc -O2 -Wall -fPIC -shared -fvisibility=hidden -o lib$name.so $name.c \
 			-Wl,--no-as-needed $*"
@@ -58,11 +58,13 @@ chroot "$D" env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-instal
 patch_string /usr/lib/mcompositor/libnokiaswipeextension.so Atmel Goodi
 # ...and read the finger in the N9's touch coordinates; the preloaded
 # mcompositor-touch gives them screen coordinates (40-harmattan-session.sh).
-build_lib mcompositor-touch -lXtst -lX11
+build_lib touch mcompositor-touch -lXtst -lX11
 
 # Qt's touch events (MeeGo Touch pans with them) from the N9's X input,
-# which harmattan-touch emulates for every process.
-build_lib harmattan-touch
+# which harmattan-touch emulates for every process; harmattan-compat for
+# the remaining N9 assumptions.
+build_lib touch harmattan-touch
+build_lib compat harmattan-compat
 P=/etc/ld.so.preload
 if [ -e "$H$P" ] && ! grep -qxF "$P" "$STATE/added"; then
 	if ! grep -qxF "$P" "$STATE/patched"; then
@@ -73,5 +75,7 @@ if [ -e "$H$P" ] && ! grep -qxF "$P" "$STATE/added"; then
 else
 	grep -qxF "$P" "$STATE/added" || echo "$P" >> "$STATE/added"
 fi
-grep -qxF /usr/lib/pro1x/libharmattan-touch.so "$H$P" 2>/dev/null ||
-	echo /usr/lib/pro1x/libharmattan-touch.so >> "$H$P"
+for l in harmattan-touch harmattan-compat; do
+	grep -qxF /usr/lib/pro1x/lib$l.so "$H$P" 2>/dev/null ||
+		echo /usr/lib/pro1x/lib$l.so >> "$H$P"
+done

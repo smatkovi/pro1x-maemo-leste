@@ -170,6 +170,7 @@ run_job() {
 		DISPLAY=:0 XAUTHORITY=/home/user/.Xauthority \
 		PULSE_SERVER=unix:/run/user/$HUID/pulse/native \
 		DBUS_SESSION_BUS_ADDRESS="$(cat "$H/var/run/pro1x-session-bus")" \
+		UPSTART_JOB=$job UPSTART_JOB_RESPAWNED=0 \
 		PRO1X_GROUPS=$GROUPS_H,$GROUPS_L "$@" \
 		/bin/sh -c "exec /bin/sh $JOBS/$job.sh > /var/log/pro1x-session/$job.log 2>&1" &
 }
@@ -215,6 +216,7 @@ do_start() {
 	start_bg nok-image-broker /usr/libexec/nok-image-broker
 	run_job timed
 	run_job ohmd
+	run_job policy-cfd
 
 	start_bg mthemedaemon /usr/bin/mthemedaemon
 	sleep 3
@@ -224,8 +226,16 @@ do_start() {
 	start_bg meegotouchhome /usr/bin/meegotouchhome -remote-theme -graphicssystem meego
 	start_bg applauncherd /usr/bin/applauncherd
 	# Harmattan's group-desktop and group-load-launcher jobs, as far as the
-	# Pro1X has their hardware.
-	for job in qmkeyd meego-im-uiserver ngfd mfeedbackd ohm-session-agent; do
+	# Pro1X has their hardware. Left out: the cellular ones (celluid,
+	# simatkuid, wappushd: no csd), the N9's WLAN driver (wl1271-cal,
+	# wlancond: Leste's icd2 does WLAN), usb_moded, the Immersion vibra
+	# (immvibed), devicelockd (Leste's lock code), first-boot and crash
+	# reporting (mstartup, cherryui, crash-reporter-daemon, bugreporter).
+	for job in qmkeyd meego-im-uiserver ngfd mfeedbackd ohm-session-agent \
+		signond-launch tracker-miner nped contactsd commhistoryd mdecorator \
+		clipboard smartsearch presenced mission-control messageserver \
+		mfacebookd mtwitter usetimed tonegend webupload-recovery \
+		calendar-icon-update pkgm-timed-checks backup-framework; do
 		run_job $job
 	done
 	# Leste's mce keeps the display on until the desktop reports ready
