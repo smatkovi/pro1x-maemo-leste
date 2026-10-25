@@ -47,6 +47,7 @@ to the command line, e.g. `hint.ufshci.0.disabled=1`.
 | GPIOs | `qcom_tlmm_sm6115` (`0006`): GPIOs and their interrupts; on them `gpiokeys` (Shift, Ctrl, Alt, Fn, Home, camera key, the slider switch), `gpioiic` (the touchscreen's bus), `gpioled` (keyboard backlight) |
 | touchscreen | `goodix` (`0007`), GT9286, multi-touch through evdev |
 | keyboard | `geniiic` (`0008`: device tree attachment of FreeBSD's GENI I2C driver, QUP wrapper bus) and `pro1xkbd` (`0009`): the 8x8 matrix behind the AW9523B, console keyboard and evdev; the boot menu keeps the I2C engine's clocks on before the jump |
+| CPU frequency | `qcom_cpufreq_hw` (`0010`): the firmware's frequency table per cluster for cpufreq(4) and powerd |
 | UFS | `ufshci` (`0005`), on the link Linux left up: the controller's PHY, clocks and regulators need Qualcomm drivers FreeBSD lacks. Linux keeps UFS powered across kexec (`device/kernel/patches/0004`), and the boot menu rebinds it with an identity mapping first, since FreeBSD does not drive the SMMU in front of it and hands the controller physical addresses. The attach reports the SMMU's view of the stream |
 
 ## Files
@@ -66,6 +67,7 @@ to the command line, e.g. `hint.ufshci.0.disabled=1`.
 | `patches/0007-*` | `goodix`, the touchscreen |
 | `patches/0008-*` | `geniiic` from the device tree, the QUP v3 wrapper as a bus |
 | `patches/0009-*` | `pro1xkbd`, the keyboard matrix |
+| `patches/0010-*` | `qcom_cpufreq_hw`, CPU frequency |
 
 The root filesystem is the release's `/rescue` (one static binary for sh,
 init, mount, ifconfig...) from `base.txz`, built into the kernel

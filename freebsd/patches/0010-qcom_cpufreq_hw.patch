@@ -1,0 +1,363 @@
+From 0dbf282fb8981b640539610b7a8a35b4ea8c431d Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 18:39:51 +0100
+Subject: [PATCH] qcom_cpufreq_hw: Qualcomm CPU frequency hardware
+
+cpufreq(4) driver for qcom,cpufreq-hw (SM6115): the firmware's lookup
+table per frequency domain becomes the levels, a level is picked by
+writing its row to the domain's perf state register.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/arm64/qualcomm/qcom_cpufreq_hw.c | 326 +++++++++++++++++++++++++++
+ sys/conf/files.arm64                 |   1 +
+ 2 files changed, 327 insertions(+)
+ create mode 100644 sys/arm64/qualcomm/qcom_cpufreq_hw.c
+
+diff --git a/sys/arm64/qualcomm/qcom_cpufreq_hw.c b/sys/arm64/qualcomm/qcom_cpufreq_hw.c
+new file mode 100644
+index 000000000..8632be079
+--- /dev/null
++++ b/sys/arm64/qualcomm/qcom_cpufreq_hw.c
+@@ -0,0 +1,326 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Qualcomm CPU frequency hardware ("qcom,cpufreq-hw", OSM-less SoCs such as
++ * the SM6115): firmware runs the clusters' PLLs and voltages from a lookup
++ * table; the operating system only picks a row of it per frequency domain.
++ *
++ * Each CPU node names its domain with qcom,freq-domain = <&cpufreq_hw N>;
++ * domain N is the provider's N-th register block. A row of the frequency
++ * table holds the clock source (XO times L, or the alternate PLL), the core
++ * count (1 marks a boost row) and, in the voltage table, the millivolts.
++ * Two equal rows in a row end the table (Linux's qcom-cpufreq-hw).
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/cpu.h>
++#include <sys/kernel.h>
++#include <sys/module.h>
++#include <sys/pcpu.h>
++#include <sys/smp.h>
++
++#include <vm/vm.h>
++#include <vm/pmap.h>
++
++#include <dev/ofw/openfirm.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++#include <dev/ofw/ofw_subr.h>
++
++#include "cpufreq_if.h"
++
++#define	REG_ENABLE		0x000
++#define	REG_FREQ_LUT		0x110
++#define	REG_VOLT_LUT		0x114
++#define	REG_PERF_STATE		0x920
++#define	LUT_ROW_SIZE		32
++#define	LUT_MAX_ENTRIES		40
++
++#define	LUT_SRC(x)		(((x) >> 30) & 0x3)
++#define	LUT_CORE_COUNT(x)	(((x) >> 16) & 0x7)
++#define	LUT_L_VAL(x)		((x) & 0xff)
++#define	LUT_VOLT(x)		((x) & 0xfff)
++#define	LUT_TURBO_IND		1
++
++#define	XO_KHZ			19200
++/* The alternate source: GPLL0 (600 MHz on the SM6115) divided by two */
++#define	ALT_KHZ			300000
++
++struct qcom_cpufreq_softc {
++	device_t	dev;
++	vm_offset_t	regs;
++	vm_size_t	size;
++	u_int		domain;
++	u_int		nlevels;
++	int		mhz[LUT_MAX_ENTRIES];
++	int		mv[LUT_MAX_ENTRIES];
++	uint8_t		row[LUT_MAX_ENTRIES];	/* LUT row of each level */
++	cpuset_t	cpus;			/* the domain's CPUs */
++};
++
++static uint32_t
++rd(struct qcom_cpufreq_softc *sc, vm_size_t off)
++{
++	return (*(volatile uint32_t *)(sc->regs + off));
++}
++
++static void
++wr(struct qcom_cpufreq_softc *sc, vm_size_t off, uint32_t val)
++{
++	*(volatile uint32_t *)(sc->regs + off) = val;
++}
++
++/* The domain of a CPU node, and the provider's node */
++static int
++qcom_cpufreq_domain(phandle_t cpu, phandle_t *provider, u_int *domain)
++{
++	pcell_t cells[2];
++
++	if (OF_getencprop(cpu, "qcom,freq-domain", cells, sizeof(cells)) !=
++	    sizeof(cells))
++		return (ENXIO);
++	*provider = OF_node_from_xref(cells[0]);
++	*domain = cells[1];
++	if (*provider <= 0 ||
++	    !ofw_bus_node_is_compatible(*provider, "qcom,cpufreq-hw"))
++		return (ENXIO);
++	return (0);
++}
++
++static void
++qcom_cpufreq_identify(driver_t *driver, device_t parent)
++{
++	phandle_t provider;
++	u_int domain;
++
++	if (qcom_cpufreq_domain(ofw_bus_get_node(parent), &provider,
++	    &domain) != 0)
++		return;
++	if (device_find_child(parent, "qcom_cpufreq", DEVICE_UNIT_ANY) != NULL)
++		return;
++	if (BUS_ADD_CHILD(parent, 0, "qcom_cpufreq", device_get_unit(parent))
++	    == NULL)
++		device_printf(parent, "unable to add qcom_cpufreq\n");
++}
++
++static int
++qcom_cpufreq_probe(device_t dev)
++{
++	phandle_t provider;
++	u_int domain;
++
++	if (qcom_cpufreq_domain(ofw_bus_get_node(device_get_parent(dev)),
++	    &provider, &domain) != 0)
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm CPU frequency hardware");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static void
++qcom_cpufreq_read_lut(struct qcom_cpufreq_softc *sc)
++{
++	uint32_t f, v;
++	int i, khz, prev;
++
++	prev = -1;
++	for (i = 0; i < LUT_MAX_ENTRIES; i++) {
++		f = rd(sc, REG_FREQ_LUT + i * LUT_ROW_SIZE);
++		v = rd(sc, REG_VOLT_LUT + i * LUT_ROW_SIZE);
++		khz = LUT_SRC(f) != 0 ? XO_KHZ * LUT_L_VAL(f) : ALT_KHZ;
++		if (khz == prev)
++			break;
++		prev = khz;
++		if (LUT_CORE_COUNT(f) == LUT_TURBO_IND)
++			continue;
++		sc->mhz[sc->nlevels] = khz / 1000;
++		sc->mv[sc->nlevels] = LUT_VOLT(v);
++		sc->row[sc->nlevels] = i;
++		sc->nlevels++;
++	}
++}
++
++/* The CPUs whose nodes name the same domain */
++static void
++qcom_cpufreq_find_cpus(struct qcom_cpufreq_softc *sc, phandle_t provider)
++{
++	devclass_t dc = devclass_find("cpu");
++	phandle_t node, prov;
++	device_t cpudev;
++	u_int cpu, domain;
++
++	/* cpu(4) units are the CPU ids (ofw_cpu). */
++	CPU_ZERO(&sc->cpus);
++	CPU_FOREACH(cpu) {
++		cpudev = dc != NULL ? devclass_get_device(dc, cpu) : NULL;
++		if (cpudev == NULL)
++			continue;
++		node = ofw_bus_get_node(cpudev);
++		if (qcom_cpufreq_domain(node, &prov, &domain) == 0 &&
++		    prov == provider && domain == sc->domain)
++			CPU_SET(cpu, &sc->cpus);
++	}
++}
++
++static void
++qcom_cpufreq_notify(struct qcom_cpufreq_softc *sc, int mhz)
++{
++	u_int cpu;
++
++	CPU_FOREACH(cpu)
++		if (CPU_ISSET(cpu, &sc->cpus))
++			pcpu_find(cpu)->pc_clock = (uint64_t)mhz * 1000000;
++}
++
++static int
++qcom_cpufreq_attach(device_t dev)
++{
++	struct qcom_cpufreq_softc *sc = device_get_softc(dev);
++	phandle_t provider;
++	bus_addr_t pa;
++	bus_size_t size;
++	u_int i, cur;
++
++	sc->dev = dev;
++	if (qcom_cpufreq_domain(ofw_bus_get_node(device_get_parent(dev)),
++	    &provider, &sc->domain) != 0 ||
++	    ofw_reg_to_paddr(provider, sc->domain, &pa, &size, NULL) != 0) {
++		device_printf(dev, "no registers for the frequency domain\n");
++		return (ENXIO);
++	}
++	sc->size = size;
++	sc->regs = (vm_offset_t)pmap_mapdev(pa, size);
++	if (!(rd(sc, REG_ENABLE) & 1)) {
++		device_printf(dev, "domain %u not enabled by the firmware\n",
++		    sc->domain);
++		pmap_unmapdev((void *)sc->regs, sc->size);
++		return (ENXIO);
++	}
++	qcom_cpufreq_read_lut(sc);
++	if (sc->nlevels == 0) {
++		device_printf(dev, "empty frequency table\n");
++		pmap_unmapdev((void *)sc->regs, sc->size);
++		return (ENXIO);
++	}
++	qcom_cpufreq_find_cpus(sc, provider);
++
++	cur = rd(sc, REG_PERF_STATE);
++	for (i = 0; i < sc->nlevels && sc->row[i] != cur; i++)
++		;
++	if (bootverbose || device_get_unit(device_get_parent(dev)) == 0)
++		device_printf(dev, "domain %u: %d-%d MHz in %u levels, now "
++		    "%d MHz\n", sc->domain, sc->mhz[0],
++		    sc->mhz[sc->nlevels - 1], sc->nlevels,
++		    i < sc->nlevels ? sc->mhz[i] : -1);
++	if (i < sc->nlevels)
++		qcom_cpufreq_notify(sc, sc->mhz[i]);
++
++	cpufreq_register(dev);
++	return (0);
++}
++
++static int
++qcom_cpufreq_detach(device_t dev)
++{
++	struct qcom_cpufreq_softc *sc = device_get_softc(dev);
++
++	cpufreq_unregister(dev);
++	pmap_unmapdev((void *)sc->regs, sc->size);
++	return (0);
++}
++
++static void
++qcom_cpufreq_setting(struct qcom_cpufreq_softc *sc, u_int i,
++    struct cf_setting *set)
++{
++	memset(set, CPUFREQ_VAL_UNKNOWN, sizeof(*set));
++	set->freq = sc->mhz[i];
++	set->volts = sc->mv[i];
++	set->power = CPUFREQ_VAL_UNKNOWN;
++	set->lat = 0;
++	set->dev = sc->dev;
++}
++
++static int
++qcom_cpufreq_settings(device_t dev, struct cf_setting *sets, int *count)
++{
++	struct qcom_cpufreq_softc *sc = device_get_softc(dev);
++	u_int i;
++
++	if (sets == NULL || count == NULL)
++		return (EINVAL);
++	if (*count < (int)sc->nlevels) {
++		*count = sc->nlevels;
++		return (E2BIG);
++	}
++	/* cpufreq(4) wants the fastest first. */
++	for (i = 0; i < sc->nlevels; i++)
++		qcom_cpufreq_setting(sc, sc->nlevels - 1 - i, &sets[i]);
++	*count = sc->nlevels;
++	return (0);
++}
++
++static int
++qcom_cpufreq_get(device_t dev, struct cf_setting *set)
++{
++	struct qcom_cpufreq_softc *sc = device_get_softc(dev);
++	uint32_t cur;
++	u_int i;
++
++	cur = rd(sc, REG_PERF_STATE);
++	for (i = 0; i < sc->nlevels; i++)
++		if (sc->row[i] == cur) {
++			qcom_cpufreq_setting(sc, i, set);
++			return (0);
++		}
++	return (ENXIO);
++}
++
++static int
++qcom_cpufreq_set(device_t dev, const struct cf_setting *set)
++{
++	struct qcom_cpufreq_softc *sc = device_get_softc(dev);
++	u_int i;
++
++	for (i = 0; i < sc->nlevels; i++)
++		if (sc->mhz[i] == set->freq)
++			break;
++	if (i == sc->nlevels)
++		return (EINVAL);
++	/* Firmware switches PLL and voltage; the vote takes effect at once. */
++	wr(sc, REG_PERF_STATE, sc->row[i]);
++	qcom_cpufreq_notify(sc, sc->mhz[i]);
++	return (0);
++}
++
++static int
++qcom_cpufreq_type(device_t dev, int *type)
++{
++	if (type == NULL)
++		return (EINVAL);
++	*type = CPUFREQ_TYPE_ABSOLUTE;
++	return (0);
++}
++
++static device_method_t qcom_cpufreq_methods[] = {
++	DEVMETHOD(device_identify,	qcom_cpufreq_identify),
++	DEVMETHOD(device_probe,		qcom_cpufreq_probe),
++	DEVMETHOD(device_attach,	qcom_cpufreq_attach),
++	DEVMETHOD(device_detach,	qcom_cpufreq_detach),
++
++	DEVMETHOD(cpufreq_drv_get,	qcom_cpufreq_get),
++	DEVMETHOD(cpufreq_drv_set,	qcom_cpufreq_set),
++	DEVMETHOD(cpufreq_drv_type,	qcom_cpufreq_type),
++	DEVMETHOD(cpufreq_drv_settings,	qcom_cpufreq_settings),
++
++	DEVMETHOD_END
++};
++
++static driver_t qcom_cpufreq_driver = {
++	"qcom_cpufreq",
++	qcom_cpufreq_methods,
++	sizeof(struct qcom_cpufreq_softc),
++};
++
++DRIVER_MODULE(qcom_cpufreq, cpu, qcom_cpufreq_driver, 0, 0);
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index 338001344..95ec6b336 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -740,6 +740,7 @@ arm64/qualcomm/qcom_geni_qup.c			optional geniiic fdt
+ dev/iicbus/controller/qcom/geni_iic.c		optional geniiic
+ dev/iicbus/controller/qcom/geni_iic_fdt.c	optional geniiic fdt
+ dev/iicbus/pro1x_kbd.c				optional pro1xkbd fdt gpiokeys
++arm64/qualcomm/qcom_cpufreq_hw.c		optional qcom_cpufreq_hw fdt cpufreq
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ 
+ # RockChip Drivers
+-- 
+2.56.0
+

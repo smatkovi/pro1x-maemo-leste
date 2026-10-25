@@ -46,6 +46,10 @@ device		goodix			# the touchscreen (0007)
 device		geniiic			# FDT attachment (0008)
 device		pro1xkbd		# the keyboard matrix on it (0009)
 
+# CPU frequency: the firmware's lookup table per cluster (0010)
+device		cpufreq
+device		qcom_cpufreq_hw
+
 # Disks and file systems: CAM, GPT, ext4 (userdata, where the system
 # images live)
 device		scbus
