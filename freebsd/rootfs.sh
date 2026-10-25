@@ -20,7 +20,7 @@ REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 WORK=${WORK:?set WORK=<build directory>}
 ABI=${ABI:-FreeBSD:15:aarch64}
 PKGURL=${PKGURL:-https://pkg.freebsd.org/$ABI/quarterly}
-PKGS=${PKGS-xorg-minimal xf86-video-scfb xf86-input-libinput xinit xfce xfce4-terminal dejavu xwd}
+PKGS=${PKGS-xorg-minimal xf86-video-scfb xf86-input-libinput xinit xfce xfce4-terminal xfce4-genmon-plugin dejavu xset xwd}
 # Pulled in only for building or for optional parts: LLVM (mesa's OpenCL
 # and llvmpipe, 1.8 GiB), Samba (gvfs's SMB backend), Qt and bsdisks
 # (automounting), Python and Perl (scripts)
@@ -110,6 +110,9 @@ for s in m.get("scripts", {}).values():
 fi
 
 log "Pro1X configuration (rootfs/)"
+# root's home is a tmpfs filled at boot from here (rc.d/pro1x_setup)
+mkdir -p "$R/usr/local/share/pro1x/root"
+cp -a "$R/root/." "$R/usr/local/share/pro1x/root/"
 cp -a "$REPO/freebsd/rootfs/." "$R/"
 # A fixed host id: rc would write one into /etc, which is read only.
 uuidgen > "$R/etc/hostid"

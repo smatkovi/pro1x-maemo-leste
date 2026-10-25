@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- F(x)tec Pro1X: 2160x1080 on 6 inches, about 400 dpi: everything twice -->
+<channel name="xsettings" version="1.0">
+  <property name="Gdk" type="empty">
+    <property name="WindowScalingFactor" type="int" value="2"/>
+  </property>
+</channel>

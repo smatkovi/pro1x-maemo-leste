@@ -59,8 +59,11 @@ index (`pkgfetch.py`); what is only needed to build or for optional parts
 (LLVM, Samba, Qt, Python, Perl) stays out (`PRUNE`). Owners and modes come
 from the tarballs' mtrees (`mkspec.py`); the packages' users and groups,
 GSettings schemas and MIME database are set up at build time, the image
-loader list and font cache at boot (`rootfs/usr/local/etc/rc.d/pro1x_caches`).
-As root on the console: `startx` (`/root/.xinitrc` starts Xfce).
+loader list and font cache at boot (`rootfs/usr/local/etc/rc.d/pro1x_setup`,
+which also fills root's home, a tmpfs, from `/usr/local/share/pro1x/root`).
+As root on the console: `startx` (`~/.xinitrc` starts Xfce, scaled twice for
+the 400 dpi screen, the battery in the panel through genmon, black after
+3 minutes since scfb has no DPMS).
 
 `freebsd/cmdline` on userdata: `pro1x.root=ram` stays in the RAM root;
 `pro1x.test=1` makes the full system report, start X for 40 s, keep a

@@ -1,0 +1,15 @@
+#!/bin/sh
+# The battery for the Xfce panel (genmon): pro1x_battery's state of charge
+# and status, in the ACPI form (hw.acpi.battery.*).
+life=$(sysctl -n hw.acpi.battery.life 2>/dev/null)
+state=$(sysctl -n hw.acpi.battery.state 2>/dev/null)
+mins=$(sysctl -n hw.acpi.battery.time 2>/dev/null)
+[ -n "$life" ] && [ "$life" -ge 0 ] || { echo "<txt>no battery</txt>"; exit 0; }
+case $(( ${state:-0} & 3 )) in
+2) sign="+" tip="charging" ;;
+1) sign="" tip="discharging" ;;
+*) sign="" tip="full" ;;
+esac
+[ -n "$mins" ] && [ "$mins" -gt 0 ] && tip="$tip, $((mins / 60)):$(printf %02d $((mins % 60))) h left"
+echo "<txt>$sign$life %</txt>"
+echo "<tool>Battery $life %, $tip</tool>"
