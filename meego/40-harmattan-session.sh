@@ -103,7 +103,7 @@ h_pids() {
 
 do_stop() {
 	local pids
-	for d in n9-sensors iphbd mainvolumed bmed positioningd; do
+	for d in n9-sensors iphbd mainvolumed bmed positioningd leste-apps; do
 		start-stop-daemon --stop --quiet --pidfile /run/pro1x-$d.pid --remove-pidfile || true
 	done
 	pids=$(h_pids)
@@ -228,6 +228,11 @@ do_start() {
 	start-stop-daemon --start --quiet --background --make-pidfile \
 		--pidfile /run/pro1x-positioningd.pid --exec /usr/bin/python3 -- \
 		/usr/lib/pro1x-meego/positioningd "$H" || true
+	# Leste's own applications (camera, Firefox...) in the application grid
+	/usr/lib/pro1x-meego/leste-apps sync "$H" || true
+	start-stop-daemon --start --quiet --background --make-pidfile \
+		--pidfile /run/pro1x-leste-apps.pid --exec /usr/bin/python3 -- \
+		/usr/lib/pro1x-meego/leste-apps serve || true
 	ln -sf /var/run/m.mthemedaemon "$H/tmp/m.mthemedaemon"
 	start_bg nok-image-broker /usr/libexec/nok-image-broker
 	run_job timed

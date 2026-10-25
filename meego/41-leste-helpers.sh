@@ -9,6 +9,8 @@
 #               replaced libbmeipc (bme/, 38-hardware-adaptation.sh)
 #   positioningd  Nokia's positioning daemon for QtLocation, on Leste's
 #               gpsd (positioning/)
+#   leste-apps  Leste applications (camera, Firefox...) in Harmattan's
+#               application grid (leste-apps/, /etc/pro1x-meego/leste-apps)
 #
 # Runs as root on Leste, after scripts/46-sensor-stack.sh (libssc).
 #
@@ -34,8 +36,12 @@ gcc -O2 -Wall -o /usr/lib/pro1x-meego/mainvolumed "$SRC/mainvolume/mainvolumed.c
 gcc -O2 -Wall -DBMED -o /usr/lib/pro1x-meego/bmed "$SRC/bme/bmeipc.c"
 apt-get install -y -q --no-install-recommends python3-dbus python3-gi > /dev/null
 install -m 755 "$SRC/positioning/positioningd.py" /usr/lib/pro1x-meego/positioningd
+install -m 755 "$SRC/leste-apps/leste-apps.py" /usr/lib/pro1x-meego/leste-apps
+install -m 644 "$SRC/leste-apps/org.pro1x.LesteLauncher.conf" /etc/dbus-1/system.d/
+install -d /etc/pro1x-meego
+[ -e /etc/pro1x-meego/leste-apps ] || install -m 644 "$SRC/leste-apps/leste-apps.list" /etc/pro1x-meego/leste-apps
 
 install -m 644 "$SRC/sensors/95-pro1x.conf" "$H/etc/sensorfw/sensord.conf.d/95-pro1x.conf"
 P=/etc/sensorfw/sensord.conf.d/95-pro1x.conf
 grep -qxF "$P" "$STATE/added" || echo "$P" >> "$STATE/added"
-echo "n9-sensors, iphbd, mainvolumed, bmed and positioningd installed"
+echo "n9-sensors, iphbd, mainvolumed, bmed, positioningd and leste-apps installed"

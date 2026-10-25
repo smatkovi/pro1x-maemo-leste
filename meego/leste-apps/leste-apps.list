@@ -1,0 +1,5 @@
+# Leste applications shown in the MeeGo session's application grid
+# (Leste desktop ids, from /usr/share/applications or its hildon/ directory)
+pro1x-camera
+firefox-esr
+gpodder-leste
