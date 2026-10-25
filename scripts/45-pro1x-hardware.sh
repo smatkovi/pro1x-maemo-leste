@@ -50,6 +50,21 @@ apt-get install -y -q \
   iw bluez gdisk mesa-utils \
   xinput debootstrap debian-archive-keyring
 
+# --- Upgrades ----------------------------------------------------------------
+# apt upgrade / dist-upgrade must not undo the port: configuration files it
+# changed stay (dpkg would otherwise ask, or a front end would replace them),
+# and Debian's kernel meta packages go, since the phone boots its own kernel
+# from the boot partition and never Debian's.
+log "apt: keep changed configuration files, no Debian kernels"
+cat > /etc/apt/apt.conf.d/50pro1x-upgrades <<'EOF'
+// Pro1X: upgrades keep configuration files changed on the phone and take
+// the package's new version of the unchanged ones
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+EOF
+for p in linux-image-arm64 linux-headers-arm64; do
+  if dpkg -s "$p" > /dev/null 2>&1; then apt-get remove -y -q "$p"; fi
+done
+
 # --- Overlay: init scripts, mce configuration ------------------------------
 log "overlay from $REPO/rootfs-overlay"
 cp -a "$REPO/rootfs-overlay/." /
