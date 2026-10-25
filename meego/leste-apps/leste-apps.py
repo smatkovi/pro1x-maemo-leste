@@ -108,7 +108,9 @@ def session_env():
            'XAUTHORITY': '/home/%s/.Xauthority' % USER, 'LANG': os.environ.get('LANG', 'en_US.UTF-8'),
            'PATH': '/usr/local/bin:/usr/bin:/bin:/usr/games',
            # Leste's Qt 5 programs crash on touch input after a blank with XI2
-           'QT_XCB_NO_XI2': '1'}
+           'QT_XCB_NO_XI2': '1',
+           # Firefox scrolls by touch only with XI2 touch events
+           'MOZ_USE_XINPUT2': '1'}
     try:
         with open('/tmp/session_bus_address.user') as f:
             for line in f:
