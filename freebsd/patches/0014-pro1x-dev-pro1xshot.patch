@@ -1,0 +1,117 @@
+From 5b66f35400593e8e9619cec2d1a119fd2bde90e0 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 19:08:20 +0100
+Subject: [PATCH] pro1x: /dev/pro1xshot, data for Linux behind the RAM console
+
+What is written to /dev/pro1xshot (a screenshot of an unattended test)
+stays in the spare splash memory at 0x5cc00000, after a header line and
+its length, for Linux to read after the next boot.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/arm64/pro1x/ramcons.c | 79 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 79 insertions(+)
+
+diff --git a/sys/arm64/pro1x/ramcons.c b/sys/arm64/pro1x/ramcons.c
+index eef542721..623ada663 100644
+--- a/sys/arm64/pro1x/ramcons.c
++++ b/sys/arm64/pro1x/ramcons.c
+@@ -10,11 +10,19 @@
+  *
+  * Built with -DPRO1X_RAMCONS (kernel config PRO1X), which also turns on
+  * multiple consoles, so that the framebuffer console stays on as well.
++ *
++ * Behind the console, /dev/pro1xshot keeps what is written to it (a
++ * screenshot of an unattended test, say) for Linux the same way: at
++ * 0x5cc00000 the line "PRO1X-SHOT", its length (32 bits, little endian, at
++ * offset 12) and the data from offset 16, up to 3 MiB.
+  */
+ #include <sys/param.h>
+ #include <sys/systm.h>
++#include <sys/conf.h>
+ #include <sys/kernel.h>
+ #include <sys/cons.h>
++#include <sys/fcntl.h>
++#include <sys/uio.h>
+ 
+ #include <vm/vm.h>
+ #include <vm/pmap.h>
+@@ -83,4 +91,75 @@ ramcons_cnungrab(struct consdev *cp)
+ 
+ CONSOLE_DRIVER(ramcons);
+ 
++#define	SHOT_PA		0x5cc00000UL
++#define	SHOT_SIZE	(3 * 1024 * 1024)
++#define	SHOT_HDR	16
++#define	SHOT_MAGIC	"PRO1X-SHOT\n"
++
++static char *shot_buf;
++static size_t shot_len;
++
++static void
++shot_set_len(void)
++{
++	uint32_t len = shot_len;
++
++	memcpy(shot_buf + 12, &len, sizeof(len));
++	dsb(sy);
++}
++
++static int
++shot_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
++{
++	if (shot_buf == NULL)
++		return (ENXIO);
++	if (oflags & FWRITE) {
++		memset(shot_buf, 0, SHOT_HDR);
++		memcpy(shot_buf, SHOT_MAGIC, sizeof(SHOT_MAGIC) - 1);
++		shot_len = 0;
++		shot_set_len();
++	}
++	return (0);
++}
++
++static int
++shot_write(struct cdev *dev, struct uio *uio, int ioflag)
++{
++	size_t n;
++	int error;
++
++	error = 0;
++	while (error == 0 && uio->uio_resid > 0) {
++		n = MIN(uio->uio_resid, SHOT_SIZE - SHOT_HDR - shot_len);
++		if (n == 0) {
++			error = ENOSPC;
++			break;
++		}
++		error = uiomove(shot_buf + SHOT_HDR + shot_len, n, uio);
++		if (error == 0)
++			shot_len += n;
++	}
++	shot_set_len();
++	return (error);
++}
++
++static struct cdevsw shot_cdevsw = {
++	.d_version =	D_VERSION,
++	.d_open =	shot_open,
++	.d_write =	shot_write,
++	.d_name =	"pro1xshot",
++};
++
++static void
++shot_init(void *arg)
++{
++	/* Normal uncached memory: copies need no alignment, reach the DRAM */
++	shot_buf = pmap_mapdev_attr(SHOT_PA, SHOT_SIZE,
++	    VM_MEMATTR_UNCACHEABLE);
++	if (shot_buf != NULL)
++		make_dev(&shot_cdevsw, 0, UID_ROOT, GID_WHEEL, 0600,
++		    "pro1xshot");
++}
++SYSINIT(pro1xshot, SI_SUB_DRIVERS, SI_ORDER_ANY, shot_init, NULL);
++
+ #endif /* PRO1X_RAMCONS */
+-- 
+2.56.0
+

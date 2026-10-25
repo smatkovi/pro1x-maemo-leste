@@ -9,6 +9,18 @@ if [ -n "$(kenv -q pro1x.test)" ]; then
 	df -h
 	mount
 	ls /dev/input 2>/dev/null
+	# The desktop for 40 s: does Xorg come up on scfb with the inputs?
+	if [ -x /usr/local/bin/startx ]; then
+		echo "--- X"
+		(cd /root && HOME=/root startx > /var/log/startx.log 2>&1 &)
+		sleep 40
+		grep -E "\((EE|WW)\)|scfb|libinput|Rotate" /var/log/Xorg.0.log | head -40
+		tail -5 /var/log/startx.log
+		ps ax | grep -E "Xorg|xfce|xfwm|panel" | grep -v grep
+		# The screen for Linux to fetch after the reboot (/dev/pro1xshot)
+		XAUTHORITY=/root/.Xauthority xwd -root -silent -display :0 |
+		    gzip -9 > /dev/pro1xshot && echo "screenshot kept"
+	fi
 	echo "=== test done, rebooting in 20 s"
 	(sleep 20; shutdown -r now "pro1x test done") > /dev/null 2>&1 &
 fi

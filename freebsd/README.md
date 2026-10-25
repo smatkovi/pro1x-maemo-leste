@@ -51,8 +51,21 @@ the reroot). The root stays read only, `/var` and `/tmp` are in memory
 console as root (no password). devd powers the phone off when the power
 key is held for 2 s; powerd scales the CPU frequency.
 
+The desktop: `rootfs.sh` also puts packages from pkg.freebsd.org into
+the image (`PKGS`, default Xorg with `scfb` on the framebuffer turned to
+landscape, libinput, Xfce; `PKGS=` for the base system only). The index
+is checked against the release's trusted key, every package against the
+index (`pkgfetch.py`); what is only needed to build or for optional parts
+(LLVM, Samba, Qt, Python, Perl) stays out (`PRUNE`). Owners and modes come
+from the tarballs' mtrees (`mkspec.py`); the packages' users and groups,
+GSettings schemas and MIME database are set up at build time, the image
+loader list and font cache at boot (`rootfs/usr/local/etc/rc.d/pro1x_caches`).
+As root on the console: `startx` (`/root/.xinitrc` starts Xfce).
+
 `freebsd/cmdline` on userdata: `pro1x.root=ram` stays in the RAM root;
-`pro1x.test=1` makes the full system report and reboot (`rootfs/etc/rc.local`);
+`pro1x.test=1` makes the full system report, start X for 40 s, keep a
+screenshot in `/dev/pro1xshot` (`patches/0014`: at 0x5cc00000, for Linux
+to read after the reboot) and reboot (`rootfs/etc/rc.local`);
 `hint.qcom_wdt.0.lifetime=N` lets the watchdog reset the phone N seconds
 after boot (`patches/0013`), so that unattended tests always end.
 
@@ -90,7 +103,9 @@ after boot (`patches/0013`), so that unattended tests always end.
 | `patches/0011-*` | `qcom_spmi`, `qcom_pon`, `qcom_rtc`: PMIC access, keys, clock |
 | `patches/0012-*` | reroot keeps the filesystems below `/dev` |
 | `patches/0013-*` | `qcom_wdt` lifetime for unattended tests |
+| `patches/0014-*` | `/dev/pro1xshot`, data for Linux behind the RAM console |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
+| `pkgfetch.py`, `mkspec.py` | packages with dependencies, checked; the image's owners and modes |
 
 The root filesystem is the release's `/rescue` (one static binary for sh,
 init, mount, ifconfig...) from `base.txz`, built into the kernel

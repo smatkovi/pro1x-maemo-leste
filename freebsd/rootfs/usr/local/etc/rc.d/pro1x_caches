@@ -1,0 +1,32 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_caches
+# REQUIRE: LOGIN ldconfig
+# KEYWORD: nojail
+#
+# The caches packages build when they are installed, on the read-only root
+# built into /var at every boot: gdk-pixbuf's list of image loaders (found
+# through GDK_PIXBUF_MODULE_FILE, /root/.xinitrc) and, in the background,
+# fontconfig's font cache.
+
+. /etc/rc.subr
+
+name="pro1x_caches"
+rcvar="pro1x_caches_enable"
+start_cmd="pro1x_caches_start"
+stop_cmd=":"
+
+pro1x_caches_start()
+{
+	if [ -x /usr/local/bin/gdk-pixbuf-query-loaders ]; then
+		/usr/local/bin/gdk-pixbuf-query-loaders \
+		    > /var/db/gdk-pixbuf-loaders.cache 2>/dev/null
+	fi
+	if [ -x /usr/local/bin/fc-cache ]; then
+		(nice /usr/local/bin/fc-cache -s > /dev/null 2>&1 &)
+	fi
+}
+
+load_rc_config $name
+: ${pro1x_caches_enable:="YES"}
+run_rc_command "$1"
