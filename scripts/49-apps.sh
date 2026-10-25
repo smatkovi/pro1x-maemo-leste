@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds and installs the Pro1X apps from apps/: the camera and the
-# pedometer home widget.
+# pedometer home widget; and printing (CUPS).
 #
 # Runs as root INSIDE the target (chroot or the running phone), after
 # 48-camera-stack.sh. Needs network for the build dependencies.
@@ -26,6 +26,13 @@ make install
 rm -rf "$SRC/pedometer-home-widget"
 cp -r "$REPO/apps/pedometer-home-widget" "$SRC/pedometer-home-widget"
 make -C "$SRC/pedometer-home-widget" install
+
+# Printing: CUPS with the command line tools (lp, lpr). No recommends, so no
+# cups-browsed or avahi listening on the network; browsing stays off.
+# Printers: lpadmin -p NAME -E -v ipp://PRINTER/ipp/print -m everywhere
+apt-get install -y -q --no-install-recommends cups cups-client cups-bsd cups-filters
+sed -i 's/^Browsing Yes/Browsing No/' /etc/cups/cupsd.conf
+usermod -aG lpadmin user
 
 # Leste does not refresh the icon cache when apps are installed.
 gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
