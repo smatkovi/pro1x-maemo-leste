@@ -1,0 +1,29 @@
+diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+index c3f08957d1..dd583eb727 100644
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -20,6 +20,7 @@
+ #include <linux/delay.h>
+ #include <linux/hex.h>
+ #include <linux/interrupt.h>
++#include <linux/kexec.h>
+ #include <linux/module.h>
+ #include <linux/pm_opp.h>
+ #include <linux/regulator/consumer.h>
+@@ -10766,6 +10767,16 @@ static void ufshcd_wl_shutdown(struct scsi_device *sdev)
+ 	hba->shutting_down = true;
+ 	up(&hba->host_sem);
+ 
++	/*
++	 * kexec: leave the controller, the link and the device powered and
++	 * clocked, so that the next kernel finds UFS working. A Linux kernel
++	 * starts it over anyway; another OS without drivers for this SoC's
++	 * clocks, PHY and regulators (FreeBSD on the F(x)tec Pro1X) could not
++	 * bring it back up.
++	 */
++	if (kexec_in_progress)
++		return;
++
+ 	/* Turn on everything while shutting down */
+ 	ufshcd_rpm_get_sync(hba);
+ 	scsi_device_quiesce(sdev);
