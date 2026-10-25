@@ -1,11 +1,11 @@
 /*
- * The Pro1X's accelerometer, proximity sensor and keyboard slide switch as
- * the N9/N950 reported them, for Harmattan's sensord and contextkit. Runs
- * on Leste, as root, during the MeeGo session.
+ * The Pro1X's accelerometer, proximity sensor, keyboard slide switch and
+ * side keys as the N9/N950 reported them, for Harmattan's sensord,
+ * contextkit and qmkeyd. Runs on Leste, as root, during the MeeGo session.
  *
  * The Pro1X sensors sit behind the ADSP's sensor core (libssc); the N9's
  * were evdev devices, which Harmattan still expects. One uinput device,
- * named like the N9's accelerometer, carries all three:
+ * named like the N9's accelerometer, carries them all:
  *
  *   EV_ABS X/Y/Z in mG     sensord's accelerometeradaptor ("accelerometer"
  *                          in the name)
@@ -15,9 +15,13 @@
  *                          link /dev/input/gpio-keys: set while the keyboard
  *                          is closed, the N950's sense - the Pro1X's
  *                          gpio-keys sets it while the keyboard is out
+ *   KEY_VOLUMEUP/DOWN,     qmkeyd, also through /dev/input/gpio-keys (the
+ *   KEY_CAMERA             N9 had them on its gpio-keys); copied from the
+ *                          Pro1X's gpio-keys and pm8941_resin
  *
  * Leste's mce skips input devices with that name, so these events neither
- * count as user activity nor as its own keyboard slide.
+ * count as user activity nor as its own keyboard slide; X ignores the
+ * device (90-pro1x-n9-input.rules), so it gets the keys only once.
  *
  * Axes: corrected with the Pro1X's mount matrix (x and y flipped, as
  * verified by the NixOS port and set for iio-sensor-proxy in
@@ -51,6 +55,7 @@
 #define LONG_BITS (8 * sizeof(long))
 #define LANDSCAPE_START_US (20 * G_USEC_PER_SEC)
 
+static const int side_keys[] = { KEY_VOLUMEUP, KEY_VOLUMEDOWN, KEY_CAMERA };
 static int out_fd = -1;
 static gint64 start_us;
 
@@ -79,6 +84,9 @@ static int uinput_open(void)
 	ioctl(fd, UI_SET_EVBIT, EV_SW);
 	ioctl(fd, UI_SET_SWBIT, SW_FRONT_PROXIMITY);
 	ioctl(fd, UI_SET_SWBIT, SW_KEYPAD_SLIDE);
+	ioctl(fd, UI_SET_EVBIT, EV_KEY);
+	for (unsigned i = 0; i < G_N_ELEMENTS(side_keys); i++)
+		ioctl(fd, UI_SET_KEYBIT, side_keys[i]);
 	if (ioctl(fd, UI_DEV_SETUP, &setup) < 0 || ioctl(fd, UI_DEV_CREATE) < 0) {
 		perror("uinput");
 		close(fd);
@@ -130,8 +138,8 @@ static void prox_cb(SSCSensorProximity *s, gboolean near, gpointer data)
 	emit(EV_SYN, SYN_REPORT, 0);
 }
 
-/* The Pro1X's gpio-keys device, by name. */
-static int open_gpio_keys(void)
+/* An input device of the Pro1X, by name. */
+static int open_input(const char *want)
 {
 	char path[64], name[64];
 
@@ -140,11 +148,26 @@ static int open_gpio_keys(void)
 		int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 		if (fd < 0)
 			continue;
-		if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) > 0 && !strcmp(name, "gpio-keys"))
+		if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) > 0 && !strcmp(name, want))
 			return fd;
 		close(fd);
 	}
+	fprintf(stderr, "%s not found\n", want);
 	return -1;
+}
+
+static void copy_side_keys(const struct input_event *ev, ssize_t n)
+{
+	for (ssize_t i = 0; i < n; i++) {
+		if (ev[i].type != EV_KEY)
+			continue;
+		for (unsigned k = 0; k < G_N_ELEMENTS(side_keys); k++) {
+			if (ev[i].code == side_keys[k]) {
+				emit(EV_KEY, ev[i].code, ev[i].value);
+				emit(EV_SYN, SYN_REPORT, 0);
+			}
+		}
+	}
 }
 
 static void slide_emit(int gpio_fd)
@@ -161,12 +184,25 @@ static void slide_emit(int gpio_fd)
 static gboolean gpio_cb(gint fd, GIOCondition cond, gpointer data)
 {
 	struct input_event ev[16];
+	ssize_t n;
 
 	(void)cond;
 	(void)data;
-	while (read(fd, ev, sizeof(ev)) > 0)
-		;
+	while ((n = read(fd, ev, sizeof(ev))) > 0)
+		copy_side_keys(ev, n / (ssize_t)sizeof(ev[0]));
 	slide_emit(fd);
+	return G_SOURCE_CONTINUE;
+}
+
+static gboolean keys_cb(gint fd, GIOCondition cond, gpointer data)
+{
+	struct input_event ev[16];
+	ssize_t n;
+
+	(void)cond;
+	(void)data;
+	while ((n = read(fd, ev, sizeof(ev))) > 0)
+		copy_side_keys(ev, n / (ssize_t)sizeof(ev[0]));
 	return G_SOURCE_CONTINUE;
 }
 
@@ -180,13 +216,15 @@ int main(void)
 	if (out_fd < 0)
 		return 1;
 
-	int gpio_fd = open_gpio_keys();
+	int gpio_fd = open_input("gpio-keys");
 	if (gpio_fd >= 0) {
 		slide_emit(gpio_fd);
 		g_unix_fd_add(gpio_fd, G_IO_IN, gpio_cb, NULL);
-	} else {
-		fprintf(stderr, "gpio-keys not found\n");
 	}
+	/* volume down */
+	int resin_fd = open_input("pm8941_resin");
+	if (resin_fd >= 0)
+		g_unix_fd_add(resin_fd, G_IO_IN, keys_cb, NULL);
 
 	SSCSensorAccelerometer *accel = ssc_sensor_accelerometer_new_sync(NULL, &err);
 	if (accel)

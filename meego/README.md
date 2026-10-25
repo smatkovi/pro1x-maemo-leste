@@ -16,7 +16,7 @@ from an N950 rootfs image (`/host/harmattan.img`) in a chroot.
 | 37 | `37-harmattan-user.sh` | Harmattan's user gets Leste's uid 1000 |
 | 38 | `38-hardware-adaptation.sh` | Touch input in the N9's format for Qt and mcompositor (`touch/`), small binary patches |
 | 39 | `39-leste-mce.sh` | Leste's mce closes Harmattan's lock screen (`patches/`) |
-| 41 | `41-leste-helpers.sh` | Leste-side helpers of the session: the Pro1X's sensors as the N9's input device for sensord (`sensors/`), dsme's IP heartbeat service (`iphb/`) |
+| 41 | `41-leste-helpers.sh` | Leste-side helpers of the session: the Pro1X's sensors, slide switch and side keys as the N9's input device (`sensors/`), dsme's IP heartbeat service (`iphb/`), PulseAudio's main volume interface for the volume bar (`mainvolume/`) |
 | 40 | `40-harmattan-session.sh` | Mounts and starts the session (installed as `/usr/lib/pro1x-meego/harmattan-session`, run by the `pro1x-meego` OpenRC service in the MeeGo boot); runs Harmattan's own upstart jobs (`run_job`) |
 
 Steps 20-38 and 41 work on the mounted image (`H=/mnt/harmattan`); 39 and
@@ -29,20 +29,19 @@ Works: GPU-accelerated MeeGo Touch UI in landscape (960x480), touch with
 scrolling and edge swipes (minimise, close), lock screen, display
 blanking, status bar clock, hardware keyboard and slide state, WLAN
 (Leste's icd2), applications through applauncherd including Python/PySide
-ports, music library (tracker), orientation sensor. Session jobs started
-from Harmattan's upstart files: timed, ohmd, qmkeyd, meego-im-uiserver,
-ngfd, mfeedbackd, ohm-session-agent.
+ports, music library (tracker) and playback, orientation sensor, volume
+keys with Harmattan's volume bar (like on the N9 only while media plays or
+during a call: ohmd's volume_mode). Session jobs started from Harmattan's
+upstart files: timed, ohmd, policy-cfd, qmkeyd, meego-im-uiserver, ngfd,
+mfeedbackd, ohm-session-agent and the rest of group-load-launcher.
 
 ## Towards parity with Leste
 
 In this order:
 
 1. Sensors: orientation, keyboard slide state (done)
-2. Harmattan's session daemons from its own upstart jobs: the first batch
-   runs; next mdecorator, clipboard, contactsd, commhistoryd and the rest
-   of group-load-launcher; check audio playback (ohmd's policy) and the
-   volume keys (sysuid's volume extension wants PulseAudio's
-   com.Nokia.MainVolume1, which Leste's PulseAudio lacks)
+2. Harmattan's session daemons from its own upstart jobs, audio playback,
+   volume keys (done)
 3. Battery: a BME server (`/tmp/.bmesrv`) fed from Leste's power supply
 4. Connectivity UI: Harmattan's radio states API in Leste's mce
    (the status menu shows "flight mode" without it)

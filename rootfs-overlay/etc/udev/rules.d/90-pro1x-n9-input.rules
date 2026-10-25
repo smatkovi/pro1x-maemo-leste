@@ -1,5 +1,8 @@
 # The N950's input device names, which MeeGo Harmattan opens directly
-# (contextkit's kbslider plugin: keyboard open/present; the slide switch
-# in the N950's sense comes from meego/sensors/n9-sensors.c).
+# (contextkit's kbslider plugin: keyboard open/present; qmkeyd: side keys;
+# the slide switch in the N950's sense and the side keys come from
+# meego/sensors/n9-sensors.c).
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="ST LIS3LV02DL Accelerometer", SYMLINK+="input/gpio-keys"
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Pro1X keyboard", SYMLINK+="input/keypad"
+# Only for Harmattan: X and iio-sensor-proxy already have the real devices.
+SUBSYSTEM=="input", ATTRS{name}=="ST LIS3LV02DL Accelerometer", ENV{ID_INPUT}="", ENV{ID_INPUT_KEY}="", ENV{ID_INPUT_KEYBOARD}="", ENV{ID_INPUT_SWITCH}="", ENV{ID_INPUT_ACCELEROMETER}=""

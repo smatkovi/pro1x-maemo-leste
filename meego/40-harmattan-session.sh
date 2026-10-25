@@ -103,7 +103,7 @@ h_pids() {
 
 do_stop() {
 	local pids
-	for d in n9-sensors iphbd; do
+	for d in n9-sensors iphbd mainvolumed; do
 		start-stop-daemon --stop --quiet --pidfile /run/pro1x-$d.pid --remove-pidfile || true
 	done
 	pids=$(h_pids)
@@ -210,6 +210,13 @@ do_start() {
 	# periodic wakeups (the status bar clock among them) depend on it.
 	start-stop-daemon --start --quiet --background --make-pidfile \
 		--pidfile /run/pro1x-iphbd.pid --exec /usr/lib/pro1x-meego/iphbd || true
+	# The main volume in steps, which sysuid's volume bar (side keys) uses,
+	# on Leste's PulseAudio: N9's PulseAudio had it on its own D-Bus server.
+	install -d -o $HUID -g $HUID "$H/var/run/pulse"
+	env HOME=/home/$HOST_USER PULSE_SERVER=unix:/run/user/$HUID/pulse/native \
+		start-stop-daemon --start --quiet --background --make-pidfile \
+		--pidfile /run/pro1x-mainvolumed.pid --chuid $HUID:$HUID \
+		--exec /usr/lib/pro1x-meego/mainvolumed -- "$H/var/run/pulse/dbus-socket" || true
 	as_user /usr/bin/dbus-daemon --session --fork --print-address \
 		> "$H/var/run/pro1x-session-bus"
 	ln -sf /var/run/m.mthemedaemon "$H/tmp/m.mthemedaemon"
