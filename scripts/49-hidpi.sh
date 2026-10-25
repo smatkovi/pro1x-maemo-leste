@@ -31,6 +31,7 @@ PARTS=(
   "hildon-desktop|1273f9eee252"
 )
 
+apt-get update -q || log "apt-get update had errors: going on with the lists it got"
 apt-get install -y -q --no-install-recommends gcc libc6-dev pkg-config \
   libgdk-pixbuf-2.0-dev
 
