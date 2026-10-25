@@ -13,8 +13,8 @@
  *
  * Like Android's step counter the count only grows and starts over at boot;
  * clients keep their own day totals from the differences. When the ADSP
- * starts counting from zero again (sensor reopened, ADSP restarted), the
- * steps so far are kept.
+ * starts counting from zero again (sensor reopened, ADSP restarted) or the
+ * daemon restarts, the steps so far are kept (in /run, which a boot clears).
  *
  * Runs as root (FastRPC/QRTR), from /etc/init.d/pro1x-steps.
  */
@@ -27,6 +27,7 @@
 #define NAME "org.pro1x.Steps"
 #define PATH "/org/pro1x/Steps"
 #define RETRY_S 30
+#define STATE "/run/pro1x-steps"
 
 static const char introspection[] =
 	"<node>"
@@ -46,12 +47,19 @@ static guint64 total(void)
 	return base + last;
 }
 
+static void save(void)
+{
+	g_autofree char *s = g_strdup_printf("%" G_GUINT64_FORMAT "\n", total());
+	g_file_set_contents(STATE, s, -1, NULL);
+}
+
 static void measurement_cb(SSCSensorPedometer *s, guint steps, gpointer data)
 {
 	(void)s, (void)data;
 	if (steps < last)
 		base += last;
 	last = steps;
+	save();
 	if (bus)
 		g_dbus_connection_emit_signal(bus, NULL, PATH, NAME, "StepsChanged",
 					      g_variant_new("(t)", total()), NULL);
@@ -120,7 +128,10 @@ int main(void)
 {
 	GMainLoop *loop = g_main_loop_new(NULL, FALSE);
 	GDBusNodeInfo *node = g_dbus_node_info_new_for_xml(introspection, NULL);
+	g_autofree char *saved = NULL;
 
+	if (g_file_get_contents(STATE, &saved, NULL, NULL))
+		base = g_ascii_strtoull(saved, NULL, 10);
 	g_bus_own_name(G_BUS_TYPE_SYSTEM, NAME, G_BUS_NAME_OWNER_FLAGS_NONE,
 		       bus_acquired_cb, NULL, name_lost_cb, node, NULL);
 	open_sensor(NULL);
