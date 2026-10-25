@@ -1,0 +1,28 @@
+diff --git a/drivers/gpu/drm/msm/msm_kms.c b/drivers/gpu/drm/msm/msm_kms.c
+index e5d0ea6294..52f84ecdc3 100644
+--- a/drivers/gpu/drm/msm/msm_kms.c
++++ b/drivers/gpu/drm/msm/msm_kms.c
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include <linux/aperture.h>
++#include <linux/kexec.h>
+ #include <linux/kthread.h>
+ #include <linux/sched/mm.h>
+ #include <uapi/linux/sched/types.h>
+@@ -366,6 +367,15 @@ void msm_kms_shutdown(struct platform_device *pdev)
+ 	struct msm_drm_private *priv = platform_get_drvdata(pdev);
+ 	struct drm_device *drm = priv ? priv->dev : NULL;
+ 
++	/*
++	 * kexec: leave the display running, so that the next kernel has a
++	 * picture without a display driver of its own. FreeBSD on the F(x)tec
++	 * Pro1X points the scanout at the bootloader's framebuffer (in
++	 * physical memory, with the SMMU context of the display bypassed).
++	 */
++	if (kexec_in_progress)
++		return;
++
+ 	/*
+ 	 * Shutdown the hw if we're far enough along where things might be on.
+ 	 * If we run this too early, we'll end up panicking in any variety of

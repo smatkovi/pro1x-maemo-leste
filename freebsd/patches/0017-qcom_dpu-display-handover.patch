@@ -1,0 +1,269 @@
+From a0c30f4e4b57ddee427d9db266f0e7468b4908ee Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 19:25:12 +0100
+Subject: [PATCH] qcom_dpu: take over the display Linux leaves running
+
+Linux's msm keeps the display on across kexec (Pro1X kernel patch).
+This points the active DPU source pipes at the /chosen
+simple-framebuffer that vt_simplefb draws into, after turning off
+translation in the display streams' SMMU context banks, and flushes
+them: the console shows on the next frame (video-mode panel).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/arm64/qualcomm/qcom_dpu_handover.c | 230 +++++++++++++++++++++++++
+ sys/conf/files.arm64                   |   1 +
+ 2 files changed, 231 insertions(+)
+ create mode 100644 sys/arm64/qualcomm/qcom_dpu_handover.c
+
+diff --git a/sys/arm64/qualcomm/qcom_dpu_handover.c b/sys/arm64/qualcomm/qcom_dpu_handover.c
+new file mode 100644
+index 000000000..d71543e8b
+--- /dev/null
++++ b/sys/arm64/qualcomm/qcom_dpu_handover.c
+@@ -0,0 +1,230 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Qualcomm display (MDSS/DPU) handed over from Linux, as on the F(x)tec
++ * Pro1X (SM6115) started by kexec from the boot menu.
++ *
++ * Linux's msm driver keeps the display running across kexec (the Pro1X
++ * kernel's device/kernel/patches/0005): panel, DSI and the DPU pipeline
++ * stay on and keep scanning out Linux's last frame, through the SMMU
++ * context of the display streams. This driver points the scanout at the
++ * bootloader's framebuffer, the simple-framebuffer under /chosen that
++ * vt_simplefb draws into: it turns off translation in the display's SMMU
++ * context banks (SCTLR.M=0, as Linux's arm-smmu-qcom does to emulate
++ * bypass), writes the framebuffer's physical address and stride into the
++ * active source pipes and flushes them; the panel is in video mode, so
++ * the next frame shows the console.
++ *
++ * DPU 6.3 (SM6115) offsets from Linux's catalog, relative to the "mdp"
++ * registers: CTL_0 0x1000, SSPP VIG0 0x4000, DMA0 0x24000.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/kernel.h>
++#include <sys/module.h>
++
++#include <vm/vm.h>
++#include <vm/pmap.h>
++
++#include <dev/ofw/openfirm.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++#include <dev/ofw/ofw_subr.h>
++
++#define	CTL0			0x1000
++#define	 CTL_FLUSH		0x018
++#define	 FLUSH_CTL		(1u << 17)
++#define	SSPP_SRC_SIZE		0x00
++#define	SSPP_SRC0_ADDR		0x14
++#define	SSPP_SRC_YSTRIDE0	0x24
++
++static const struct {
++	const char	*name;
++	uint32_t	base;
++	uint32_t	flush;
++} pipes[] = {
++	{ "VIG0",	0x4000,		1u << 0 },
++	{ "DMA0",	0x24000,	1u << 11 },
++};
++
++/* ARM SMMUv2 (MMU-500) */
++#define	SMMU_IDR0		0x020
++#define	SMMU_IDR1		0x024
++#define	SMMU_SMR(n)		(0x800 + 4 * (n))
++#define	SMMU_S2CR(n)		(0xc00 + 4 * (n))
++#define	SMMU_CB_SCTLR		0x000
++
++static struct ofw_compat_data compat_data[] = {
++	{ "qcom,sm6115-mdss",	1 },
++	{ NULL,			0 }
++};
++
++static volatile uint32_t *
++reg32(vm_offset_t va, vm_size_t off)
++{
++	return ((volatile uint32_t *)(va + off));
++}
++
++/* Translation off in the context banks of the display's streams */
++static void
++dpu_smmu_bypass(device_t dev, phandle_t node)
++{
++	pcell_t *cells;
++	phandle_t smmu;
++	bus_addr_t pa;
++	bus_size_t size;
++	vm_offset_t va;
++	uint32_t idr1, smr, s2cr, sctlr, sid, mask;
++	u_int i, k, nsmr, pgshift, numpage, cb;
++	ssize_t n;
++
++	n = OF_getencprop_alloc_multi(node, "iommus", sizeof(pcell_t),
++	    (void **)&cells);
++	if (n < 3) {
++		if (n > 0)
++			OF_prop_free(cells);
++		device_printf(dev, "not behind an SMMU\n");
++		return;
++	}
++	smmu = OF_node_from_xref(cells[0]);
++	if (smmu <= 0 || ofw_reg_to_paddr(smmu, 0, &pa, &size, NULL) != 0) {
++		OF_prop_free(cells);
++		return;
++	}
++	va = (vm_offset_t)pmap_mapdev(pa, size);
++	nsmr = *reg32(va, SMMU_IDR0) & 0xff;
++	idr1 = *reg32(va, SMMU_IDR1);
++	pgshift = (idr1 & (1u << 31)) ? 16 : 12;
++	numpage = 1u << (((idr1 >> 28) & 0x7) + 1);
++	for (k = 0; k + 3 <= (u_int)n; k += 3) {
++		sid = cells[k + 1];
++		mask = cells[k + 2];
++		for (i = 0; i < nsmr; i++) {
++			smr = *reg32(va, SMMU_SMR(i));
++			if (!(smr & (1u << 31)) ||
++			    ((smr ^ sid) & 0x7fff & ~(mask | (smr >> 16))) != 0)
++				continue;
++			s2cr = *reg32(va, SMMU_S2CR(i));
++			if (((s2cr >> 16) & 0x3) != 0) {
++				device_printf(dev, "stream %#x: S2CR %#x, no "
++				    "translation\n", sid, s2cr);
++				continue;
++			}
++			cb = s2cr & 0xff;
++			sctlr = *reg32(va, ((vm_size_t)(numpage + cb) << pgshift) +
++			    SMMU_CB_SCTLR);
++			*reg32(va, ((vm_size_t)(numpage + cb) << pgshift) +
++			    SMMU_CB_SCTLR) = 0;
++			device_printf(dev, "stream %#x: context bank %u, SCTLR %#x "
++			    "-> %#x\n", sid, cb, sctlr, *reg32(va,
++			    ((vm_size_t)(numpage + cb) << pgshift) + SMMU_CB_SCTLR));
++		}
++	}
++	OF_prop_free(cells);
++	pmap_unmapdev((void *)va, size);
++}
++
++/* The simple-framebuffer under /chosen: address and stride */
++static int
++dpu_find_fb(bus_addr_t *pa, uint32_t *stride)
++{
++	phandle_t chosen, c;
++	bus_size_t size;
++	pcell_t v;
++
++	chosen = OF_finddevice("/chosen");
++	for (c = chosen > 0 ? OF_child(chosen) : 0; c > 0; c = OF_peer(c)) {
++		if (!ofw_bus_node_is_compatible(c, "simple-framebuffer"))
++			continue;
++		if (ofw_reg_to_paddr(c, 0, pa, &size, NULL) != 0 ||
++		    OF_getencprop(c, "stride", &v, sizeof(v)) != sizeof(v))
++			return (ENXIO);
++		*stride = v;
++		return (0);
++	}
++	return (ENXIO);
++}
++
++static int
++qcom_dpu_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data == 0)
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm display, handed over from Linux");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++qcom_dpu_attach(device_t dev)
++{
++	phandle_t node = ofw_bus_get_node(dev), mdp;
++	bus_addr_t mdp_pa, fb_pa;
++	bus_size_t mdp_size;
++	vm_offset_t va;
++	uint32_t stride, addr, flush, size;
++	u_int i;
++
++	for (mdp = OF_child(node); mdp > 0; mdp = OF_peer(mdp))
++		if (ofw_bus_node_is_compatible(mdp, "qcom,sm6115-dpu"))
++			break;
++	if (mdp <= 0 || ofw_reg_to_paddr(mdp, 0, &mdp_pa, &mdp_size,
++	    NULL) != 0) {
++		device_printf(dev, "no DPU registers\n");
++		return (ENXIO);
++	}
++	if (dpu_find_fb(&fb_pa, &stride) != 0) {
++		device_printf(dev, "no simple-framebuffer\n");
++		return (ENXIO);
++	}
++
++	va = (vm_offset_t)pmap_mapdev(mdp_pa, mdp_size);
++	flush = 0;
++	for (i = 0; i < nitems(pipes); i++) {
++		addr = *reg32(va, pipes[i].base + SSPP_SRC0_ADDR);
++		size = *reg32(va, pipes[i].base + SSPP_SRC_SIZE);
++		device_printf(dev, "%s: source %#x, %ux%u, stride %u\n",
++		    pipes[i].name, addr, size & 0xffff, size >> 16,
++		    *reg32(va, pipes[i].base + SSPP_SRC_YSTRIDE0) & 0xffff);
++		if (addr != 0)
++			flush |= pipes[i].flush;
++	}
++	if (flush == 0) {
++		device_printf(dev, "no pipe scans out: the display is off\n");
++		pmap_unmapdev((void *)va, mdp_size);
++		return (ENXIO);
++	}
++
++	/* One frame from the old address untranslated at most, then ours */
++	dpu_smmu_bypass(dev, node);
++	for (i = 0; i < nitems(pipes); i++) {
++		if (!(flush & pipes[i].flush))
++			continue;
++		*reg32(va, pipes[i].base + SSPP_SRC0_ADDR) = (uint32_t)fb_pa;
++		*reg32(va, pipes[i].base + SSPP_SRC_YSTRIDE0) =
++		    (*reg32(va, pipes[i].base + SSPP_SRC_YSTRIDE0) &
++		    0xffff0000) | stride;
++	}
++	*reg32(va, CTL0 + CTL_FLUSH) = flush | FLUSH_CTL;
++	device_printf(dev, "scanout now from %#jx (stride %u)\n",
++	    (uintmax_t)fb_pa, stride);
++	pmap_unmapdev((void *)va, mdp_size);
++	return (0);
++}
++
++static device_method_t qcom_dpu_methods[] = {
++	DEVMETHOD(device_probe,		qcom_dpu_probe),
++	DEVMETHOD(device_attach,	qcom_dpu_attach),
++	DEVMETHOD_END
++};
++
++static driver_t qcom_dpu_driver = {
++	"qcom_dpu",
++	qcom_dpu_methods,
++	0,
++};
++
++DRIVER_MODULE(qcom_dpu, simplebus, qcom_dpu_driver, 0, 0);
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index 754e3e145..6a4f05ee5 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -741,6 +741,7 @@ dev/iicbus/controller/qcom/geni_iic.c		optional geniiic
+ dev/iicbus/controller/qcom/geni_iic_fdt.c	optional geniiic fdt
+ dev/iicbus/pro1x_kbd.c				optional pro1xkbd fdt gpiokeys
+ arm64/qualcomm/qcom_cpufreq_hw.c		optional qcom_cpufreq_hw fdt cpufreq
++arm64/qualcomm/qcom_dpu_handover.c		optional qcom_dpu fdt
+ dev/qcom_spmi/qcom_spmi.c			optional qcom_spmi fdt
+ dev/qcom_spmi/qcom_pon.c			optional qcom_spmi fdt
+ dev/qcom_spmi/qcom_rtc.c			optional qcom_spmi fdt
+-- 
+2.56.0
+

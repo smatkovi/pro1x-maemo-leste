@@ -74,6 +74,7 @@ after boot (`patches/0013`), so that unattended tests always end.
 | | |
 | --- | --- |
 | console | `vt_simplefb` on the bootloader's framebuffer; RAM console (`0003`) |
+| display | `qcom_dpu` (`0017`): Linux's msm keeps the display running across kexec (`device/kernel/patches/0005`), FreeBSD points its scanout at the bootloader's framebuffer (SMMU context of the display bypassed): without it the screen stays black, since msm drives the display from the boot menu on |
 | watchdog | `qcom_wdt` (`0004`): the boot menu arms the APSS watchdog before the jump, FreeBSD feeds it; a hang resets the phone into the boot menu |
 | GPIOs | `qcom_tlmm_sm6115` (`0006`): GPIOs and their interrupts; on them `gpiokeys` (Shift, Ctrl, Alt, Fn, Home, camera key, the slider switch), `gpioiic` (the touchscreen's bus), `gpioled` (keyboard backlight) |
 | touchscreen | `goodix` (`0007`), GT9286, multi-touch through evdev |
@@ -107,6 +108,7 @@ after boot (`patches/0013`), so that unattended tests always end.
 | `patches/0014-*` | `/dev/pro1xshot`, data for Linux behind the RAM console |
 | `patches/0015-*` | `pro1x_battery`, the battery's state of charge |
 | `patches/0016-*` | `/dev/pro1x-host`, the mount point below `/dev` (devfs has no mkdir) |
+| `patches/0017-*` | `qcom_dpu`, the display handed over from Linux |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `pkgfetch.py`, `mkspec.py` | packages with dependencies, checked; the image's owners and modes |
 
@@ -118,8 +120,10 @@ init, mount, ifconfig...) from `base.txz`, built into the kernel
 
 - Nothing appears before the console starts; the green stripe tells
   "entered" from "never reached".
-- Linux could switch the display off on its way out of kexec; then the
-  `fastboot boot` way shows whether FreeBSD itself is fine.
+- Linux's msm display driver (built in) runs the display from the boot
+  menu on and would switch it off on its way out of kexec; kernel patch
+  0005 keeps it on, `qcom_dpu` takes it over. After `fastboot boot` the
+  bootloader's splash setup is still there.
 - The bootloader appends its own arguments to the command line, which
   FreeBSD then ignores; settings go into `pro1x.env`.
 - `rc` reports and reboots after 10 s unless Enter is pressed, which

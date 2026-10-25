@@ -24,10 +24,12 @@ makeoptions	MFS_IMAGE=@MFS_IMAGE@
 options 	MD_ROOT_READONLY
 device		md
 
-# Console: the bootloader's framebuffer, and the keyboard multiplexer
+# Console: the bootloader's framebuffer, and the keyboard multiplexer;
+# the display Linux leaves running is pointed at that framebuffer (0017)
 device		vt
 device		vt_simplefb
 device		kbdmux
+device		qcom_dpu
 
 # Pro1X drivers (patches/0004 on)
 device		qcom_wdt		# APSS watchdog: a hang resets the phone
