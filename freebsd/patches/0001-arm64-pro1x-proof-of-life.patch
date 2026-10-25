@@ -1,8 +1,8 @@
 diff --git a/sys/arm64/arm64/locore.S b/sys/arm64/arm64/locore.S
-index 39eb762a4..946098c9d 100644
+index 39eb762a4..bb99aff57 100644
 --- a/sys/arm64/arm64/locore.S
 +++ b/sys/arm64/arm64/locore.S
-@@ -87,6 +87,23 @@
+@@ -87,6 +87,41 @@
   */
  
  ENTRY(_start)
@@ -21,6 +21,24 @@ index 39eb762a4..946098c9d 100644
 +1:	str	w11, [x9], #4
 +	subs	x10, x10, #4
 +	b.ne	1b
++	/*
++	 * And "PRO1X-FBSD:ENTERED\n" in the spare splash memory behind the
++	 * framebuffer (0x5ca00000), which Linux reads after the next boot.
++	 */
++	movz	x9, #0x5ca0, lsl #16
++	movz	x10, #0x5250
++	movk	x10, #0x314f, lsl #16
++	movk	x10, #0x2d58, lsl #32
++	movk	x10, #0x4246, lsl #48
++	str	x10, [x9]
++	movz	x10, #0x4453
++	movk	x10, #0x453a, lsl #16
++	movk	x10, #0x544e, lsl #32
++	movk	x10, #0x5245, lsl #48
++	str	x10, [x9, #8]
++	movz	x10, #0x4445
++	movk	x10, #0x000a, lsl #16
++	str	x10, [x9, #16]
 +	dsb	sy
 +#endif
  	/* Enter the kernel exception level */

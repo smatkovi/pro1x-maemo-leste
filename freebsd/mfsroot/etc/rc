@@ -1,17 +1,24 @@
 #!/bin/sh
 # First FreeBSD on the Pro1X: a root filesystem in RAM, no keyboard yet.
-# Show what the kernel found, then reboot into the boot menu.
+# Reports what the kernel found, on the screen and into a spare part of the
+# bootloader's splash memory (0x5ca01000, behind the framebuffer), which
+# Linux reads after the next boot; then reboots into the boot menu.
 PATH=/rescue; export PATH
-echo
-echo "=== FreeBSD on the F(x)tec Pro1X ==="
-uname -a
-sysctl hw.model hw.machine_arch hw.ncpu hw.physmem kern.bootfile 2>/dev/null
-echo "--- devices:"
-ls /dev | tr '\n' ' '
-echo
-echo "--- attached (dmesg):"
-dmesg | grep -E ' at | on ' | tail -40
-echo
-echo "rebooting into the boot menu in 120 s"
-sleep 120
+LOG_BLOCK=$((0x5ca01000 / 4096))
+report() {
+	echo "=== FreeBSD on the F(x)tec Pro1X ==="
+	uname -a
+	sysctl hw.model hw.machine_arch hw.ncpu hw.physmem kern.bootfile
+	echo "--- devices:"
+	echo /dev/*
+	echo "--- dmesg:"
+	dmesg
+	echo "=== end"
+}
+report 2>&1 | tee /dev/console | dd of=/dev/mem bs=4096 seek=$LOG_BLOCK conv=notrunc,sync 2>/dev/null
+# Read 64 MiB elsewhere to push the report out of the caches into the DRAM
+# before the reset.
+dd if=/dev/mem of=/dev/null bs=1m count=64 skip=2048 2>/dev/null
+echo "rebooting into the boot menu in 30 s"
+sleep 30
 reboot
