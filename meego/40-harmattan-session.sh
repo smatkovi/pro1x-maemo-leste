@@ -156,7 +156,7 @@ do_start() {
 
 	start_bg mthemedaemon /usr/bin/mthemedaemon
 	sleep 3
-	start_bg mcompositor /usr/bin/mcompositor
+	start_bg mcompositor env LD_PRELOAD=/usr/lib/pro1x/libmcompositor-touch.so /usr/bin/mcompositor
 	sleep 2
 	start_bg sysuid /usr/bin/sysuid -graphicssystem meego
 	start_bg meegotouchhome /usr/bin/meegotouchhome -remote-theme -graphicssystem meego
