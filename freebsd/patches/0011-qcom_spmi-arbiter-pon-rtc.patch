@@ -1,0 +1,1343 @@
+From 3fbfd31ab2885bd5054acfeb4ccbb7a680815202 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 18:47:48 +0100
+Subject: [PATCH] qcom_spmi: Qualcomm SPMI PMIC arbiter v5, PON keys, RTC
+
+The arbiter (qcom,spmi-pmic-arb, version 5) as a bus of PMICs, each a
+bus of its peripherals, with register access for peripheral drivers
+(qcom_spmi.h) and the interrupt controller for <sid pid irq type>.
+After Linux's spmi-pmic-arb: the APID map and owners from the
+arbiter's tables, reads through the observer channels, writes through
+the read/write channels.
+
+qcom_pon: power key and RESIN through evdev, the power key also
+through devctl. qcom_rtc: the PMIC's seconds counter plus an offset
+handed over as hint.qcom_rtc.0.offset, since phones such as the Pro1X
+cannot set the counter.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/conf/files.arm64          |   3 +
+ sys/dev/qcom_spmi/qcom_pon.c  | 219 +++++++++
+ sys/dev/qcom_spmi/qcom_rtc.c  | 143 ++++++
+ sys/dev/qcom_spmi/qcom_spmi.c | 880 ++++++++++++++++++++++++++++++++++
+ sys/dev/qcom_spmi/qcom_spmi.h |  30 ++
+ 5 files changed, 1275 insertions(+)
+ create mode 100644 sys/dev/qcom_spmi/qcom_pon.c
+ create mode 100644 sys/dev/qcom_spmi/qcom_rtc.c
+ create mode 100644 sys/dev/qcom_spmi/qcom_spmi.c
+ create mode 100644 sys/dev/qcom_spmi/qcom_spmi.h
+
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index 95ec6b336..ddf4ca431 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -741,6 +741,9 @@ dev/iicbus/controller/qcom/geni_iic.c		optional geniiic
+ dev/iicbus/controller/qcom/geni_iic_fdt.c	optional geniiic fdt
+ dev/iicbus/pro1x_kbd.c				optional pro1xkbd fdt gpiokeys
+ arm64/qualcomm/qcom_cpufreq_hw.c		optional qcom_cpufreq_hw fdt cpufreq
++dev/qcom_spmi/qcom_spmi.c			optional qcom_spmi fdt
++dev/qcom_spmi/qcom_pon.c			optional qcom_spmi fdt
++dev/qcom_spmi/qcom_rtc.c			optional qcom_spmi fdt
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ 
+ # RockChip Drivers
+diff --git a/sys/dev/qcom_spmi/qcom_pon.c b/sys/dev/qcom_spmi/qcom_pon.c
+new file mode 100644
+index 000000000..5effaf8bf
+--- /dev/null
++++ b/sys/dev/qcom_spmi/qcom_pon.c
+@@ -0,0 +1,219 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Qualcomm PMIC power-on block (PON): the power key and RESIN (on the
++ * F(x)tec Pro1X: volume down), from the "qcom,pm8941-pwrkey" and
++ * "qcom,pm8941-resin" subnodes. Both report through evdev with their
++ * linux,code; the power key also through devctl (system PMIC, subsystem
++ * POWER, type PRESS or RELEASE), for devd to act on.
++ *
++ * Each key has an interrupt on both edges; its handler reads the state
++ * from PON_RT_STS (bit 0 power key, bit 1 RESIN).
++ */
++
++#include "opt_evdev.h"
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/kernel.h>
++#include <sys/lock.h>
++#include <sys/module.h>
++#include <sys/mutex.h>
++#include <sys/rman.h>
++
++#include <machine/bus.h>
++
++#include <dev/evdev/evdev.h>
++#include <dev/evdev/input.h>
++#include <dev/ofw/openfirm.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++#include <dev/qcom_spmi/qcom_spmi.h>
++
++#define	PON_RT_STS		0x10
++#define	 RT_KPDPWR		(1u << 0)
++#define	 RT_RESIN		(1u << 1)
++#define	PON_NKEYS		2
++
++struct qcom_pon_key {
++	struct qcom_pon_softc	*sc;
++	uint8_t			bit;
++	uint16_t		code;
++	bool			pressed;
++	int			rid;
++	struct resource		*irq;
++	void			*ih;
++};
++
++struct qcom_pon_softc {
++	device_t		dev;
++	struct mtx		mtx;
++	uint16_t		base;
++	struct evdev_dev	*evdev;
++	struct qcom_pon_key	keys[PON_NKEYS];
++	int			nkeys;
++};
++
++static struct ofw_compat_data compat_data[] = {
++	{ "qcom,pm8998-pon",	1 },
++	{ "qcom,pm8941-pon",	1 },
++	{ "qcom,pm8916-pon",	1 },
++	{ NULL,			0 }
++};
++
++static void
++qcom_pon_intr(void *arg)
++{
++	struct qcom_pon_key *key = arg;
++	struct qcom_pon_softc *sc = key->sc;
++	uint8_t sts;
++	bool pressed;
++
++	if (qcom_spmi_read(sc->dev, sc->base + PON_RT_STS, &sts, 1) != 0)
++		return;
++	pressed = (sts & key->bit) != 0;
++	mtx_lock(&sc->mtx);
++	if (pressed == key->pressed) {
++		mtx_unlock(&sc->mtx);
++		return;
++	}
++	key->pressed = pressed;
++#ifdef EVDEV_SUPPORT
++	evdev_push_key(sc->evdev, key->code, pressed);
++	evdev_sync(sc->evdev);
++#endif
++	mtx_unlock(&sc->mtx);
++	if (key->code == KEY_POWER)
++		devctl_notify("PMIC", "POWER", pressed ? "PRESS" : "RELEASE",
++		    NULL);
++}
++
++static int
++qcom_pon_add_key(struct qcom_pon_softc *sc, phandle_t node, uint8_t bit,
++    uint16_t dflt)
++{
++	struct qcom_pon_key *key = &sc->keys[sc->nkeys];
++	pcell_t cells[4], code;
++	u_int irq;
++
++	if (OF_getencprop(node, "interrupts", cells, sizeof(cells)) !=
++	    sizeof(cells)) {
++		device_printf(sc->dev, "%s without an interrupt\n",
++		    ofw_bus_get_name(sc->dev));
++		return (ENXIO);
++	}
++	key->sc = sc;
++	key->bit = bit;
++	key->code = OF_getencprop(node, "linux,code", &code, sizeof(code)) ==
++	    sizeof(code) ? code : dflt;
++	irq = ofw_bus_map_intr(sc->dev, qcom_spmi_intr_xref(sc->dev), 4,
++	    cells);
++	key->rid = sc->nkeys;
++	bus_set_resource(sc->dev, SYS_RES_IRQ, key->rid, irq, 1);
++	key->irq = bus_alloc_resource_any(sc->dev, SYS_RES_IRQ, &key->rid,
++	    RF_ACTIVE);
++	if (key->irq == NULL)
++		return (ENXIO);
++#ifdef EVDEV_SUPPORT
++	evdev_support_key(sc->evdev, key->code);
++#endif
++	sc->nkeys++;
++	return (0);
++}
++
++static int
++qcom_pon_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data == 0)
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm PMIC power-on keys");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++qcom_pon_detach(device_t dev)
++{
++	struct qcom_pon_softc *sc = device_get_softc(dev);
++	int i;
++
++	for (i = 0; i < sc->nkeys; i++) {
++		if (sc->keys[i].ih != NULL)
++			bus_teardown_intr(dev, sc->keys[i].irq, sc->keys[i].ih);
++		bus_release_resource(dev, SYS_RES_IRQ, sc->keys[i].rid,
++		    sc->keys[i].irq);
++	}
++#ifdef EVDEV_SUPPORT
++	if (sc->evdev != NULL)
++		evdev_free(sc->evdev);
++#endif
++	mtx_destroy(&sc->mtx);
++	return (0);
++}
++
++static int
++qcom_pon_attach(device_t dev)
++{
++	struct qcom_pon_softc *sc = device_get_softc(dev);
++	phandle_t child;
++	int i;
++
++	sc->dev = dev;
++	sc->base = qcom_spmi_base(dev, 0);
++	mtx_init(&sc->mtx, device_get_nameunit(dev), NULL, MTX_DEF);
++
++#ifdef EVDEV_SUPPORT
++	sc->evdev = evdev_alloc();
++	evdev_set_name(sc->evdev, "PMIC power-on keys");
++	evdev_set_phys(sc->evdev, device_get_nameunit(dev));
++	evdev_set_id(sc->evdev, BUS_HOST, 0, 0, 0);
++	evdev_support_event(sc->evdev, EV_SYN);
++	evdev_support_event(sc->evdev, EV_KEY);
++#endif
++	for (child = OF_child(ofw_bus_get_node(dev)); child > 0 &&
++	    sc->nkeys < PON_NKEYS; child = OF_peer(child)) {
++		if (!ofw_bus_node_status_okay(child))
++			continue;
++		if (ofw_bus_node_is_compatible(child, "qcom,pm8941-pwrkey"))
++			qcom_pon_add_key(sc, child, RT_KPDPWR, KEY_POWER);
++		else if (ofw_bus_node_is_compatible(child,
++		    "qcom,pm8941-resin"))
++			qcom_pon_add_key(sc, child, RT_RESIN, KEY_VOLUMEDOWN);
++	}
++	if (sc->nkeys == 0) {
++		qcom_pon_detach(dev);
++		return (ENXIO);
++	}
++#ifdef EVDEV_SUPPORT
++	if (evdev_register_mtx(sc->evdev, &sc->mtx) != 0) {
++		evdev_free(sc->evdev);
++		sc->evdev = NULL;
++		qcom_pon_detach(dev);
++		return (ENXIO);
++	}
++#endif
++	for (i = 0; i < sc->nkeys; i++)
++		if (bus_setup_intr(dev, sc->keys[i].irq,
++		    INTR_TYPE_MISC | INTR_MPSAFE, NULL, qcom_pon_intr,
++		    &sc->keys[i], &sc->keys[i].ih) != 0)
++			device_printf(dev, "unable to set up key %d\n", i);
++	return (0);
++}
++
++static device_method_t qcom_pon_methods[] = {
++	DEVMETHOD(device_probe,		qcom_pon_probe),
++	DEVMETHOD(device_attach,	qcom_pon_attach),
++	DEVMETHOD(device_detach,	qcom_pon_detach),
++	DEVMETHOD_END
++};
++
++static driver_t qcom_pon_driver = {
++	"qcom_pon",
++	qcom_pon_methods,
++	sizeof(struct qcom_pon_softc),
++};
++
++DRIVER_MODULE(qcom_pon, qcom_pmic, qcom_pon_driver, 0, 0);
+diff --git a/sys/dev/qcom_spmi/qcom_rtc.c b/sys/dev/qcom_spmi/qcom_rtc.c
+new file mode 100644
+index 000000000..20efbcbe7
+--- /dev/null
++++ b/sys/dev/qcom_spmi/qcom_rtc.c
+@@ -0,0 +1,143 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Qualcomm PMIC real-time clock ("qcom,pm8941-rtc"): a 32-bit seconds
++ * counter. On phones such as the F(x)tec Pro1X the counter cannot be set
++ * from here and does not count from the Unix epoch; the time is the
++ * counter plus an offset, which the boot hands over as the kernel
++ * environment hint.qcom_rtc.0.offset (seconds; the Pro1X boot menu reads it
++ * from userdata). Setting the clock changes the offset only.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/clock.h>
++#include <sys/endian.h>
++#include <sys/kernel.h>
++#include <sys/module.h>
++
++#include <dev/ofw/openfirm.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++#include <dev/qcom_spmi/qcom_spmi.h>
++
++#include "clock_if.h"
++
++#define	RTC_CTRL		0x46
++#define	 CTRL_EN		(1u << 7)
++#define	RTC_READ		0x48
++
++struct qcom_rtc_softc {
++	device_t	dev;
++	uint16_t	base;
++	int64_t		offset;
++};
++
++static int
++qcom_rtc_read(struct qcom_rtc_softc *sc, uint32_t *secs)
++{
++	uint8_t v[4], lsb;
++	int error;
++
++	if ((error = qcom_spmi_read(sc->dev, sc->base + RTC_READ, v, 4)) != 0)
++		return (error);
++	/* A carry between the bytes: read again. */
++	if ((error = qcom_spmi_read(sc->dev, sc->base + RTC_READ, &lsb,
++	    1)) != 0)
++		return (error);
++	if (lsb < v[0] &&
++	    (error = qcom_spmi_read(sc->dev, sc->base + RTC_READ, v, 4)) != 0)
++		return (error);
++	*secs = le32dec(v);
++	return (0);
++}
++
++static int
++qcom_rtc_gettime(device_t dev, struct timespec *ts)
++{
++	struct qcom_rtc_softc *sc = device_get_softc(dev);
++	uint32_t secs;
++	int error;
++
++	if ((error = qcom_rtc_read(sc, &secs)) != 0)
++		return (error);
++	ts->tv_sec = (time_t)secs + sc->offset;
++	ts->tv_nsec = 0;
++	return (0);
++}
++
++static int
++qcom_rtc_settime(device_t dev, struct timespec *ts)
++{
++	struct qcom_rtc_softc *sc = device_get_softc(dev);
++	uint32_t secs;
++	int error;
++
++	if ((error = qcom_rtc_read(sc, &secs)) != 0)
++		return (error);
++	sc->offset = ts->tv_sec - (time_t)secs;
++	return (0);
++}
++
++static int
++qcom_rtc_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (!ofw_bus_is_compatible(dev, "qcom,pm8941-rtc"))
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm PMIC RTC");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++qcom_rtc_attach(device_t dev)
++{
++	struct qcom_rtc_softc *sc = device_get_softc(dev);
++	uint8_t ctrl;
++	uint32_t secs;
++	long off;
++
++	sc->dev = dev;
++	sc->base = qcom_spmi_base(dev, 0);
++	if (qcom_spmi_read(dev, sc->base + RTC_CTRL, &ctrl, 1) != 0 ||
++	    !(ctrl & CTRL_EN) || qcom_rtc_read(sc, &secs) != 0) {
++		device_printf(dev, "not running\n");
++		return (ENXIO);
++	}
++	if (resource_long_value(device_get_name(dev), device_get_unit(dev),
++	    "offset", &off) == 0)
++		sc->offset = off;
++	device_printf(dev, "counter %u, offset %jd%s\n", secs,
++	    (intmax_t)sc->offset, sc->offset == 0 ? " (none handed over)" : "");
++	clock_register(dev, 1000000);
++	return (0);
++}
++
++static int
++qcom_rtc_detach(device_t dev)
++{
++	clock_unregister(dev);
++	return (0);
++}
++
++static device_method_t qcom_rtc_methods[] = {
++	DEVMETHOD(device_probe,		qcom_rtc_probe),
++	DEVMETHOD(device_attach,	qcom_rtc_attach),
++	DEVMETHOD(device_detach,	qcom_rtc_detach),
++
++	DEVMETHOD(clock_gettime,	qcom_rtc_gettime),
++	DEVMETHOD(clock_settime,	qcom_rtc_settime),
++
++	DEVMETHOD_END
++};
++
++static driver_t qcom_rtc_driver = {
++	"qcom_rtc",
++	qcom_rtc_methods,
++	sizeof(struct qcom_rtc_softc),
++};
++
++DRIVER_MODULE(qcom_rtc, qcom_pmic, qcom_rtc_driver, 0, 0);
+diff --git a/sys/dev/qcom_spmi/qcom_spmi.c b/sys/dev/qcom_spmi/qcom_spmi.c
+new file mode 100644
+index 000000000..6a8d0682a
+--- /dev/null
++++ b/sys/dev/qcom_spmi/qcom_spmi.c
+@@ -0,0 +1,880 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Qualcomm SPMI PMIC arbiter, version 5 (SM6115), and the PMICs on it.
++ *
++ * The arbiter ("qcom,spmi-pmic-arb") carries the register traffic to the
++ * PMICs and is the interrupt controller of their peripherals. Every PMIC
++ * peripheral (PPID: slave id and peripheral id) has a channel (APID): the
++ * mapping and the owners (the execution environment allowed to write it,
++ * the one that gets its interrupts) are in the arbiter's tables; this
++ * kernel is EE "qcom,ee". Reads go through the EE's observer channels,
++ * writes through the read/write channels. After Linux's spmi-pmic-arb.
++ *
++ * Interrupts are <sid pid irq type> (four cells). A peripheral has up to
++ * eight; their enable, type and latch registers are in the peripheral
++ * (QPNPINT_*), the arbiter forwards a peripheral's interrupts once its
++ * accumulator is enabled, and one summary interrupt tells which channels
++ * have pending ones.
++ *
++ * Two buses: the arbiter with a child per PMIC ("qcom,spmi-pmic", reg =
++ * <sid type>), and each PMIC with a child per peripheral (reg = its
++ * addresses). Peripheral drivers use qcom_spmi.h.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/intr.h>
++#include <sys/kernel.h>
++#include <sys/lock.h>
++#include <sys/malloc.h>
++#include <sys/module.h>
++#include <sys/mutex.h>
++#include <sys/proc.h>
++#include <sys/rman.h>
++
++#include <machine/bus.h>
++#include <machine/intr.h>
++
++#include <dev/ofw/openfirm.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++#include <dev/qcom_spmi/qcom_spmi.h>
++
++#include "ofw_bus_if.h"
++#include "pic_if.h"
++
++/* core */
++#define	ARB_VERSION		0x0000
++#define	 ARB_V5_MIN		0x50000000
++#define	 ARB_V7_MIN		0x70000000
++#define	ARB_FEATURES		0x0004
++#define	 FEATURES_PERIPHS(x)	((x) & 0x7ff)
++#define	ARB_APID_MAP(n)		(0x900 + 4 * (n))
++#define	 MAP_PPID(x)		(((x) >> 8) & 0xfff)
++#define	 MAP_IRQ_OWNER		(1u << 24)
++/* cnfg */
++#define	ARB_APID_OWNER(n)	(0x700 + 4 * (n))
++#define	 OWNER_EE(x)		((x) & 0x7)
++/* a channel, in chnls (per APID) or obsrvr (per EE and APID) */
++#define	CH_CMD			0x00
++#define	CH_STATUS		0x08
++#define	 ST_DONE		(1u << 0)
++#define	 ST_FAILURE		(1u << 1)
++#define	 ST_DENIED		(1u << 2)
++#define	 ST_DROPPED		(1u << 3)
++#define	CH_WDATA0		0x10
++#define	CH_WDATA1		0x14
++#define	CH_RDATA0		0x18
++#define	CH_RDATA1		0x1c
++#define	CHNL(apid)		(0x10000 * (apid))
++#define	OBSRVR(ee, apid)	(0x10000 * (ee) + 0x80 * (apid))
++#define	CH_ACC_ENABLE		0x100	/* in chnls */
++#define	 ACC_ENABLE		(1u << 0)
++#define	CH_IRQ_STATUS		0x104
++#define	CH_IRQ_CLEAR		0x108
++/* intr: per EE, a bit per APID */
++#define	ACC_STATUS(ee, word)	(0x10000 * (ee) + 4 * (word))
++
++#define	OP_EXT_WRITEL		0
++#define	OP_EXT_READL		1
++#define	CMD(op, addr, len)	(((op) << 27) | (((addr) & 0xff) << 4) | \
++				 (((len) - 1) & 0x7))
++
++#define	MAX_PERIPHS		512
++#define	MAX_PPID		4096
++#define	APID_VALID		0x8000
++#define	NO_EE			0xff
++#define	SPMI_TIMEOUT_US		1000
++
++enum { R_CORE, R_CHNLS, R_OBSRVR, R_INTR, R_CNFG, R_COUNT };
++
++struct spmi_isrc {
++	struct intr_irqsrc	isrc;
++	uint16_t		apid;
++	uint8_t			sid;
++	uint8_t			pid;
++	uint8_t			id;
++	bool			edge;
++};
++
++struct qcom_spmi_softc {
++	device_t		dev;
++	struct resource		*res[R_COUNT];
++	struct resource		*irq;
++	void			*ih;
++	struct mtx		mtx;		/* spin: one transaction at a time */
++	u_int			ee;
++	u_int			napids;
++	uint16_t		ppid_to_apid[MAX_PPID];
++	uint8_t			write_ee[MAX_PERIPHS];
++	uint8_t			irq_ee[MAX_PERIPHS];
++	uint16_t		apid_ppid[MAX_PERIPHS];
++	struct spmi_isrc	**isrcs;	/* [apid * 8 + id] */
++	phandle_t		xref;
++};
++
++/* Children of either bus */
++struct qcom_spmi_devinfo {
++	struct ofw_bus_devinfo	obd;
++	struct resource_list	rl;
++	uint32_t		reg[4];
++	int			nreg;
++};
++
++static struct resource_spec qcom_spmi_res_spec[] = {
++	{ SYS_RES_MEMORY,	R_CORE,		RF_ACTIVE },
++	{ SYS_RES_MEMORY,	R_CHNLS,	RF_ACTIVE },
++	{ SYS_RES_MEMORY,	R_OBSRVR,	RF_ACTIVE },
++	{ SYS_RES_MEMORY,	R_INTR,		RF_ACTIVE },
++	{ SYS_RES_MEMORY,	R_CNFG,		RF_ACTIVE },
++	{ -1, 0 }
++};
++
++#define	RD(sc, r, off)		bus_read_4((sc)->res[r], (off))
++#define	WR(sc, r, off, v)	bus_write_4((sc)->res[r], (off), (v))
++
++/* --- register traffic ------------------------------------------------ */
++
++static int
++spmi_apid(struct qcom_spmi_softc *sc, u_int sid, uint16_t addr)
++{
++	uint16_t a = sc->ppid_to_apid[((sid & 0xf) << 8) | (addr >> 8)];
++
++	return ((a & APID_VALID) ? (int)(a & ~APID_VALID) : -1);
++}
++
++static int
++spmi_wait(struct qcom_spmi_softc *sc, int r, bus_size_t ch)
++{
++	uint32_t st;
++	int i;
++
++	for (i = 0; i < SPMI_TIMEOUT_US; i++) {
++		st = RD(sc, r, ch + CH_STATUS);
++		if (st & ST_DONE) {
++			if (st & ST_DENIED)
++				return (EPERM);
++			if (st & (ST_FAILURE | ST_DROPPED))
++				return (EIO);
++			return (0);
++		}
++		DELAY(1);
++	}
++	return (ETIMEDOUT);
++}
++
++static int
++spmi_read_locked(struct qcom_spmi_softc *sc, u_int sid, uint16_t addr,
++    uint8_t *buf, size_t len)
++{
++	bus_size_t ch;
++	uint32_t d;
++	int apid, error;
++
++	mtx_assert(&sc->mtx, MA_OWNED);
++	if (len == 0 || len > 8)
++		return (EINVAL);
++	if ((apid = spmi_apid(sc, sid, addr)) < 0)
++		return (ENXIO);
++	ch = OBSRVR(sc->ee, apid);
++	WR(sc, R_OBSRVR, ch + CH_CMD, CMD(OP_EXT_READL, addr, len));
++	if ((error = spmi_wait(sc, R_OBSRVR, ch)) != 0)
++		return (error);
++	d = RD(sc, R_OBSRVR, ch + CH_RDATA0);
++	memcpy(buf, &d, MIN(len, 4));
++	if (len > 4) {
++		d = RD(sc, R_OBSRVR, ch + CH_RDATA1);
++		memcpy(buf + 4, &d, len - 4);
++	}
++	return (0);
++}
++
++static int
++spmi_write_locked(struct qcom_spmi_softc *sc, u_int sid, uint16_t addr,
++    const uint8_t *buf, size_t len)
++{
++	bus_size_t ch;
++	uint32_t d;
++	int apid;
++
++	mtx_assert(&sc->mtx, MA_OWNED);
++	if (len == 0 || len > 8)
++		return (EINVAL);
++	if ((apid = spmi_apid(sc, sid, addr)) < 0)
++		return (ENXIO);
++	if (sc->write_ee[apid] != sc->ee)
++		return (EPERM);
++	ch = CHNL(apid);
++	d = 0;
++	memcpy(&d, buf, MIN(len, 4));
++	WR(sc, R_CHNLS, ch + CH_WDATA0, d);
++	if (len > 4) {
++		d = 0;
++		memcpy(&d, buf + 4, len - 4);
++		WR(sc, R_CHNLS, ch + CH_WDATA1, d);
++	}
++	WR(sc, R_CHNLS, ch + CH_CMD, CMD(OP_EXT_WRITEL, addr, len));
++	return (spmi_wait(sc, R_CHNLS, ch));
++}
++
++static int
++spmi_read(struct qcom_spmi_softc *sc, u_int sid, uint16_t addr, void *buf,
++    size_t len)
++{
++	int error;
++
++	mtx_lock_spin(&sc->mtx);
++	error = spmi_read_locked(sc, sid, addr, buf, len);
++	mtx_unlock_spin(&sc->mtx);
++	return (error);
++}
++
++static int
++spmi_write(struct qcom_spmi_softc *sc, u_int sid, uint16_t addr,
++    const void *buf, size_t len)
++{
++	int error;
++
++	mtx_lock_spin(&sc->mtx);
++	error = spmi_write_locked(sc, sid, addr, buf, len);
++	mtx_unlock_spin(&sc->mtx);
++	return (error);
++}
++
++/* --- the API for peripheral drivers ---------------------------------- */
++
++static struct qcom_spmi_devinfo *
++spmi_dinfo(device_t child)
++{
++	return (device_get_ivars(child));
++}
++
++/* A peripheral -> its PMIC (slave id) -> the arbiter */
++static struct qcom_spmi_softc *
++spmi_arb_of(device_t periph, u_int *sid)
++{
++	device_t pmic = device_get_parent(periph);
++
++	*sid = spmi_dinfo(pmic)->reg[0];
++	return (device_get_softc(device_get_parent(pmic)));
++}
++
++int
++qcom_spmi_read(device_t periph, uint16_t addr, void *buf, size_t len)
++{
++	struct qcom_spmi_softc *sc;
++	uint8_t *p = buf;
++	size_t n;
++	u_int sid;
++	int error;
++
++	sc = spmi_arb_of(periph, &sid);
++	for (error = 0; error == 0 && len > 0; addr += n, p += n, len -= n) {
++		n = MIN(len, 8);
++		error = spmi_read(sc, sid, addr, p, n);
++	}
++	return (error);
++}
++
++int
++qcom_spmi_write(device_t periph, uint16_t addr, const void *buf, size_t len)
++{
++	struct qcom_spmi_softc *sc;
++	const uint8_t *p = buf;
++	size_t n;
++	u_int sid;
++	int error;
++
++	sc = spmi_arb_of(periph, &sid);
++	for (error = 0; error == 0 && len > 0; addr += n, p += n, len -= n) {
++		n = MIN(len, 8);
++		error = spmi_write(sc, sid, addr, p, n);
++	}
++	return (error);
++}
++
++uint16_t
++qcom_spmi_base(device_t periph, int index)
++{
++	struct qcom_spmi_devinfo *di = spmi_dinfo(periph);
++
++	return (index < di->nreg ? di->reg[index] : 0);
++}
++
++phandle_t
++qcom_spmi_intr_xref(device_t periph)
++{
++	u_int sid;
++
++	return (spmi_arb_of(periph, &sid)->xref);
++}
++
++/* --- interrupts ------------------------------------------------------ */
++
++static void
++spmi_irq_write(struct qcom_spmi_softc *sc, struct spmi_isrc *si, u_int reg,
++    const uint8_t *buf, size_t len)
++{
++	(void)spmi_write_locked(sc, si->sid, (si->pid << 8) | reg, buf, len);
++}
++
++static void
++spmi_irq_mask(struct qcom_spmi_softc *sc, struct spmi_isrc *si)
++{
++	uint8_t b = 1u << si->id;
++
++	spmi_irq_write(sc, si, QPNPINT_EN_CLR, &b, 1);
++}
++
++static void
++spmi_irq_unmask(struct qcom_spmi_softc *sc, struct spmi_isrc *si)
++{
++	uint8_t en, b[2];
++
++	if (!(RD(sc, R_CHNLS, CHNL(si->apid) + CH_ACC_ENABLE) & ACC_ENABLE))
++		WR(sc, R_CHNLS, CHNL(si->apid) + CH_ACC_ENABLE, ACC_ENABLE);
++	if (spmi_read_locked(sc, si->sid, (si->pid << 8) | QPNPINT_EN_SET,
++	    &en, 1) != 0)
++		return;
++	if (!(en & (1u << si->id))) {
++		/* LATCHED_CLR and EN_SET at once: no stale latch fires. */
++		b[0] = b[1] = 1u << si->id;
++		spmi_irq_write(sc, si, QPNPINT_LATCHED_CLR, b, 2);
++	}
++}
++
++static void
++spmi_irq_ack(struct qcom_spmi_softc *sc, struct spmi_isrc *si)
++{
++	uint8_t b = 1u << si->id;
++
++	WR(sc, R_CHNLS, CHNL(si->apid) + CH_IRQ_CLEAR, b);
++	spmi_irq_write(sc, si, QPNPINT_LATCHED_CLR, &b, 1);
++}
++
++static int
++qcom_spmi_summary(void *arg)
++{
++	struct qcom_spmi_softc *sc = arg;
++	struct spmi_isrc *si;
++	uint32_t acc, irqs;
++	u_int w, apid, id;
++	uint8_t b;
++
++	for (w = 0; w < howmany(sc->napids, 32); w++) {
++		acc = RD(sc, R_INTR, ACC_STATUS(sc->ee, w));
++		while (acc != 0) {
++			apid = w * 32 + ffs(acc) - 1;
++			acc &= acc - 1;
++			if (apid >= sc->napids || !(RD(sc, R_CHNLS,
++			    CHNL(apid) + CH_ACC_ENABLE) & ACC_ENABLE))
++				continue;
++			irqs = RD(sc, R_CHNLS, CHNL(apid) + CH_IRQ_STATUS) &
++			    0xff;
++			while (irqs != 0) {
++				id = ffs(irqs) - 1;
++				irqs &= irqs - 1;
++				si = sc->isrcs[apid * 8 + id];
++				if (si != NULL && si->edge) {
++					mtx_lock_spin(&sc->mtx);
++					spmi_irq_ack(sc, si);
++					mtx_unlock_spin(&sc->mtx);
++				}
++				if (si != NULL && intr_isrc_dispatch(&si->isrc,
++				    curthread->td_intr_frame) == 0)
++					continue;
++				/* Nobody's: off for good */
++				mtx_lock_spin(&sc->mtx);
++				b = 1u << id;
++				WR(sc, R_CHNLS, CHNL(apid) + CH_IRQ_CLEAR, b);
++				(void)spmi_write_locked(sc,
++				    sc->apid_ppid[apid] >> 8,
++				    (sc->apid_ppid[apid] & 0xff) << 8 |
++				    QPNPINT_EN_CLR, &b, 1);
++				mtx_unlock_spin(&sc->mtx);
++			}
++		}
++	}
++	return (FILTER_HANDLED);
++}
++
++static int
++spmi_map(struct qcom_spmi_softc *sc, struct intr_map_data *data,
++    u_int *sid, u_int *pid, u_int *id, u_int *type, int *apid)
++{
++	struct intr_map_data_fdt *daf;
++
++	if (data->type != INTR_MAP_DATA_FDT)
++		return (ENOTSUP);
++	daf = (struct intr_map_data_fdt *)data;
++	if (daf->ncells != 4)
++		return (EINVAL);
++	*sid = daf->cells[0];
++	*pid = daf->cells[1];
++	*id = daf->cells[2];
++	*type = daf->cells[3];
++	if (*sid > 0xf || *pid > 0xff || *id > 7)
++		return (EINVAL);
++	*apid = spmi_apid(sc, *sid, *pid << 8);
++	if (*apid < 0 || sc->irq_ee[*apid] != sc->ee)
++		return (ENXIO);
++	return (0);
++}
++
++static int
++qcom_spmi_pic_map_intr(device_t dev, struct intr_map_data *data,
++    struct intr_irqsrc **isrcp)
++{
++	struct qcom_spmi_softc *sc = device_get_softc(dev);
++	struct spmi_isrc *si;
++	u_int sid, pid, id, type;
++	int apid, error;
++
++	if ((error = spmi_map(sc, data, &sid, &pid, &id, &type, &apid)) != 0)
++		return (error);
++	si = sc->isrcs[apid * 8 + id];
++	if (si == NULL) {
++		si = malloc(sizeof(*si), M_DEVBUF, M_NOWAIT | M_ZERO);
++		if (si == NULL)
++			return (ENOMEM);
++		si->apid = apid;
++		si->sid = sid;
++		si->pid = pid;
++		si->id = id;
++		error = intr_isrc_register(&si->isrc, dev, 0, "spmi%u.%02x.%u",
++		    sid, pid, id);
++		if (error != 0) {
++			free(si, M_DEVBUF);
++			return (error);
++		}
++		sc->isrcs[apid * 8 + id] = si;
++	}
++	*isrcp = &si->isrc;
++	return (0);
++}
++
++static int
++qcom_spmi_pic_setup_intr(device_t dev, struct intr_irqsrc *isrc,
++    struct resource *res, struct intr_map_data *data)
++{
++	struct qcom_spmi_softc *sc = device_get_softc(dev);
++	struct spmi_isrc *si = (struct spmi_isrc *)isrc;
++	u_int sid, pid, id, type;
++	uint8_t t[3], bit;
++	int apid, error;
++
++	if (data == NULL || (error = spmi_map(sc, data, &sid, &pid, &id, &type,
++	    &apid)) != 0)
++		return (EINVAL);
++	if (isrc->isrc_handlers != 0)
++		return (0);
++
++	bit = 1u << id;
++	mtx_lock_spin(&sc->mtx);
++	error = spmi_read_locked(sc, sid, (pid << 8) | QPNPINT_SET_TYPE, t, 3);
++	if (error == 0) {
++		/* IRQ_TYPE_*: 1 rising, 2 falling, 3 both, 4 high, 8 low */
++		si->edge = (type & 0x3) != 0;
++		t[0] = si->edge ? (t[0] | bit) : (t[0] & ~bit);
++		t[1] = (type & (0x1 | 0x4)) ? (t[1] | bit) : (t[1] & ~bit);
++		t[2] = (type & (0x2 | 0x8)) ? (t[2] | bit) : (t[2] & ~bit);
++		error = spmi_write_locked(sc, sid, (pid << 8) |
++		    QPNPINT_SET_TYPE, t, 3);
++	}
++	if (error == 0)
++		spmi_irq_unmask(sc, si);
++	mtx_unlock_spin(&sc->mtx);
++	return (error);
++}
++
++static int
++qcom_spmi_pic_teardown_intr(device_t dev, struct intr_irqsrc *isrc,
++    struct resource *res, struct intr_map_data *data)
++{
++	struct qcom_spmi_softc *sc = device_get_softc(dev);
++
++	if (isrc->isrc_handlers == 0) {
++		mtx_lock_spin(&sc->mtx);
++		spmi_irq_mask(sc, (struct spmi_isrc *)isrc);
++		mtx_unlock_spin(&sc->mtx);
++	}
++	return (0);
++}
++
++static void
++qcom_spmi_pic_enable_intr(device_t dev, struct intr_irqsrc *isrc)
++{
++	struct qcom_spmi_softc *sc = device_get_softc(dev);
++
++	mtx_lock_spin(&sc->mtx);
++	spmi_irq_unmask(sc, (struct spmi_isrc *)isrc);
++	mtx_unlock_spin(&sc->mtx);
++}
++
++static void
++qcom_spmi_pic_disable_intr(device_t dev, struct intr_irqsrc *isrc)
++{
++	struct qcom_spmi_softc *sc = device_get_softc(dev);
++
++	mtx_lock_spin(&sc->mtx);
++	spmi_irq_mask(sc, (struct spmi_isrc *)isrc);
++	mtx_unlock_spin(&sc->mtx);
++}
++
++static void
++qcom_spmi_pic_pre_ithread(device_t dev, struct intr_irqsrc *isrc)
++{
++	qcom_spmi_pic_disable_intr(dev, isrc);
++}
++
++static void
++qcom_spmi_pic_post_ithread(device_t dev, struct intr_irqsrc *isrc)
++{
++	struct qcom_spmi_softc *sc = device_get_softc(dev);
++	struct spmi_isrc *si = (struct spmi_isrc *)isrc;
++
++	mtx_lock_spin(&sc->mtx);
++	if (!si->edge)
++		spmi_irq_ack(sc, si);
++	spmi_irq_unmask(sc, si);
++	mtx_unlock_spin(&sc->mtx);
++}
++
++static void
++qcom_spmi_pic_post_filter(device_t dev, struct intr_irqsrc *isrc)
++{
++	struct qcom_spmi_softc *sc = device_get_softc(dev);
++	struct spmi_isrc *si = (struct spmi_isrc *)isrc;
++
++	if (!si->edge) {
++		mtx_lock_spin(&sc->mtx);
++		spmi_irq_ack(sc, si);
++		mtx_unlock_spin(&sc->mtx);
++	}
++}
++
++/* --- children of both buses ------------------------------------------ */
++
++static device_t
++spmi_add_child(device_t bus, phandle_t node, int regcells)
++{
++	struct qcom_spmi_devinfo *di;
++	pcell_t reg[8];
++	device_t child;
++	ssize_t n;
++	int i;
++
++	di = malloc(sizeof(*di), M_DEVBUF, M_WAITOK | M_ZERO);
++	if (ofw_bus_gen_setup_devinfo(&di->obd, node) != 0) {
++		free(di, M_DEVBUF);
++		return (NULL);
++	}
++	resource_list_init(&di->rl);
++	n = OF_getencprop(node, "reg", reg, sizeof(reg));
++	/* A PMIC: <sid type>, the sid counts; a peripheral: <addr>... */
++	for (i = 0; n > 0 && i < n / (ssize_t)sizeof(pcell_t) &&
++	    di->nreg < (int)nitems(di->reg); i += regcells)
++		di->reg[di->nreg++] = reg[i];
++	child = device_add_child(bus, NULL, DEVICE_UNIT_ANY);
++	if (child == NULL) {
++		ofw_bus_gen_destroy_devinfo(&di->obd);
++		free(di, M_DEVBUF);
++		return (NULL);
++	}
++	device_set_ivars(child, di);
++	return (child);
++}
++
++static struct resource_list *
++spmi_get_resource_list(device_t bus, device_t child)
++{
++	return (&spmi_dinfo(child)->rl);
++}
++
++static const struct ofw_bus_devinfo *
++spmi_get_devinfo(device_t bus, device_t child)
++{
++	return (&spmi_dinfo(child)->obd);
++}
++
++static void
++spmi_child_deleted(device_t bus, device_t child)
++{
++	struct qcom_spmi_devinfo *di = spmi_dinfo(child);
++
++	if (di == NULL)
++		return;
++	resource_list_free(&di->rl);
++	ofw_bus_gen_destroy_devinfo(&di->obd);
++	free(di, M_DEVBUF);
++}
++
++static int
++spmi_print_child(device_t bus, device_t child)
++{
++	struct qcom_spmi_devinfo *di = spmi_dinfo(child);
++	int rv;
++
++	rv = bus_print_child_header(bus, child);
++	if (di->nreg > 0)
++		rv += printf(" at %#x", di->reg[0]);
++	rv += resource_list_print_type(&di->rl, "irq", SYS_RES_IRQ, "%jd");
++	rv += bus_print_child_footer(bus, child);
++	return (rv);
++}
++
++/* --- the arbiter ----------------------------------------------------- */
++
++static void
++qcom_spmi_read_map(struct qcom_spmi_softc *sc)
++{
++	bus_size_t core_size = rman_get_size(sc->res[R_CORE]);
++	uint32_t v;
++	uint16_t ppid, prev;
++	u_int apid;
++	bool irq_owner;
++
++	for (apid = 0; apid < sc->napids; apid++) {
++		sc->write_ee[apid] = sc->irq_ee[apid] = NO_EE;
++		if (ARB_APID_MAP(apid) >= core_size)
++			break;
++		v = RD(sc, R_CORE, ARB_APID_MAP(apid));
++		if (v == 0)
++			continue;
++		ppid = MAP_PPID(v);
++		irq_owner = (v & MAP_IRQ_OWNER) != 0;
++		sc->write_ee[apid] = OWNER_EE(RD(sc, R_CNFG,
++		    ARB_APID_OWNER(apid)));
++		sc->irq_ee[apid] = irq_owner ? sc->write_ee[apid] : NO_EE;
++		sc->apid_ppid[apid] = ppid;
++		prev = sc->ppid_to_apid[ppid];
++		if (!(prev & APID_VALID) || sc->write_ee[apid] == sc->ee) {
++			/* The first mapping, or the one for this EE */
++			sc->ppid_to_apid[ppid] = apid | APID_VALID;
++		} else if (irq_owner &&
++		    sc->write_ee[prev & ~APID_VALID] == sc->ee) {
++			/* A later mapping owns the interrupts of ours */
++			sc->irq_ee[prev & ~APID_VALID] = sc->irq_ee[apid];
++		}
++	}
++}
++
++static int
++qcom_spmi_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (!ofw_bus_is_compatible(dev, "qcom,spmi-pmic-arb"))
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm SPMI PMIC arbiter");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++qcom_spmi_attach(device_t dev)
++{
++	struct qcom_spmi_softc *sc = device_get_softc(dev);
++	phandle_t node = ofw_bus_get_node(dev), child;
++	uint32_t ver;
++	pcell_t ee;
++	u_int apid, own;
++	int rid;
++
++	sc->dev = dev;
++	mtx_init(&sc->mtx, device_get_nameunit(dev), NULL, MTX_SPIN);
++	if (bus_alloc_resources(dev, qcom_spmi_res_spec, sc->res) != 0) {
++		device_printf(dev, "unable to map the register regions\n");
++		return (ENXIO);
++	}
++	ver = RD(sc, R_CORE, ARB_VERSION);
++	if (ver < ARB_V5_MIN || ver >= ARB_V7_MIN) {
++		device_printf(dev, "arbiter version %#x, only v5 is known\n",
++		    ver);
++		bus_release_resources(dev, qcom_spmi_res_spec, sc->res);
++		return (ENXIO);
++	}
++	sc->ee = OF_getencprop(node, "qcom,ee", &ee, sizeof(ee)) ==
++	    sizeof(ee) ? ee : 0;
++	sc->napids = MIN(FEATURES_PERIPHS(RD(sc, R_CORE, ARB_FEATURES)),
++	    MAX_PERIPHS);
++	qcom_spmi_read_map(sc);
++	sc->isrcs = malloc(sizeof(*sc->isrcs) * sc->napids * 8, M_DEVBUF,
++	    M_WAITOK | M_ZERO);
++
++	/*
++	 * Accumulators the previous kernel left on would raise the summary
++	 * interrupt for nobody; each comes back with its first handler.
++	 */
++	for (apid = own = 0; apid < sc->napids; apid++) {
++		if (sc->irq_ee[apid] != sc->ee)
++			continue;
++		own++;
++		if (sc->write_ee[apid] == sc->ee)
++			WR(sc, R_CHNLS, CHNL(apid) + CH_ACC_ENABLE, 0);
++	}
++	device_printf(dev, "v%u.%u, EE %u, %u channels, %u with interrupts "
++	    "here\n", ver >> 28, (ver >> 16) & 0xfff, sc->ee, sc->napids, own);
++
++	sc->xref = OF_xref_from_node(node);
++	if (intr_pic_register(dev, sc->xref) == NULL) {
++		device_printf(dev, "unable to register the interrupt "
++		    "controller\n");
++		return (ENXIO);
++	}
++	rid = 0;
++	sc->irq = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid, RF_ACTIVE);
++	if (sc->irq == NULL || bus_setup_intr(dev, sc->irq,
++	    INTR_TYPE_MISC | INTR_MPSAFE, qcom_spmi_summary, NULL, sc,
++	    &sc->ih) != 0) {
++		device_printf(dev, "unable to set up the summary interrupt\n");
++		return (ENXIO);
++	}
++
++	for (child = OF_child(node); child > 0; child = OF_peer(child))
++		if (ofw_bus_node_status_okay(child))
++			spmi_add_child(dev, child, 2);
++	bus_attach_children(dev);
++	return (0);
++}
++
++static int
++qcom_spmi_detach(device_t dev)
++{
++	/* The interrupt controller cannot go away. */
++	return (EBUSY);
++}
++
++static device_method_t qcom_spmi_methods[] = {
++	DEVMETHOD(device_probe,		qcom_spmi_probe),
++	DEVMETHOD(device_attach,	qcom_spmi_attach),
++	DEVMETHOD(device_detach,	qcom_spmi_detach),
++
++	DEVMETHOD(bus_print_child,	spmi_print_child),
++	DEVMETHOD(bus_child_deleted,	spmi_child_deleted),
++	DEVMETHOD(bus_get_resource_list, spmi_get_resource_list),
++	DEVMETHOD(bus_set_resource,	bus_generic_rl_set_resource),
++	DEVMETHOD(bus_get_resource,	bus_generic_rl_get_resource),
++	DEVMETHOD(bus_alloc_resource,	bus_generic_rl_alloc_resource),
++	DEVMETHOD(bus_release_resource,	bus_generic_rl_release_resource),
++	DEVMETHOD(bus_activate_resource, bus_generic_activate_resource),
++	DEVMETHOD(bus_deactivate_resource, bus_generic_deactivate_resource),
++	DEVMETHOD(bus_setup_intr,	bus_generic_setup_intr),
++	DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
++
++	DEVMETHOD(ofw_bus_get_devinfo,	spmi_get_devinfo),
++	DEVMETHOD(ofw_bus_get_compat,	ofw_bus_gen_get_compat),
++	DEVMETHOD(ofw_bus_get_model,	ofw_bus_gen_get_model),
++	DEVMETHOD(ofw_bus_get_name,	ofw_bus_gen_get_name),
++	DEVMETHOD(ofw_bus_get_node,	ofw_bus_gen_get_node),
++	DEVMETHOD(ofw_bus_get_type,	ofw_bus_gen_get_type),
++
++	DEVMETHOD(pic_map_intr,		qcom_spmi_pic_map_intr),
++	DEVMETHOD(pic_setup_intr,	qcom_spmi_pic_setup_intr),
++	DEVMETHOD(pic_teardown_intr,	qcom_spmi_pic_teardown_intr),
++	DEVMETHOD(pic_enable_intr,	qcom_spmi_pic_enable_intr),
++	DEVMETHOD(pic_disable_intr,	qcom_spmi_pic_disable_intr),
++	DEVMETHOD(pic_pre_ithread,	qcom_spmi_pic_pre_ithread),
++	DEVMETHOD(pic_post_ithread,	qcom_spmi_pic_post_ithread),
++	DEVMETHOD(pic_post_filter,	qcom_spmi_pic_post_filter),
++
++	DEVMETHOD_END
++};
++
++static driver_t qcom_spmi_driver = {
++	"qcom_spmi",
++	qcom_spmi_methods,
++	sizeof(struct qcom_spmi_softc),
++};
++
++EARLY_DRIVER_MODULE(qcom_spmi, simplebus, qcom_spmi_driver, 0, 0,
++    BUS_PASS_INTERRUPT + BUS_PASS_ORDER_LATE);
++
++/* --- a PMIC: a bus of peripherals ------------------------------------ */
++
++static int
++qcom_pmic_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (!ofw_bus_is_compatible(dev, "qcom,spmi-pmic"))
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm SPMI PMIC");
++	return (BUS_PROBE_DEFAULT);
++}
++
++/* A peripheral's interrupts, mapped through the arbiter */
++static void
++qcom_pmic_child_irqs(device_t dev, device_t child, phandle_t node)
++{
++	struct qcom_spmi_devinfo *di = spmi_dinfo(child);
++	struct qcom_spmi_softc *arb = device_get_softc(device_get_parent(dev));
++	pcell_t *cells;
++	ssize_t n;
++	u_int irq;
++	int i, rid;
++
++	n = OF_getencprop_alloc_multi(node, "interrupts", sizeof(pcell_t),
++	    (void **)&cells);
++	for (i = 0, rid = 0; i + 4 <= n; i += 4, rid++) {
++		irq = ofw_bus_map_intr(dev, arb->xref, 4, cells + i);
++		resource_list_add(&di->rl, SYS_RES_IRQ, rid, irq, irq, 1);
++	}
++	if (n > 0)
++		OF_prop_free(cells);
++}
++
++static int
++qcom_pmic_attach(device_t dev)
++{
++	phandle_t node = ofw_bus_get_node(dev), child;
++	device_t cdev;
++
++	for (child = OF_child(node); child > 0; child = OF_peer(child)) {
++		if (!ofw_bus_node_status_okay(child))
++			continue;
++		cdev = spmi_add_child(dev, child, 1);
++		if (cdev != NULL)
++			qcom_pmic_child_irqs(dev, cdev, child);
++	}
++	bus_attach_children(dev);
++	return (0);
++}
++
++static device_method_t qcom_pmic_methods[] = {
++	DEVMETHOD(device_probe,		qcom_pmic_probe),
++	DEVMETHOD(device_attach,	qcom_pmic_attach),
++	DEVMETHOD(device_detach,	bus_generic_detach),
++
++	DEVMETHOD(bus_print_child,	spmi_print_child),
++	DEVMETHOD(bus_child_deleted,	spmi_child_deleted),
++	DEVMETHOD(bus_get_resource_list, spmi_get_resource_list),
++	DEVMETHOD(bus_set_resource,	bus_generic_rl_set_resource),
++	DEVMETHOD(bus_get_resource,	bus_generic_rl_get_resource),
++	DEVMETHOD(bus_alloc_resource,	bus_generic_rl_alloc_resource),
++	DEVMETHOD(bus_release_resource,	bus_generic_rl_release_resource),
++	DEVMETHOD(bus_activate_resource, bus_generic_activate_resource),
++	DEVMETHOD(bus_deactivate_resource, bus_generic_deactivate_resource),
++	DEVMETHOD(bus_setup_intr,	bus_generic_setup_intr),
++	DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
++
++	DEVMETHOD(ofw_bus_get_devinfo,	spmi_get_devinfo),
++	DEVMETHOD(ofw_bus_get_compat,	ofw_bus_gen_get_compat),
++	DEVMETHOD(ofw_bus_get_model,	ofw_bus_gen_get_model),
++	DEVMETHOD(ofw_bus_get_name,	ofw_bus_gen_get_name),
++	DEVMETHOD(ofw_bus_get_node,	ofw_bus_gen_get_node),
++	DEVMETHOD(ofw_bus_get_type,	ofw_bus_gen_get_type),
++
++	DEVMETHOD_END
++};
++
++static driver_t qcom_pmic_driver = {
++	"qcom_pmic",
++	qcom_pmic_methods,
++	0,
++};
++
++EARLY_DRIVER_MODULE(qcom_pmic, qcom_spmi, qcom_pmic_driver, 0, 0,
++    BUS_PASS_INTERRUPT + BUS_PASS_ORDER_LATE);
+diff --git a/sys/dev/qcom_spmi/qcom_spmi.h b/sys/dev/qcom_spmi/qcom_spmi.h
+new file mode 100644
+index 000000000..d7a4f7f2b
+--- /dev/null
++++ b/sys/dev/qcom_spmi/qcom_spmi.h
+@@ -0,0 +1,30 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Register access for the peripherals of Qualcomm SPMI PMICs: drivers of
++ * PMIC peripherals (children of a qcom_pmic bus) read and write the PMIC's
++ * registers by their 16-bit address; qcom_spmi_base() gives the
++ * peripheral's own addresses (its "reg" entries).
++ */
++
++#ifndef _DEV_QCOM_SPMI_QCOM_SPMI_H_
++#define	_DEV_QCOM_SPMI_QCOM_SPMI_H_
++
++int	qcom_spmi_read(device_t periph, uint16_t addr, void *buf, size_t len);
++int	qcom_spmi_write(device_t periph, uint16_t addr, const void *buf,
++	    size_t len);
++uint16_t qcom_spmi_base(device_t periph, int index);
++/* The interrupt controller's xref, for interrupts of peripheral subnodes */
++phandle_t qcom_spmi_intr_xref(device_t periph);
++
++/* Interrupt registers of every peripheral, after its base */
++#define	QPNPINT_RT_STS		0x10
++#define	QPNPINT_SET_TYPE	0x11
++#define	QPNPINT_POLARITY_HIGH	0x12
++#define	QPNPINT_POLARITY_LOW	0x13
++#define	QPNPINT_LATCHED_CLR	0x14
++#define	QPNPINT_EN_SET		0x15
++#define	QPNPINT_EN_CLR		0x16
++#define	QPNPINT_LATCHED_STS	0x18
++
++#endif
+-- 
+2.56.0
+

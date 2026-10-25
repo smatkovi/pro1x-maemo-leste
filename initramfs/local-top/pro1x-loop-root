@@ -89,6 +89,12 @@ EOF
     log_begin_msg "Starting FreeBSD"
     pro1x-boot set-current freebsd
     args=$(cat "/host${image%/*}/cmdline" 2>/dev/null)
+    # The time: the RTC only counts, Leste keeps the offset (pro1x-rtc)
+    off=$(cat /host/pro1x-rtc-offset 2>/dev/null)
+    case "$off" in
+      ''|*[!0-9-]*) ;;
+      *) args="$args hint.qcom_rtc.0.offset=$off" ;;
+    esac
     if kexec -s -l "/host$image" --command-line="FreeBSD:$args"; then
       sync
       umount /host

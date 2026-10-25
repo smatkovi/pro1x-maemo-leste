@@ -50,6 +50,9 @@ device		pro1xkbd		# the keyboard matrix on it (0009)
 device		cpufreq
 device		qcom_cpufreq_hw
 
+# The PMICs over SPMI: power and volume-down keys, the RTC (0011)
+device		qcom_spmi
+
 # Disks and file systems: CAM, GPT, ext4 (userdata, where the system
 # images live)
 device		scbus

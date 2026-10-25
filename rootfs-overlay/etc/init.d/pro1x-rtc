@@ -18,6 +18,9 @@ start() {
 stop() {
 	ebegin "Saving the RTC offset"
 	/usr/local/sbin/pro1x-rtc save
+	# A copy next to the system images: the boot menu hands it to systems
+	# without this service (FreeBSD: hint.qcom_rtc.0.offset).
+	[ -d /host ] && cp /var/lib/pro1x-rtc/offset /host/pro1x-rtc-offset 2>/dev/null
 	# A wake alarm is set (alarmd, or timed in the MeeGo boot): the phone
 	# powers on for it into the system that set it.
 	if [ -n "$(cat /sys/class/rtc/rtc0/wakealarm 2>/dev/null)" ]; then
