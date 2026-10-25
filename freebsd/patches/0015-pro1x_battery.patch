@@ -1,0 +1,679 @@
+From 7c08f43f9f51585ff6de25b15ab3608882b0ae63 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 19:12:16 +0100
+Subject: [PATCH] pro1x_battery: F(x)tec Pro1X battery state of charge
+
+A port of the Pro1X Leste kernel's pro1x-adc-battery: battery voltage
+from the PMI632 ADC5, current from the QG fuel gauge, the open-circuit
+voltage with a learned internal resistance looked up in the
+monitored-battery's OCV table, charge counting pulled towards it while
+the current is small. Reported as dev.pro1x_battery.0.* and, for
+battery monitors written for ACPI, hw.acpi.battery.* and
+hw.acpi.acline.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/conf/files.arm64              |   1 +
+ sys/dev/qcom_spmi/pro1x_battery.c | 638 ++++++++++++++++++++++++++++++
+ 2 files changed, 639 insertions(+)
+ create mode 100644 sys/dev/qcom_spmi/pro1x_battery.c
+
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index ddf4ca431..754e3e145 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -744,6 +744,7 @@ arm64/qualcomm/qcom_cpufreq_hw.c		optional qcom_cpufreq_hw fdt cpufreq
+ dev/qcom_spmi/qcom_spmi.c			optional qcom_spmi fdt
+ dev/qcom_spmi/qcom_pon.c			optional qcom_spmi fdt
+ dev/qcom_spmi/qcom_rtc.c			optional qcom_spmi fdt
++dev/qcom_spmi/pro1x_battery.c			optional qcom_spmi fdt
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ 
+ # RockChip Drivers
+diff --git a/sys/dev/qcom_spmi/pro1x_battery.c b/sys/dev/qcom_spmi/pro1x_battery.c
+new file mode 100644
+index 000000000..e37730051
+--- /dev/null
++++ b/sys/dev/qcom_spmi/pro1x_battery.c
+@@ -0,0 +1,638 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Battery state of charge for the F(x)tec Pro1X (PMI632), a port of the
++ * Pro1X Leste kernel's pro1x-adc-battery ("fxtec,pro1x-adc-battery").
++ *
++ * The PMI632 fuel gauge (QG) has no driver, but still measures the battery
++ * current (burst average, the downstream qpnp-qg's registers and scale);
++ * the battery voltage comes from the PMIC ADC (ADC5, channels from
++ * io-channels: vbat, usbin). The open-circuit voltage
++ *
++ *	OCV = V + I * ESR		(I positive while discharging)
++ *
++ * is looked up in the ocv-capacity table of the monitored-battery node.
++ * The percentage itself is charge counting (the current over time), which
++ * the OCV estimate pulls towards it slowly while the current is small; the
++ * ESR is learned from how the voltage follows the current. Full is told by
++ * the charger voltage. Polled every 5 s.
++ *
++ * Reported as dev.pro1x_battery.0.* and, for battery monitors written for
++ * ACPI, hw.acpi.battery.{life,state,time,units} and hw.acpi.acline.
++ */
++
++#include "opt_acpi.h"
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/kernel.h>
++#include <sys/lock.h>
++#include <sys/module.h>
++#include <sys/mutex.h>
++#include <sys/sysctl.h>
++#include <sys/taskqueue.h>
++#include <sys/time.h>
++
++#include <dev/ofw/openfirm.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++#include <dev/qcom_spmi/qcom_spmi.h>
++
++#define	POLL_S			5
++#define	ANCHOR_POLLS		24
++#define	ANCHOR_MAX_UA_DISCH	400000
++#define	ANCHOR_MAX_UA_CHG	200000
++#define	ANCHOR_POLLS_LOAD	96
++#define	ANCHOR_LOAD_MAX_UA	1500000
++#define	REANCHOR_RETRY_POLLS	36
++#define	GAP_MS			(3 * POLL_S * 1000)
++#define	LONG_GAP_MS		120000
++#define	GAP_REANCHOR_MAX_UA	600000
++#define	CHG_EFFICIENCY_PCT	97
++#define	GAP_MAX_CHARGE_MS	(12 * 3600 * 1000LL)
++#define	RATCHET_RELEASE		3
++#define	DEFAULT_FULL_UAH	3150000
++#define	DEFAULT_FULL_UV		4380000
++#define	LEARN_POLLS		6
++#define	WIN			24
++#define	USB_PRESENT_UV		4000000
++#define	CHARGING_MIN_UA		30000
++#define	ESR_MIN_MOHM		50
++#define	ESR_MAX_MOHM		400
++#define	OCV_MAX			100
++
++/* QG registers, after the node's reg */
++#define	QG_PERPH_SUBTYPE	0x05
++#define	 QG_SUBTYPE_IBAT_5A	0x03
++#define	QG_DATA_CTL2		0x42
++#define	 BURST_AVG_HOLD		0x01
++#define	QG_LAST_BURST_AVG_I	0xc6
++#define	QG_I_RESET		0x8000
++#define	IRAW_NA_5A		152588
++#define	IRAW_NA_10A		305176
++
++/* ADC5 registers, after the ADC node's reg */
++#define	ADC5_STATUS1		0x08
++#define	 STATUS1_REQ_EOC	0x03
++#define	 STATUS1_EOC		0x01
++#define	ADC5_DIG_PARAM		0x42	/* 0x42..0x47: written in one go */
++#define	ADC5_DATA0		0x50
++#define	ADC5_DATA_CHECK		0x8000
++#define	ADC5_MAX_CODE		0x7fff
++#define	ADC5_FULL_SCALE		0x70e4
++#define	ADC5_VREF_MV		1875
++#define	ADC5_DECIMATION		2	/* the defaults of Linux's adc5 */
++#define	ADC5_ABSOLUTE_CAL	2
++#define	ADC5_POLLS		400
++#define	BURST			8
++#define	BURST_PICK		5	/* of 8, ascending: not the sagging ones */
++
++enum { ST_UNKNOWN, ST_DISCHARGING, ST_CHARGING, ST_FULL };
++static const char *const status_names[] = { "unknown", "discharging",
++	"charging", "full" };
++
++struct adc_chan {
++	uint8_t		num;
++	uint32_t	pre_num, pre_den;
++};
++
++struct pro1x_battery_softc {
++	device_t		dev;
++	struct mtx		mtx;
++	struct timeout_task	poll;
++	bool			detaching;
++	uint16_t		base, adc_base;
++	struct adc_chan		vbat, usbin;
++	int64_t			i_scale_na;
++	int			full_uv;
++	int			ocv_uv_tab[OCV_MAX + 1];
++	int			ocv_cap_tab[OCV_MAX + 1];
++	int			ocv_n;
++	u_int			esr_mohm;
++	int			esr_learn;
++
++	bool			filt_valid;
++	int			v_f, i_f, ocv_uv;
++	int			win_v[WIN], win_i[WIN];
++	int			win_n, win_pos;
++	int64_t			q_uah, q_full_uah;
++	bool			have_q, have_t;
++	struct timespec		last_t;
++	u_int			reanchor_left, ticks;
++	int			cap, status;
++	bool			usb;
++};
++
++static struct pro1x_battery_softc *pro1x_battery_sc;
++
++/* --- measurements ---------------------------------------------------- */
++
++static int
++adc_convert(struct pro1x_battery_softc *sc, struct adc_chan *ch, int *uv)
++{
++	uint8_t p[6], st, d[2];
++	uint16_t code;
++	int64_t v;
++	int i, error;
++
++	if ((error = qcom_spmi_read(sc->dev, sc->adc_base + ADC5_DIG_PARAM, p,
++	    6)) != 0)
++		return (error);
++	p[0] = (p[0] & ~0x7c) | ADC5_ABSOLUTE_CAL << 4 | ADC5_DECIMATION << 2;
++	p[1] &= ~0x07;			/* one sample */
++	p[2] = ch->num;
++	p[3] &= ~0x0f;			/* no settle delay */
++	p[4] |= 0x80;			/* enable */
++	p[5] |= 0x80;			/* conversion request */
++	if ((error = qcom_spmi_write(sc->dev, sc->adc_base + ADC5_DIG_PARAM, p,
++	    6)) != 0)
++		return (error);
++	for (i = 0; i < ADC5_POLLS; i++) {
++		if ((error = qcom_spmi_read(sc->dev, sc->adc_base +
++		    ADC5_STATUS1, &st, 1)) != 0)
++			return (error);
++		if ((st & STATUS1_REQ_EOC) == STATUS1_EOC)
++			break;
++		DELAY(264);
++	}
++	if (i == ADC5_POLLS)
++		return (ETIMEDOUT);
++	if ((error = qcom_spmi_read(sc->dev, sc->adc_base + ADC5_DATA0, d,
++	    2)) != 0)
++		return (error);
++	code = d[1] << 8 | d[0];
++	if (code == ADC5_DATA_CHECK)
++		return (EIO);
++	if (code > ADC5_MAX_CODE)
++		code = 0;
++	v = (int64_t)code * ADC5_VREF_MV * 1000 / ADC5_FULL_SCALE;
++	*uv = v > 0 ? (int)(v * ch->pre_den / ch->pre_num) : 0;
++	return (0);
++}
++
++static int
++read_vbat(struct pro1x_battery_softc *sc, int *vbat)
++{
++	int v[BURST], i, j, t, error;
++
++	for (i = 0; i < BURST; i++) {
++		if ((error = adc_convert(sc, &sc->vbat, &v[i])) != 0)
++			return (error);
++		if (i < BURST - 1)
++			pause("p1xbat", MAX(1, hz * 6 / 1000));
++	}
++	for (i = 1; i < BURST; i++)
++		for (j = i; j > 0 && v[j - 1] > v[j]; j--) {
++			t = v[j];
++			v[j] = v[j - 1];
++			v[j - 1] = t;
++		}
++	*vbat = v[BURST_PICK];
++	return (0);
++}
++
++/* The battery current in uA, positive while discharging */
++static int
++read_ibat(struct pro1x_battery_softc *sc, int *ibat)
++{
++	uint8_t ctl, raw[2];
++	uint16_t u;
++	int error, error2;
++
++	if ((error = qcom_spmi_read(sc->dev, sc->base + QG_DATA_CTL2, &ctl,
++	    1)) != 0)
++		return (error);
++	/* The burst average held while both bytes are read */
++	ctl |= BURST_AVG_HOLD;
++	if ((error = qcom_spmi_write(sc->dev, sc->base + QG_DATA_CTL2, &ctl,
++	    1)) != 0)
++		return (error);
++	error = qcom_spmi_read(sc->dev, sc->base + QG_LAST_BURST_AVG_I, raw, 2);
++	ctl &= ~BURST_AVG_HOLD;
++	error2 = qcom_spmi_write(sc->dev, sc->base + QG_DATA_CTL2, &ctl, 1);
++	if (error != 0 || error2 != 0)
++		return (error != 0 ? error : error2);
++	u = raw[1] << 8 | raw[0];
++	if (u == QG_I_RESET)
++		return (EAGAIN);
++	*ibat = (int)((int64_t)(int16_t)u * sc->i_scale_na / 1000);
++	return (0);
++}
++
++/* --- the estimate (the Linux driver's) -------------------------------- */
++
++static int
++ocv2cap(struct pro1x_battery_softc *sc, int ocv)
++{
++	int i;
++
++	/* The table runs from full down; interpolated between its rows */
++	if (ocv >= sc->ocv_uv_tab[0])
++		return (sc->ocv_cap_tab[0]);
++	for (i = 1; i < sc->ocv_n; i++)
++		if (ocv >= sc->ocv_uv_tab[i])
++			return (sc->ocv_cap_tab[i] + (sc->ocv_cap_tab[i - 1] -
++			    sc->ocv_cap_tab[i]) * (ocv - sc->ocv_uv_tab[i]) /
++			    (sc->ocv_uv_tab[i - 1] - sc->ocv_uv_tab[i]));
++	return (sc->ocv_cap_tab[sc->ocv_n - 1]);
++}
++
++static void
++learn_esr(struct pro1x_battery_softc *sc)
++{
++	int64_t vm = 0, im = 0, cov = 0, var = 0, r, dv, di;
++	int i;
++
++	if (!sc->esr_learn || sc->win_n < WIN)
++		return;
++	for (i = 0; i < WIN; i++) {
++		vm += sc->win_v[i];
++		im += sc->win_i[i];
++	}
++	vm /= WIN;
++	im /= WIN;
++	for (i = 0; i < WIN; i++) {
++		dv = sc->win_v[i] - vm;
++		di = sc->win_i[i] - im;
++		cov += dv * di;
++		var += di * di;
++	}
++	/* A real spread of the current (150 mA), else it is noise */
++	if (var < (int64_t)WIN * 150 * 150 || cov >= 0)
++		return;
++	r = -cov * 1000 / var;
++	if (r < ESR_MIN_MOHM || r > ESR_MAX_MOHM)
++		return;
++	sc->esr_mohm = (sc->esr_mohm * 3 + (u_int)r) / 4;
++}
++
++static void
++update(struct pro1x_battery_softc *sc)
++{
++	struct timespec now, d;
++	int vbat, ibat, usbin, est, max_anchor, new_cap;
++	int64_t dq, est_q, dt_ms = 0, gap_ms = 0;
++	bool usb, charging, full, gap = false, long_gap = false;
++
++	if (read_vbat(sc, &vbat) != 0 || adc_convert(sc, &sc->usbin, &usbin) !=
++	    0 || read_ibat(sc, &ibat) != 0)
++		return;
++	usb = usbin > USB_PRESENT_UV;
++
++	mtx_lock(&sc->mtx);
++	/* Uptime counts suspended time too. */
++	nanouptime(&now);
++	if (sc->have_t) {
++		timespecsub(&now, &sc->last_t, &d);
++		dt_ms = (int64_t)d.tv_sec * 1000 + d.tv_nsec / 1000000;
++		if (dt_ms > GAP_MS) {
++			gap = true;
++			gap_ms = MIN(dt_ms, GAP_MAX_CHARGE_MS);
++			dt_ms = 0;
++			if (gap_ms >= LONG_GAP_MS) {
++				long_gap = true;
++				sc->reanchor_left = REANCHOR_RETRY_POLLS;
++				sc->filt_valid = false;
++				sc->win_n = sc->win_pos = 0;
++			}
++		}
++	}
++	sc->last_t = now;
++	sc->have_t = true;
++
++	if (!sc->filt_valid) {
++		sc->v_f = vbat;
++		sc->i_f = ibat;
++		sc->filt_valid = true;
++	} else {
++		sc->v_f += (vbat - sc->v_f) / 3;
++		sc->i_f += (ibat - sc->i_f) / 3;
++	}
++	sc->win_v[sc->win_pos] = vbat / 1000;
++	sc->win_i[sc->win_pos] = ibat / 1000;
++	sc->win_pos = (sc->win_pos + 1) % WIN;
++	if (sc->win_n < WIN)
++		sc->win_n++;
++	sc->ticks++;
++	if (!usb && sc->ticks % LEARN_POLLS == 0)
++		learn_esr(sc);
++
++	sc->ocv_uv = sc->v_f + (int)((int64_t)sc->i_f * sc->esr_mohm / 1000);
++	est = MAX(0, MIN(100, ocv2cap(sc, sc->ocv_uv)));
++	est_q = (int64_t)est * sc->q_full_uah / 100;
++	charging = usb && sc->i_f < -CHARGING_MIN_UA;
++	full = usb && sc->v_f >= sc->full_uv;
++
++	if (!sc->have_q) {
++		sc->q_uah = est_q;
++		sc->have_q = true;
++	} else {
++		dq = (int64_t)ibat * (charging && gap ? gap_ms : dt_ms) /
++		    3600000;
++		if (dq < 0)
++			dq = dq * CHG_EFFICIENCY_PCT / 100;
++		sc->q_uah = MAX(0, MIN(sc->q_full_uah, sc->q_uah - dq));
++		max_anchor = charging ? ANCHOR_MAX_UA_CHG : ANCHOR_MAX_UA_DISCH;
++		if (charging)
++			sc->reanchor_left = 0;
++		if (sc->reanchor_left) {
++			sc->reanchor_left--;
++			if (sc->win_n >= 3 && abs(sc->i_f) < GAP_REANCHOR_MAX_UA) {
++				sc->q_uah = est_q;
++				sc->reanchor_left = 0;
++			}
++		} else if (abs(sc->i_f) < max_anchor && est > 0) {
++			sc->q_uah += (est_q - sc->q_uah) / ANCHOR_POLLS;
++		} else if (!charging && abs(sc->i_f) < ANCHOR_LOAD_MAX_UA &&
++		    est > 0) {
++			sc->q_uah += (est_q - sc->q_uah) / ANCHOR_POLLS_LOAD;
++		}
++	}
++	if (full)
++		sc->q_uah = sc->q_full_uah;
++	else if (est == 0)
++		sc->q_uah = 0;
++
++	new_cap = MAX(0, MIN(100, (int)((sc->q_uah * 100 + sc->q_full_uah / 2) /
++	    sc->q_full_uah)));
++	/* With a charger in, 100 % only once the charger says full */
++	if (usb && !full && new_cap > 99)
++		new_cap = 99;
++	/* The reading only moves with the energy flow, unless far off */
++	if (sc->cap >= 0 && !long_gap && !full && new_cap != 0) {
++		if (charging && new_cap < sc->cap &&
++		    sc->cap - new_cap < RATCHET_RELEASE)
++			new_cap = sc->cap;
++		else if (!charging && new_cap > sc->cap &&
++		    new_cap - sc->cap < RATCHET_RELEASE)
++			new_cap = sc->cap;
++	}
++	sc->cap = new_cap;
++	sc->usb = usb;
++	sc->status = !usb ? ST_DISCHARGING : sc->v_f >= sc->full_uv ? ST_FULL :
++	    ST_CHARGING;
++	mtx_unlock(&sc->mtx);
++}
++
++static void
++poll_task(void *arg, int pending)
++{
++	struct pro1x_battery_softc *sc = arg;
++
++	if (sc->detaching)
++		return;
++	update(sc);
++	taskqueue_enqueue_timeout(taskqueue_thread, &sc->poll, POLL_S * hz);
++}
++
++/* --- sysctl ------------------------------------------------------------ */
++
++static int
++sysctl_status(SYSCTL_HANDLER_ARGS)
++{
++	struct pro1x_battery_softc *sc = arg1;
++	char buf[16];
++
++	strlcpy(buf, status_names[sc->status], sizeof(buf));
++	return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
++}
++
++/* ACPI's view: life %, state bits (1 discharging, 2 charging, 4 critical) */
++static int
++sysctl_acpi_state(SYSCTL_HANDLER_ARGS)
++{
++	struct pro1x_battery_softc *sc = pro1x_battery_sc;
++	int state = 0;
++
++	if (sc != NULL) {
++		if (sc->status == ST_DISCHARGING)
++			state |= 1;
++		else if (sc->status == ST_CHARGING)
++			state |= 2;
++		if (sc->cap >= 0 && sc->cap <= 5 && !sc->usb)
++			state |= 4;
++	}
++	return (sysctl_handle_int(oidp, &state, 0, req));
++}
++
++static int
++sysctl_acpi_life(SYSCTL_HANDLER_ARGS)
++{
++	int life = pro1x_battery_sc != NULL ? pro1x_battery_sc->cap : -1;
++
++	return (sysctl_handle_int(oidp, &life, 0, req));
++}
++
++static int
++sysctl_acpi_acline(SYSCTL_HANDLER_ARGS)
++{
++	int on = pro1x_battery_sc != NULL && pro1x_battery_sc->usb;
++
++	return (sysctl_handle_int(oidp, &on, 0, req));
++}
++
++static int
++sysctl_acpi_time(SYSCTL_HANDLER_ARGS)
++{
++	struct pro1x_battery_softc *sc = pro1x_battery_sc;
++	int min = -1;
++
++	/* Minutes left at the present discharge */
++	if (sc != NULL && sc->status == ST_DISCHARGING && sc->i_f > 10000)
++		min = (int)(sc->q_uah * 60 / sc->i_f);
++	return (sysctl_handle_int(oidp, &min, 0, req));
++}
++
++static int acpi_units = 1;
++
++#ifndef DEV_ACPI
++static SYSCTL_NODE(_hw, OID_AUTO, acpi, CTLFLAG_RD | CTLFLAG_MPSAFE, NULL,
++    "Battery and AC line, as ACPI reports them (pro1x_battery)");
++static SYSCTL_NODE(_hw_acpi, OID_AUTO, battery, CTLFLAG_RD | CTLFLAG_MPSAFE,
++    NULL, "Battery");
++SYSCTL_PROC(_hw_acpi_battery, OID_AUTO, life, CTLTYPE_INT | CTLFLAG_RD |
++    CTLFLAG_MPSAFE, NULL, 0, sysctl_acpi_life, "I", "Capacity (%)");
++SYSCTL_PROC(_hw_acpi_battery, OID_AUTO, state, CTLTYPE_INT | CTLFLAG_RD |
++    CTLFLAG_MPSAFE, NULL, 0, sysctl_acpi_state, "I",
++    "1 discharging, 2 charging, 4 critical");
++SYSCTL_PROC(_hw_acpi_battery, OID_AUTO, time, CTLTYPE_INT | CTLFLAG_RD |
++    CTLFLAG_MPSAFE, NULL, 0, sysctl_acpi_time, "I", "Minutes left, -1");
++SYSCTL_INT(_hw_acpi_battery, OID_AUTO, units, CTLFLAG_RD, &acpi_units, 0,
++    "Batteries");
++SYSCTL_PROC(_hw_acpi, OID_AUTO, acline, CTLTYPE_INT | CTLFLAG_RD |
++    CTLFLAG_MPSAFE, NULL, 0, sysctl_acpi_acline, "I", "Charger present");
++#endif
++
++/* --- device ------------------------------------------------------------ */
++
++/* ADC channel N of io-channels: its number and the ADC's prescaling */
++static int
++adc_channel(phandle_t node, int index, uint16_t *base, struct adc_chan *ch)
++{
++	pcell_t *cells, pre[2], reg;
++	phandle_t adc, c;
++	ssize_t n;
++	int error = ENXIO;
++
++	n = OF_getencprop_alloc_multi(node, "io-channels", sizeof(pcell_t),
++	    (void **)&cells);
++	if (n < 2 * (index + 1)) {
++		if (n > 0)
++			OF_prop_free(cells);
++		return (ENXIO);
++	}
++	adc = OF_node_from_xref(cells[2 * index]);
++	ch->num = cells[2 * index + 1];
++	OF_prop_free(cells);
++	if (adc <= 0 || !ofw_bus_node_is_compatible(adc, "qcom,spmi-adc5") ||
++	    OF_getencprop(adc, "reg", &reg, sizeof(reg)) != sizeof(reg))
++		return (ENXIO);
++	*base = reg;
++	ch->pre_num = ch->pre_den = 1;
++	for (c = OF_child(adc); c > 0; c = OF_peer(c)) {
++		if (OF_getencprop(c, "reg", &reg, sizeof(reg)) != sizeof(reg) ||
++		    reg != ch->num)
++			continue;
++		if (OF_getencprop(c, "qcom,pre-scaling", pre, sizeof(pre)) ==
++		    sizeof(pre) && pre[0] != 0) {
++			ch->pre_num = pre[0];
++			ch->pre_den = pre[1];
++		}
++		error = 0;
++	}
++	return (error);
++}
++
++static int
++read_battery_node(struct pro1x_battery_softc *sc, phandle_t node)
++{
++	pcell_t xref, v, *tab;
++	phandle_t bat;
++	ssize_t n;
++	int i;
++
++	if (OF_getencprop(node, "monitored-battery", &xref, sizeof(xref)) !=
++	    sizeof(xref) || (bat = OF_node_from_xref(xref)) <= 0)
++		return (ENXIO);
++	if (OF_getencprop(bat, "charge-full-design-microamp-hours", &v,
++	    sizeof(v)) == sizeof(v) && v > 0)
++		sc->q_full_uah = v;
++	n = OF_getencprop_alloc_multi(bat, "ocv-capacity-table-0",
++	    sizeof(pcell_t), (void **)&tab);
++	if (n < 4)
++		return (ENXIO);
++	for (i = 0; i + 1 < n && sc->ocv_n <= OCV_MAX; i += 2) {
++		sc->ocv_uv_tab[sc->ocv_n] = tab[i];
++		sc->ocv_cap_tab[sc->ocv_n] = tab[i + 1];
++		sc->ocv_n++;
++	}
++	OF_prop_free(tab);
++	return (0);
++}
++
++static int
++pro1x_battery_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (!ofw_bus_is_compatible(dev, "fxtec,pro1x-adc-battery"))
++		return (ENXIO);
++	device_set_desc(dev, "F(x)tec Pro1X battery (PMI632 ADC and gauge)");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++pro1x_battery_attach(device_t dev)
++{
++	struct pro1x_battery_softc *sc = device_get_softc(dev);
++	phandle_t node = ofw_bus_get_node(dev);
++	struct sysctl_ctx_list *ctx = device_get_sysctl_ctx(dev);
++	struct sysctl_oid_list *tree =
++	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev));
++	uint16_t adc2;
++	uint8_t subtype;
++	pcell_t v;
++
++	sc->dev = dev;
++	sc->base = qcom_spmi_base(dev, 0);
++	sc->cap = -1;
++	sc->esr_mohm = 150;
++	sc->esr_learn = 1;
++	sc->q_full_uah = DEFAULT_FULL_UAH;
++	sc->full_uv = OF_getencprop(node, "fxtec,full-voltage-microvolt", &v,
++	    sizeof(v)) == sizeof(v) ? (int)v : DEFAULT_FULL_UV;
++	if (adc_channel(node, 0, &sc->adc_base, &sc->vbat) != 0 ||
++	    adc_channel(node, 1, &adc2, &sc->usbin) != 0 ||
++	    adc2 != sc->adc_base) {
++		device_printf(dev, "no ADC channels (io-channels)\n");
++		return (ENXIO);
++	}
++	if (read_battery_node(sc, node) != 0) {
++		device_printf(dev, "no ocv-capacity table (monitored-battery)\n");
++		return (ENXIO);
++	}
++	if (qcom_spmi_read(dev, sc->base + QG_PERPH_SUBTYPE, &subtype, 1) !=
++	    0) {
++		device_printf(dev, "gauge not readable\n");
++		return (ENXIO);
++	}
++	sc->i_scale_na = subtype == QG_SUBTYPE_IBAT_5A ? IRAW_NA_5A :
++	    IRAW_NA_10A;
++	mtx_init(&sc->mtx, device_get_nameunit(dev), NULL, MTX_DEF);
++
++	SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "capacity", CTLFLAG_RD, &sc->cap,
++	    0, "State of charge (%)");
++	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "status", CTLTYPE_STRING |
++	    CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0, sysctl_status, "A",
++	    "discharging, charging or full");
++	SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "voltage", CTLFLAG_RD, &sc->v_f,
++	    0, "Battery voltage, filtered (uV)");
++	SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "ocv", CTLFLAG_RD, &sc->ocv_uv, 0,
++	    "Open-circuit voltage estimate (uV)");
++	SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "current", CTLFLAG_RD, &sc->i_f,
++	    0, "Battery current, filtered (uA, positive discharging)");
++	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "esr", CTLFLAG_RW, &sc->esr_mohm,
++	    0, "Internal resistance for the load compensation (mOhm)");
++	SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "esr_learn", CTLFLAG_RW,
++	    &sc->esr_learn, 0, "Learn the internal resistance");
++	SYSCTL_ADD_BOOL(ctx, tree, OID_AUTO, "usb", CTLFLAG_RD, &sc->usb, 0,
++	    "Charger present");
++
++	pro1x_battery_sc = sc;
++	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->poll, 0, poll_task, sc);
++	taskqueue_enqueue_timeout(taskqueue_thread, &sc->poll, 1);
++	device_printf(dev, "gauge subtype %#x, ADC at %#x (vbat %#x 1/%u, "
++	    "usbin %#x 1/%u), %d OCV rows\n", subtype, sc->adc_base,
++	    sc->vbat.num, sc->vbat.pre_den / sc->vbat.pre_num, sc->usbin.num,
++	    sc->usbin.pre_den / sc->usbin.pre_num, sc->ocv_n);
++	return (0);
++}
++
++static int
++pro1x_battery_detach(device_t dev)
++{
++	struct pro1x_battery_softc *sc = device_get_softc(dev);
++
++	sc->detaching = true;
++	taskqueue_drain_timeout(taskqueue_thread, &sc->poll);
++	pro1x_battery_sc = NULL;
++	mtx_destroy(&sc->mtx);
++	return (0);
++}
++
++static device_method_t pro1x_battery_methods[] = {
++	DEVMETHOD(device_probe,		pro1x_battery_probe),
++	DEVMETHOD(device_attach,	pro1x_battery_attach),
++	DEVMETHOD(device_detach,	pro1x_battery_detach),
++	DEVMETHOD_END
++};
++
++static driver_t pro1x_battery_driver = {
++	"pro1x_battery",
++	pro1x_battery_methods,
++	sizeof(struct pro1x_battery_softc),
++};
++
++DRIVER_MODULE(pro1x_battery, qcom_pmic, pro1x_battery_driver, 0, 0);
+-- 
+2.56.0
+

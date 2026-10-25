@@ -79,6 +79,7 @@ after boot (`patches/0013`), so that unattended tests always end.
 | touchscreen | `goodix` (`0007`), GT9286, multi-touch through evdev |
 | keyboard | `geniiic` (`0008`: device tree attachment of FreeBSD's GENI I2C driver, QUP wrapper bus) and `pro1xkbd` (`0009`): the 8x8 matrix behind the AW9523B, console keyboard and evdev; the boot menu keeps the I2C engine's clocks on before the jump |
 | PMIC | `qcom_spmi` (`0011`): the SPMI arbiter (register access, interrupts), `qcom_pon` (power and volume-down keys: evdev, devctl), `qcom_rtc` (the seconds counter plus the offset Leste's `pro1x-rtc` keeps; the boot menu hands it over from `/host/pro1x-rtc-offset`) |
+| battery | `pro1x_battery` (`0015`): Leste's `pro1x-adc-battery` ported (PMI632 ADC voltage, gauge current, OCV table, charge counting); `dev.pro1x_battery.0.*`, `hw.acpi.battery.*`, `hw.acpi.acline` |
 | CPU frequency | `qcom_cpufreq_hw` (`0010`): the firmware's frequency table per cluster for cpufreq(4) and powerd |
 | UFS | `ufshci` (`0005`), on the link Linux left up: the controller's PHY, clocks and regulators need Qualcomm drivers FreeBSD lacks. Linux keeps UFS powered across kexec (`device/kernel/patches/0004`), and the boot menu rebinds it with an identity mapping first, since FreeBSD does not drive the SMMU in front of it and hands the controller physical addresses. The attach reports the SMMU's view of the stream |
 
@@ -104,6 +105,7 @@ after boot (`patches/0013`), so that unattended tests always end.
 | `patches/0012-*` | reroot keeps the filesystems below `/dev` |
 | `patches/0013-*` | `qcom_wdt` lifetime for unattended tests |
 | `patches/0014-*` | `/dev/pro1xshot`, data for Linux behind the RAM console |
+| `patches/0015-*` | `pro1x_battery`, the battery's state of charge |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `pkgfetch.py`, `mkspec.py` | packages with dependencies, checked; the image's owners and modes |
 
