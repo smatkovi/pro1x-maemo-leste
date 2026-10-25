@@ -1,0 +1,60 @@
+From 9b038ff4a34dff9094b950752a16148b37c18f00 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sun, 25 Oct 2026 18:54:28 +0100
+Subject: [PATCH 2/2] qcom_wdt: a lifetime for unattended tests
+
+hint.qcom_wdt.0.lifetime=N stops feeding the watchdog N seconds after
+boot: a test run ends in a reset whatever state it is in.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/dev/qcom_wdt/qcom_wdt.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/sys/dev/qcom_wdt/qcom_wdt.c b/sys/dev/qcom_wdt/qcom_wdt.c
+index 56268534b..9cb5cb912 100644
+--- a/sys/dev/qcom_wdt/qcom_wdt.c
++++ b/sys/dev/qcom_wdt/qcom_wdt.c
+@@ -12,6 +12,9 @@
+  * key. This driver keeps it running (or starts it, when the bootloader
+  * started FreeBSD) and resets the count from a callout: a system that still
+  * runs its timers keeps the phone up, a hung one is reset.
++ *
++ * hint.qcom_wdt.0.lifetime=N stops the feeding N seconds after boot, so
++ * that an unattended test always ends in the boot menu again.
+  */
+ 
+ #include <sys/param.h>
+@@ -45,6 +48,7 @@ struct qcom_wdt_softc {
+ 	device_t		dev;
+ 	struct resource		*res;
+ 	struct callout		feed;
++	int			lifetime;	/* s after boot, 0: forever */
+ };
+ 
+ static void
+@@ -52,6 +56,11 @@ qcom_wdt_feed(void *arg)
+ {
+ 	struct qcom_wdt_softc *sc = arg;
+ 
++	if (sc->lifetime > 0 && time_uptime >= (time_t)sc->lifetime) {
++		device_printf(sc->dev, "lifetime of %d s over, the watchdog "
++		    "resets the phone\n", sc->lifetime);
++		return;
++	}
+ 	bus_write_4(sc->res, WDT_RST, 1);
+ 	callout_reset(&sc->feed, WDT_FEED_S * hz, qcom_wdt_feed, sc);
+ }
+@@ -92,6 +101,9 @@ qcom_wdt_attach(device_t dev)
+ 	device_printf(dev, "%s; fed every %d s, bites after about %d s\n",
+ 	    running ? "left running" : "started", WDT_FEED_S,
+ 	    bus_read_4(sc->res, WDT_BITE_TIME) / 32768);
++	if (resource_int_value(device_get_name(dev), device_get_unit(dev),
++	    "lifetime", &sc->lifetime) == 0 && sc->lifetime > 0)
++		device_printf(dev, "fed for %d s only\n", sc->lifetime);
+ 	qcom_wdt_feed(sc);
+ 	return (0);
+ }
+-- 
+2.56.0
+

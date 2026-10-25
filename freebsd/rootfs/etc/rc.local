@@ -1,0 +1,14 @@
+#!/bin/sh
+# Unattended tests (hint pro1x.test set by the boot menu's freebsd/cmdline):
+# report on the console, which the RAM console keeps for Linux, and go back
+# to the boot menu.
+if [ -n "$(kenv -q pro1x.test)" ]; then
+	echo "=== FreeBSD multi-user: test report ==="
+	uname -a
+	sysctl hw.ncpu hw.physmem dev.cpu.0.freq dev.cpu.0.freq_levels
+	df -h
+	mount
+	ls /dev/input 2>/dev/null
+	echo "=== test done, rebooting in 20 s"
+	(sleep 20; shutdown -r now "pro1x test done") > /dev/null 2>&1 &
+fi

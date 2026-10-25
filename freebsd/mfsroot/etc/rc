@@ -1,9 +1,19 @@
 #!/bin/sh
-# FreeBSD on the Pro1X: a root filesystem in RAM, no keyboard yet.
+# FreeBSD on the Pro1X: the root filesystem in RAM (built into the kernel).
+#
 # Reports what the kernel found on the console (the screen and the RAM
-# console, which Linux reads after the next boot), then reboots into the
-# boot menu.
+# console, which Linux reads after the next boot). Then, as Leste's boot
+# does with its loop image: userdata read only below /dev (the kernel keeps
+# filesystems there across a reroot, patches/0012), the root image
+# freebsd/root.ufs from it (rootfs.sh) as md1, and a reroot into it.
+#
+# Kernel environment (freebsd/cmdline next to the kernel):
+#   pro1x.root=ram   stay here: report, then Enter for a shell or reboot
+#   pro1x.test=1     unattended test: the full system reports and reboots
 PATH=/rescue; export PATH
+HOST=/dev/pro1x-host
+IMAGE=$HOST/freebsd/root.ufs
+
 echo "=== FreeBSD on the F(x)tec Pro1X: rc ==="
 uname -a
 sysctl hw.model hw.machine_arch hw.ncpu hw.physmem kern.bootfile
@@ -12,22 +22,29 @@ echo /dev/*
 echo "--- disks:"
 camcontrol devlist
 gpart show -p
-sysctl dev.ufshci 2>/dev/null | head -40
-# userdata, where the system images live: read only, a look is enough
-if [ -e /dev/gpt/userdata ]; then
-	mount -t tmpfs tmpfs /tmp
-	mkdir /tmp/host
-	if mount -t ext2fs -o ro /dev/gpt/userdata /tmp/host; then
-		df -h /tmp/host
-		ls -la /tmp/host /tmp/host/freebsd
-		umount /tmp/host
+echo "--- input:"
+ls /dev/input /dev/kbd* 2>/dev/null
+
+if [ "$(kenv -q pro1x.root)" != ram ] && [ -e /dev/gpt/userdata ]; then
+	mkdir -p $HOST
+	if mount -t ext2fs -o ro /dev/gpt/userdata $HOST; then
+		if [ -f $IMAGE ] && mdconfig -a -t vnode -o readonly -f $IMAGE -u 1
+		then
+			kenv vfs.root.mountfrom=ufs:/dev/md1
+			kenv vfs.root.mountfrom.options=ro
+			echo "=== rerooting into $IMAGE"
+			reboot -r
+			exit 0
+		fi
+		echo "--- no root image, userdata has:"
+		ls -la $HOST/freebsd
+		umount $HOST
 	fi
 fi
-echo "--- input:"
-sysctl -n kern.evdev.input 2>/dev/null; ls /dev/input /dev/kbd* 2>/dev/null
-# With the keyboard (gpiokeys, pro1xkbd behind kbdmux) Enter starts a
-# shell on the console; otherwise back to the boot menu, which also ends
-# unattended tests.
+
+# No root image: with the keyboard (gpiokeys, pro1xkbd behind kbdmux)
+# Enter starts a shell on the console; otherwise back to the boot menu,
+# which also ends unattended tests.
 echo "=== rc done: Enter within 10 s for a shell, else reboot"
 if read -t 10 key < /dev/console; then
 	echo "shell; 'reboot' returns to the boot menu"

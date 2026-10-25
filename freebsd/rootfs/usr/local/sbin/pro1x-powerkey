@@ -1,0 +1,14 @@
+#!/bin/sh
+# pro1x-powerkey PRESS|RELEASE (from devd, etc/devd/pro1x.conf): powers the
+# phone off when the power key stays down for 2 s.
+pid=/var/run/pro1x-powerkey.pid
+case "$1" in
+PRESS)
+	(sleep 2; rm -f "$pid"; shutdown -p now "power key") &
+	echo $! > "$pid"
+	;;
+RELEASE)
+	[ -f "$pid" ] && kill "$(cat "$pid")" 2>/dev/null
+	rm -f "$pid"
+	;;
+esac

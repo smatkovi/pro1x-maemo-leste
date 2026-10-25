@@ -38,6 +38,24 @@ words (`read()` on `/dev/mem` fails there).
 `freebsd/cmdline` next to the kernel on userdata adds kernel environment
 to the command line, e.g. `hint.ufshci.0.disabled=1`.
 
+## The full system
+
+`rootfs.sh` builds `out/root.ufs` (2 GiB UFS) from the release's
+`base.txz` with the Pro1X configuration in `rootfs/` (owners and modes
+from an mtree of the tarball). On the phone it goes to
+`/host/freebsd/root.ufs`. The RAM root (`mfsroot/etc/rc`) mounts userdata
+read only at `/dev/pro1x-host`, attaches the image as `md1` and reroots
+into it (`reboot -r`; `patches/0012` keeps filesystems below `/dev` across
+the reroot). The root stays read only, `/var` and `/tmp` are in memory
+(`rootfs/etc/rc.conf`): FreeBSD does not write to userdata. Login on the
+console as root (no password). devd powers the phone off when the power
+key is held for 2 s; powerd scales the CPU frequency.
+
+`freebsd/cmdline` on userdata: `pro1x.root=ram` stays in the RAM root;
+`pro1x.test=1` makes the full system report and reboot (`rootfs/etc/rc.local`);
+`hint.qcom_wdt.0.lifetime=N` lets the watchdog reset the phone N seconds
+after boot (`patches/0013`), so that unattended tests always end.
+
 ## Drivers
 
 | | |
@@ -58,7 +76,7 @@ to the command line, e.g. `hint.ufshci.0.disabled=1`.
 | `build.sh` | builds everything on a Linux PC (clang, lld, libarchive): sources, cross toolchain, root filesystem, kernel, boot image |
 | `PRO1X` | kernel config: only what the start needs, the frameworks for the SoC drivers and the Pro1X drivers (a GENERIC-based kernel hung early; its drivers for blocks without clocks are the suspects) |
 | `pro1x.env` | static kernel environment: one CPU (PSCI under Qualcomm's hypervisor is untested), verbose boot |
-| `mfsroot/etc/rc` | shows what the kernel found (devices, disks, a read-only look at userdata), then reboots into the boot menu after 10 s (no keyboard yet) |
+| `mfsroot/etc/rc` | shows what the kernel found, then reroots into `root.ufs` on userdata; without it, Enter within 10 s for a shell, else reboot |
 | `patches/0001-*` | proof of life: the green stripe and the entry marker |
 | `patches/0002-*` | building on an Arch Linux host: glibc 2.43 (two bootstrap fixes) and a clang that reports more than one "version" line |
 | `patches/0003-*` | RAM console in the splash memory; keeps the kernel config's environment when the bootloader passes bootargs |
@@ -70,6 +88,9 @@ to the command line, e.g. `hint.ufshci.0.disabled=1`.
 | `patches/0009-*` | `pro1xkbd`, the keyboard matrix |
 | `patches/0010-*` | `qcom_cpufreq_hw`, CPU frequency |
 | `patches/0011-*` | `qcom_spmi`, `qcom_pon`, `qcom_rtc`: PMIC access, keys, clock |
+| `patches/0012-*` | reroot keeps the filesystems below `/dev` |
+| `patches/0013-*` | `qcom_wdt` lifetime for unattended tests |
+| `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 
 The root filesystem is the release's `/rescue` (one static binary for sh,
 init, mount, ifconfig...) from `base.txz`, built into the kernel
