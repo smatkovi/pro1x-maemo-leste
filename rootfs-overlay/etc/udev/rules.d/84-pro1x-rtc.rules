@@ -1,0 +1,3 @@
+# alarmd runs as user:users and sets the wake alarm for alarms that have to
+# power the phone on (tools/pro1x-rtc translates the time).
+SUBSYSTEM=="rtc", KERNEL=="rtc0", GROUP="users", MODE="0660"

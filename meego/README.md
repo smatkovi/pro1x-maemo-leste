@@ -14,7 +14,7 @@ from an N950 rootfs image (`/host/harmattan.img`) in a chroot.
 | 35 | `35-nokshim.sh` | Nokia EGL extensions (`EGL_NOK_image_shared`, lock_surface2, ...) on top of Mesa (`nokshim/`) |
 | 36 | `36-aegis-permissive.sh` | libcreds without the Aegis kernel module: every credential check passes, tokens translate; aegis-exec as a plain user switch (`aegis/`) |
 | 37 | `37-harmattan-user.sh` | Harmattan's user gets Leste's uid 1000 |
-| 38 | `38-hardware-adaptation.sh` | Touch input in the N9's format for Qt and mcompositor (`touch/`), the battery from the kernel's power supply class in place of the N9's BME (`bme/`), small binary patches |
+| 38 | `38-hardware-adaptation.sh` | Touch input in the N9's format for Qt and mcompositor (`touch/`), the battery from the kernel's power supply class in place of the N9's BME (`bme/`), timed's wake alarms translated for the Pro1X's RTC (`../tools/pro1x-rtc`), small binary patches |
 | 39 | `39-leste-mce.sh` | Leste's mce closes Harmattan's lock screen (`patches/`) and has Harmattan's radio states, mapped onto the device mode (`mce/`) |
 | 41 | `41-leste-helpers.sh` | Leste-side helpers of the session: the Pro1X's sensors, slide switch and side keys as the N9's input device (`sensors/`), dsme's IP heartbeat service (`iphb/`), PulseAudio's main volume interface for the volume bar (`mainvolume/`), BME's event file (`bme/`) |
 | 40 | `40-harmattan-session.sh` | Mounts and starts the session (installed as `/usr/lib/pro1x-meego/harmattan-session`, run by the `pro1x-meego` OpenRC service in the MeeGo boot); runs Harmattan's own upstart jobs (`run_job`) |

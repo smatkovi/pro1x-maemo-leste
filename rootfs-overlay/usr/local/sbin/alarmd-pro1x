@@ -1,0 +1,7 @@
+#!/bin/sh
+# alarmd with librtc-realtime (tools/pro1x-rtc): alarmd writes wake alarms
+# as real time into /dev/rtc0, whose RTC does not keep the real time.
+# /etc/conf.d/alarmd points DAEMON here; dsme starts alarmd with its own
+# environment, so the preload is set here and not in conf.d.
+export LD_PRELOAD=/usr/local/lib/aarch64-linux-gnu/librtc-realtime.so${LD_PRELOAD:+:$LD_PRELOAD}
+exec /usr/sbin/alarmd.wrapper "$@"

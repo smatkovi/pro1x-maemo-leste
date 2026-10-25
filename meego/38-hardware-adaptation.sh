@@ -85,6 +85,9 @@ build_lib touch mcompositor-touch -lXtst -lX11
 # the remaining N9 assumptions.
 build_lib touch harmattan-touch
 build_lib compat harmattan-compat
+# Wake alarms from power off: timed writes them as real time into /dev/rtc0,
+# whose RTC does not keep the real time (../tools/pro1x-rtc).
+build_lib ../tools/pro1x-rtc rtc-realtime
 # The battery, from the kernel's power supply class: the N9's BME server
 # needs the N9's charger hardware (bme/).
 replace_lib bme bmeipc /usr/lib/libbmeipc.so.0 libbmeipc.so.0
@@ -98,7 +101,7 @@ if [ -e "$H$P" ] && ! grep -qxF "$P" "$STATE/added"; then
 else
 	grep -qxF "$P" "$STATE/added" || echo "$P" >> "$STATE/added"
 fi
-for l in harmattan-touch harmattan-compat; do
+for l in harmattan-touch harmattan-compat rtc-realtime; do
 	grep -qxF /usr/lib/pro1x/lib$l.so "$H$P" 2>/dev/null ||
 		echo /usr/lib/pro1x/lib$l.so >> "$H$P"
 done

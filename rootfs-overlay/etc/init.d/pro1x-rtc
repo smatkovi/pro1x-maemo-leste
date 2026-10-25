@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+# The real time across power off (tools/pro1x-rtc): the PMIC's RTC cannot be
+# set, so the clock comes from the RTC plus the offset saved at shutdown.
+
+description="Clock from the Pro1X RTC and its saved offset"
+
+depend() {
+	after hwclock fake-hwclock
+	before clockd alarmd
+}
+
+start() {
+	ebegin "Setting the clock from the RTC"
+	/usr/local/sbin/pro1x-rtc restore
+	eend 0
+}
+
+stop() {
+	ebegin "Saving the RTC offset"
+	/usr/local/sbin/pro1x-rtc save
+	# A wake alarm is set (alarmd, or timed in the MeeGo boot): the phone
+	# powers on for it into the system that set it.
+	if [ -n "$(cat /sys/class/rtc/rtc0/wakealarm 2>/dev/null)" ]; then
+		/usr/local/sbin/pro1x-boot next "$(/usr/local/sbin/pro1x-boot current)"
+	fi
+	eend 0
+}

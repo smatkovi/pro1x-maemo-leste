@@ -99,6 +99,15 @@ gcc -O2 -Wall -o /usr/local/sbin/pro1x-steps "$REPO/tools/pro1x-steps/pro1x-step
   $(PKG_CONFIG_PATH=/usr/local/lib/aarch64-linux-gnu/pkgconfig pkg-config --cflags --libs libssc gio-unix-2.0)
 install -m 644 "$REPO/rootfs-overlay/etc/dbus-1/system.d/org.pro1x.Steps.conf" /etc/dbus-1/system.d/
 install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-steps" /etc/init.d/
+log "pro1x-rtc (real time across power off, wake alarms from power off)"
+gcc -O2 -Wall -o /usr/local/sbin/pro1x-rtc "$REPO/tools/pro1x-rtc/pro1x-rtc.c"
+gcc -O2 -Wall -fPIC -shared -fvisibility=hidden -o /usr/local/lib/aarch64-linux-gnu/librtc-realtime.so \
+  "$REPO/tools/pro1x-rtc/rtc-realtime.c"
+install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-rtc" /etc/init.d/
+install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/alarmd-pro1x" /usr/local/sbin/
+install -m 644 "$REPO/rootfs-overlay/etc/udev/rules.d/84-pro1x-rtc.rules" /etc/udev/rules.d/
+# alarmd (started by dsme) runs through that wrapper; only DAEMON changes
+sed -i 's|^DAEMON=.*|DAEMON="/usr/local/sbin/alarmd-pro1x"|' /etc/conf.d/alarmd
 # gpsd-clients recommends matplotlib and friends; gpspipe/cgps need none of it.
 apt-get install -y -q --no-install-recommends gpsd gpsd-clients
 
@@ -110,4 +119,5 @@ rm -f /usr/share/pro1x/hexagonfs/README.md
 
 rc-update add pro1x-hexagonrpcd default
 rc-update add pro1x-steps default
+rc-update add pro1x-rtc boot
 log "done"
