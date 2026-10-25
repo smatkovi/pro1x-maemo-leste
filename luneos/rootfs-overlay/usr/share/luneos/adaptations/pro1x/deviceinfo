@@ -1,0 +1,20 @@
+# LuneOS device adaptation: F(x)tec Pro1X (Qualcomm SM6115), mainline kernel.
+# Read by /usr/bin/luneos-device-config; the directory is named for the device
+# tree's first compatible, "fxtec,pro1x". Installed by
+# luneos/20-pro1x-hardware.sh of the pro1x-maemo-leste repository.
+
+deviceinfo_name="F(x)tec Pro1X"
+deviceinfo_name_short="Pro1X"
+
+# The 1080x2160 panel scans out in portrait; the Pro1X is held in landscape
+# with the keyboard towards the user, which Maemo Leste gets by turning the X
+# screen "right" (RandR's 270). The touchscreen follows the compositor's
+# rotation. Should the picture come up upside down, r90 is the other way.
+deviceinfo_compositor_geometry="1080x2160+0+0r270s1"
+
+# 5.99" at 1080x2160
+deviceinfo_display_dpi="403"
+
+# The PinePhone's input links, which the image ships, do not exist here.
+deviceinfo_touchscreen_by_name="Goodix Capacitive TouchScreen"
+deviceinfo_key_devices_by_name="pm8941_pwrkey;gpio-keys;pm8941_resin"

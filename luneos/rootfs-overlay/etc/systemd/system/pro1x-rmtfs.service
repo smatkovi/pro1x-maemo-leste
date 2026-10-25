@@ -1,0 +1,13 @@
+[Unit]
+Description=Pro1X modem remote filesystem (rmtfs, from Maemo Leste)
+After=systemd-modules-load.service
+
+[Service]
+Environment=LD_LIBRARY_PATH=/usr/lib/pro1x
+ExecStartPre=-/sbin/modprobe -q rmtfs_mem
+ExecStart=/usr/lib/pro1x/rmtfs -r -P -s
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

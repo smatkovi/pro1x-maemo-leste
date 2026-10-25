@@ -9,12 +9,13 @@
 #   pro1x-boot reboot <system>      next <system> + reboot
 #   pro1x-boot current              the system that is running now
 #
-# Systems: leste, meego, kali (started from slot b through the boot menu in
-# the initramfs) and sailfish (slot a, its own kernel). MeeGo is Harmattan
-# (/harmattan.img) running on Maemo Leste's hardware layer: from its own
-# copy of it (/meego-leste.img, meego/45-meego-image.sh) or else from the
+# Systems: leste, meego, kali, luneos (started from slot b through the boot
+# menu in the initramfs) and sailfish (slot a, its own kernel). MeeGo is
+# Harmattan (/harmattan.img) running on Maemo Leste's hardware layer: from its
+# own copy of it (/meego-leste.img, meego/45-meego-image.sh) or else from the
 # Leste image; the initramfs records the choice in pro1x-boot/current.
-# Kali (/kali.img, kali/ in the repo) boots Leste's kernel from its own image.
+# Kali (/kali.img, kali/ in the repo) and LuneOS (/luneos.img, luneos/) boot
+# Leste's kernel from their own images.
 # Works in the initramfs, in Maemo Leste/MeeGo (userdata on /host) and in
 # Sailfish OS (userdata on /userdata), so the choice never depends on keys:
 # pick the next system from the running one, then reboot.
@@ -37,6 +38,7 @@ all_entries() {
 	echo "leste|Maemo Leste|/maemo-leste.img|"
 	echo "meego|MeeGo Harmattan|/meego-leste.img:/maemo-leste.img|/harmattan.img"
 	echo "kali|Kali Linux|/kali.img|"
+	echo "luneos|LuneOS|/luneos.img|"
 	echo "sailfish|Sailfish OS||"
 }
 
@@ -57,7 +59,7 @@ entries() {
 }
 
 valid_key() {
-	all_entries | cut -d'|' -f1 | grep -qx "$1" || die "unknown system '$1' (leste, meego, kali, sailfish)"
+	all_entries | cut -d'|' -f1 | grep -qx "$1" || die "unknown system '$1' (leste, meego, kali, luneos, sailfish)"
 }
 
 # "disk partition-number" for a partition label
@@ -163,7 +165,7 @@ set-current)
 	;;
 get-timeout) cat "$CONF/timeout" 2>/dev/null || echo 5 ;;
 *)
-	sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
 	exit 1
 	;;
 esac

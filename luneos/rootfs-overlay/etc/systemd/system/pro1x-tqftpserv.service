@@ -1,0 +1,11 @@
+[Unit]
+Description=Pro1X modem TFTP server over QRTR (tqftpserv, from Maemo Leste)
+
+[Service]
+Environment=LD_LIBRARY_PATH=/usr/lib/pro1x
+ExecStart=/usr/lib/pro1x/tqftpserv
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
