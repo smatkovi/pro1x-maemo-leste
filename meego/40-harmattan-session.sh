@@ -103,7 +103,7 @@ h_pids() {
 
 do_stop() {
 	local pids
-	for d in n9-sensors iphbd mainvolumed; do
+	for d in n9-sensors iphbd mainvolumed bmed; do
 		start-stop-daemon --stop --quiet --pidfile /run/pro1x-$d.pid --remove-pidfile || true
 	done
 	pids=$(h_pids)
@@ -217,6 +217,10 @@ do_start() {
 		start-stop-daemon --start --quiet --background --make-pidfile \
 		--pidfile /run/pro1x-mainvolumed.pid --chuid $HUID:$HUID \
 		--exec /usr/lib/pro1x-meego/mainvolumed -- "$H/var/run/pulse/dbus-socket" || true
+	# The battery: the replaced libbmeipc reads the kernel's power supply
+	# class and is told about changes through BME's event file.
+	start-stop-daemon --start --quiet --background --make-pidfile \
+		--pidfile /run/pro1x-bmed.pid --exec /usr/lib/pro1x-meego/bmed -- "$H/tmp/.bmeevt" || true
 	as_user /usr/bin/dbus-daemon --session --fork --print-address \
 		> "$H/var/run/pro1x-session-bus"
 	ln -sf /var/run/m.mthemedaemon "$H/tmp/m.mthemedaemon"

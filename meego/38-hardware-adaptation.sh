@@ -46,6 +46,26 @@ build_lib() {
 	echo "/usr/lib/pro1x/lib$name.so built"
 }
 
+# Build <dir>/<name>.c in place of Harmattan's library <rel> (soname
+# <soname>); the original is kept like patch_string's.
+replace_lib() {
+	local dir=$1 name=$2 rel=$3 soname=$4; shift 4
+	local B=$D/tmp/pro1x-build
+	rm -rf "$B"
+	cp -r "$SRC/$dir" "$B"
+	chroot "$D" sh -c "cd /tmp/pro1x-build &&
+		gcc -O2 -Wall -fPIC -shared -fvisibility=hidden -o out.so $name.c \
+			-Wl,-soname,$soname $*"
+	if ! grep -qxF "$rel" "$STATE/patched"; then
+		mkdir -p "$(dirname "$SAVE$rel")"
+		cp -a "$H$rel" "$SAVE$rel"
+		echo "$rel" >> "$STATE/patched"
+	fi
+	install -m 644 "$B/out.so" "$H$rel"
+	rm -rf "$B"
+	echo "$rel replaced"
+}
+
 for m in proc sys dev; do
 	mountpoint -q "$D/$m" || mount --bind "/$m" "$D/$m"
 done
@@ -65,6 +85,9 @@ build_lib touch mcompositor-touch -lXtst -lX11
 # the remaining N9 assumptions.
 build_lib touch harmattan-touch
 build_lib compat harmattan-compat
+# The battery, from the kernel's power supply class: the N9's BME server
+# needs the N9's charger hardware (bme/).
+replace_lib bme bmeipc /usr/lib/libbmeipc.so.0 libbmeipc.so.0
 P=/etc/ld.so.preload
 if [ -e "$H$P" ] && ! grep -qxF "$P" "$STATE/added"; then
 	if ! grep -qxF "$P" "$STATE/patched"; then
