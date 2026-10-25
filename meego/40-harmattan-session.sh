@@ -143,6 +143,8 @@ start_root() {
 # ran them; the jobs switch to "user" through aegis-exec
 # (36-aegis-permissive.sh), with the groups in PRO1X_GROUPS. Upstart's own
 # commands are stubs. Extra arguments are environment settings (PAR1=...).
+# Jobs that stay root (tonegend) reach Leste's PulseAudio, which runs as
+# "user", only with its cookie; without it they retried every ten seconds.
 JOBS=/var/run/pro1x-jobs
 run_job() {
 	local job=$1 conf
@@ -173,6 +175,7 @@ run_job() {
 		HOME=/root LANG=en_US.utf8 TMPDIR=/var/tmp QT_IM_MODULE=MInputContext \
 		DISPLAY=:0 XAUTHORITY=/home/user/.Xauthority \
 		PULSE_SERVER=unix:/run/user/$HUID/pulse/native \
+		PULSE_COOKIE=/home/user/.pulse-cookie \
 		DBUS_SESSION_BUS_ADDRESS="$(cat "$H/var/run/pro1x-session-bus")" \
 		UPSTART_JOB=$job UPSTART_JOB_RESPAWNED=0 \
 		PRO1X_GROUPS=$GROUPS_H,$GROUPS_L "$@" \

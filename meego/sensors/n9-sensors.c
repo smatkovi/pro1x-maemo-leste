@@ -35,6 +35,12 @@
  * while the device lies flat, so a phone lying on the table would come up
  * in portrait. For the first seconds, while it lies flat, it is reported
  * standing in landscape instead; any real tilt goes through unchanged.
+ *
+ * The accelerometer streams only while the display is on (mce's
+ * display_status_ind): every sample wakes the ADSP link, this daemon and
+ * each reader of the device - sensord, qmkeyd and the MeeGo Touch processes
+ * - about a hundred wakeups a second in all, for a screen nobody sees.
+ * Proximity (on-change) and the keys stay on.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -46,6 +52,7 @@
 #include <unistd.h>
 #include <glib.h>
 #include <glib-unix.h>
+#include <gio/gio.h>
 #include <libssc-sensor-accelerometer.h>
 #include <libssc-sensor-proximity.h>
 
@@ -206,12 +213,79 @@ static gboolean keys_cb(gint fd, GIOCondition cond, gpointer data)
 	return G_SOURCE_CONTINUE;
 }
 
+/* The accelerometer follows the display: open while it is on or dimmed. */
+static SSCSensorAccelerometer *accel;
+static gboolean accel_want, accel_on, accel_busy;
+
+static void accel_apply(void);
+
+static void accel_done(GObject *src, GAsyncResult *res, gpointer opening)
+{
+	g_autoptr(GError) err = NULL;
+	gboolean ok = opening ? ssc_sensor_accelerometer_open_finish(accel, res, &err)
+			      : ssc_sensor_accelerometer_close_finish(accel, res, &err);
+
+	(void)src;
+	accel_busy = FALSE;
+	if (!ok) {
+		/* tried again at the next change of the display */
+		fprintf(stderr, "accelerometer %s: %s\n", opening ? "open" : "close",
+			err ? err->message : "?");
+		return;
+	}
+	accel_on = opening != NULL;
+	/* the landscape start counts from the first samples, which wait for
+	 * the display when the session starts in the dark */
+	if (accel_on && !start_us)
+		start_us = g_get_monotonic_time();
+	accel_apply();		/* the display may have changed meanwhile */
+}
+
+static void accel_apply(void)
+{
+	if (accel_busy || accel_want == accel_on)
+		return;
+	accel_busy = TRUE;
+	if (accel_want)
+		ssc_sensor_accelerometer_open(accel, NULL, accel_done, GINT_TO_POINTER(1));
+	else
+		ssc_sensor_accelerometer_close(accel, NULL, accel_done, NULL);
+}
+
+static void display_state(const char *state)
+{
+	accel_want = g_strcmp0(state, "off") != 0;
+	accel_apply();
+}
+
+static void display_sig(GDBusConnection *conn, const char *sender, const char *path,
+			const char *iface, const char *signal, GVariant *params, gpointer data)
+{
+	const char *state;
+
+	(void)conn, (void)sender, (void)path, (void)iface, (void)signal, (void)data;
+	if (g_variant_is_of_type(params, G_VARIANT_TYPE("(s)"))) {
+		g_variant_get(params, "(&s)", &state);
+		display_state(state);
+	}
+}
+
+static void display_status_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(GVariant) r = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), res, NULL);
+	const char *state = "on";	/* without mce's answer: always on, as before */
+
+	(void)data;
+	if (r)
+		g_variant_get(r, "(&s)", &state);
+	display_state(state);
+}
+
 int main(void)
 {
 	g_autoptr(GError) err = NULL;
 	GMainLoop *loop = g_main_loop_new(NULL, FALSE);
 
-	start_us = g_get_monotonic_time();
 	out_fd = uinput_open();
 	if (out_fd < 0)
 		return 1;
@@ -226,12 +300,22 @@ int main(void)
 	if (resin_fd >= 0)
 		g_unix_fd_add(resin_fd, G_IO_IN, keys_cb, NULL);
 
-	SSCSensorAccelerometer *accel = ssc_sensor_accelerometer_new_sync(NULL, &err);
-	if (accel)
-		g_signal_connect(accel, "measurement", G_CALLBACK(accel_cb), NULL);
-	if (!accel || !ssc_sensor_accelerometer_open_sync(accel, NULL, &err)) {
+	accel = ssc_sensor_accelerometer_new_sync(NULL, &err);
+	if (!accel) {
 		fprintf(stderr, "accelerometer: %s\n", err ? err->message : "?");
 		return 1;
+	}
+	g_signal_connect(accel, "measurement", G_CALLBACK(accel_cb), NULL);
+	GDBusConnection *sys = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
+	if (sys) {
+		g_dbus_connection_signal_subscribe(sys, NULL, "com.nokia.mce.signal", "display_status_ind",
+						   "/com/nokia/mce/signal", NULL, G_DBUS_SIGNAL_FLAGS_NONE,
+						   display_sig, NULL, NULL);
+		g_dbus_connection_call(sys, "com.nokia.mce", "/com/nokia/mce/request", "com.nokia.mce.request",
+				       "get_display_status", NULL, G_VARIANT_TYPE("(s)"),
+				       G_DBUS_CALL_FLAGS_NONE, 5000, NULL, display_status_cb, NULL);
+	} else {
+		display_state("on");
 	}
 
 	SSCSensorProximity *prox = ssc_sensor_proximity_new_sync(NULL, &err);
