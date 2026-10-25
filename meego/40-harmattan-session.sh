@@ -103,9 +103,13 @@ h_pids() {
 
 do_stop() {
 	local pids
-	for d in n9-sensors iphbd mainvolumed bmed positioningd leste-apps; do
+	for d in n9-sensors iphbd mainvolumed bmed positioningd leste-apps bluetoothd; do
 		start-stop-daemon --stop --quiet --pidfile /run/pro1x-$d.pid --remove-pidfile || true
 	done
+	if [ -e /run/pro1x-meego-leste-bt ]; then
+		rm -f /run/pro1x-meego-leste-bt
+		rc-service bluetooth start >/dev/null 2>&1 || true
+	fi
 	pids=$(h_pids)
 	if [ -n "$pids" ]; then
 		kill $pids 2>/dev/null || true
@@ -206,6 +210,22 @@ do_start() {
 		i=$((i + 1))
 	done
 	start_root sensord /usr/sbin/sensord
+	# Bluetooth: Harmattan's bluez 4 (its UI speaks bluez 4's API) in place
+	# of Leste's bluez 5 for the session; Leste's comes back at the end.
+	if rc-service bluetooth status >/dev/null 2>&1; then
+		rc-service bluetooth stop >/dev/null 2>&1 && touch /run/pro1x-meego-leste-bt
+	fi
+	# bluez 4 gives up when org.bluez is still taken
+	i=0
+	while [ $i -lt 20 ] && dbus-send --system --print-reply --dest=org.freedesktop.DBus \
+		/org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner string:org.bluez 2>/dev/null |
+		grep -q "boolean true"; do
+		sleep 0.25
+		i=$((i + 1))
+	done
+	chroot "$H" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+		/usr/sbin/bluetoothd -n > "$LOG/bluetoothd.log" 2>&1 &
+	echo $! > /run/pro1x-bluetoothd.pid
 	# dsme's IP heartbeat service, which Leste's dsme lacks: Harmattan's
 	# periodic wakeups (the status bar clock among them) depend on it.
 	start-stop-daemon --start --quiet --background --make-pidfile \

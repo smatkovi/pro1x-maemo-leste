@@ -46,6 +46,19 @@ build_lib() {
 	echo "/usr/lib/pro1x/lib$name.so built"
 }
 
+# Edit a text file of the tree with sed; the original is kept like
+# patch_string's.
+patch_file() {
+	local rel=$1; shift
+	if ! grep -qxF "$rel" "$STATE/patched"; then
+		mkdir -p "$(dirname "$SAVE$rel")"
+		cp -a "$H$rel" "$SAVE$rel"
+		echo "$rel" >> "$STATE/patched"
+	fi
+	sed -i "$@" "$H$rel"
+	echo "$rel edited"
+}
+
 # Build <dir>/<name>.c in place of Harmattan's library <rel> (soname
 # <soname>); the original is kept like patch_string's.
 replace_lib() {
@@ -88,6 +101,11 @@ build_lib compat harmattan-compat
 # Wake alarms from power off: timed writes them as real time into /dev/rtc0,
 # whose RTC does not keep the real time (../tools/pro1x-rtc).
 build_lib ../tools/pro1x-rtc rtc-realtime
+# Harmattan's bluetoothd (bluez 4.91, run by the session in place of Leste's
+# bluez 5): the Pro1X's name, and plain instead of periodic inquiry.
+patch_file /etc/bluetooth/main.conf -e 's/^Name = .*/Name = Pro1X/' \
+	-e 's/^DiscoverSchedulerInterval = 0/DiscoverSchedulerInterval = 30/'
+
 # The battery, from the kernel's power supply class: the N9's BME server
 # needs the N9's charger hardware (bme/).
 replace_lib bme bmeipc /usr/lib/libbmeipc.so.0 libbmeipc.so.0

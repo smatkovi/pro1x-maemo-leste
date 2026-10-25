@@ -45,11 +45,11 @@ In this order:
 3. Battery (done)
 4. Connectivity UI: Harmattan's radio states API in Leste's mce (built,
    active after the next reboot; to test: flight mode in the status menu)
-5. Bluetooth: Harmattan's own bluetoothd 4.91 (as root, in place of Leste's
-   bluez 5 for the MeeGo session) comes up and powers the adapter; its
-   discovery (HCI periodic inquiry) finds nothing on the WCN3950 where
-   bluez 5 does. Next: plain inquiry instead of periodic, the adapter name
-   from Harmattan's main.conf ("Nokia N950")
+5. Bluetooth: Harmattan's own bluetoothd 4.91 (its UI speaks bluez 4's
+   API) runs for the session in place of Leste's bluez 5, which comes back
+   when the session ends; the adapter is named Pro1X. Open: Bluetooth audio
+   (Leste's PulseAudio only knows bluez 5); discovery and pairing still to
+   be tried with a device in range
 6. GPS (QtLocation through `positioning/` and Leste's gpsd; gpsd only starts
    once Leste's location disclaimer is accepted; tested with injected NMEA)
 7. Cameras: Leste's camera app (pro1x-camera on libcamera) starts from
