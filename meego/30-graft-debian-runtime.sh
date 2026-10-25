@@ -23,6 +23,7 @@ SAVE=$H/usr/lib/harmattan-replaced
 TRIPLET=arm-linux-gnueabihf
 ML=usr/lib/$TRIPLET
 TOOLS=$(cd "$(dirname "$0")" && pwd)/tools
+LDCOMPAT=$(cd "$(dirname "$0")" && pwd)/ldcompat
 
 ROOTS=$(sed 's/#.*//' "$(dirname "$0")/debian-packages.list")
 
@@ -201,6 +202,21 @@ graft() {
 	# ld-linux-armhf.so.3: both are Debian's armhf loader.
 	link /$ML/ld-linux-armhf.so.3 /lib/ld-linux.so.3
 	link /$ML/ld-linux-armhf.so.3 /lib/ld-linux-armhf.so.3
+	# Objects from newer toolchains also name the loader ld-linux.so.3 in
+	# DT_NEEDED, which would map it a second time: ldcompat/ takes that name.
+	for m in proc sys dev; do
+		mountpoint -q "$D/$m" || mount --bind "/$m" "$D/$m"
+	done
+	chroot "$D" env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+		gcc libc6-dev > /dev/null
+	rm -rf "$D/tmp/ldcompat"
+	cp -r "$LDCOMPAT" "$D/tmp/ldcompat"
+	chroot "$D" sh -c 'cd /tmp/ldcompat &&
+		gcc -O2 -Wall -fPIC -shared -nostartfiles -Wl,-soname,ld-linux.so.3 \
+			-Wl,--version-script,ld-linux-compat.map -o ld-linux.so.3 ld-linux-compat.c'
+	install -m 644 "$D/tmp/ldcompat/ld-linux.so.3" "$H/$ML/ld-linux.so.3"
+	echo "/$ML/ld-linux.so.3" >> "$STATE/added"
+	rm -rf "$D/tmp/ldcompat"
 	echo "/lib/$TRIPLET
 /usr/lib/$TRIPLET" > "$H/etc/ld.so.conf.d/$TRIPLET.conf"
 	echo "/etc/ld.so.conf.d/$TRIPLET.conf" >> "$STATE/added"

@@ -1,0 +1,7 @@
+GLIBC_2.4 {
+	global: __pro1x_ld_linux_compat;
+	local: *;
+};
+GLIBC_PRIVATE {
+	global: __pro1x_ld_linux_compat_private;
+} GLIBC_2.4;
