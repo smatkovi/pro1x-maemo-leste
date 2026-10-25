@@ -1,3 +1,0 @@
-#!/bin/sh
-# headphoned: pause the players when the headphones are unplugged
-/usr/local/bin/headphoned &

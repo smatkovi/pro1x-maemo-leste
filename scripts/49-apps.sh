@@ -1,6 +1,6 @@
 #!/bin/bash
-# Builds and installs the Pro1X apps from apps/: the camera and the
-# pedometer home widget, headphoned, gPodder; and printing (CUPS).
+# Builds and installs the Pro1X camera app (apps/), installs the Maemo 5
+# ports from their repositories' releases, and printing (CUPS).
 #
 # Runs as root INSIDE the target (chroot or the running phone), after
 # 48-camera-stack.sh. Needs network for the build dependencies.
@@ -11,8 +11,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get install -y -q --no-install-recommends build-essential qtbase5-dev \
   qtbase5-dev-tools qt5-qmake libqt5maemo5-dev libqt5x11extras5-dev \
-  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-  libgtk2.0-dev libhildon1-dev libhildondesktop1-dev
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev curl
 
 rm -rf "$SRC/pro1x-camera"
 mkdir -p "$SRC"
@@ -22,17 +21,17 @@ qmake
 make -j"$(nproc)"
 make install
 
-# Pedometer Home Widget (the step counter of tools/pro1x-steps)
-rm -rf "$SRC/pedometer-home-widget"
-cp -r "$REPO/apps/pedometer-home-widget" "$SRC/pedometer-home-widget"
-make -C "$SRC/pedometer-home-widget" install
-
-# headphoned: pauses the players when the headphones are unplugged
-make -C "$REPO/apps/headphoned" install
-make -C "$REPO/apps/headphoned" clean
-
-# gPodder 4 with the touch QML UI
-bash "$REPO/apps/gpodder/install.sh"
+# Ports of Maemo 5 apps, each in its own repository with release packages
+# (Pedometer Home Widget on tools/pro1x-steps, headphoned, gPodder 4).
+GH=https://github.com/smatkovi
+for deb in \
+	pedometerhomewidget/releases/download/v0.4.0/pedometerhomewidget_0.4.0_arm64.deb \
+	headphoned/releases/download/v2.0.0/headphoned_2.0.0_arm64.deb \
+	gpodder-leste/releases/download/v4.17.2%2Bleste1/gpodder-leste_4.17.2+leste1_all.deb; do
+	curl -sfL -o "/tmp/${deb##*/}" "$GH/$deb"
+	apt-get install -y -q "/tmp/${deb##*/}"
+	rm -f "/tmp/${deb##*/}"
+done
 
 # Printing: CUPS with the command line tools (lp, lpr). No recommends, so no
 # cups-browsed or avahi listening on the network; browsing stays off.

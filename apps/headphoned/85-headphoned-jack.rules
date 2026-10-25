@@ -1,3 +1,0 @@
-# headphoned (run by the session user, in group audio) reads the jack
-# switches; on the Pro1X "F(x)tec Pro1X Headset Jack".
-SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="*Jack", GROUP="audio"
