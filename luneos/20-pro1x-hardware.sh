@@ -65,6 +65,12 @@ log "configuration"
 # The PinePhone's boot partition does not exist; systemd would wait for it.
 sed -i '/[[:space:]]\/boot[[:space:]]/d' "$MNT/etc/fstab"
 echo luneos > "$MNT/etc/hostname"
+# LuneOS's USB gadget takes 172.16.42.2, the computer's address on this link
+# under Leste and Kali; the phone is 172.16.42.1 there, so here too.
+G=$MNT/usr/sbin/luneos-usb-gadget.sh
+sed -i -e 's|^IP=172\.16\.42\.2/16$|IP=172.16.42.1/24|' \
+       -e 's|(ECM network at 172\.16\.42\.2)|(ECM network at 172.16.42.1)|' "$G"
+grep -qx 'IP=172.16.42.1/24' "$G" || { echo "$G: address not changed"; exit 1; }
 chroot "$MNT" /bin/sh -e <<'EOF'
 # eg25-manager drives the PinePhone's modem over its GPIOs
 systemctl mask eg25-manager.service

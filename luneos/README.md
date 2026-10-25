@@ -39,8 +39,9 @@ the device tree's `fxtec,pro1x`):
 ## Access
 
 - The developer image's root has no password. Over the USB link (LuneOS's
-  own gadget, network 172.16.42.0/24) `ssh root@172.16.42.1` works without
-  one; over Wi-Fi only with a key (`sshd_config.d/pro1x.conf`).
+  own gadget, moved to 172.16.42.1 like Leste and Kali; the computer is
+  172.16.42.2) `ssh root@172.16.42.1` works without one; over Wi-Fi only
+  with a key (`sshd_config.d/pro1x.conf`).
 - Wi-Fi: connman; mobile data and calls: oFono (LuneOS's telephony only
   speaks oFono), with Leste's rmtfs and tqftpserv for the modem.
 
