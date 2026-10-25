@@ -29,7 +29,10 @@ typedef struct {
 	char *name;
 } creds_audit_t;
 
+/* creds.c's translation, wrapped below */
+#define creds_str2creds creds_str2creds_aegis
 #include "creds.c"
+#undef creds_str2creds
 
 static void creds_audit_init(creds_t creds, pid_t pid)
 {
@@ -45,6 +48,34 @@ static void creds_audit_free(creds_t creds)
 static void creds_audit_log(creds_t creds, creds_type_t type, creds_value_t value)
 {
 	(void)creds; (void)type; (void)value;
+}
+
+/*
+ * Aegis resource tokens ("tracker::tracker", "TrackerReadAccess", ...) are
+ * names only the kernel module translated. Harmattan's D-Bus policies
+ * grant bus names and methods per token ("Unable to translate credential"
+ * drops such a rule, and the default deny stays): without the module every
+ * token becomes a value of its own type, which creds_have_p() passes like
+ * every other check. Harmattan's dbus-daemon keeps type and value in one
+ * word (3 and 29 bits).
+ */
+#define CREDS_TOKEN 7
+
+long creds_str2creds(const char *credential, creds_value_t *value)
+{
+	creds_value_t dummy;
+	long type = creds_str2creds_aegis(credential, value);
+	unsigned long h = 5381;
+	const char *p;
+
+	if (type != CREDS_BAD || !credential || !*credential)
+		return type;
+	for (p = credential; *p; p++)
+		h = h * 33 + (unsigned char)*p;
+	if (!value)
+		value = &dummy;
+	*value = h & 0x1fffffff;
+	return CREDS_TOKEN;
 }
 
 /*
