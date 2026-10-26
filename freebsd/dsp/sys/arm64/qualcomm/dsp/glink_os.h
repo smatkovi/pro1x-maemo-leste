@@ -43,6 +43,14 @@ typedef struct cv	glink_cond_t;
 #define	glink_wmb()		wmb()
 #define	GLINK_TIMEDOUT		EWOULDBLOCK
 
+/* Deferred work: a task on the system's thread task queue */
+#include <sys/taskqueue.h>
+typedef struct task	glink_work_t;
+#define	glink_work_init(w, fn, arg) \
+	TASK_INIT((w), 0, (void (*)(void *, int))(fn), (arg))
+#define	glink_work_queue(w)	taskqueue_enqueue(taskqueue_thread, (w))
+#define	glink_work_drain(w)	taskqueue_drain(taskqueue_thread, (w))
+
 #else /* !_KERNEL: the test on the PC */
 #include <sys/types.h>
 #include <errno.h>
@@ -92,11 +100,80 @@ glink_now_ms(void)
 #define	glink_log(...)		fprintf(stderr, "glink: " __VA_ARGS__)
 #define	glink_wmb()		__atomic_thread_fence(__ATOMIC_RELEASE)
 #define	GLINK_TIMEDOUT		ETIMEDOUT
+
+/* Deferred work: one thread per work item, woken by a semaphore */
+#include <semaphore.h>
+typedef struct {
+	void		(*fn)(void *, int);
+	void		*arg;
+	sem_t		sem;
+	pthread_t	thread;
+	int		pending;	/* queued, not yet started */
+	int		running;
+	pthread_mutex_t	lock;
+	pthread_cond_t	idle;
+} glink_work_t;
+static void *
+glink_work_thread(void *p)
+{
+	glink_work_t *w = p;
+
+	for (;;) {
+		sem_wait(&w->sem);
+		pthread_mutex_lock(&w->lock);
+		if (w->pending == 0) {
+			pthread_mutex_unlock(&w->lock);
+			continue;
+		}
+		w->pending = 0;
+		w->running = 1;
+		pthread_mutex_unlock(&w->lock);
+		w->fn(w->arg, 1);
+		pthread_mutex_lock(&w->lock);
+		w->running = 0;
+		pthread_cond_broadcast(&w->idle);
+		pthread_mutex_unlock(&w->lock);
+	}
+	return (NULL);
+}
+static inline void
+glink_work_init(glink_work_t *w, void (*fn)(void *, int), void *arg)
+{
+	memset(w, 0, sizeof(*w));
+	w->fn = fn;
+	w->arg = arg;
+	sem_init(&w->sem, 0, 0);
+	pthread_mutex_init(&w->lock, NULL);
+	pthread_cond_init(&w->idle, NULL);
+	pthread_create(&w->thread, NULL, glink_work_thread, w);
+	pthread_detach(w->thread);
+}
+static inline void
+glink_work_queue(glink_work_t *w)
+{
+	pthread_mutex_lock(&w->lock);
+	if (!w->pending) {
+		w->pending = 1;
+		sem_post(&w->sem);
+	}
+	pthread_mutex_unlock(&w->lock);
+}
+static inline void
+glink_work_drain(glink_work_t *w)
+{
+	pthread_mutex_lock(&w->lock);
+	while (w->pending || w->running)
+		pthread_cond_wait(&w->idle, &w->lock);
+	pthread_mutex_unlock(&w->lock);
+}
 #ifndef roundup2
 #define	roundup2(x, y)		(((x) + ((y) - 1)) & ~((y) - 1))
 #endif
 #ifndef MIN
 #define	MIN(a, b)		((a) < (b) ? (a) : (b))
+#endif
+#ifndef nitems
+#define	nitems(x)		(sizeof((x)) / sizeof((x)[0]))
 #endif
 #endif /* _KERNEL */
 

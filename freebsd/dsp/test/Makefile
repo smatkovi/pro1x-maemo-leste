@@ -9,8 +9,12 @@ all: run
 glink_test: glink_test.c $(SRC)/glink_core.c $(SRC)/glink.h $(SRC)/glink_os.h
 	$(CC) $(CFLAGS) -o $@ glink_test.c $(SRC)/glink_core.c
 
-run: glink_test
+qrtr_test: qrtr_test.c $(SRC)/qrtr_core.c $(SRC)/qrtr.h $(SRC)/glink_os.h
+	$(CC) $(CFLAGS) -o $@ qrtr_test.c $(SRC)/qrtr_core.c
+
+run: glink_test qrtr_test
 	./glink_test
+	./qrtr_test
 
 clean:
-	rm -f glink_test
+	rm -f glink_test qrtr_test
