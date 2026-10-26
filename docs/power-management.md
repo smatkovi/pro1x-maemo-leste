@@ -137,9 +137,10 @@ Android's kernel (Sailfish on this phone) has it.
 
 `device/kernel/patches/0006-sm6115-hook-up-mpm.patch` adds it as on the
 sister SoCs QCM2290 and SM6375, with the pin map of Qualcomm's own
-`qcom-mpm-bengal.c`: the SPMI arbiter (power key, RTC alarm, charger), the
-GPIOs and the USB SS PHY go through the MPM, which is the parent power
-domain of both CPU clusters. It concerns every system on the mainline
+`qcom-mpm-bengal.c`: the SPMI arbiter (power key, RTC alarm, charger) and
+the GPIOs go through the MPM, which is the parent power
+domain of both CPU clusters. The same patch is meant for upstream
+Linux (written against linux-next). It concerns every system on the mainline
 kernel (Leste, the MeeGo copy, Kali, LuneOS). Built into `out-mpm/` (`OUT=`
 of `30-build-kernel.sh`), so that `out/` and the boot image on the phone
 stay as they are until it is tried: a wrong interrupt route costs the power

@@ -1,22 +1,15 @@
-From: Pro1X Maemo Leste <noreply@localhost>
-Subject: [PATCH] arm64: dts: qcom: sm6115: hook up the MPM
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] arm64: dts: qcom: sm6115: Hook up MPM
 
-Without the MPM (the RPM's wake-up interrupt controller) the RPM never
-takes the SoC into its system sleep states: qcom_stats vlow and vmin stay
-0 on the Pro1X, also in s2idle. The SM6115's sister SoCs QCM2290 (agatti)
-and SM6375 have it upstream; the pinctrl driver already has the SM6115's
-GPIO-to-MPM map (Konrad Dybcio, 2023), the device tree never got the node.
+Wire up MPM and the interrupts it provides, as on QCM2290.
+Pin map from downstream bengal. Prepared with Claude Opus 5.5.
 
-As in agatti.dtsi: the MPM in the RPM message RAM at 0x1b8, its IPC bit 1
-in the APCS mailbox, GIC SPI 197; the parent power domain of both CPU
-clusters, so that the last CPU going down hands the wake-up interrupts to
-the RPM. Pin map from Qualcomm's msm-5.4 qcom-mpm-bengal.c (GIC hwirq - 32),
-without its TSENS entry (bengal's and scuba's tables disagree there; not a
-wake-up source needed here). Through the MPM: the SPMI arbiter (power key,
-RTC alarm, charger), all mapped GPIOs (wakeup-parent) and the DWC3 SS PHY.
+(The patch meant for upstream Linux, made against linux-next; it applies
+to v7.1 with the NixOS port's patches too. Without the MPM the RPM never
+takes the SoC into vlow or vmin: docs/power-management.md.)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6115.dtsi b/arch/arm64/boot/dts/qcom/sm6115.dtsi
-index 1472df2286..926df79dc2 100644
+index 0f2af8aba..b488bc690 100644
 --- a/arch/arm64/boot/dts/qcom/sm6115.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm6115.dtsi
 @@ -360,11 +360,13 @@ cpu_pd7: power-domain-cpu7 {
@@ -47,9 +40,9 @@ index 1472df2286..926df79dc2 100644
 +		#power-domain-cells = <0>;
 +		interrupt-parent = <&intc>;
 +		qcom,mpm-pin-count = <96>;
-+		qcom,mpm-pin-map = <5 296>,  /* Soundwire wake_irq */
++		qcom,mpm-pin-map = <5 296>,  /* Soundwire master_irq */
 +				   <12 422>, /* DWC3 ss_phy_irq */
-+				   <24 79>,  /* Soundwire wake_irq (LPI) */
++				   <24 79>,  /* Soundwire wake_irq */
 +				   <86 183>, /* MPM wake, SPMI */
 +				   <90 260>, /* QUSB2_PHY DP */
 +				   <91 260>; /* QUSB2_PHY DM */
@@ -66,7 +59,7 @@ index 1472df2286..926df79dc2 100644
  			#gpio-cells = <2>;
  			interrupt-controller;
  			#interrupt-cells = <2>;
-@@ -1137,7 +1158,7 @@ spmi_bus: spmi@1c40000 {
+@@ -1060,7 +1081,7 @@ spmi_bus: spmi@1c40000 {
  			      <0x0 0x01c0a000 0x0 0x26000>;
  			reg-names = "core", "chnls", "obsrvr", "intr", "cnfg";
  			interrupt-names = "periph_irq";
@@ -75,7 +68,7 @@ index 1472df2286..926df79dc2 100644
  			qcom,ee = <0>;
  			qcom,channel = <0>;
  			#address-cells = <2>;
-@@ -1164,8 +1185,15 @@ bimc: interconnect@4480000 {
+@@ -1087,8 +1108,15 @@ bimc: interconnect@4480000 {
  		};
  
  		rpm_msg_ram: sram@45f0000 {
@@ -92,18 +85,3 @@ index 1472df2286..926df79dc2 100644
  		};
  
  		sram@4690000 {
-@@ -1731,10 +1759,10 @@ usb: usb@4ef8800 {
- 					  <&gcc GCC_USB30_PRIM_MASTER_CLK>;
- 			assigned-clock-rates = <19200000>, <66666667>;
- 
--			interrupts = <GIC_SPI 302 IRQ_TYPE_LEVEL_HIGH>,
--				     <GIC_SPI 260 IRQ_TYPE_LEVEL_HIGH>,
--				     <GIC_SPI 254 IRQ_TYPE_LEVEL_HIGH>,
--				     <GIC_SPI 422 IRQ_TYPE_LEVEL_HIGH>;
-+			interrupts-extended = <&intc GIC_SPI 302 IRQ_TYPE_LEVEL_HIGH>,
-+					      <&intc GIC_SPI 260 IRQ_TYPE_LEVEL_HIGH>,
-+					      <&intc GIC_SPI 254 IRQ_TYPE_LEVEL_HIGH>,
-+					      <&mpm 12 IRQ_TYPE_LEVEL_HIGH>;
- 			interrupt-names = "pwr_event",
- 					  "qusb2_phy",
- 					  "hs_phy_irq",
