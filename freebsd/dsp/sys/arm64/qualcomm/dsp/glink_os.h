@@ -38,8 +38,12 @@ typedef struct cv	glink_cond_t;
 #define	glink_cond_wait(c, m, ms) \
 	cv_timedwait_sbt((c), (m), (sbintime_t)(ms) * SBT_1MS, 0, 0)
 #define	glink_zalloc(n)		malloc((n), M_GLINK, M_WAITOK | M_ZERO)
+/* where waiting is not allowed (a router's receive path): may be NULL */
+#define	glink_zalloc_nowait(n)	malloc((n), M_GLINK, M_NOWAIT | M_ZERO)
 #define	glink_free(p)		free((p), M_GLINK)
 #define	glink_now_ms()		((uint64_t)(getsbinuptime() / SBT_1MS))
+/* Linux's jiffies are ticks here (LinuxKPI's HZ is hz) */
+#define	glink_ticks_to_ms(t)	((uint64_t)(t) * 1000 / hz)
 #define	glink_log(...)		printf("glink: " __VA_ARGS__)
 #define	glink_wmb()		wmb()
 #define	GLINK_TIMEDOUT		EWOULDBLOCK
@@ -89,7 +93,10 @@ glink_cond_wait(glink_cond_t *c, glink_mutex_t *m, unsigned int ms)
 	return (pthread_cond_timedwait(c, m, &ts));
 }
 #define	glink_zalloc(n)		calloc(1, (n))
+#define	glink_zalloc_nowait(n)	calloc(1, (n))
 #define	glink_free(p)		free(p)
+/* the tests count jiffies in milliseconds */
+#define	glink_ticks_to_ms(t)	((uint64_t)(t))
 static inline uint64_t
 glink_now_ms(void)
 {
