@@ -180,8 +180,10 @@ custom_alarmd() {
 	local m=(CC="$CC" AR="$AR" PREFIX=/usr/local ROOT="$PR"
 	    PKGCFGDIR=/usr/local/libdata/pkgconfig
 	    PKG_NAMES="glib-2.0 dbus-glib-1 dbus-1" USE_LIBTIME=n)
+	# LDFLAGS on the command line replace the Makefile's, which name the
+	# soname: the users would need libalarm.so, the development link
 	make -j1 "${m[@]}" CFLAGS="$CPPFLAGS $CFLAGS -std=gnu99 -fPIC" \
-	    LDFLAGS="$LDFLAGS" libalarm.a libalarm.so.2 > make.out 2>&1 ||
+	    LDFLAGS="$LDFLAGS -Wl,-soname,libalarm.so.2" libalarm.a libalarm.so.2 > make.out 2>&1 ||
 	    { grep -m20 -E "error:|Error [0-9]" make.out; exit 1; }
 	make "${m[@]}" install-libalarm install-libalarm-dev > install.out 2>&1 ||
 	    { tail -20 install.out; exit 1; }

@@ -1,0 +1,10 @@
+The library where the others go ($(libdir): /usr/local/lib on FreeBSD), not
+into the base system's /usr/lib.
+
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -6,3 +6,3 @@
+ 
+-calendarbackenddir=/usr/lib
++calendarbackenddir=$(libdir)
+ calendarbackend_LTLIBRARIES = libcalendar_backend.la
