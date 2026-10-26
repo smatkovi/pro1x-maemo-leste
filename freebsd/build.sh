@@ -75,7 +75,7 @@ sed -e "s|@MFS_IMAGE@|$OUT/mfsroot.ufs|" -e "s|@ENV_FILE@|$REPO/freebsd/pro1x.en
 # The DSP stack's drivers (dsp/, kernel modules for the root image): only
 # these modules are built
 cp -a "$REPO/freebsd/dsp/sys/." "$SRC/sys/"
-MODULES=${MODULES:-qcom_dsp}
+MODULES=${MODULES:-qcom_dsp qrtr}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} buildkernel)
 K=$(find "$WORK/obj" -path '*/sys/PRO1X/kernel.bin' | head -1)
@@ -103,6 +103,10 @@ for t in "$REPO"/freebsd/dsp/tools/*/; do
 	    -fuse-ld=lld -O2 -Wall -I"$REPO/freebsd/dsp/sys/arm64/qualcomm/dsp" \
 	    -o "$OUT/dsp-tools/$t" "$REPO/freebsd/dsp/tools/$t/$t.c"
 done
+# and the test of the QRTR sockets (freebsd/dsp/test)
+clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" -fuse-ld=lld \
+    -O2 -Wall -I"$REPO/freebsd/dsp/sys/arm64/qualcomm/dsp" \
+    -o "$OUT/dsp-tools/qrtr_sock_test" "$REPO/freebsd/dsp/test/qrtr_sock_test.c"
 # The Linux arm64 Image header: magic "ARMd" at 0x38. image_size (0x10)
 # covers the kernel up to _end; FreeBSD then copies the device tree and
 # builds its first page tables right behind _end. 8 MiB more, so that

@@ -91,4 +91,10 @@ typedef void qrtr_server_cb_t(void *arg, uint32_t service, uint32_t instance,
 	    uint32_t node, uint32_t port);
 void	qrtr_ns_servers(qrtr_server_cb_t *cb, void *arg);
 
+#ifdef _KERNEL
+/* The endpoints over GLINK's IPCRTR channel (qrtr_glink.c) */
+void	qrtr_glink_init(void);
+void	qrtr_glink_fini(void);
+#endif
+
 #endif /* _QRTR_H_ */

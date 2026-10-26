@@ -9,8 +9,9 @@
  * (the node's) runs glink_edge_rx in a task; ours is an APCS doorbell.
  *
  * Users of a channel register by channel name (qcom_glink_register): when a
- * remote processor opens such a channel, the user's callback runs in the
- * glink task queue, where it may open the channel and wait.
+ * remote processor opens such a channel, the user's callback runs in a task
+ * queue of its own, where it may open the channel and wait (the edges'
+ * receive tasks, which bring the acknowledgements, run in the other).
  */
 
 #include <sys/param.h>
@@ -77,7 +78,8 @@ static LIST_HEAD(, qcom_glink_edge) edges = LIST_HEAD_INITIALIZER(edges);
 static LIST_HEAD(, glink_user) users = LIST_HEAD_INITIALIZER(users);
 static struct mtx glink_list_lock;
 MTX_SYSINIT(qcom_glink_list, &glink_list_lock, "qcom_glink list", MTX_DEF);
-static struct taskqueue *glink_tq;
+static struct taskqueue *glink_tq;	/* the edges' receive tasks */
+static struct taskqueue *glink_user_tq;	/* the users' announcements */
 
 /* --- the FIFOs in SMEM ------------------------------------------------------------ */
 
@@ -245,7 +247,7 @@ edge_announce(void *arg, const char *channel)
 	at->edge = e;
 	strlcpy(at->channel, channel, sizeof(at->channel));
 	TASK_INIT(&at->task, 0, announce_task, at);
-	taskqueue_enqueue(glink_tq, &at->task);
+	taskqueue_enqueue(glink_user_tq, &at->task);
 }
 
 void
@@ -275,7 +277,8 @@ qcom_glink_unregister(const char *channel)
 		}
 	mtx_unlock(&glink_list_lock);
 	/* an announcement may be running with it */
-	taskqueue_drain_all(glink_tq);
+	if (glink_user_tq != NULL)
+		taskqueue_drain_all(glink_user_tq);
 	free(u, M_GLINK);
 }
 
@@ -324,6 +327,10 @@ qcom_glink_edge_start(device_t dev, phandle_t rproc, void **cookie)
 		glink_tq = taskqueue_create("qcom_glink", M_WAITOK,
 		    taskqueue_thread_enqueue, &glink_tq);
 		taskqueue_start_threads(&glink_tq, 1, PI_NET, "qcom_glink");
+		glink_user_tq = taskqueue_create("qcom_glink_user", M_WAITOK,
+		    taskqueue_thread_enqueue, &glink_user_tq);
+		taskqueue_start_threads(&glink_user_tq, 1, PI_NET,
+		    "qcom_glink_user");
 	}
 	e = malloc(sizeof(*e), M_GLINK, M_WAITOK | M_ZERO);
 	e->dev = dev;
@@ -420,6 +427,8 @@ qcom_glink_edge_stop(void *cookie)
 	bus_release_resource(e->dev, SYS_RES_IRQ, IRQ_RID, e->irq);
 	glink_edge_abort(e->glink);
 	taskqueue_drain_all(glink_tq);
+	/* announcements of this edge: their opens fail now, they end */
+	taskqueue_drain_all(glink_user_tq);
 	/* users close their channels on the down; what is left goes */
 	glink_edge_destroy(e->glink);
 	free(e, M_GLINK);

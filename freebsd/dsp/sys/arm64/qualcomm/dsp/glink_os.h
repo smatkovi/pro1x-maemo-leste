@@ -17,6 +17,7 @@
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
+#include <sys/queue.h>
 #include <sys/condvar.h>
 #include <sys/time.h>
 #include <machine/atomic.h>
