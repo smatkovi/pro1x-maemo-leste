@@ -55,4 +55,11 @@ void	qcom_glink_register(const char *channel, qcom_glink_user_cb_t *cb,
 void	qcom_glink_unregister(const char *channel);
 struct glink_edge *qcom_glink_find(const char *label);
 
+/* SMMU streams without translation (qcom_smmu.c) */
+int	qcom_smmu_bypass(phandle_t smmu, uint32_t sid, uint32_t mask,
+	    const char *who);
+
+/* FastRPC (qcom_fastrpc.c): /dev/fastrpc-<dsp> once a DSP opens its channel */
+void	qcom_fastrpc_init(void);
+
 #endif /* _QCOM_DSP_H_ */

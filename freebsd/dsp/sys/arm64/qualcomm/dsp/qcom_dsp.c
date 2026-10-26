@@ -25,6 +25,8 @@ qcom_dsp_modevent(module_t mod, int what, void *arg)
 
 	switch (what) {
 	case MOD_LOAD:
+		/* users of the DSPs' channels wait for them */
+		qcom_fastrpc_init();
 		/* a secure monitor call elsewhere may be an undefined instruction */
 		if (!ofw_bus_node_is_compatible(OF_finddevice("/"),
 		    "qcom,sm6115")) {
