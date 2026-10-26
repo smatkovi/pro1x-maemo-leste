@@ -471,6 +471,10 @@ def dep_on(n):
 rev = subprocess.run(['git', '-C', REPO, 'rev-parse', 'HEAD'],
                      capture_output=True, text=True).stdout.strip()
 repo_www = 'https://github.com/smatkovi/pro1x-maemo-leste'
+# a step up with every commit of this repository, so that pkg upgrade
+# brings hildon-meta's new apps
+own_version = '1.0.' + (subprocess.run(['git', '-C', REPO, 'rev-list', '--count', 'HEAD'],
+                                       capture_output=True, text=True).stdout.strip() or '0')
 # what shows in a menu, the home view, the status area or the control panel
 apps = sorted(x['name'] for x in meta.values()
               if any(os.path.isdir(os.path.join(x['root'], d, 'share/applications'))
@@ -500,7 +504,7 @@ for name, comment, desc, root, deps in (
                 rel = '/' + os.path.relpath(os.path.join(dp, f), r)
                 plist.append(rel[len('/usr/local/'):] if rel.startswith('/usr/local/') else rel)
     manifest = {
-        'name': name, 'origin': 'pro1x/' + name, 'version': '1.0',
+        'name': name, 'origin': 'pro1x/' + name, 'version': own_version,
         'comment': comment, 'desc': desc, 'maintainer': MAINTAINER,
         'www': repo_www, 'prefix': '/usr/local', 'licenselogic': 'single',
         'licenses': ['UNKNOWN'], 'categories': ['x11'],
@@ -517,9 +521,9 @@ for name, comment, desc, root, deps in (
         json.dump(manifest, f, indent=1)
     with open(os.path.join(d, 'plist'), 'w') as f:
         f.write('\n'.join(plist) + ('\n' if plist else ''))
-    meta['_' + name] = {'name': name, 'version': '1.0', 'origin': 'pro1x/' + name,
+    meta['_' + name] = {'name': name, 'version': own_version, 'origin': 'pro1x/' + name,
                         'root': r}
-    print('%-40s %-22s %-14s %d files, %d deps' % (name, '1.0', 'UNKNOWN', len(plist), len(deps)))
+    print('%-40s %-22s %-14s %d files, %d deps' % (name, own_version, 'UNKNOWN', len(plist), len(deps)))
 
 for n, sos in sorted(unresolved.items()):
     print('unresolved in %s: %s' % (n, ' '.join(sorted(set(sos)))))
