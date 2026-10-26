@@ -1,6 +1,8 @@
 #!/bin/bash
 # root.ufs (rootfs.sh) as a ZFS pool, root.zfs: pool "pro1x", the root in
-# pro1x/ROOT/default, zstd compressed (about half the size), made with
+# pro1x/ROOT/default, lz4 compressed (zstd packs better, but lz4 unpacks
+# several times cheaper, which counts on a phone; see also the commit
+# interval vfs.zfs.txg.timeout in pro1x.env), made with
 # FreeBSD's own zpool and zfs in a FreeBSD machine (freebsd/vm/vm.sh):
 # FreeBSD's makefs -t zfs, run on Linux, stops at the image's hard links.
 #
@@ -27,7 +29,7 @@ truncate -s "$SIZE" root.zfs
 z=$(mdconfig -a -t vnode -f root.zfs)
 mkdir -p ufs zfs
 mount -t ufs -o ro /dev/$u ufs
-zpool create -f -o ashift=12 -o cachefile=none -O compression=zstd \
+zpool create -f -o ashift=12 -o cachefile=none -O compression=lz4 \
     -O atime=off -O mountpoint=none -R /root/rootzfs/zfs pro1x /dev/$z
 zfs create -o mountpoint=none pro1x/ROOT
 zfs create -o mountpoint=/ pro1x/ROOT/default

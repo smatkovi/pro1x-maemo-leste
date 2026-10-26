@@ -6,7 +6,7 @@
 # pro1x.test=panel: the DCS commands of qcom_dpu (patches/0022), each step
 # with its time on the console: brightness 100/10/50 %, the low power mode
 # (idle mode), partial mode (one half of the panel), the panel off and on,
-# 4 s each; then back. With a
+# asleep and awake, the touchscreen asleep and awake, 4 s each; then back. With a
 # watchdog lifetime hint a hanging DSI ends in a reset.
 if [ "$(kenv -q pro1x.test)" = panel ]; then
 	echo "=== FreeBSD multi-user: panel test ==="
@@ -25,6 +25,11 @@ if [ "$(kenv -q pro1x.test)" = panel ]; then
 	step "partial 0"; sysctl dev.qcom_dpu.0.partial=0; sleep 4
 	step "display 0"; sysctl dev.qcom_dpu.0.display=0; sleep 4
 	step "display 1"; sysctl dev.qcom_dpu.0.display=1; sleep 4
+	step "sleep 1"; sysctl dev.qcom_dpu.0.sleep=1; sleep 4
+	step "sleep 0"; sysctl dev.qcom_dpu.0.sleep=0; sleep 4
+	# the touchscreen asleep and awake again (goodix: screen off command)
+	step "touch sleep 1"; sysctl dev.goodix.0.sleep=1; sleep 4
+	step "touch sleep 0"; sysctl dev.goodix.0.sleep=0; sleep 2
 	backlight -f /dev/backlight/backlight0 2>&1
 	dmesg | grep -E "CMD_DMA|qcom_dpu" | tail -5
 	echo "=== test done, rebooting in 20 s"

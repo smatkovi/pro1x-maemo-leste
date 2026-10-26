@@ -22,7 +22,7 @@ load_rc_config $name
 pidfile=/var/run/${name}.pid
 procname=/usr/local/bin/rmtfs
 command=/usr/sbin/daemon
-command_args="-r -R 1 -P ${pidfile} -o /var/log/${name}.log ${procname} -r -P"
+command_args="-r -R 10 -C 5 -P ${pidfile} -o /var/log/${name}.log ${procname} -r -P"
 start_precmd=rmtfs_prestart
 
 rmtfs_prestart()

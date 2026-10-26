@@ -1,0 +1,151 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 26 Oct 2026 21:59:20 +0100
+Subject: [PATCH 7/7] goodix: sleep (dev.goodix.0.sleep)
+
+The controller's screen-off command with Linux's sequence (INT low 5 ms,
+command, 58 ms; INT high 2-5 ms, INT synchronisation on wake-up): asleep
+it does not scan, so a covered phone (the stand-by screen in a pocket)
+does not read touches over the bit-banged I2C. The N9's touch controller
+slept whenever touches could not matter (mce DisableTSImmediately).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/dev/iicbus/goodix.c | 74 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 73 insertions(+), 1 deletion(-)
+
+diff --git a/sys/dev/iicbus/goodix.c b/sys/dev/iicbus/goodix.c
+index e251a152e..c3c7188b5 100644
+--- a/sys/dev/iicbus/goodix.c
++++ b/sys/dev/iicbus/goodix.c
+@@ -31,6 +31,8 @@
+ #include <sys/module.h>
+ #include <sys/mutex.h>
+ #include <sys/rman.h>
++#include <sys/sx.h>
++#include <sys/sysctl.h>
+ #include <sys/taskqueue.h>
+ 
+ #include <dev/evdev/evdev.h>
+@@ -42,8 +44,11 @@
+ #include <dev/ofw/ofw_bus.h>
+ #include <dev/ofw/ofw_bus_subr.h>
+ 
++#include "gpio_if.h"
+ #include "iicbus_if.h"
+ 
++#define	GOODIX_REG_COMMAND	0x8040
++#define	 CMD_SCREEN_OFF		0x05
+ #define	GOODIX_REG_CONFIG_GT9X	0x8047
+ #define	GOODIX_REG_CONFIG_GT1X	0x8050
+ #define	GOODIX_REG_ID		0x8140
+@@ -90,6 +95,8 @@ struct goodix_softc {
+ 	u_int			y_max;
+ 	u_int			contacts;
+ 	bool			detaching;
++	struct sx		sleep_lock;
++	bool			sleeping;	/* screen off: no scanning */
+ };
+ 
+ static int
+@@ -162,10 +169,68 @@ goodix_intr(void *arg)
+ {
+ 	struct goodix_softc *sc = arg;
+ 
+-	if (!sc->detaching)
++	/* asleep, the INT line is ours: not the controller's reports */
++	if (!sc->detaching && !sc->sleeping)
+ 		taskqueue_enqueue(taskqueue_thread, &sc->task);
+ }
+ 
++/* The INT line as an output, at a physical level */
++static void
++goodix_int_out(struct goodix_softc *sc, int level)
++{
++	gpio_pin_setflags(sc->irq_pin, GPIO_PIN_OUTPUT);
++	GPIO_PIN_SET(sc->irq_pin->dev, sc->irq_pin->pin, level);
++}
++
++/*
++ * Sleep and wake-up, the controller's "screen off" as in Linux's goodix
++ * suspend and resume: INT low for 5 ms, the command, 58 ms before any
++ * wake-up; INT high for 2-5 ms, then low for 50 ms and back to an input
++ * (the INT synchronisation). Asleep the controller does not scan, which
++ * the N9 had too: its touch controller slept whenever touches could not
++ * matter (mce's DisableTSImmediately; atmel_mxt deep sleep).
++ */
++static int
++goodix_sleep_sysctl(SYSCTL_HANDLER_ARGS)
++{
++	struct goodix_softc *sc = arg1;
++	int on, error;
++
++	on = sc->sleeping;
++	error = sysctl_handle_int(oidp, &on, 0, req);
++	if (error != 0 || req->newptr == NULL)
++		return (error);
++	on = on != 0;
++	sx_xlock(&sc->sleep_lock);
++	if (on == sc->sleeping || sc->evdev == NULL) {
++		sx_xunlock(&sc->sleep_lock);
++		return (0);
++	}
++	if (on) {
++		sc->sleeping = true;
++		taskqueue_drain(taskqueue_thread, &sc->task);
++		goodix_int_out(sc, 0);
++		pause_sbt("gdxslp", 5 * SBT_1MS, SBT_1MS, 0);
++		error = goodix_write1(sc, GOODIX_REG_COMMAND, CMD_SCREEN_OFF);
++		pause_sbt("gdxslp", 58 * SBT_1MS, SBT_1MS, 0);
++		if (error != 0) {
++			gpio_pin_setflags(sc->irq_pin, GPIO_PIN_INPUT);
++			sc->sleeping = false;
++		}
++	} else {
++		goodix_int_out(sc, 1);
++		pause_sbt("gdxwake", 3 * SBT_1MS, SBT_1MS, 0);
++		goodix_int_out(sc, 0);
++		pause_sbt("gdxwake", 50 * SBT_1MS, SBT_1MS, 0);
++		gpio_pin_setflags(sc->irq_pin, GPIO_PIN_INPUT);
++		sc->sleeping = false;
++		/* a report from before may wait */
++		goodix_write1(sc, GOODIX_REG_COOR, 0);
++	}
++	sx_xunlock(&sc->sleep_lock);
++	return (error);
++}
++
+ /* The interrupt of irq-gpios, with the trigger the configuration names */
+ static int
+ goodix_setup_irq(struct goodix_softc *sc, u_int trigger)
+@@ -261,6 +326,11 @@ goodix_start(void *arg)
+ 	TASK_INIT(&sc->task, 0, goodix_task, sc);
+ 	if (goodix_setup_irq(sc, cfg[CFG_TRIGGER] & 3) != 0)
+ 		return;
++	SYSCTL_ADD_PROC(device_get_sysctl_ctx(sc->dev),
++	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->dev)), OID_AUTO, "sleep",
++	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
++	    goodix_sleep_sysctl, "I",
++	    "Controller asleep (1, no scanning) or awake (0)");
+ 	/* A report may be waiting since before the interrupt was set up. */
+ 	goodix_write1(sc, GOODIX_REG_COOR, 0);
+ }
+@@ -283,6 +353,7 @@ goodix_attach(device_t dev)
+ 
+ 	sc->dev = dev;
+ 	mtx_init(&sc->mtx, device_get_nameunit(dev), NULL, MTX_DEF);
++	sx_init(&sc->sleep_lock, "goodix sleep");
+ 	/* The I2C bus and the GPIO interrupts work once interrupts run. */
+ 	sc->hook.ich_func = goodix_start;
+ 	sc->hook.ich_arg = sc;
+@@ -309,6 +380,7 @@ goodix_detach(device_t dev)
+ 	if (sc->irq_pin != NULL)
+ 		gpio_pin_release(sc->irq_pin);
+ 	mtx_destroy(&sc->mtx);
++	sx_destroy(&sc->sleep_lock);
+ 	return (0);
+ }
+ 
+-- 
+2.56.0
+

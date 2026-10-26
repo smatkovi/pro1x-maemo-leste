@@ -22,7 +22,7 @@ load_rc_config $name
 pidfile=/var/run/${name}.pid
 procname=/usr/local/bin/pd-mapper
 command=/usr/sbin/daemon
-command_args="-r -R 1 -P ${pidfile} -o /var/log/pd-mapper.log ${procname}"
+command_args="-r -R 10 -C 5 -P ${pidfile} -o /var/log/pd-mapper.log ${procname}"
 start_precmd=pd_mapper_prestart
 
 pd_mapper_prestart()

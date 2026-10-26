@@ -545,6 +545,12 @@ static void panel_partial(int first, int last)
 		strlcpy(v, "0", sizeof(v));
 	sysctlbyname("dev.qcom_dpu.0.partial", NULL, NULL, v, strlen(v) + 1);
 }
+
+/* the touchscreen not scanning (patches/0028), while covered */
+static void touch_sleep(int on)
+{
+	sysctlbyname("dev.goodix.0.sleep", NULL, NULL, &on, sizeof(on));
+}
 #else
 /*
  * Linux: the panel's backlight device (the Pro1X's panel driver with
@@ -632,6 +638,12 @@ static void panel_partial(int first, int last)
 	else
 		snprintf(v, sizeof(v), "0");
 	sys_write("device/partial", v);
+}
+
+/* Leste's mce inhibits the touchscreen itself */
+static void touch_sleep(int on)
+{
+	(void)on;
 }
 #endif
 
@@ -968,8 +980,10 @@ static void sb_hide(struct standby *sb)
 	if (sb->mode != STANDBY)
 		return;
 	proximity_watch(sb, 0);
-	if (sb->near)
+	if (sb->near) {
+		touch_sleep(0);
 		panel_set("display", 1);
+	}
 	sb->near = 0;
 	if (sb->part_last) {
 		panel_partial(0, 0);
@@ -1007,9 +1021,14 @@ static void proximity(struct standby *sb, int near)
 	sb->near = near;
 	debug(near ? "near" : "far");
 	if (near) {
-		/* in a pocket: the panel off, nothing to draw until it is out */
+		/*
+		 * in a pocket: the panel off and the touchscreen asleep,
+		 * nothing to draw until it is out
+		 */
 		panel_set("display", 0);
+		touch_sleep(1);
 	} else {
+		touch_sleep(0);
 		panel_set("display", 1);
 		sb_draw(sb, 0);
 	}

@@ -179,7 +179,8 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `patches/0019-*` | `aw86224`, the vibration motor |
 | `patches/0020-*` | `qcom_lpg`, the RGB status LED |
 | `patches/0021-*` | LinuxKPI DMA for platform devices (the DSP stack's Wi-Fi, in progress) |
-| `patches/0022-*` | `qcom_dpu`: brightness, panel off/on, low power and partial mode by DCS commands |
+| `patches/0022-*` | `qcom_dpu`: brightness, panel off/on, sleep, low power and partial mode by DCS commands |
+| `patches/0023-*` … `0028-*` | power, checked against the Nokia N9: watchdog fed every 15 s, held keys scanned every 30 ms, UFS Auto-Hibernate, the battery read by time with events for devd, the random harvester at 1 Hz once seeded, the touchscreen's sleep (`docs/power-management.md`) |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `rootzfs.sh` | the root image as a ZFS pool |
 | `vm/` | a FreeBSD/arm64 VM on the PC (qemu): packages, ZFS image, tries |

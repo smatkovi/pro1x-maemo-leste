@@ -23,7 +23,7 @@ FreeBSD: the battery from hw.acpi.battery.* and hw.acpi.acline when upowerd has 
 + * kernel's hw.acpi.battery sysctls are there for others too (the F(x)tec
 + * Pro1X's pro1x_battery): life in percent, state bits (1 discharging,
 + * 2 charging, 4 critical), time in minutes, hw.acpi.acline. Read every
-+ * 10 seconds.
++ * 30 seconds (the driver itself reads every 30 s on the battery).
 + */
 +static guint sysctl_timer;
 +
@@ -80,7 +80,7 @@ FreeBSD: the battery from hw.acpi.battery.* and hw.acpi.acline when upowerd has 
 +    return 1;
 +  memset(&private.data, 0, sizeof(private.data));
 +  sysctl_batt_read(NULL);
-+  sysctl_timer = g_timeout_add_seconds(10, sysctl_batt_read, NULL);
++  sysctl_timer = g_timeout_add_seconds(30, sysctl_batt_read, NULL);
 +  return 0;
 +}
 +#endif

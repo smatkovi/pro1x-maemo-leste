@@ -1,9 +1,11 @@
 #!/bin/sh
-# pro1x-statusled: the RGB status LED shows the battery as on Leste (mce's
-# PatternBatteryCharging 255;10;0 and PatternBatteryFull 0;255;0): orange
-# while charging, green when full, off on battery. Run by
-# rc.d/pro1x_statusled; the LED is qcom_lpg's /dev/led/status_* with the
-# duty cycle dev.qcom_lpg.0.<colour> (0-511).
+# pro1x-statusled [STATUS]: the RGB status LED shows the battery as on Leste
+# (mce's PatternBatteryCharging 255;10;0 and PatternBatteryFull 0;255;0):
+# orange while charging, green when full, off on battery. Run by devd when
+# pro1x_battery tells it of a change (etc/devd/pro1x.conf), so nothing
+# polls, as the N9's mce got BME's events; without STATUS it reads the
+# state now (rc.d/pro1x_statusled at boot). The LED is qcom_lpg's
+# /dev/led/status_* with the duty cycle dev.qcom_lpg.0.<colour> (0-511).
 led() {
 	for c in red green blue; do
 		v=$1
@@ -12,18 +14,10 @@ led() {
 		if [ "$v" -gt 0 ]; then echo 1; else echo 0; fi > /dev/led/status_$c
 	done
 }
-trap 'led 0 0 0; exit 0' TERM INT
-prev=
-while :; do
-	st=$(sysctl -n dev.pro1x_battery.0.status 2> /dev/null)
-	if [ "$st" != "$prev" ]; then
-		case $st in
-		charging)	led 511 20 0 ;;
-		full)		led 0 511 0 ;;
-		*)		led 0 0 0 ;;
-		esac
-		prev=$st
-	fi
-	sleep 10 &
-	wait $!
-done
+[ -c /dev/led/status_red ] || exit 0
+st=${1:-$(sysctl -n dev.pro1x_battery.0.status 2> /dev/null)}
+case $st in
+charging)	led 511 20 0 ;;
+full)		led 0 511 0 ;;
+*)		led 0 0 0 ;;
+esac

@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 26 Oct 2026 21:59:19 +0100
+Subject: [PATCH 5/7] pro1x_battery: read by time, sleep while converting, tell
+ devd
+
+- On the battery every 30 s (sysctl poll_battery), on a charger every
+  5 s as before, with 10 % slack. The N9's gauge was read every 360 s,
+  but this charge estimate wants ADC readings; the filters that counted
+  5 s steps now scale with the real interval, the gap detection with it.
+- The ADC conversion is waited for with pause_sbt, not DELAY: the CPU
+  can idle meanwhile.
+- A change of status, capacity or charger goes to devd
+  (system PRO1X, subsystem BATTERY, type CHANGE), so that the status LED
+  needs no polling, as the N9's mce got BME's events.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/dev/qcom_spmi/pro1x_battery.c | 58 ++++++++++++++++++++++++++-----
+ 1 file changed, 49 insertions(+), 9 deletions(-)
+
+diff --git a/sys/dev/qcom_spmi/pro1x_battery.c b/sys/dev/qcom_spmi/pro1x_battery.c
+index e37730051..4ce2ccaf5 100644
+--- a/sys/dev/qcom_spmi/pro1x_battery.c
++++ b/sys/dev/qcom_spmi/pro1x_battery.c
+@@ -40,14 +40,24 @@
+ 
+ #include <dev/qcom_spmi/qcom_spmi.h>
+ 
++/*
++ * How often: every 5 s on a charger, every 30 s on the battery (sysctl
++ * poll_battery), with 10 % slack to ride along with other wake-ups. The
++ * N9's fuel gauge integrated in hardware and was read every 360 s; here
++ * the charge is estimated from ADC readings, which wants them more often,
++ * but not every 5 s while the phone lies idle. The filters below count in
++ * 5 s steps (POLL_S) and scale with the real interval.
++ */
+ #define	POLL_S			5
++#define	POLL_BATTERY_S		30
+ #define	ANCHOR_POLLS		24
+ #define	ANCHOR_MAX_UA_DISCH	400000
+ #define	ANCHOR_MAX_UA_CHG	200000
+ #define	ANCHOR_POLLS_LOAD	96
+ #define	ANCHOR_LOAD_MAX_UA	1500000
+ #define	REANCHOR_RETRY_POLLS	36
+-#define	GAP_MS			(3 * POLL_S * 1000)
++/* a gap (suspend, a stuck task): three intervals without a reading */
++#define	GAP_MS(sc)		(3 * (int64_t)(sc)->interval_s * 1000)
+ #define	LONG_GAP_MS		120000
+ #define	GAP_REANCHOR_MAX_UA	600000
+ #define	CHG_EFFICIENCY_PCT	97
+@@ -121,6 +131,7 @@ struct pro1x_battery_softc {
+ 	bool			have_q, have_t;
+ 	struct timespec		last_t;
+ 	u_int			reanchor_left, ticks;
++	u_int			interval_s, poll_battery_s;
+ 	int			cap, status;
+ 	bool			usb;
+ };
+@@ -155,7 +166,8 @@ adc_convert(struct pro1x_battery_softc *sc, struct adc_chan *ch, int *uv)
+ 			return (error);
+ 		if ((st & STATUS1_REQ_EOC) == STATUS1_EOC)
+ 			break;
+-		DELAY(264);
++		/* the conversion takes a few hundred us: sleep, not spin */
++		pause_sbt("p1xadc", 264 * SBT_1US, 64 * SBT_1US, 0);
+ 	}
+ 	if (i == ADC5_POLLS)
+ 		return (ETIMEDOUT);
+@@ -272,9 +284,9 @@ static void
+ update(struct pro1x_battery_softc *sc)
+ {
+ 	struct timespec now, d;
+-	int vbat, ibat, usbin, est, max_anchor, new_cap;
++	int vbat, ibat, usbin, est, max_anchor, new_cap, new_status;
+ 	int64_t dq, est_q, dt_ms = 0, gap_ms = 0;
+-	bool usb, charging, full, gap = false, long_gap = false;
++	bool usb, charging, full, gap = false, long_gap = false, changed;
+ 
+ 	if (read_vbat(sc, &vbat) != 0 || adc_convert(sc, &sc->usbin, &usbin) !=
+ 	    0 || read_ibat(sc, &ibat) != 0)
+@@ -287,7 +299,7 @@ update(struct pro1x_battery_softc *sc)
+ 	if (sc->have_t) {
+ 		timespecsub(&now, &sc->last_t, &d);
+ 		dt_ms = (int64_t)d.tv_sec * 1000 + d.tv_nsec / 1000000;
+-		if (dt_ms > GAP_MS) {
++		if (dt_ms > GAP_MS(sc)) {
+ 			gap = true;
+ 			gap_ms = MIN(dt_ms, GAP_MAX_CHARGE_MS);
+ 			dt_ms = 0;
+@@ -344,10 +356,14 @@ update(struct pro1x_battery_softc *sc)
+ 				sc->reanchor_left = 0;
+ 			}
+ 		} else if (abs(sc->i_f) < max_anchor && est > 0) {
+-			sc->q_uah += (est_q - sc->q_uah) / ANCHOR_POLLS;
++			sc->q_uah += (est_q - sc->q_uah) *
++			    MIN(dt_ms, ANCHOR_POLLS * POLL_S * 1000) /
++			    (ANCHOR_POLLS * POLL_S * 1000);
+ 		} else if (!charging && abs(sc->i_f) < ANCHOR_LOAD_MAX_UA &&
+ 		    est > 0) {
+-			sc->q_uah += (est_q - sc->q_uah) / ANCHOR_POLLS_LOAD;
++			sc->q_uah += (est_q - sc->q_uah) *
++			    MIN(dt_ms, ANCHOR_POLLS_LOAD * POLL_S * 1000) /
++			    (ANCHOR_POLLS_LOAD * POLL_S * 1000);
+ 		}
+ 	}
+ 	if (full)
+@@ -369,11 +385,28 @@ update(struct pro1x_battery_softc *sc)
+ 		    new_cap - sc->cap < RATCHET_RELEASE)
+ 			new_cap = sc->cap;
+ 	}
++	changed = new_cap != sc->cap || usb != sc->usb;
+ 	sc->cap = new_cap;
+ 	sc->usb = usb;
+-	sc->status = !usb ? ST_DISCHARGING : sc->v_f >= sc->full_uv ? ST_FULL :
++	new_status = !usb ? ST_DISCHARGING : sc->v_f >= sc->full_uv ? ST_FULL :
+ 	    ST_CHARGING;
++	changed |= new_status != sc->status;
++	sc->status = new_status;
++	sc->interval_s = usb ? POLL_S : MAX(POLL_S, sc->poll_battery_s);
+ 	mtx_unlock(&sc->mtx);
++
++	/*
++	 * Who shows the state (the status LED, through devd) hears of a
++	 * change instead of asking every few seconds, as the N9's mce got
++	 * BME's events
++	 */
++	if (changed) {
++		char data[48];
++
++		snprintf(data, sizeof(data), "status=%s capacity=%d usb=%d",
++		    status_names[new_status], new_cap, usb);
++		devctl_notify("PRO1X", "BATTERY", "CHANGE", data);
++	}
+ }
+ 
+ static void
+@@ -384,7 +417,8 @@ poll_task(void *arg, int pending)
+ 	if (sc->detaching)
+ 		return;
+ 	update(sc);
+-	taskqueue_enqueue_timeout(taskqueue_thread, &sc->poll, POLL_S * hz);
++	taskqueue_enqueue_timeout_sbt(taskqueue_thread, &sc->poll,
++	    sc->interval_s * SBT_1S, sc->interval_s * SBT_1S / 10, 0);
+ }
+ 
+ /* --- sysctl ------------------------------------------------------------ */
+@@ -597,10 +631,16 @@ pro1x_battery_attach(device_t dev)
+ 	    0, "Internal resistance for the load compensation (mOhm)");
+ 	SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "esr_learn", CTLFLAG_RW,
+ 	    &sc->esr_learn, 0, "Learn the internal resistance");
++	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "poll_battery", CTLFLAG_RW,
++	    &sc->poll_battery_s, 0, "Seconds between readings on the battery");
++	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "interval", CTLFLAG_RD,
++	    &sc->interval_s, 0, "Seconds between readings now");
+ 	SYSCTL_ADD_BOOL(ctx, tree, OID_AUTO, "usb", CTLFLAG_RD, &sc->usb, 0,
+ 	    "Charger present");
+ 
+ 	pro1x_battery_sc = sc;
++	sc->interval_s = POLL_S;
++	sc->poll_battery_s = POLL_BATTERY_S;
+ 	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->poll, 0, poll_task, sc);
+ 	taskqueue_enqueue_timeout(taskqueue_thread, &sc->poll, 1);
+ 	device_printf(dev, "gauge subtype %#x, ADC at %#x (vbat %#x 1/%u, "
+-- 
+2.56.0
+

@@ -24,7 +24,7 @@ STATE=/var/lib/hexagonrpcd
 pidfile=/var/run/${name}.pid
 procname=/usr/local/bin/hexagonrpcd
 command=/usr/sbin/daemon
-command_args="-r -R 10 -P ${pidfile} -o /var/log/hexagonrpcd.log ${procname} \
+command_args="-r -R 10 -C 5 -P ${pidfile} -o /var/log/hexagonrpcd.log ${procname} \
     -f /dev/fastrpc-adsp -d adsp -s -R ${STATE}"
 start_precmd=hexagonrpcd_prestart
 

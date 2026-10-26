@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
 Date: Mon, 26 Oct 2026 20:54:50 +0100
-Subject: [PATCH] qcom_dpu: DCS commands to the panel: brightness, display, low
- power modes
+Subject: [PATCH 1/7] qcom_dpu: DCS commands to the panel: brightness, display,
+ low power modes
 
 The DSI controller Linux leaves running can send DCS commands the way
 Linux's msm does: the packet in msm's format in a buffer below 4 GiB
@@ -23,17 +23,19 @@ On top:
   refresh), which the Nokia N9's panel driver (panel-nokia-dsi, "lpm")
   used for its stand-by screen,
 - dev.qcom_dpu.0.partial: the panel's partial mode, only rows "first
-  last" driven (0: all), as the N9's panel had its partial area.
+  last" driven (0: all), as the N9's panel had its partial area,
+- dev.qcom_dpu.0.sleep: display off and sleep in, sleep out and 120 ms
+  later display on (the N9's "off"), for the panel test first.
 
 Untested on the phone.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- sys/arm64/qualcomm/qcom_dpu_handover.c | 393 ++++++++++++++++++++++++-
- 1 file changed, 390 insertions(+), 3 deletions(-)
+ sys/arm64/qualcomm/qcom_dpu_handover.c | 447 ++++++++++++++++++++++++-
+ 1 file changed, 444 insertions(+), 3 deletions(-)
 
 diff --git a/sys/arm64/qualcomm/qcom_dpu_handover.c b/sys/arm64/qualcomm/qcom_dpu_handover.c
-index 7a0806108..e275ada95 100644
+index 7a0806108..9a1f8cc68 100644
 --- a/sys/arm64/qualcomm/qcom_dpu_handover.c
 +++ b/sys/arm64/qualcomm/qcom_dpu_handover.c
 @@ -18,15 +18,32 @@
@@ -82,7 +84,7 @@ index 7a0806108..e275ada95 100644
  #define	CTL0			0x1000
  #define	 CTL_FLUSH		0x018
  #define	 FLUSH_CTL		(1u << 17)
-@@ -59,6 +80,69 @@ static const struct {
+@@ -59,6 +80,72 @@ static const struct {
  #define	SMMU_S2CR(n)		(0xc00 + 4 * (n))
  #define	SMMU_CB_SCTLR		0x000
  
@@ -113,6 +115,8 @@ index 7a0806108..e275ada95 100644
 +#define	DSI_TX_SIZE		256
 +
 +/* MIPI DCS */
++#define	DCS_ENTER_SLEEP_MODE	0x10
++#define	DCS_EXIT_SLEEP_MODE	0x11
 +#define	DCS_ENTER_PARTIAL_MODE	0x12
 +#define	DCS_ENTER_NORMAL_MODE	0x13
 +#define	DCS_SET_PARTIAL_ROWS	0x30
@@ -142,6 +146,7 @@ index 7a0806108..e275ada95 100644
 +	u_int		brightness;	/* percent, the last one written */
 +	int		display_on;
 +	int		lpm;		/* idle mode */
++	int		asleep;		/* display off and sleep in */
 +	u_int		partial_first;	/* partial mode: rows driven */
 +	u_int		partial_last;	/* 0: normal mode */
 +};
@@ -152,7 +157,7 @@ index 7a0806108..e275ada95 100644
  static struct ofw_compat_data compat_data[] = {
  	{ "qcom,sm6115-mdss",	1 },
  	{ NULL,			0 }
-@@ -177,6 +261,301 @@ dpu_dump_dsi(device_t dev, phandle_t node)
+@@ -177,6 +264,352 @@ dpu_dump_dsi(device_t dev, phandle_t node)
  	}
  }
  
@@ -323,6 +328,53 @@ index 7a0806108..e275ada95 100644
 +	return (error);
 +}
 +
++/*
++ * The panel asleep: display off and sleep in (the N9's panel-nokia-dsi
++ * did both for "off"), which also stops the panel's own power supplies'
++ * converters; awake again: sleep out, the 120 ms the panel needs before
++ * it takes commands again, display on. The display controller keeps
++ * sending video meanwhile (that it stops too is the next step).
++ * Untested on the phone: only pro1x.test=panel uses it.
++ */
++static int
++qcom_dpu_sleep_sysctl(SYSCTL_HANDLER_ARGS)
++{
++	struct qcom_dpu_softc *sc = arg1;
++	uint8_t cmd;
++	int on, error;
++
++	on = sc->asleep;
++	error = sysctl_handle_int(oidp, &on, 0, req);
++	if (error != 0 || req->newptr == NULL)
++		return (error);
++	on = on != 0;
++	if (on == sc->asleep)
++		return (0);
++	sx_xlock(&sc->lock);
++	if (on) {
++		cmd = DCS_SET_DISPLAY_OFF;
++		error = dsi_dcs_write(sc, &cmd, 1);
++		pause_sbt("dcsoff", 20 * SBT_1MS, SBT_1MS, 0);
++		cmd = DCS_ENTER_SLEEP_MODE;
++		if (error == 0)
++			error = dsi_dcs_write(sc, &cmd, 1);
++		pause_sbt("dcsslp", 5 * SBT_1MS, SBT_1MS, 0);
++	} else {
++		cmd = DCS_EXIT_SLEEP_MODE;
++		error = dsi_dcs_write(sc, &cmd, 1);
++		pause_sbt("dcswake", 120 * SBT_1MS, 10 * SBT_1MS, 0);
++		cmd = DCS_SET_DISPLAY_ON;
++		if (error == 0)
++			error = dsi_dcs_write(sc, &cmd, 1);
++	}
++	if (error == 0) {
++		sc->asleep = on;
++		sc->display_on = !on;
++	}
++	sx_xunlock(&sc->lock);
++	return (error);
++}
++
 +/* "first last": only those rows of the panel driven; 0: all of them */
 +static int
 +qcom_dpu_partial_sysctl(SYSCTL_HANDLER_ARGS)
@@ -440,6 +492,10 @@ index 7a0806108..e275ada95 100644
 +	    "Low power mode: the panel's idle mode (8 colours, reduced "
 +	    "refresh), as the N9's stand-by screen");
 +	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
++	    OID_AUTO, "sleep", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
++	    sc, 0, qcom_dpu_sleep_sysctl, "I",
++	    "Panel asleep (1: display off, sleep in) or awake (0)");
++	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
 +	    OID_AUTO, "partial", CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
 +	    sc, 0, qcom_dpu_partial_sysctl, "A",
 +	    "Partial mode: only rows \"first last\" of the panel driven, 0: all");
@@ -454,7 +510,7 @@ index 7a0806108..e275ada95 100644
  static int
  qcom_dpu_probe(device_t dev)
  {
-@@ -191,6 +570,7 @@ qcom_dpu_probe(device_t dev)
+@@ -191,6 +624,7 @@ qcom_dpu_probe(device_t dev)
  static int
  qcom_dpu_attach(device_t dev)
  {
@@ -462,7 +518,7 @@ index 7a0806108..e275ada95 100644
  	phandle_t node = ofw_bus_get_node(dev), mdp;
  	bus_addr_t mdp_pa, fb_pa;
  	bus_size_t mdp_size;
-@@ -243,19 +623,26 @@ qcom_dpu_attach(device_t dev)
+@@ -243,19 +677,26 @@ qcom_dpu_attach(device_t dev)
  	    (uintmax_t)fb_pa, stride);
  	pmap_unmapdev((void *)va, mdp_size);
  	dpu_dump_dsi(dev, node);

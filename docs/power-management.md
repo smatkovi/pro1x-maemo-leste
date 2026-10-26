@@ -218,14 +218,38 @@ What FreeBSD 15 does on the Pro1X (`freebsd/`), in the same terms:
 - **Suspend:** none. FreeBSD has no suspend on arm64 (`acpi_sleep_machdep`
   is a stub there), and nothing of the Qualcomm side (RPMh/RPM votes, the
   modem and ADSP) runs under FreeBSD anyway.
-- **CPU frequency:** `powerd` with `qcom_cpufreq_hw`; `hw.acpi.acline`
-  from `pro1x_battery` tells it charger or battery.
-- **Display:** a short press on the power key blanks the X screen (the
-  screensaver). The panel is AMOLED, so black pixels draw no power, but the
-  panel and the DSI link stay on: switching the panel off needs DSI
-  commands (DCS "display off", "sleep in") from `qcom_dpu`, which needs the
-  DSI controller's state as Linux leaves it (the register dump of the
-  first FreeBSD start on the phone).
+- **CPU frequency:** `powerd` with `qcom_cpufreq_hw` (`-a adaptive -b
+  adaptive -n adaptive -p 500`: adaptive also on a charger, where the
+  default polled 4 times a second for ever); `hw.acpi.acline` from
+  `pro1x_battery` tells it charger or battery.
+- **Display:** DCS commands from `qcom_dpu` (`patches/0022`): brightness,
+  display off/on, idle mode, partial mode, sleep in/out; the stand-by
+  screen (`tools/pro1x-standby`) dims, then runs in idle and partial mode,
+  and switches the panel off in a pocket. The display controller still
+  sends 60 frames a second meanwhile (about 560 MB/s of memory traffic):
+  stopping the interface timing engine and the DSI lanes (ULPS) while the
+  panel sleeps is the next step, on the phone.
+- **The rest, checked against the N9 (2026-10-26, built, untested):**
+  - `qcom_wdt` fed every 15 s with 5 s of slack instead of every 5 s
+    (`0023`).
+  - `pro1xkbd` scans a held key every 30 ms instead of 15 (`0024`).
+  - `ufshci`: the kept link gets Linux's Auto-Hibernate (150 ms) if the
+    previous kernel set none (`0025`).
+  - `pro1x_battery`: every 30 s on the battery (5 s on a charger), the ADC
+    waits sleep instead of spinning, changes go to devd (`0026`); the
+    status LED follows those events instead of polling every 10 s, the
+    Hildon battery applet reads every 30 s instead of 10.
+  - the random harvester once a second once seeded instead of ten times
+    (`0027`, `kern.random.harvest.seeded_hz=1`).
+  - `goodix` can sleep (`0028`, `dev.goodix.0.sleep`): the stand-by screen
+    puts it to sleep while the proximity sensor is covered.
+  - cron off; the DSP daemons restart at most 5 times, 10 s apart, instead
+    of every second for ever (Nokia: `respawn limit 3 300`).
+  - ZFS root: lz4 instead of zstd, a transaction group every 30 s instead
+    of 5 (`vfs.zfs.txg.timeout=30`).
+  - Not done, larger: PSCI idle states (above), the I2C of the touchscreen
+    in hardware instead of bit-banged (GPI DMA), sensor batching in the
+    ADSP requests, iphbd (Hildon's shared wake-up heartbeat) as a daemon.
 
 So FreeBSD idles like Leste does today without autosuspend (no SoC sleep
 states), minus the deeper CPU idle states Linux uses while awake.

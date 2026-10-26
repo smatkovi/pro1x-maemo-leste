@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 26 Oct 2026 21:59:19 +0100
+Subject: [PATCH 2/7] qcom_wdt: feed every 15 s with slack
+
+The watchdog bites after about 32 s; feeding it every 5 s woke the CPU
+twice as often as needed. Every 15 s, with 5 s of slack for the callout
+to ride along with other wake-ups (the N9's dsme kicked its watchdog on
+the shared IP heartbeat).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/dev/qcom_wdt/qcom_wdt.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/sys/dev/qcom_wdt/qcom_wdt.c b/sys/dev/qcom_wdt/qcom_wdt.c
+index 9cb5cb912..c5c03d8bf 100644
+--- a/sys/dev/qcom_wdt/qcom_wdt.c
++++ b/sys/dev/qcom_wdt/qcom_wdt.c
+@@ -36,7 +36,13 @@
+ #define	WDT_BITE_TIME	0x14
+ #define	WDT_ENABLE	(1u << 0)
+ #define	WDT_MAX_TICKS	0xfffff		/* about 32 s of the 32 kHz clock */
+-#define	WDT_FEED_S	5
++/*
++ * Fed every 15 s, with 5 s of slack so that the feed can ride along with
++ * other wake-ups (it bites after about 32 s): fewer wake-ups than every
++ * 5 s, as the N9's dsme kept its watchdog kicks on the shared heartbeat
++ */
++#define	WDT_FEED_S	15
++#define	WDT_FEED_SLACK_S 5
+ 
+ static struct ofw_compat_data compat_data[] = {
+ 	{ "qcom,apss-wdt-sm6115",	1 },
+@@ -62,7 +68,8 @@ qcom_wdt_feed(void *arg)
+ 		return;
+ 	}
+ 	bus_write_4(sc->res, WDT_RST, 1);
+-	callout_reset(&sc->feed, WDT_FEED_S * hz, qcom_wdt_feed, sc);
++	callout_reset_sbt(&sc->feed, WDT_FEED_S * SBT_1S,
++	    WDT_FEED_SLACK_S * SBT_1S, qcom_wdt_feed, sc, 0);
+ }
+ 
+ static int
+-- 
+2.56.0
+

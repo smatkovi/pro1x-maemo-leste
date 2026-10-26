@@ -1,22 +1,19 @@
 #!/bin/sh
 #
 # PROVIDE: pro1x_statusled
-# REQUIRE: DAEMON
+# REQUIRE: DAEMON devd
 # KEYWORD: nojail shutdown
 #
 # F(x)tec Pro1X: the RGB status LED shows charging and full, as on Leste
-# (/usr/local/libexec/pro1x-statusled).
+# (/usr/local/libexec/pro1x-statusled): set once at boot, then by devd on
+# every change pro1x_battery reports (etc/devd/pro1x.conf).
 
 . /etc/rc.subr
 
 name="pro1x_statusled"
 rcvar="pro1x_statusled_enable"
-pidfile="/var/run/${name}.pid"
-procname="/usr/local/libexec/pro1x-statusled"
-command_interpreter="/bin/sh"
-command="/usr/sbin/daemon"
-command_args="-p ${pidfile} -t ${name} ${procname}"
-start_precmd="[ -c /dev/led/status_red ]"
+start_cmd="/usr/local/libexec/pro1x-statusled"
+stop_cmd="/usr/local/libexec/pro1x-statusled off"
 
 load_rc_config $name
 : ${pro1x_statusled_enable:="YES"}

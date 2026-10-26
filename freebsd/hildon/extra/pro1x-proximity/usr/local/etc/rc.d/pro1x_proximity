@@ -20,6 +20,6 @@ load_rc_config $name
 pidfile=/var/run/${name}.pid
 procname=/usr/local/sbin/pro1x-proximity
 command=/usr/sbin/daemon
-command_args="-r -R 5 -P ${pidfile} -o /var/log/pro1x-proximity.log ${procname}"
+command_args="-r -R 10 -C 5 -P ${pidfile} -o /var/log/pro1x-proximity.log ${procname}"
 
 run_rc_command "$1"

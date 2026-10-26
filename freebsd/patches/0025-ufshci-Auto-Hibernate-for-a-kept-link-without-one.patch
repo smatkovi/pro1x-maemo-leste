@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 26 Oct 2026 21:59:19 +0100
+Subject: [PATCH 4/7] ufshci: Auto-Hibernate for a kept link without one
+
+The link kept from the previous kernel gets its Auto-Hibernate timer
+back; if that kernel had none, Linux's default: Hibern8 after 150 ms
+without requests, left by the controller with the next one, so the link
+does not stay active between requests.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/dev/ufshci/ufshci_ctrlr.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/sys/dev/ufshci/ufshci_ctrlr.c b/sys/dev/ufshci/ufshci_ctrlr.c
+index e536ebbc2..2b1cfa1cf 100644
+--- a/sys/dev/ufshci/ufshci_ctrlr.c
++++ b/sys/dev/ufshci/ufshci_ctrlr.c
+@@ -398,9 +398,18 @@ ufshci_ctrlr_start(struct ufshci_controller *ctrlr)
+ 
+ 	/* TODO: Configure Background Operations */
+ 
+-	/* Hand the kept link its Auto-Hibernate back */
+-	if (ctrlr->is_link_kept)
++	/*
++	 * Hand the kept link its Auto-Hibernate back; if the previous kernel
++	 * had none, Linux's default: the link goes to Hibern8 after 150 ms
++	 * without requests (timer scale 3: 1 ms units), and back by itself
++	 * with the next one
++	 */
++	if (ctrlr->is_link_kept) {
++		if (ctrlr->kept_ahit == 0)
++			ctrlr->kept_ahit = 3 << UFSHCI_AHIT_REG_TS_SHIFT | 150;
++		ufshci_printf(ctrlr, "Auto-Hibernate %#x\n", ctrlr->kept_ahit);
+ 		ufshci_mmio_write_4(ctrlr, ahit, ctrlr->kept_ahit);
++	}
+ 
+ 	if (ufshci_sim_attach(ctrlr) != 0) {
+ 		ufshci_ctrlr_fail(ctrlr, false);
+-- 
+2.56.0
+

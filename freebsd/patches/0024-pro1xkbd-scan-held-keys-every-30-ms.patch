@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 26 Oct 2026 21:59:19 +0100
+Subject: [PATCH 3/7] pro1xkbd: scan held keys every 30 ms
+
+The AW9523B interrupts on input changes, not on the release of a held
+key, so the matrix is scanned while a key is down: every 30 ms instead
+of 15 still catches the shortest presses with half the I2C traffic and
+wake-ups.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/dev/iicbus/pro1x_kbd.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/sys/dev/iicbus/pro1x_kbd.c b/sys/dev/iicbus/pro1x_kbd.c
+index 687efbc32..c48f0f21f 100644
+--- a/sys/dev/iicbus/pro1x_kbd.c
++++ b/sys/dev/iicbus/pro1x_kbd.c
+@@ -59,7 +59,12 @@
+ #define	AW_SOFT_RESET	0x7f
+ 
+ #define	NLINES		8
+-#define	POLL_MS		15
++/*
++ * While a key is down the matrix is scanned every POLL_MS (the AW9523B
++ * only interrupts on changes of its inputs, not on release of a held
++ * key): 30 ms still catches the shortest presses and halves the scans
++ */
++#define	POLL_MS		30
+ #define	SCAN_RETRIES	10
+ #define	SETTLE_US	20
+ 
+-- 
+2.56.0
+
