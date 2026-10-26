@@ -55,17 +55,27 @@ tools/pro1x-autosuspend/wakemeas.sh 60
 
 ## Test protocol (with someone at the device)
 
+First the current `pro1x-autosuspend` (see "Changes after the first
+suspends") compiled in Leste and in the MeeGo copy: the `gcc` line of
+`scripts/46-sensor-stack.sh`. An older `/etc/pro1x-autosuspend.conf` may
+stay: the new settings have their defaults in the program.
+
 Over Wi-Fi (USB gets disconnected when unplugged), display off:
 
 1. After the reboot that loads the new `qcom_glink_smem`:
    `cat /sys/kernel/debug/wakeup_sources | grep glink` lists the modem edge.
-2. One suspend with an RTC wake-up, on USB:
-   `pro1x-autosuspend --test 20`. Expected: "resumed after ~20 s asleep",
-   wake-up interrupt of the RTC alarm. If it does not come back, the power
-   key has to wake it.
+2. One suspend with an RTC wake-up, unplugged (USB does not come back
+   from a suspend yet): `pro1x-autosuspend --test 20`. Expected: "resumed
+   after ~20 s asleep", wake-up interrupt of the RTC alarm, no
+   `sensor_process` crash in `dmesg`. If it does not come back, the power
+   key has to wake it. Afterwards the sensors must still work:
+   `rc-service pro1x-hexagonrpcd status` is started again,
+   `qrtr-lookup | grep ' 400 '` lists the sensor service, and the step
+   counter still counts (`dbus-send --system --print-reply --dest=org.pro1x.Steps
+   /org/pro1x/Steps org.pro1x.Steps.GetSteps` before and after a few
+   steps).
 3. Whether the SoC sleeps: the same line reports `vlow +N, vmin +N`. If both
-   stay 0, repeat with `hciconfig hci0 down`, then unplugged from USB, to
-   find what still holds it.
+   stay 0, repeat with `hciconfig hci0 down` to find what still holds it.
 4. Power key: `pro1x-autosuspend --test 0`, then press the power key.
 5. Incoming call and SMS during a `--test 0` suspend: the modem edge must
    wake the system (interrupt "glink-smem").
@@ -104,3 +114,57 @@ for the step counter during suspend.
 
 So pro1x-autosuspend stays disabled until the sensor stack survives a
 suspend, Bluetooth is no longer an immediate wake-up and USB resumes.
+
+## Changes after the first suspends (2026-10-26, untested)
+
+`pro1x-autosuspend` now does this around every suspend (also with
+`--test`), each a setting in `/etc/pro1x-autosuspend.conf`:
+
+- `StopServices=pro1x-hexagonrpcd`: stopped before the suspend, started
+  again after it. With hexagonrpcd running, a suspend crashes the ADSP's
+  sensor process on other Qualcomm phones too; postmarketOS and Debian
+  stop it around a suspend
+  ([pmaports MR 5400](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/merge_requests/5400),
+  [Debian's README](https://metadata.ftp-master.debian.org/changelogs/main/h/hexagonrpc/stable_README.Debian)).
+  hexagonrpcd only serves the ADSP files (configuration, registry), which
+  it asks for when the sensors start; libssc and iio-sensor-proxy talk to
+  the ADSP over QRTR without it.
+- `NoWakeup=4a8c000.serial`: the Bluetooth UART cannot wake the system.
+  Its wake-up interrupt fired at once. The price: Bluetooth cannot wake the
+  phone (an incoming connection, a headset button), and what the chip sends
+  during the suspend is lost; it reconnects after the next wake-up.
+- `SuspendOnUSB=false`: no suspend while a USB cable is in, by the
+  gadget's state or a USB or mains power supply online (a charger without
+  a host), until the USB controller comes back from a suspend ("HS-PHY not
+  in L2"). On battery, which is what standby time is about, this changes
+  nothing.
+
+## FreeBSD
+
+What FreeBSD 15 does on the Pro1X (`freebsd/`), in the same terms:
+
+- **CPU idle:** `wfi` only, the core's clock stops, nothing more.
+  FreeBSD's arm64 kernel has no deeper idle states. The SM6115's PSCI
+  states are all power-down states (`arm,psci-suspend-param` 0x40000003 for
+  a core, 0x41000044 for a cluster): the core loses its registers, so the
+  kernel would have to save and restore its context around
+  `PSCI_CPU_SUSPEND` (and come back through a warm-boot entry with the MMU
+  off), and the per-CPU generic timer stops with the core, so another timer
+  has to wake it (the SoC's memory-mapped `arm,armv7-timer-mem`, which
+  FreeBSD has no driver for). QEMU's PSCI treats CPU_SUSPEND as `wfi`, so
+  none of that can be tried in the VM.
+- **Suspend:** none. FreeBSD has no suspend on arm64 (`acpi_sleep_machdep`
+  is a stub there), and nothing of the Qualcomm side (RPMh/RPM votes, the
+  modem and ADSP) runs under FreeBSD anyway.
+- **CPU frequency:** `powerd` with `qcom_cpufreq_hw`; `hw.acpi.acline`
+  from `pro1x_battery` tells it charger or battery.
+- **Display:** a short press on the power key blanks the X screen (the
+  screensaver). The panel is AMOLED, so black pixels draw no power, but the
+  panel and the DSI link stay on: switching the panel off needs DSI
+  commands (DCS "display off", "sleep in") from `qcom_dpu`, which needs the
+  DSI controller's state as Linux leaves it (the register dump of the
+  first FreeBSD start on the phone).
+
+So FreeBSD idles like Leste does today without autosuspend (no SoC sleep
+states), minus the deeper CPU idle states Linux uses while awake.
+

@@ -10,7 +10,9 @@
  *
  *   - a call (mce's call state is not "none")
  *   - sound being played or recorded (an ALSA substream RUNNING)
- *   - a data connection over USB (the gadget "configured")
+ *   - a USB cable (the gadget not "not attached"): the USB controller does
+ *     not come back from a suspend yet ("HS-PHY not in L2"); SuspendOnUSB
+ *     lets it suspend anyway
  *   - a file in /run/pro1x-autosuspend/inhibit
  *   - wake-up events in progress and userspace wake locks
  *     (/sys/power/wake_lock), through the wakeup_count handshake
@@ -23,12 +25,22 @@
  * Each suspend is logged with its length, the wake-up interrupt and how
  * often the SoC reached its sleep states (qcom_stats vlow and vmin).
  *
+ * Around each suspend (also with --test):
+ *   - StopServices are stopped and started again after it: hexagonrpcd, as
+ *     on postmarketOS and Debian; the ADSP's sensor process crashes when it
+ *     is running during a suspend (and audio stays broken until a reboot)
+ *   - the devices in NoWakeup cannot wake the system: the Bluetooth UART,
+ *     whose wake-up interrupt fires at once (mainline's hci_qca has no
+ *     in-band sleep for this chip), so Bluetooth cannot wake it either
+ *
  *   pro1x-autosuspend             run (/etc/init.d/pro1x-autosuspend)
  *   pro1x-autosuspend --test N    suspend once now with a wake-up after N s,
  *                                 also while USB is connected
  *
  * Settings: /etc/pro1x-autosuspend.conf, group [autosuspend] with Delay,
- * WakeInterval (0: no periodic wake-up) and StayAwake, all in seconds.
+ * WakeInterval (0: no periodic wake-up) and StayAwake, all in seconds;
+ * StopServices (OpenRC services) and NoWakeup (platform devices) as lists;
+ * SuspendOnUSB (true/false).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -49,6 +61,8 @@
 #define BUSY_RECHECK_S 30
 
 static int delay_s = 30, wake_interval_s = 900, stay_awake_s = 45;
+static gboolean suspend_on_usb;
+static char **stop_services, **no_wakeup;
 static gboolean display_off, call_active;
 static gint64 display_off_us, awake_until_us;
 static guint check_id;
@@ -80,6 +94,40 @@ static gboolean inhibited(void)
 	return dir && g_dir_read_name(dir);
 }
 
+/*
+ * A cable in the USB port: the gadget's state is anything but "not
+ * attached", or a USB or mains supply is online (a charger without a host)
+ */
+static gboolean usb_cable(void)
+{
+	glob_t g;
+	gboolean found = FALSE;
+
+	if (glob("/sys/class/udc/*/state", 0, NULL, &g) == 0) {
+		for (size_t i = 0; i < g.gl_pathc && !found; i++) {
+			g_autofree char *s = NULL;
+			if (g_file_get_contents(g.gl_pathv[i], &s, NULL, NULL))
+				found = strcmp(g_strstrip(s), "not attached") != 0;
+		}
+		globfree(&g);
+	}
+	if (!found && glob("/sys/class/power_supply/*/type", 0, NULL, &g) == 0) {
+		for (size_t i = 0; i < g.gl_pathc && !found; i++) {
+			g_autofree char *type = NULL, *online = NULL, *dir = g_path_get_dirname(g.gl_pathv[i]);
+			g_autofree char *path = g_build_filename(dir, "online", NULL);
+
+			if (!g_file_get_contents(g.gl_pathv[i], &type, NULL, NULL) ||
+			    !g_file_get_contents(path, &online, NULL, NULL))
+				continue;
+			g_strstrip(type);
+			found = (g_str_has_prefix(type, "USB") || !strcmp(type, "Mains")) &&
+				!strcmp(g_strstrip(online), "1");
+		}
+		globfree(&g);
+	}
+	return found;
+}
+
 /* Why the system has to stay up, or NULL */
 static const char *busy(void)
 {
@@ -87,6 +135,8 @@ static const char *busy(void)
 		return "sound";
 	if (glob_any("/sys/class/udc/*/state", "configured"))
 		return "a USB data connection";
+	if (!suspend_on_usb && usb_cable())
+		return "a USB cable";
 	if (inhibited())
 		return "a file in " INHIBIT_DIR;
 	return NULL;
@@ -163,6 +213,53 @@ static void arm_alarm(int s)
 		timerfd_settime(alarm_fd, 0, &its, NULL);
 }
 
+/* rc-service NAME ACTION; TRUE on success */
+static gboolean rc_service(const char *name, const char *action)
+{
+	const char *argv[] = { "rc-service", "--quiet", name, action, NULL };
+	int status = -1;
+
+	if (!g_spawn_sync(NULL, (char **)argv, NULL, G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL |
+			  G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, NULL, NULL, &status, NULL))
+		return FALSE;
+	return g_spawn_check_wait_status(status, NULL);
+}
+
+/*
+ * Before a suspend: the services that must not run during it stopped, the
+ * devices that must not wake it without their wake-up. stopped and wakeup
+ * remember what to give back (restore_after).
+ */
+static void prepare_suspend(GPtrArray *stopped, GPtrArray *wakeup)
+{
+	for (char **n = stop_services; n && *n; n++) {
+		if (!**n || !rc_service(*n, "status"))
+			continue;
+		if (rc_service(*n, "stop"))
+			g_ptr_array_add(stopped, g_strdup(*n));
+		else
+			syslog(LOG_WARNING, "could not stop %s", *n);
+	}
+	for (char **d = no_wakeup; d && *d; d++) {
+		g_autofree char *path = g_strdup_printf("/sys/bus/platform/devices/%s/power/wakeup", *d);
+		g_autofree char *was = NULL;
+
+		if (!**d || !g_file_get_contents(path, &was, NULL, NULL))
+			continue;
+		if (!strcmp(g_strstrip(was), "enabled") && write_str(path, "disabled") == 0)
+			g_ptr_array_add(wakeup, g_steal_pointer(&path));
+	}
+}
+
+static void restore_after(GPtrArray *stopped, GPtrArray *wakeup)
+{
+	for (guint i = 0; i < wakeup->len; i++)
+		write_str(wakeup->pdata[i], "enabled");
+	for (guint i = 0; i < stopped->len; i++)
+		if (!rc_service(stopped->pdata[i], "start"))
+			syslog(LOG_WARNING, "could not start %s again", (char *)stopped->pdata[i]);
+}
+
 /*
  * One suspend with a wake-up timer after alarm_s seconds (0: none).
  * Returns TRUE when the system slept.
@@ -172,6 +269,8 @@ static gboolean suspend_once(int alarm_s)
 	char count[32];
 	struct timespec boot0, mono0, boot1, mono1;
 	guint64 vlow0 = stat_count("vlow"), vmin0 = stat_count("vmin"), expirations;
+	g_autoptr(GPtrArray) stopped = g_ptr_array_new_with_free_func(g_free);
+	g_autoptr(GPtrArray) wakeup = g_ptr_array_new_with_free_func(g_free);
 	int err;
 
 	syslog(LOG_DEBUG, "reading wakeup_count");
@@ -179,11 +278,19 @@ static gboolean suspend_once(int alarm_s)
 		syslog(LOG_WARNING, "cannot read /sys/power/wakeup_count");
 		return FALSE;
 	}
+	/* before the handshake: stopping a service may itself be a wake-up event */
+	prepare_suspend(stopped, wakeup);
+	if (!read_wakeup_count(count, sizeof(count))) {
+		syslog(LOG_WARNING, "cannot read /sys/power/wakeup_count");
+		restore_after(stopped, wakeup);
+		return FALSE;
+	}
 	arm_alarm(alarm_s);
 	/* fails when a wake-up event came after the read */
 	if (write_str("/sys/power/wakeup_count", count) != 0) {
 		syslog(LOG_INFO, "wake-up event in progress, not suspending");
 		arm_alarm(0);
+		restore_after(stopped, wakeup);
 		return FALSE;
 	}
 	syslog(LOG_INFO, "suspending");
@@ -196,6 +303,7 @@ static gboolean suspend_once(int alarm_s)
 	if (alarm_fd >= 0)
 		while (read(alarm_fd, &expirations, sizeof(expirations)) > 0)
 			;
+	restore_after(stopped, wakeup);
 	if (err) {
 		syslog(LOG_WARNING, "suspend failed: %s", strerror(err));
 		return FALSE;
@@ -342,6 +450,18 @@ static void load_config(void)
 	v = g_key_file_get_integer(kf, "autosuspend", "StayAwake", &err);
 	if (!err && v >= 0)
 		stay_awake_s = v;
+	g_clear_error(&err);
+	v = g_key_file_get_boolean(kf, "autosuspend", "SuspendOnUSB", &err);
+	if (!err)
+		suspend_on_usb = v;
+	if (g_key_file_has_key(kf, "autosuspend", "StopServices", NULL)) {
+		g_strfreev(stop_services);
+		stop_services = g_key_file_get_string_list(kf, "autosuspend", "StopServices", NULL, NULL);
+	}
+	if (g_key_file_has_key(kf, "autosuspend", "NoWakeup", NULL)) {
+		g_strfreev(no_wakeup);
+		no_wakeup = g_key_file_get_string_list(kf, "autosuspend", "NoWakeup", NULL, NULL);
+	}
 }
 
 static gboolean quit_cb(gpointer loop)
@@ -364,10 +484,12 @@ int main(int argc, char **argv)
 	alarm_fd = timerfd_create(CLOCK_BOOTTIME_ALARM, TFD_CLOEXEC | TFD_NONBLOCK);
 	if (alarm_fd < 0)
 		syslog(LOG_WARNING, "no wake-up timer (%m): no periodic wake-ups");
+	stop_services = g_strsplit("pro1x-hexagonrpcd", ";", -1);
+	no_wakeup = g_strsplit("4a8c000.serial", ";", -1);
+	load_config();
 	if (test)
 		return suspend_once(atoi(argv[2])) ? 0 : 1;
 
-	load_config();
 	syslog(LOG_INFO, "suspending %d s after the display goes off; wake-ups every %d s, then up for %d s",
 	       delay_s, wake_interval_s, stay_awake_s);
 	loop = g_main_loop_new(NULL, FALSE);

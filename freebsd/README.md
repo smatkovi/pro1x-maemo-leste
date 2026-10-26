@@ -125,6 +125,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | battery, charging | state of charge (`pro1x_battery`); the charger itself runs as the bootloader set it |
 | clock across power off | yes, with Leste's offset (`qcom_rtc`); no wake alarms |
 | CPU frequency, all CPUs | frequency yes; all eight CPUs from `kern.smp.disabled=0` (run 10 tests it) |
+| power management (autosuspend, CPU idle states) | `powerd` only: CPUs idle with `wfi`, no deeper idle states, no suspend on arm64 (`docs/power-management.md`, FreeBSD) |
 | storage | UFS on the link Linux brought up; no SD card |
 | Hildon, Xfce | yes, switchable |
 | USB (network to the PC, host) | not yet: FreeBSD's dwc3 is host only, and Linux takes the controller down at kexec |
