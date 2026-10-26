@@ -76,6 +76,14 @@ Over Wi-Fi (USB gets disconnected when unplugged), display off:
    steps).
 3. Whether the SoC sleeps: the same line reports `vlow +N, vmin +N`. If both
    stay 0, repeat with `hciconfig hci0 down` to find what still holds it.
+   With the MPM device tree (below) first check that the rerouted
+   interrupts still work: power key, volume keys, keyboard slide, touch,
+   and `grep mpm /proc/interrupts` lists the SPMI arbiter and the GPIOs.
+   Then: `vlow`/`vmin` going up proves the MPM hand-over to the RPM;
+   +0 after a good resume means another master (modem, ADSP, CDSP) or an
+   RPM vote (a clock, a regulator, an interconnect) still holds the SoC
+   up, the next thing to find (`/sys/kernel/debug/qcom_stats/` per
+   subsystem: `modem`, `adsp`, `cdsp` sleep counts).
 4. Power key: `pro1x-autosuspend --test 0`, then press the power key.
 5. Incoming call and SMS during a `--test 0` suspend: the modem edge must
    wake the system (interrupt "glink-smem").
@@ -114,6 +122,33 @@ for the step counter during suspend.
 
 So pro1x-autosuspend stays disabled until the sensor stack survives a
 suspend, Bluetooth is no longer an immediate wake-up and USB resumes.
+
+## The MPM (2026-10-26, built, untested)
+
+On RPM-based Qualcomm SoCs the SoC's system sleep states (XO shutdown,
+vlow; vmin) need the MPM: while the SoC sleeps the GIC is off, and the
+MPM, a small interrupt controller in the always-on domain, watches the
+wake-up interrupts and hands them over to the RPM. The last CPU going
+down gives the MPM its list of enabled wake-up interrupts and signals the
+RPM. Mainline's `sm6115.dtsi` has no MPM node (the pinctrl driver has the
+SM6115's GPIO map since 2023, the device tree was never hooked up), so the
+RPM never puts the SoC to sleep, which matches vlow and vmin staying 0.
+Android's kernel (Sailfish on this phone) has it.
+
+`device/kernel/patches/0006-sm6115-hook-up-mpm.patch` adds it as on the
+sister SoCs QCM2290 and SM6375, with the pin map of Qualcomm's own
+`qcom-mpm-bengal.c`: the SPMI arbiter (power key, RTC alarm, charger), the
+GPIOs and the USB SS PHY go through the MPM, which is the parent power
+domain of both CPU clusters. It concerns every system on the mainline
+kernel (Leste, the MeeGo copy, Kali, LuneOS). Built into `out-mpm/` (`OUT=`
+of `30-build-kernel.sh`), so that `out/` and the boot image on the phone
+stay as they are until it is tried: a wrong interrupt route costs the power
+key or touch, at worst the boot (slot B, rollback image as before).
+
+The MPM makes the system sleep states possible, it does not make the
+phone use them while it is awake: with about 170 interrupts a second the
+clusters rarely get down. They pay off together with autosuspend (s2idle,
+where all CPUs stay down until a wake-up).
 
 ## Changes after the first suspends (2026-10-26, untested)
 

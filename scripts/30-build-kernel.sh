@@ -10,7 +10,8 @@ WORK=${WORK:?set WORK=<build-dir>}
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 LINUX=$WORK/build/linux
 NIXOS=$WORK/build/nixos-pro1x
-OUT=$WORK/out
+# OUT=<dir>: the results elsewhere (a kernel to try without touching out/)
+OUT=${OUT:-$WORK/out}
 JOBS=${JOBS:-$(nproc)}
 
 PATCHES=(touch egpio dsi panelgap dpugap audio q6voice camera keyboard leds
