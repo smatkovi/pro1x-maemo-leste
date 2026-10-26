@@ -718,6 +718,8 @@ static void sb_grab(struct standby *sb)
 		      CurrentTime);
 }
 
+static void proximity(struct standby *sb, int near);
+
 /* The proximity sensor on while the stand-by screen shows (pro1x-proximity) */
 static void proximity_watch(struct standby *sb, int on)
 {
@@ -735,6 +737,33 @@ static void proximity_watch(struct standby *sb, int on)
 	dbus_connection_send(sb->sys, m, NULL);
 	dbus_message_unref(m);
 	dbus_connection_flush(sb->sys);
+}
+
+/*
+ * The state now, if the sensor streams already for another watcher
+ * (Changed comes only with a change)
+ */
+static void proximity_query(struct standby *sb)
+{
+	DBusMessage *m, *r;
+	dbus_bool_t near, valid;
+
+	if (!sb->sys)
+		return;
+	m = dbus_message_new_method_call("org.pro1x.Proximity",
+	    "/org/pro1x/Proximity", "org.pro1x.Proximity", "GetNear");
+	if (!m)
+		return;
+	dbus_message_set_auto_start(m, FALSE);
+	r = dbus_connection_send_with_reply_and_block(sb->sys, m, 500, NULL);
+	dbus_message_unref(m);
+	if (!r)
+		return;
+	if (dbus_message_get_args(r, NULL, DBUS_TYPE_BOOLEAN, &near,
+				  DBUS_TYPE_BOOLEAN, &valid, DBUS_TYPE_INVALID) &&
+	    valid)
+		proximity(sb, near != 0);
+	dbus_message_unref(r);
 }
 
 static void dim(struct standby *sb)
@@ -780,6 +809,7 @@ static void sb_show(struct standby *sb)
 	panel_set("lpm", 1);
 	bl_set(standby_bl);
 	proximity_watch(sb, 1);
+	proximity_query(sb);
 }
 
 static void sb_hide(struct standby *sb)
@@ -940,7 +970,9 @@ static int run_x(void)
 			       CWBackPixel | CWOverrideRedirect | CWEventMask, &a);
 	XStoreName(sb.dpy, sb.win, "pro1x-standby");
 	XSelectInput(sb.dpy, RootWindow(sb.dpy, sb.scr), StructureNotifyMask);
-	sb.bus = dbus_bus_get(DBUS_BUS_SESSION, NULL);
+	/* only an existing session bus: libdbus would start one otherwise */
+	if (getenv("DBUS_SESSION_BUS_ADDRESS"))
+		sb.bus = dbus_bus_get(DBUS_BUS_SESSION, NULL);
 	if ((sb.sys = dbus_bus_get(DBUS_BUS_SYSTEM, NULL)))
 		dbus_bus_add_match(sb.sys, "type='signal',"
 		    "interface='org.pro1x.Proximity',member='Changed'", NULL);

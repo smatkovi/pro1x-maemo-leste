@@ -78,7 +78,9 @@ genmon; as on the Nokia N9, dimmed after the display time-out of 30 s
 (`pro1x.display_timeout`) and 3 s later, or on a short press of the
 power key, the N9's stand-by screen: the time, unread notifications and
 the charging state on black, in the panel's low power mode at a low
-brightness, the panel off while the proximity sensor is covered, woken
+brightness, the panel off while the proximity sensor is covered (once
+the DSP stack runs: `hexagonrpcd_enable` and `pro1x_proximity_enable`,
+both off by default until tested), woken
 up by a double tap or the power key; the keyboard light on with key
 presses and off 30 s after the last one, as on the N950
 (`tools/pro1x-standby`, sleeping on X's idle time alarms until something
