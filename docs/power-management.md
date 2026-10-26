@@ -175,6 +175,32 @@ where all CPUs stay down until a wake-up).
   in L2"). On battery, which is what standby time is about, this changes
   nothing.
 
+## The panel's low power modes (2026-10-26, built, untested)
+
+The Nokia N9 ran its stand-by screen with the AMOLED panel in a low power
+mode (panel-nokia-dsi's `lpm`: DCS idle mode, 8 colours at a quarter of the
+refresh, and partial mode, only the panel's partial area driven). The
+Pro1X's panel (BOE BF060Y8M-AJ0) takes the same standard DCS commands:
+
+- Linux: `device/kernel/patches/0007-panel-boe-bf060y8m-aj0-low-power-modes.patch`
+  gives the panel driver `lpm` (0/1: idle mode) and `partial` ("first last"
+  rows, 0: all) next to its backlight, `/sys/class/backlight/*/device/`,
+  as the N9 had `/sys/class/backlight/display0/device/lpm`; both are kept
+  across a power cycle of the panel and sent again on power-up.
+- FreeBSD: `dev.qcom_dpu.0.lpm` and `dev.qcom_dpu.0.partial`
+  (`freebsd/patches/0022`).
+- `tools/pro1x-standby` (the N9's stand-by screen for an X session) uses
+  them: idle mode, only the rows around the clock and icons driven (about
+  a fifth of the panel), the brightness low, the panel off while the
+  proximity sensor is covered. On FreeBSD it runs in the X session;
+  on Leste mce blanks the display itself, so there it needs mce's side
+  (not done yet).
+
+Not possible on this panel: the N9's link power-down between updates
+(ULPS), which needs a command-mode panel with its own frame memory; this
+one runs in video mode, so the display controller keeps sending 60 frames
+a second. A lower refresh in the stand-by screen would be the next step.
+
 ## FreeBSD
 
 What FreeBSD 15 does on the Pro1X (`freebsd/`), in the same terms:

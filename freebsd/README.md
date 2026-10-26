@@ -78,7 +78,9 @@ genmon; as on the Nokia N9, dimmed after the display time-out of 30 s
 (`pro1x.display_timeout`) and 3 s later, or on a short press of the
 power key, the N9's stand-by screen: the time, unread notifications and
 the charging state on black, in the panel's low power mode at a low
-brightness, the panel off while the proximity sensor is covered (once
+brightness with only the rows around the content driven (partial mode;
+`pro1x.standby_partial=0` drives all of them), the panel off while the
+proximity sensor is covered (once
 the DSP stack runs: `hexagonrpcd_enable` and `pro1x_proximity_enable`,
 both off by default until tested), woken
 up by a double tap or the power key; the keyboard light on with key
@@ -99,7 +101,7 @@ shows charging (orange) and full (green), as on Leste
 `freebsd/cmdline` on userdata (it overrides `pro1x.env`, `patches/0018`;
 `kern.smp.disabled=0` starts all eight CPUs): `pro1x.root=ram` stays in
 the RAM root; `pro1x.test=panel` steps through brightness, low power
-mode and panel off/on with times on the console; `pro1x.test=1` makes
+mode, partial mode and panel off/on with times on the console; `pro1x.test=1` makes
 the full system report, cycle the
 status LED and the vibration motor, start X for 40 s
 (`pro1x.test=switch`: switching to the other desktop after 20 s), keep a
@@ -113,7 +115,7 @@ after boot (`patches/0013`), so that unattended tests always end.
 | | |
 | --- | --- |
 | console | `vt_simplefb` on the bootloader's framebuffer; RAM console (`0003`) |
-| display | `qcom_dpu` (`0017`): Linux's msm keeps the display running across kexec (`device/kernel/patches/0005`), FreeBSD points its scanout at the bootloader's framebuffer (SMMU context of the display bypassed): without it the screen stays black, since msm drives the display from the boot menu on. `0022`: DCS commands to the panel the way msm sends them (command DMA between frames, low power mode): the brightness as `backlight(4)` (`backlight(8)`, 0-100 %), `dev.qcom_dpu.0.display` (panel off/on), `dev.qcom_dpu.0.lpm` (the panel's idle mode, 8 colours at a reduced refresh, as the N9's panel driver did for its stand-by screen) |
+| display | `qcom_dpu` (`0017`): Linux's msm keeps the display running across kexec (`device/kernel/patches/0005`), FreeBSD points its scanout at the bootloader's framebuffer (SMMU context of the display bypassed): without it the screen stays black, since msm drives the display from the boot menu on. `0022`: DCS commands to the panel the way msm sends them (command DMA between frames, low power mode): the brightness as `backlight(4)` (`backlight(8)`, 0-100 %), `dev.qcom_dpu.0.display` (panel off/on), `dev.qcom_dpu.0.lpm` (the panel's idle mode, 8 colours at a reduced refresh), `dev.qcom_dpu.0.partial` (partial mode: only rows "first last" driven), as the N9's panel driver did for its stand-by screen |
 | watchdog | `qcom_wdt` (`0004`): the boot menu arms the APSS watchdog before the jump, FreeBSD feeds it; a hang resets the phone into the boot menu |
 | GPIOs | `qcom_tlmm_sm6115` (`0006`): GPIOs and their interrupts; on them `gpiokeys` (Shift, Ctrl, Alt, Fn, Home, camera key, the slider switch), `gpioiic` (the touchscreen's bus), `gpioled` (keyboard backlight) |
 | touchscreen | `goodix` (`0007`), GT9286, multi-touch through evdev |
@@ -177,7 +179,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `patches/0019-*` | `aw86224`, the vibration motor |
 | `patches/0020-*` | `qcom_lpg`, the RGB status LED |
 | `patches/0021-*` | LinuxKPI DMA for platform devices (the DSP stack's Wi-Fi, in progress) |
-| `patches/0022-*` | `qcom_dpu`: brightness, panel off/on, low power mode by DCS commands |
+| `patches/0022-*` | `qcom_dpu`: brightness, panel off/on, low power and partial mode by DCS commands |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `rootzfs.sh` | the root image as a ZFS pool |
 | `vm/` | a FreeBSD/arm64 VM on the PC (qemu): packages, ZFS image, tries |

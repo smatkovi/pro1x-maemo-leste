@@ -12,7 +12,13 @@ export GDK_PIXBUF_MODULE_FILE=/var/db/gdk-pixbuf-loaders.cache
 if [ -x /usr/local/bin/pro1x-standby ] && [ "$(kenv -q pro1x.standby)" != off ]; then
 	xset s off
 	t=$(kenv -q pro1x.display_timeout)
-	/usr/local/bin/pro1x-standby -d 403 -s "${t:-30}" &
+	# the panel's partial mode around the content: X is turned clockwise
+	# on the portrait panel (xorg.conf.d/10-pro1x.conf);
+	# pro1x.standby_partial=0 drives all of it
+	r="-R cw"
+	[ "$(kenv -q pro1x.standby_partial)" = 0 ] && r=
+	# shellcheck disable=SC2086
+	/usr/local/bin/pro1x-standby -d 403 -s "${t:-30}" $r &
 else
 	xset s 180 0
 	xset s blank

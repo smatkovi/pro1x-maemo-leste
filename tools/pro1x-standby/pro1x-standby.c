@@ -21,7 +21,10 @@
  * screen runs in the panel's low power mode (idle mode, 8 colours at a
  * reduced refresh: the N9 panel driver's "lpm") at -b % brightness; while
  * the proximity sensor is covered (pro1x-proximity, on only while the
- * stand-by screen shows) the panel is off and nothing is drawn. The
+ * stand-by screen shows) the panel is off and nothing is drawn; with -R
+ * (how X's screen lies on the panel) only the panel rows around the
+ * content are driven (partial mode, as the N9's panel had its partial
+ * area), following it when it moves. The
  * keyboard light follows the N950's mce: on with key presses, off 30 s
  * (-k) after the last one and when the display dims. The program itself
  * sleeps until something happens: X tells it when the idle time passes a
@@ -42,13 +45,15 @@
  * (Linux), the profile from profiled on the session bus.
  *
  *   pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout]
- *                 [-P pidfile] [-t themedir] [-d dpi] [-f font] [-2]
+ *                 [-R none|cw|ccw|inverted] [-P pidfile] [-t themedir]
+ *                 [-d dpi] [-f font] [-2]
  *       runs in the X session (with X's own screen saver off, xset s off)
  *   pro1x-standby -p out.png WIDTHxHEIGHT [options]
  *       draws one frame into a PNG and exits (for tests)
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <math.h>
 #include <poll.h>
 #include <signal.h>
@@ -105,6 +110,8 @@ static int twelve_hour;
 static int dim_timeout = DIM_TIMEOUT_S;
 static int standby_bl = STANDBY_BL;
 static int kbd_timeout = KBD_TIMEOUT_S;
+/* how X's screen lies on the panel's rows, for partial mode; NULL: off */
+static const char *rotation;
 static const char *pidfile = DEFAULT_PIDFILE;
 
 enum charge { CHARGE_NONE, CHARGE_CHARGING, CHARGE_FULL, CHARGE_FAILED };
@@ -407,7 +414,8 @@ static double draw_icon(cairo_t *cr, const char *name, int level,
  * The frame: black, the clock right-aligned at the content's top right
  * corner (right, top), the status row under it, right-aligned too.
  */
-static void draw(cairo_t *cr, const struct state *st, double right, double top)
+static void draw(cairo_t *cr, const struct state *st, double right, double top,
+		 double box[4])
 {
 	PangoLayout *layout;
 	PangoFontDescription *fd;
@@ -453,6 +461,14 @@ static void draw(cairo_t *cr, const struct state *st, double right, double top)
 	}
 	for (int i = 0; i < st->nnotes; i++)
 		x -= draw_icon(cr, st->notes[i], 0, x, y) + mm(SPACING_MM);
+
+	/* what it lit: x0 y0 x1 y1, for the panel's partial mode */
+	if (box) {
+		box[0] = x < right - logical.width ? x : right - logical.width;
+		box[1] = top - mm(CLOCK_SHIFT_MM);
+		box[2] = right;
+		box[3] = top + mm(CLOCK_HEIGHT_MM) + mm(STATUS_MM);
+	}
 }
 
 /*
@@ -483,9 +499,9 @@ static void place(int w, int h, int moves, double *right, double *top)
  */
 #define KBD_LED "/dev/led/kbd-backlight"
 
+#ifdef __FreeBSD__
 static int bl_get(void)
 {
-#ifdef __FreeBSD__
 	struct backlight_props p;
 	int fd = open("/dev/backlight/backlight0", O_RDWR), r = -1;
 
@@ -495,14 +511,10 @@ static int bl_get(void)
 		close(fd);
 	}
 	return r;
-#else
-	return -1;
-#endif
 }
 
 static void bl_set(int pct)
 {
-#ifdef __FreeBSD__
 	struct backlight_props p = { 0 };
 	int fd;
 
@@ -511,23 +523,117 @@ static void bl_set(int pct)
 	p.brightness = pct > 100 ? 100 : pct;
 	ioctl(fd, BACKLIGHTUPDATESTATUS, &p);
 	close(fd);
-#else
-	(void)pct;
-#endif
 }
 
-/* dev.qcom_dpu.0.display / .lpm */
+/* dev.qcom_dpu.0.display / .lpm (patches/0022) */
 static void panel_set(const char *what, int on)
 {
-#ifdef __FreeBSD__
 	char name[64];
 
 	snprintf(name, sizeof(name), "dev.qcom_dpu.0.%s", what);
 	sysctlbyname(name, NULL, NULL, &on, sizeof(on));
-#else
-	(void)what, (void)on;
-#endif
 }
+
+/* only rows first..last driven; last 0: all of them */
+static void panel_partial(int first, int last)
+{
+	char v[32];
+
+	if (last > 0)
+		snprintf(v, sizeof(v), "%d %d", first, last);
+	else
+		strlcpy(v, "0", sizeof(v));
+	sysctlbyname("dev.qcom_dpu.0.partial", NULL, NULL, v, strlen(v) + 1);
+}
+#else
+/*
+ * Linux: the panel's backlight device (the Pro1X's panel driver with
+ * device/kernel/patches/0007: lpm and partial next to it, as the N9 had
+ * /sys/class/backlight/display0/device/lpm)
+ */
+static const char *bl_dir(void)
+{
+	static char dir[256];
+	glob_t g;
+
+	if (!dir[0] && glob("/sys/class/backlight/*", 0, NULL, &g) == 0) {
+		snprintf(dir, sizeof(dir), "%s", g.gl_pathv[0]);
+		globfree(&g);
+	}
+	return dir[0] ? dir : NULL;
+}
+
+static int sys_read(const char *name)
+{
+	char p[320];
+	FILE *f;
+	int v = -1;
+
+	if (!bl_dir())
+		return -1;
+	snprintf(p, sizeof(p), "%s/%s", bl_dir(), name);
+	if ((f = fopen(p, "r"))) {
+		if (fscanf(f, "%d", &v) != 1)
+			v = -1;
+		fclose(f);
+	}
+	return v;
+}
+
+static void sys_write(const char *name, const char *v)
+{
+	char p[320];
+	int fd;
+
+	if (!bl_dir())
+		return;
+	snprintf(p, sizeof(p), "%s/%s", bl_dir(), name);
+	if ((fd = open(p, O_WRONLY)) < 0)
+		return;
+	if (write(fd, v, strlen(v)) < 0) {
+		/* the panel may not have it */
+	}
+	close(fd);
+}
+
+static int bl_get(void)
+{
+	int b = sys_read("brightness"), max = sys_read("max_brightness");
+
+	return b < 0 || max <= 0 ? -1 : (b * 100 + max / 2) / max;
+}
+
+static void bl_set(int pct)
+{
+	int max = sys_read("max_brightness");
+	char v[16];
+
+	if (pct < 0 || max <= 0)
+		return;
+	snprintf(v, sizeof(v), "%d", (pct > 100 ? 100 : pct) * max / 100);
+	sys_write("brightness", v);
+}
+
+/* display: the backlight's power (the panel driver writes 0 then) */
+static void panel_set(const char *what, int on)
+{
+	if (!strcmp(what, "display"))
+		sys_write("bl_power", on ? "0" : "4");
+	else
+		sys_write("device/lpm", on ? "1" : "0");
+}
+
+static void panel_partial(int first, int last)
+{
+	char v[32];
+
+	if (last > 0)
+		snprintf(v, sizeof(v), "%d %d", first, last);
+	else
+		snprintf(v, sizeof(v), "0");
+	sys_write("device/partial", v);
+}
+#endif
 
 static void kbd_light(int on)
 {
@@ -602,6 +708,7 @@ struct standby {
 	int moves;
 	time_t moved, shown_min;
 	double right, top;
+	int part_first, part_last;	/* partial mode as applied, or 0 */
 	struct state st;
 	Time tap_time;			/* the last touch, for double taps */
 	int tap_x, tap_y;
@@ -691,10 +798,53 @@ static void go_active(struct standby *sb)
 	arm(sb, base + dim_timeout * 1000LL, base > 500 ? base : 0);
 }
 
+/*
+ * Partial mode: the panel rows under the lit area (and 2 mm more each
+ * side). Panel rows run along X's x axis when X is turned by a quarter
+ * (cw: row = x, ccw: row = width - 1 - x), along y otherwise.
+ */
+static void sb_partial(struct standby *sb, const double box[4])
+{
+	double a, b, n, margin = mm(2);
+	int first, last;
+
+	if (!rotation)
+		return;
+	if (!strcmp(rotation, "cw") || !strcmp(rotation, "ccw")) {
+		n = sb->w;
+		a = box[0];
+		b = box[2];
+	} else {
+		n = sb->h;
+		a = box[1];
+		b = box[3];
+	}
+	if (!strcmp(rotation, "ccw") || !strcmp(rotation, "inverted")) {
+		double t = n - 1 - b;
+
+		b = n - 1 - a;
+		a = t;
+	}
+	first = a - margin > 0 ? (int)(a - margin) : 0;
+	last = b + margin < n - 1 ? (int)(b + margin) : (int)n - 1;
+	if (last <= first || (first == sb->part_first && last == sb->part_last))
+		return;
+	panel_partial(first, last);
+	sb->part_first = first;
+	sb->part_last = last;
+	{
+		char m[48];
+
+		snprintf(m, sizeof(m), "partial rows %d-%d", first, last);
+		debug(m);
+	}
+}
+
 static void sb_draw(struct standby *sb, int full)
 {
 	cairo_surface_t *s;
 	cairo_t *cr;
+	double box[4];
 
 	if (sb->near)
 		return;
@@ -702,11 +852,12 @@ static void sb_draw(struct standby *sb, int full)
 	    DefaultVisual(sb->dpy, sb->scr), sb->w, sb->h);
 	cr = cairo_create(s);
 	read_state(&sb->st, sb->bus, full);
-	draw(cr, &sb->st, sb->right, sb->top);
+	draw(cr, &sb->st, sb->right, sb->top, box);
 	cairo_destroy(cr);
 	cairo_surface_destroy(s);
 	XFlush(sb->dpy);
 	sb->shown_min = time(NULL) / 60;
+	sb_partial(sb, box);
 }
 
 /* All input to the stand-by window, so that touches and keys reach nothing */
@@ -820,6 +971,10 @@ static void sb_hide(struct standby *sb)
 	if (sb->near)
 		panel_set("display", 1);
 	sb->near = 0;
+	if (sb->part_last) {
+		panel_partial(0, 0);
+		sb->part_first = sb->part_last = 0;
+	}
 	panel_set("lpm", 0);
 	XUngrabPointer(sb->dpy, CurrentTime);
 	XUngrabKeyboard(sb->dpy, CurrentTime);
@@ -1159,7 +1314,7 @@ static int run_preview(const char *out, const char *size)
 		}
 	}
 	place(w, h, 0, &right, &top);
-	draw(cr, &st, right, top);
+	draw(cr, &st, right, top, NULL);
 	cairo_destroy(cr);
 	if (cairo_surface_write_to_png(s, out) != CAIRO_STATUS_SUCCESS) {
 		fprintf(stderr, "pro1x-standby: cannot write %s\n", out);
@@ -1173,7 +1328,8 @@ static void usage(void)
 {
 	fprintf(stderr,
 	    "usage: pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout]\n"
-	    "                     [-P pidfile] [-t themedir] [-d dpi] [-f font] [-2]\n"
+	    "                     [-R none|cw|ccw|inverted] [-P pidfile]\n"
+	    "                     [-t themedir] [-d dpi] [-f font] [-2]\n"
 	    "       pro1x-standby -p out.png WIDTHxHEIGHT [options]\n");
 	exit(2);
 }
@@ -1183,8 +1339,14 @@ int main(int argc, char **argv)
 	const char *preview = NULL;
 	int c;
 
-	while ((c = getopt(argc, argv, "s:b:k:P:t:d:f:p:2h")) != -1) {
+	while ((c = getopt(argc, argv, "s:b:k:R:P:t:d:f:p:2h")) != -1) {
 		switch (c) {
+		case 'R':
+			if (strcmp(optarg, "none") && strcmp(optarg, "cw") &&
+			    strcmp(optarg, "ccw") && strcmp(optarg, "inverted"))
+				usage();
+			rotation = optarg;
+			break;
 		case 's': dim_timeout = atoi(optarg); break;
 		case 'b': standby_bl = atoi(optarg); break;
 		case 'k': kbd_timeout = atoi(optarg); break;

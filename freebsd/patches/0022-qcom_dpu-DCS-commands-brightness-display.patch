@@ -2,7 +2,7 @@ From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
 Date: Mon, 26 Oct 2026 20:54:50 +0100
 Subject: [PATCH] qcom_dpu: DCS commands to the panel: brightness, display, low
- power mode
+ power modes
 
 The DSI controller Linux leaves running can send DCS commands the way
 Linux's msm does: the packet in msm's format in a buffer below 4 GiB
@@ -21,20 +21,22 @@ On top:
 - dev.qcom_dpu.0.display: DCS display off/on (a pocket),
 - dev.qcom_dpu.0.lpm: the panel's idle mode (8 colours, reduced
   refresh), which the Nokia N9's panel driver (panel-nokia-dsi, "lpm")
-  used for its stand-by screen.
+  used for its stand-by screen,
+- dev.qcom_dpu.0.partial: the panel's partial mode, only rows "first
+  last" driven (0: all), as the N9's panel had its partial area.
 
 Untested on the phone.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- sys/arm64/qualcomm/qcom_dpu_handover.c | 333 ++++++++++++++++++++++++-
- 1 file changed, 330 insertions(+), 3 deletions(-)
+ sys/arm64/qualcomm/qcom_dpu_handover.c | 393 ++++++++++++++++++++++++-
+ 1 file changed, 390 insertions(+), 3 deletions(-)
 
 diff --git a/sys/arm64/qualcomm/qcom_dpu_handover.c b/sys/arm64/qualcomm/qcom_dpu_handover.c
-index 7a0806108..d6537b668 100644
+index 7a0806108..e275ada95 100644
 --- a/sys/arm64/qualcomm/qcom_dpu_handover.c
 +++ b/sys/arm64/qualcomm/qcom_dpu_handover.c
-@@ -18,15 +18,31 @@
+@@ -18,15 +18,32 @@
   * DPU 6.3 (SM6115) offsets from Linux's catalog, relative to the "mdp"
   * registers: CTL_0 0x1000, SSPP VIG0 0x4000, DMA0 0x24000.
   *
@@ -45,11 +47,12 @@ index 7a0806108..d6537b668 100644
 + * between two frames of video, in low power mode as the panel asks): the
 + * brightness as a backlight(9) device (backlight(8), 0-100 % for the
 + * panel's 0-255), the display switched off and on (sysctl
-+ * dev.qcom_dpu.0.display) and the panel's idle mode, 8 colours at a
-+ * reduced refresh (dev.qcom_dpu.0.lpm), which is what the Nokia N9's
-+ * panel driver (panel-nokia-dsi, "lpm") used for its stand-by screen, for
-+ * the stand-by screen and a pocket. Linux's DSI and DMA trigger settings
-+ * are kept as they are and checked first.
++ * dev.qcom_dpu.0.display), the panel's idle mode, 8 colours at a
++ * reduced refresh (dev.qcom_dpu.0.lpm), and its partial mode, only some
++ * rows driven (dev.qcom_dpu.0.partial, "first last" or 0), which is what
++ * the Nokia N9's panel driver (panel-nokia-dsi, "lpm", partial area) used
++ * for its stand-by screen, for the stand-by screen and a pocket. Linux's
++ * DSI and DMA trigger settings are kept as they are and checked first.
   */
  
  #include <sys/param.h>
@@ -68,7 +71,7 @@ index 7a0806108..d6537b668 100644
  
  #include <vm/vm.h>
  #include <vm/pmap.h>
-@@ -36,6 +52,10 @@
+@@ -36,6 +53,10 @@
  #include <dev/ofw/ofw_bus_subr.h>
  #include <dev/ofw/ofw_subr.h>
  
@@ -79,7 +82,7 @@ index 7a0806108..d6537b668 100644
  #define	CTL0			0x1000
  #define	 CTL_FLUSH		0x018
  #define	 FLUSH_CTL		(1u << 17)
-@@ -59,6 +79,61 @@ static const struct {
+@@ -59,6 +80,69 @@ static const struct {
  #define	SMMU_S2CR(n)		(0xc00 + 4 * (n))
  #define	SMMU_CB_SCTLR		0x000
  
@@ -110,6 +113,9 @@ index 7a0806108..d6537b668 100644
 +#define	DSI_TX_SIZE		256
 +
 +/* MIPI DCS */
++#define	DCS_ENTER_PARTIAL_MODE	0x12
++#define	DCS_ENTER_NORMAL_MODE	0x13
++#define	DCS_SET_PARTIAL_ROWS	0x30
 +#define	DCS_SET_DISPLAY_OFF	0x28
 +#define	DCS_SET_DISPLAY_ON	0x29
 +#define	DCS_EXIT_IDLE_MODE	0x38
@@ -136,12 +142,17 @@ index 7a0806108..d6537b668 100644
 +	u_int		brightness;	/* percent, the last one written */
 +	int		display_on;
 +	int		lpm;		/* idle mode */
++	u_int		partial_first;	/* partial mode: rows driven */
++	u_int		partial_last;	/* 0: normal mode */
 +};
++
++/* The panel's rows (BOE BF060Y8M-AJ0, portrait) */
++#define	PANEL_ROWS		2160
 +
  static struct ofw_compat_data compat_data[] = {
  	{ "qcom,sm6115-mdss",	1 },
  	{ NULL,			0 }
-@@ -177,6 +252,250 @@ dpu_dump_dsi(device_t dev, phandle_t node)
+@@ -177,6 +261,301 @@ dpu_dump_dsi(device_t dev, phandle_t node)
  	}
  }
  
@@ -312,6 +323,53 @@ index 7a0806108..d6537b668 100644
 +	return (error);
 +}
 +
++/* "first last": only those rows of the panel driven; 0: all of them */
++static int
++qcom_dpu_partial_sysctl(SYSCTL_HANDLER_ARGS)
++{
++	struct qcom_dpu_softc *sc = arg1;
++	char buf[32];
++	uint8_t cmd[5];
++	u_int first, last;
++	int error;
++
++	if (sc->partial_last != 0)
++		snprintf(buf, sizeof(buf), "%u %u", sc->partial_first,
++		    sc->partial_last);
++	else
++		strlcpy(buf, "0", sizeof(buf));
++	error = sysctl_handle_string(oidp, buf, sizeof(buf), req);
++	if (error != 0 || req->newptr == NULL)
++		return (error);
++	if (sscanf(buf, "%u %u", &first, &last) == 2) {
++		if (last <= first || last >= PANEL_ROWS)
++			return (EINVAL);
++	} else if (strcmp(buf, "0") == 0) {
++		first = last = 0;
++	} else
++		return (EINVAL);
++
++	sx_xlock(&sc->lock);
++	if (last != 0) {
++		cmd[0] = DCS_SET_PARTIAL_ROWS;
++		cmd[1] = first >> 8;
++		cmd[2] = first & 0xff;
++		cmd[3] = last >> 8;
++		cmd[4] = last & 0xff;
++		error = dsi_dcs_write(sc, cmd, 5);
++		cmd[0] = DCS_ENTER_PARTIAL_MODE;
++	} else
++		cmd[0] = DCS_ENTER_NORMAL_MODE;
++	if (error == 0)
++		error = dsi_dcs_write(sc, cmd, 1);
++	if (error == 0) {
++		sc->partial_first = first;
++		sc->partial_last = last;
++	}
++	sx_xunlock(&sc->lock);
++	return (error);
++}
++
 +static void
 +dsi_dma_cb(void *arg, bus_dma_segment_t *segs, int nseg, int error)
 +{
@@ -381,6 +439,10 @@ index 7a0806108..d6537b668 100644
 +	    sc, SWITCH_LPM, qcom_dpu_switch_sysctl, "I",
 +	    "Low power mode: the panel's idle mode (8 colours, reduced "
 +	    "refresh), as the N9's stand-by screen");
++	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
++	    OID_AUTO, "partial", CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
++	    sc, 0, qcom_dpu_partial_sysctl, "A",
++	    "Partial mode: only rows \"first last\" of the panel driven, 0: all");
 +	device_printf(dev, "DCS commands over DSI at %#jx (buffer %#jx)\n",
 +	    (uintmax_t)pa, (uintmax_t)sc->buf_pa);
 +	return;
@@ -392,7 +454,7 @@ index 7a0806108..d6537b668 100644
  static int
  qcom_dpu_probe(device_t dev)
  {
-@@ -191,6 +510,7 @@ qcom_dpu_probe(device_t dev)
+@@ -191,6 +570,7 @@ qcom_dpu_probe(device_t dev)
  static int
  qcom_dpu_attach(device_t dev)
  {
@@ -400,7 +462,7 @@ index 7a0806108..d6537b668 100644
  	phandle_t node = ofw_bus_get_node(dev), mdp;
  	bus_addr_t mdp_pa, fb_pa;
  	bus_size_t mdp_size;
-@@ -243,19 +563,26 @@ qcom_dpu_attach(device_t dev)
+@@ -243,19 +623,26 @@ qcom_dpu_attach(device_t dev)
  	    (uintmax_t)fb_pa, stride);
  	pmap_unmapdev((void *)va, mdp_size);
  	dpu_dump_dsi(dev, node);

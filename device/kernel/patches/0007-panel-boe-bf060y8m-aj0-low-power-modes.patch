@@ -1,0 +1,174 @@
+diff --git a/drivers/gpu/drm/panel/panel-boe-bf060y8m-aj0.c b/drivers/gpu/drm/panel/panel-boe-bf060y8m-aj0.c
+index d83b2d20e0..04c58770ce 100644
+--- a/drivers/gpu/drm/panel/panel-boe-bf060y8m-aj0.c
++++ b/drivers/gpu/drm/panel/panel-boe-bf060y8m-aj0.c
+@@ -34,6 +34,18 @@ struct boe_bf060y8m_aj0 {
+ 	struct mipi_dsi_device *dsi;
+ 	struct regulator_bulk_data vregs[BF060Y8M_VREG_MAX];
+ 	struct gpio_desc *reset_gpio;
++
++	/*
++	 * Low power modes as the Nokia N9's panel driver offered them for its
++	 * stand-by screen (panel-nokia-dsi "lpm"): the panel's idle mode (8
++	 * colours, reduced refresh) and its partial mode (only rows
++	 * partial_start..partial_end driven). Kept across power cycles of
++	 * the panel and applied again on power-up.
++	 */
++	struct mutex lock;
++	bool on;
++	bool lpm;
++	u16 partial_start, partial_end;	/* end 0: normal mode */
+ };
+ 
+ static inline
+@@ -87,6 +99,30 @@ static int boe_bf060y8m_aj0_on(struct boe_bf060y8m_aj0 *boe)
+ 	return dsi_ctx.accum_err;
+ }
+ 
++/* Idle and partial mode as asked for; with the lock held, the panel on */
++static int boe_bf060y8m_aj0_set_low_power(struct boe_bf060y8m_aj0 *boe)
++{
++	struct mipi_dsi_multi_context dsi_ctx = { .dsi = boe->dsi };
++	u8 rows[] = {
++		MIPI_DCS_SET_PARTIAL_ROWS,
++		boe->partial_start >> 8, boe->partial_start & 0xff,
++		boe->partial_end >> 8, boe->partial_end & 0xff,
++	};
++
++	if (boe->partial_end) {
++		mipi_dsi_dcs_write_buffer_multi(&dsi_ctx, rows, sizeof(rows));
++		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_ENTER_PARTIAL_MODE);
++	} else {
++		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_ENTER_NORMAL_MODE);
++	}
++	if (boe->lpm)
++		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_ENTER_IDLE_MODE);
++	else
++		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_EXIT_IDLE_MODE);
++
++	return dsi_ctx.accum_err;
++}
++
+ static void boe_bf060y8m_aj0_off(struct boe_bf060y8m_aj0 *boe)
+ {
+ 	struct mipi_dsi_device *dsi = boe->dsi;
+@@ -140,6 +176,12 @@ static int boe_bf060y8m_aj0_prepare(struct drm_panel *panel)
+ 		goto err_on;
+ 	}
+ 
++	mutex_lock(&boe->lock);
++	boe->on = true;
++	if (boe->lpm || boe->partial_end)
++		boe_bf060y8m_aj0_set_low_power(boe);
++	mutex_unlock(&boe->lock);
++
+ 	return 0;
+ 
+ err_on:
+@@ -159,6 +201,10 @@ static int boe_bf060y8m_aj0_unprepare(struct drm_panel *panel)
+ {
+ 	struct boe_bf060y8m_aj0 *boe = to_boe_bf060y8m_aj0(panel);
+ 
++	mutex_lock(&boe->lock);
++	boe->on = false;
++	mutex_unlock(&boe->lock);
++
+ 	boe_bf060y8m_aj0_off(boe);
+ 
+ 	gpiod_set_value_cansleep(boe->reset_gpio, 1);
+@@ -344,6 +390,79 @@ static int boe_bf060y8m_aj0_init_vregs(struct boe_bf060y8m_aj0 *boe,
+ 	return 0;
+ }
+ 
++static ssize_t lpm_show(struct device *dev, struct device_attribute *attr,
++			char *buf)
++{
++	struct boe_bf060y8m_aj0 *boe = mipi_dsi_get_drvdata(to_mipi_dsi_device(dev));
++
++	return sysfs_emit(buf, "%d\n", boe->lpm);
++}
++
++static ssize_t lpm_store(struct device *dev, struct device_attribute *attr,
++			 const char *buf, size_t len)
++{
++	struct boe_bf060y8m_aj0 *boe = mipi_dsi_get_drvdata(to_mipi_dsi_device(dev));
++	bool lpm;
++	int ret;
++
++	ret = kstrtobool(buf, &lpm);
++	if (ret)
++		return ret;
++
++	mutex_lock(&boe->lock);
++	boe->lpm = lpm;
++	ret = boe->on ? boe_bf060y8m_aj0_set_low_power(boe) : 0;
++	mutex_unlock(&boe->lock);
++
++	return ret ? ret : len;
++}
++static DEVICE_ATTR_RW(lpm);
++
++static ssize_t partial_show(struct device *dev, struct device_attribute *attr,
++			    char *buf)
++{
++	struct boe_bf060y8m_aj0 *boe = mipi_dsi_get_drvdata(to_mipi_dsi_device(dev));
++
++	if (!boe->partial_end)
++		return sysfs_emit(buf, "0\n");
++	return sysfs_emit(buf, "%u %u\n", boe->partial_start, boe->partial_end);
++}
++
++/* "first last" (rows of the panel, 0-based), or 0 for the whole panel */
++static ssize_t partial_store(struct device *dev, struct device_attribute *attr,
++			     const char *buf, size_t len)
++{
++	struct boe_bf060y8m_aj0 *boe = mipi_dsi_get_drvdata(to_mipi_dsi_device(dev));
++	unsigned int first, last;
++	int ret;
++
++	if (sscanf(buf, "%u %u", &first, &last) == 2) {
++		if (last <= first ||
++		    last >= boe_bf060y8m_aj0_mode.vdisplay)
++			return -EINVAL;
++	} else if (!kstrtouint(buf, 0, &first) && first == 0) {
++		last = 0;
++	} else {
++		return -EINVAL;
++	}
++
++	mutex_lock(&boe->lock);
++	boe->partial_start = last ? first : 0;
++	boe->partial_end = last;
++	ret = boe->on ? boe_bf060y8m_aj0_set_low_power(boe) : 0;
++	mutex_unlock(&boe->lock);
++
++	return ret ? ret : len;
++}
++static DEVICE_ATTR_RW(partial);
++
++static struct attribute *boe_bf060y8m_aj0_attrs[] = {
++	&dev_attr_lpm.attr,
++	&dev_attr_partial.attr,
++	NULL
++};
++ATTRIBUTE_GROUPS(boe_bf060y8m_aj0);
++
+ static int boe_bf060y8m_aj0_probe(struct mipi_dsi_device *dsi)
+ {
+ 	struct device *dev = &dsi->dev;
+@@ -367,6 +486,7 @@ static int boe_bf060y8m_aj0_probe(struct mipi_dsi_device *dsi)
+ 				     "Failed to get reset-gpios\n");
+ 
+ 	boe->dsi = dsi;
++	mutex_init(&boe->lock);
+ 	mipi_dsi_set_drvdata(dsi, boe);
+ 
+ 	dsi->lanes = 4;
+@@ -422,6 +542,7 @@ static struct mipi_dsi_driver boe_bf060y8m_aj0_driver = {
+ 	.driver = {
+ 		.name = "panel-sw43404-boe-fhd-amoled",
+ 		.of_match_table = boe_bf060y8m_aj0_of_match,
++		.dev_groups = boe_bf060y8m_aj0_groups,
+ 	},
+ };
+ module_mipi_dsi_driver(boe_bf060y8m_aj0_driver);
