@@ -12,6 +12,7 @@
 #define	_QCOM_DSP_H_
 
 #include <sys/types.h>
+#include <sys/bus.h>
 #include <dev/ofw/openfirm.h>
 
 /* Secure monitor calls (qcom_scm.c) */
@@ -41,5 +42,17 @@ int	qcom_smp2p_in_watch(phandle_t entry, u_int bit, qcom_smp2p_cb_t *cb,
 void	qcom_smp2p_in_unwatch(phandle_t entry, u_int bit);
 int	qcom_smp2p_in_read(phandle_t entry, uint32_t *value);
 int	qcom_smp2p_out_update(phandle_t entry, uint32_t mask, uint32_t value);
+
+/* GLINK over SMEM (qcom_glink.c), the edges of the remote processors */
+struct glink_edge;
+/* a remote processor opened CHANNEL on EDGE (label: "lpass", "mpss", ...) */
+typedef void qcom_glink_user_cb_t(void *arg, struct glink_edge *edge,
+    const char *label, const char *channel);
+int	qcom_glink_edge_start(device_t dev, phandle_t rproc, void **cookie);
+void	qcom_glink_edge_stop(void *cookie);
+void	qcom_glink_register(const char *channel, qcom_glink_user_cb_t *cb,
+	    void *arg);
+void	qcom_glink_unregister(const char *channel);
+struct glink_edge *qcom_glink_find(const char *label);
 
 #endif /* _QCOM_DSP_H_ */

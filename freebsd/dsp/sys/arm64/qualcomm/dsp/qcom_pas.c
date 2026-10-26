@@ -28,6 +28,7 @@
 #include <sys/mutex.h>
 #include <sys/rman.h>
 #include <sys/sx.h>
+#include <sys/taskqueue.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
@@ -92,6 +93,8 @@ struct pas_softc {
 	uint32_t	state;
 	uint32_t	flags;
 	char		crash_reason[128];
+	void		*glink;		/* the GLINK edge while running */
+	struct task	crash_task;
 };
 
 static d_ioctl_t pas_ioctl;
@@ -139,6 +142,7 @@ pas_in_cb(void *arg, u_int bit, bool set)
 			pas_crash_reason(sc);
 			device_printf(sc->dev, "fatal error: %s\n",
 			    sc->crash_reason);
+			taskqueue_enqueue(taskqueue_thread, &sc->crash_task);
 		}
 		if (i == IN_READY && sc->state == QCOM_PAS_STATE_LOADING)
 			sc->state = QCOM_PAS_STATE_RUNNING;
@@ -158,9 +162,24 @@ pas_wdog_intr(void *arg)
 		sc->state = QCOM_PAS_STATE_CRASHED;
 		pas_crash_reason(sc);
 		device_printf(sc->dev, "watchdog: %s\n", sc->crash_reason);
+		taskqueue_enqueue(taskqueue_thread, &sc->crash_task);
 	}
 	wakeup(sc);
 	mtx_unlock(&sc->mtx);
+}
+
+/* After a crash: its GLINK edge goes (the users hear it), in a task */
+static void
+pas_crash_task(void *arg, int pending)
+{
+	struct pas_softc *sc = arg;
+
+	sx_xlock(&sc->sx);
+	if (sc->glink != NULL) {
+		qcom_glink_edge_stop(sc->glink);
+		sc->glink = NULL;
+	}
+	sx_xunlock(&sc->sx);
 }
 
 /* Wait for one of the flags, or a crash; EWOULDBLOCK on timeout */
@@ -283,6 +302,10 @@ pas_start(struct pas_softc *sc, uint32_t timeout_ms)
 		return (error == EWOULDBLOCK ? ETIMEDOUT : error);
 	}
 	device_printf(sc->dev, "running\n");
+	/* its channels: GLINK over SMEM, when it has an edge */
+	if (qcom_glink_edge_start(sc->dev, ofw_bus_get_node(sc->dev),
+	    &sc->glink) != 0)
+		sc->glink = NULL;
 	return (0);
 }
 
@@ -293,6 +316,10 @@ pas_stop(struct pas_softc *sc)
 
 	if (sc->state == QCOM_PAS_STATE_OFF)
 		return (0);
+	if (sc->glink != NULL) {
+		qcom_glink_edge_stop(sc->glink);
+		sc->glink = NULL;
+	}
 	if (sc->stop_xref != 0 && sc->state == QCOM_PAS_STATE_RUNNING) {
 		qcom_smp2p_out_update(sc->stop_xref, 1U << sc->stop_bit,
 		    1U << sc->stop_bit);
@@ -451,6 +478,7 @@ pas_attach(device_t dev)
 	node = ofw_bus_get_node(dev);
 	sx_init(&sc->sx, "qcom_pas");
 	mtx_init(&sc->mtx, device_get_nameunit(dev), NULL, MTX_DEF);
+	TASK_INIT(&sc->crash_task, 0, pas_crash_task, sc);
 
 	if (OF_getencprop(node, "memory-region", cells, sizeof(pcell_t)) <= 0) {
 		device_printf(dev, "no memory-region\n");
