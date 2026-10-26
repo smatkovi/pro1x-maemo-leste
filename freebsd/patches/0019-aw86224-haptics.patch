@@ -1,0 +1,408 @@
+From 1275ea6dadbad28c7732dd2b93f3c1b2314fc6b0 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 26 Oct 2026 05:59:00 +0100
+Subject: [PATCH 1/2] aw86224: Awinic AW86224 haptics as led(4)
+
+The F(x)tec Pro1X's vibration motor, on the keyboard's I2C bus:
+/dev/led/vibrator, so that led(4)'s on/off and blink patterns drive
+it. Continuous resonant drive only, with the register values of the
+Pro1X Leste kernel's driver; the drive levels are sysctls. led(4)
+switches from a callout, the I2C transfers run in a task.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/conf/files.arm64     |   1 +
+ sys/dev/iicbus/aw86224.c | 369 +++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 370 insertions(+)
+ create mode 100644 sys/dev/iicbus/aw86224.c
+
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index 6a4f05ee5..3115783dd 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -740,6 +740,7 @@ arm64/qualcomm/qcom_geni_qup.c			optional geniiic fdt
+ dev/iicbus/controller/qcom/geni_iic.c		optional geniiic
+ dev/iicbus/controller/qcom/geni_iic_fdt.c	optional geniiic fdt
+ dev/iicbus/pro1x_kbd.c				optional pro1xkbd fdt gpiokeys
++dev/iicbus/aw86224.c				optional aw86224 fdt gpio
+ arm64/qualcomm/qcom_cpufreq_hw.c		optional qcom_cpufreq_hw fdt cpufreq
+ arm64/qualcomm/qcom_dpu_handover.c		optional qcom_dpu fdt
+ dev/qcom_spmi/qcom_spmi.c			optional qcom_spmi fdt
+diff --git a/sys/dev/iicbus/aw86224.c b/sys/dev/iicbus/aw86224.c
+new file mode 100644
+index 000000000..8725416e7
+--- /dev/null
++++ b/sys/dev/iicbus/aw86224.c
+@@ -0,0 +1,369 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Awinic AW86224/AW86225 LRA haptics ("awinic,aw86224"), the F(x)tec
++ * Pro1X's vibration motor, as led(4): /dev/led/vibrator, so that
++ * "echo 1 >", "echo 0 >" and led(4)'s blink patterns ("echo f2 >",
++ * "echo m.-. >") drive it.
++ *
++ * Only the chip's continuous resonant drive (CONT) mode, with the
++ * register values of the Pro1X Leste kernel's driver (aw86224.c, from
++ * the vendor's aw8622x driver): no RAM/RTP waveforms, no f0 calibration.
++ * The drive levels are sysctls (dev.aw86224.0.drv1_lvl, drv2_lvl,
++ * d2s_gain) and apply from the next start.
++ *
++ * led(4) switches from a callout, the I2C transfers sleep: the state goes
++ * to a task.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/bus.h>
++#include <sys/gpio.h>
++#include <sys/kernel.h>
++#include <sys/lock.h>
++#include <sys/module.h>
++#include <sys/mutex.h>
++#include <sys/sysctl.h>
++#include <sys/taskqueue.h>
++
++#include <dev/gpio/gpiobusvar.h>
++#include <dev/iicbus/iicbus.h>
++#include <dev/iicbus/iiconf.h>
++#include <dev/led/led.h>
++#include <dev/ofw/ofw_bus.h>
++#include <dev/ofw/ofw_bus_subr.h>
++
++#define	AW_REG_ID		0x00
++#define	 AW_SOFTRESET		0xaa
++#define	AW_REG_PLAYCFG3		0x08
++#define	 AW_PLAY_MODE_MASK	0x03
++#define	 AW_PLAY_MODE_CONT	2
++#define	AW_REG_PLAYCFG4		0x09
++#define	 AW_GO			0x01
++#define	 AW_STOP		0x02
++#define	AW_REG_CONTCFG1		0x18
++#define	AW_REG_CONTCFG5		0x1c
++#define	AW_REG_CONTCFG6		0x1d
++#define	 AW_TRACK_EN		0x80
++#define	AW_REG_CONTCFG7		0x1e
++#define	AW_REG_CONTCFG8		0x1f
++#define	AW_REG_CONTCFG9		0x20
++#define	AW_REG_CONTCFG10	0x21
++#define	AW_REG_CONTCFG11	0x22
++#define	AW_REG_CONTCFG13	0x24
++#define	AW_REG_TRGCFG8		0x3a
++#define	 AW_TRGCFG8_TRIG_MASK	0x18
++#define	 AW_TRGCFG8_DISABLE	(3 << 3)
++#define	AW_REG_GLBRD5		0x3f
++#define	AW_REG_SYSCTRL1		0x43
++#define	 AW_VBAT_MODE_HW	0x80
++#define	 AW_RAMINIT		0x08
++#define	AW_REG_SYSCTRL2		0x44
++#define	 AW_STANDBY		0x40
++#define	 AW_RATE_MASK		0x03
++#define	 AW_RATE_12K		2
++#define	AW_REG_SYSCTRL3		0x45
++#define	AW_REG_SYSCTRL7		0x49
++#define	 AW_D2S_GAIN_MASK	0x07
++#define	AW_REG_PWMCFG1		0x4c
++#define	AW_REG_PWMCFG3		0x4e
++#define	 AW_PWMCFG_PROT_EN	0x80
++#define	AW_REG_DETCFG2		0x52
++#define	 AW_DIAG_GO		0x01
++#define	AW_REG_TRIMCFG1		0x58
++#define	 AW_RL_TRIM_SRC_REG	0x40
++#define	AW_REG_TRIMCFG3		0x5a
++#define	AW_REG_EFRD9		0x64
++#define	AW_REG_ANACFG8		0x77
++#define	 AW_ANACFG8_HDRV_MASK	0xc0
++
++/*
++ * Start-up and sustained drive level (7 bits each, the stock Pro1X device
++ * tree's 0x7f/0x3b) and the output gain code (0-7 = x1, x2, x4, x5, x8,
++ * x10, x20, x40; stock 5), as in the Leste driver.
++ */
++#define	DRV1_LVL_DEFAULT	0x7f
++#define	DRV2_LVL_DEFAULT	0x3b
++#define	D2S_GAIN_STOCK		5
++#define	D2S_GAIN_DEFAULT	6
++
++struct aw86224_softc {
++	device_t		dev;
++	struct mtx		mtx;
++	struct cdev		*led;
++	struct task		task;
++	struct intr_config_hook	hook;
++	gpio_pin_t		reset;
++	bool			ready;
++	bool			want;		/* led(4)'s state */
++	bool			on;		/* the chip's */
++	u_int			drv1_lvl;
++	u_int			drv2_lvl;
++	u_int			d2s_gain;
++};
++
++static int
++aw_write(struct aw86224_softc *sc, uint8_t reg, uint8_t val)
++{
++	return (iicdev_writeto(sc->dev, reg, &val, 1, IIC_WAIT));
++}
++
++static int
++aw_read(struct aw86224_softc *sc, uint8_t reg, uint8_t *val)
++{
++	return (iicdev_readfrom(sc->dev, reg, val, 1, IIC_WAIT));
++}
++
++static int
++aw_update(struct aw86224_softc *sc, uint8_t reg, uint8_t mask, uint8_t val)
++{
++	uint8_t v;
++	int error;
++
++	if ((error = aw_read(sc, reg, &v)) != 0)
++		return (error);
++	return (aw_write(sc, reg, (v & ~mask) | (val & mask)));
++}
++
++static void
++aw_pause(u_int ms)
++{
++	pause_sbt("aw86224", SBT_1MS * ms, 0, 0);
++}
++
++static int
++aw_stop(struct aw86224_softc *sc)
++{
++	uint8_t v;
++	int error;
++
++	if ((error = aw_write(sc, AW_REG_PLAYCFG4, AW_STOP)) != 0)
++		return (error);
++	for (int i = 0; i < 20; i++) {
++		if ((error = aw_read(sc, AW_REG_GLBRD5, &v)) != 0)
++			return (error);
++		v &= 0x0f;
++		if (v == 0 || v == 0x0a)	/* standby, or braked */
++			return (0);
++		aw_pause(3);
++	}
++	return (ETIMEDOUT);
++}
++
++static int
++aw_start(struct aw86224_softc *sc)
++{
++	u_int d1, d2;
++	int error;
++
++	d1 = MAX(1, MIN(sc->drv1_lvl, 0x7f));
++	d2 = MAX(1, MIN(sc->drv2_lvl, 0x7f));
++	if ((error = aw_update(sc, AW_REG_SYSCTRL7, AW_D2S_GAIN_MASK,
++	    MIN(sc->d2s_gain, 7))) != 0 ||
++	    (error = aw_update(sc, AW_REG_PLAYCFG3, AW_PLAY_MODE_MASK,
++	    AW_PLAY_MODE_CONT)) != 0 ||
++	    (error = aw_write(sc, AW_REG_CONTCFG6, AW_TRACK_EN | d1)) != 0 ||
++	    (error = aw_write(sc, AW_REG_CONTCFG7, d2)) != 0)
++		return (error);
++	return (aw_write(sc, AW_REG_PLAYCFG4, AW_GO));
++}
++
++static int
++aw_init(struct aw86224_softc *sc)
++{
++	static const uint8_t sine[4] = { 0x05, 0xb2, 0xff, 0xef };
++	uint8_t v;
++	int error;
++
++	if (sc->reset != NULL) {
++		gpio_pin_set_active(sc->reset, true);
++		aw_pause(3);
++		gpio_pin_set_active(sc->reset, false);
++		aw_pause(5);
++	}
++	if ((error = aw_write(sc, AW_REG_ID, AW_SOFTRESET)) != 0)
++		return (error);
++	aw_pause(4);
++
++	if ((error = aw_update(sc, AW_REG_SYSCTRL2,
++	    AW_RATE_MASK | AW_STANDBY, AW_RATE_12K)) != 0)
++		return (error);
++	for (u_int i = 0; i < nitems(sine); i++)
++		if ((error = aw_write(sc, AW_REG_SYSCTRL3 + i, sine[i])) != 0)
++			return (error);
++
++	aw_update(sc, AW_REG_TRGCFG8, AW_TRGCFG8_TRIG_MASK, AW_TRGCFG8_DISABLE);
++	aw_update(sc, AW_REG_ANACFG8, AW_ANACFG8_HDRV_MASK,
++	    AW_ANACFG8_HDRV_MASK);
++	aw_update(sc, AW_REG_SYSCTRL7, AW_D2S_GAIN_MASK, D2S_GAIN_STOCK);
++	aw_write(sc, AW_REG_CONTCFG13, (6 << 4) | 2);	/* tset, bemf */
++	aw_write(sc, AW_REG_CONTCFG10, 6);		/* brake time */
++	aw_update(sc, AW_REG_CONTCFG5, 0x0f, 8);	/* brake gain */
++	aw_write(sc, AW_REG_CONTCFG8, 4);		/* drv1 time */
++	aw_write(sc, AW_REG_CONTCFG9, 0x14);		/* drv2 time */
++	aw_write(sc, AW_REG_CONTCFG11, 0x12);		/* track margin */
++
++	/* motor protection off */
++	aw_update(sc, AW_REG_PWMCFG1, AW_PWMCFG_PROT_EN, 0);
++	aw_update(sc, AW_REG_PWMCFG3, AW_PWMCFG_PROT_EN, 0);
++
++	/* offset calibration */
++	aw_update(sc, AW_REG_SYSCTRL1, AW_RAMINIT, AW_RAMINIT);
++	aw_update(sc, AW_REG_DETCFG2, AW_DIAG_GO, AW_DIAG_GO);
++	aw_pause(3);
++	aw_update(sc, AW_REG_SYSCTRL1, AW_RAMINIT, 0);
++
++	aw_update(sc, AW_REG_SYSCTRL1, AW_VBAT_MODE_HW, AW_VBAT_MODE_HW);
++	aw_update(sc, AW_REG_TRIMCFG1, AW_RL_TRIM_SRC_REG, AW_RL_TRIM_SRC_REG);
++	aw_update(sc, AW_REG_TRIMCFG3, 0x3f, 0);
++
++	aw_read(sc, AW_REG_CONTCFG1, &v);
++	return (aw_stop(sc));
++}
++
++static void
++aw86224_task(void *arg, int pending __unused)
++{
++	struct aw86224_softc *sc = arg;
++	bool want;
++	int error;
++
++	mtx_lock(&sc->mtx);
++	want = sc->want;
++	mtx_unlock(&sc->mtx);
++	if (!sc->ready || want == sc->on)
++		return;
++	error = want ? aw_start(sc) : aw_stop(sc);
++	if (error != 0)
++		device_printf(sc->dev, "%s failed: %d\n",
++		    want ? "start" : "stop", error);
++	sc->on = want;
++}
++
++static void
++aw86224_led(void *arg, int onoff)
++{
++	struct aw86224_softc *sc = arg;
++
++	mtx_lock(&sc->mtx);
++	sc->want = onoff != 0;
++	mtx_unlock(&sc->mtx);
++	taskqueue_enqueue(taskqueue_thread, &sc->task);
++}
++
++static void
++aw86224_start_hook(void *arg)
++{
++	struct aw86224_softc *sc = arg;
++	uint8_t id, efrd;
++	int error;
++
++	config_intrhook_disestablish(&sc->hook);
++
++	if ((error = aw_init(sc)) != 0) {
++		device_printf(sc->dev, "init failed: %d\n", error);
++		return;
++	}
++	aw_read(sc, AW_REG_ID, &id);
++	aw_read(sc, AW_REG_EFRD9, &efrd);
++	device_printf(sc->dev, "chip id %#04x efrd9 %#04x\n", id, efrd);
++	sc->ready = true;
++	sc->led = led_create(aw86224_led, sc, "vibrator");
++}
++
++static int
++aw86224_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (!ofw_bus_is_compatible(dev, "awinic,aw86224"))
++		return (ENXIO);
++	device_set_desc(dev, "Awinic AW86224 haptics");
++	return (BUS_PROBE_DEFAULT);
++}
++
++static int
++aw86224_attach(device_t dev)
++{
++	struct aw86224_softc *sc = device_get_softc(dev);
++	struct sysctl_ctx_list *ctx = device_get_sysctl_ctx(dev);
++	struct sysctl_oid_list *tree =
++	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev));
++
++	sc->dev = dev;
++	mtx_init(&sc->mtx, device_get_nameunit(dev), "aw86224", MTX_DEF);
++	TASK_INIT(&sc->task, 0, aw86224_task, sc);
++	sc->drv1_lvl = DRV1_LVL_DEFAULT;
++	sc->drv2_lvl = DRV2_LVL_DEFAULT;
++	sc->d2s_gain = D2S_GAIN_DEFAULT;
++
++	if (gpio_pin_get_by_ofw_property(dev, ofw_bus_get_node(dev),
++	    "reset-gpios", &sc->reset) == 0)
++		gpio_pin_setflags(sc->reset, GPIO_PIN_OUTPUT);
++	else
++		sc->reset = NULL;
++
++	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "drv1_lvl", CTLFLAG_RW,
++	    &sc->drv1_lvl, 0, "start-up drive level (1-127)");
++	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "drv2_lvl", CTLFLAG_RW,
++	    &sc->drv2_lvl, 0, "sustained drive level (1-127, stock 59)");
++	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "d2s_gain", CTLFLAG_RW,
++	    &sc->d2s_gain, 0,
++	    "output gain code 0-7 = x1, x2, x4, x5, x8, x10, x20, x40");
++
++	/* The I2C controller works once interrupts run. */
++	sc->hook.ich_func = aw86224_start_hook;
++	sc->hook.ich_arg = sc;
++	if (config_intrhook_establish(&sc->hook) != 0) {
++		if (sc->reset != NULL)
++			gpio_pin_release(sc->reset);
++		mtx_destroy(&sc->mtx);
++		return (ENOMEM);
++	}
++	return (0);
++}
++
++static int
++aw86224_detach(device_t dev)
++{
++	struct aw86224_softc *sc = device_get_softc(dev);
++
++	config_intrhook_drain(&sc->hook);
++	if (sc->led != NULL)
++		led_destroy(sc->led);
++	taskqueue_drain(taskqueue_thread, &sc->task);
++	if (sc->ready)
++		aw_stop(sc);
++	if (sc->reset != NULL)
++		gpio_pin_release(sc->reset);
++	mtx_destroy(&sc->mtx);
++	return (0);
++}
++
++static int
++aw86224_shutdown(device_t dev)
++{
++	struct aw86224_softc *sc = device_get_softc(dev);
++
++	if (sc->ready)
++		aw_stop(sc);
++	return (0);
++}
++
++static device_method_t aw86224_methods[] = {
++	DEVMETHOD(device_probe,		aw86224_probe),
++	DEVMETHOD(device_attach,	aw86224_attach),
++	DEVMETHOD(device_detach,	aw86224_detach),
++	DEVMETHOD(device_shutdown,	aw86224_shutdown),
++	DEVMETHOD_END
++};
++
++static driver_t aw86224_driver = {
++	"aw86224",
++	aw86224_methods,
++	sizeof(struct aw86224_softc),
++};
++
++DRIVER_MODULE(aw86224, iicbus, aw86224_driver, NULL, NULL);
++MODULE_DEPEND(aw86224, iicbus, IICBUS_MINVER, IICBUS_PREFVER, IICBUS_MAXVER);
+-- 
+2.56.0
+

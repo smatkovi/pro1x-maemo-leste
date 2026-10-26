@@ -1,0 +1,10 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Type=Application
+Name=Terminal
+Exec=/usr/local/bin/xfce4-terminal
+Icon=org.xfce.terminal
+Terminal=false
+Categories=Utility
+X-Osso-Type=application/x-executable

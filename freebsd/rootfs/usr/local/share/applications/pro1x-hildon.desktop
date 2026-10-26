@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Hildon
+Comment=Switch to Hildon, Maemo's desktop
+Exec=/usr/local/bin/pro1x-desktop hildon
+Icon=preferences-desktop
+Terminal=false
+Categories=System;

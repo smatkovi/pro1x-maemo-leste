@@ -1,14 +1,26 @@
 #!/bin/sh
 # pro1x-powerkey PRESS|RELEASE (from devd, etc/devd/pro1x.conf): powers the
-# phone off when the power key stays down for 2 s.
+# phone off when the power key stays down for 2 s; a short press blanks
+# the X session's screen or brings it back, as on Leste. A touch or a key
+# brings it back too; the press after that one only clears the note that
+# it is blank (xset cannot tell), the next blanks again.
 pid=/var/run/pro1x-powerkey.pid
+blank=/var/run/pro1x-blanked
 case "$1" in
 PRESS)
 	(sleep 2; rm -f "$pid"; shutdown -p now "power key") &
 	echo $! > "$pid"
 	;;
 RELEASE)
-	[ -f "$pid" ] && kill "$(cat "$pid")" 2>/dev/null
+	[ -f "$pid" ] || exit 0
+	kill "$(cat "$pid")" 2>/dev/null
 	rm -f "$pid"
+	export DISPLAY=:0 XAUTHORITY=/root/.Xauthority
+	if [ -f "$blank" ]; then
+		rm -f "$blank"
+		/usr/local/bin/xset s reset 2>/dev/null
+	elif /usr/local/bin/xset s activate 2>/dev/null; then
+		touch "$blank"
+	fi
 	;;
 esac

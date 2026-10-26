@@ -62,13 +62,23 @@ GSettings schemas and MIME database are set up at build time, the image
 loader list and font cache at boot (`rootfs/usr/local/etc/rc.d/pro1x_setup`,
 which also fills root's home, a tmpfs, from `/usr/local/share/pro1x/root`).
 Hildon, Leste's desktop, is in the image too when `hildon/build.sh` has
-built it (`hildon/README.md`): `startx /usr/local/bin/hildon-session`.
-As root on the console: `startx` (`~/.xinitrc` starts Xfce, scaled twice for
-the 400 dpi screen, the battery in the panel through genmon, black after
-3 minutes since scfb has no DPMS).
+built it (`hildon/README.md`). As root on the console: `startx` (Xfce,
+scaled twice for the 400 dpi screen, the battery in the panel through
+genmon, black after 3 minutes since scfb has no DPMS), `startx hildon` or
+`startx xfce`; without an argument `pro1x.desktop=hildon` in
+`freebsd/cmdline` picks Hildon. "Hildon" in Xfce's menu and "Xfce" in
+Hildon's (`pro1x-desktop hildon|xfce`) switch without leaving X:
+`~/.xinitrc` runs the desktops one after the other on the same server.
+A short press on the power key blanks the screen or brings it back, held
+for 2 s it powers the phone off (`pro1x-powerkey`). The RGB status LED
+shows charging (orange) and full (green), as on Leste
+(`rc.d/pro1x_statusled`).
 
-`freebsd/cmdline` on userdata: `pro1x.root=ram` stays in the RAM root;
-`pro1x.test=1` makes the full system report, start X for 40 s, keep a
+`freebsd/cmdline` on userdata (it overrides `pro1x.env`, `patches/0018`;
+`kern.smp.disabled=0` starts all eight CPUs): `pro1x.root=ram` stays in
+the RAM root; `pro1x.test=1` makes the full system report, cycle the
+status LED and the vibration motor, start X for 40 s
+(`pro1x.test=switch`: switching to the other desktop after 20 s), keep a
 screenshot in `/dev/pro1xshot` (`patches/0014`: at 0x5cc00000, for Linux
 to read after the reboot) and reboot (`rootfs/etc/rc.local`);
 `hint.qcom_wdt.0.lifetime=N` lets the watchdog reset the phone N seconds
@@ -87,7 +97,31 @@ after boot (`patches/0013`), so that unattended tests always end.
 | PMIC | `qcom_spmi` (`0011`): the SPMI arbiter (register access, interrupts), `qcom_pon` (power and volume-down keys: evdev, devctl), `qcom_rtc` (the seconds counter plus the offset Leste's `pro1x-rtc` keeps; the boot menu hands it over from `/host/pro1x-rtc-offset`) |
 | battery | `pro1x_battery` (`0015`): Leste's `pro1x-adc-battery` ported (PMI632 ADC voltage, gauge current, OCV table, charge counting); `dev.pro1x_battery.0.*`, `hw.acpi.battery.*`, `hw.acpi.acline` |
 | CPU frequency | `qcom_cpufreq_hw` (`0010`): the firmware's frequency table per cluster for cpufreq(4) and powerd |
+| vibration | `aw86224` (`0019`): the AW86224 haptics on the keyboard's I2C bus as `/dev/led/vibrator` (led(4): on/off and blink patterns), continuous drive with the Leste driver's register values; drive levels `dev.aw86224.0.*` |
+| status LED | `qcom_lpg` (`0020`): the PMI632's light pulse generator, `/dev/led/status_red`, `_green`, `_blue` (led(4)), duty cycle `dev.qcom_lpg.0.<colour>` |
 | UFS | `ufshci` (`0005`), on the link Linux left up: the controller's PHY, clocks and regulators need Qualcomm drivers FreeBSD lacks. Linux keeps UFS powered across kexec (`device/kernel/patches/0004`), and the boot menu rebinds it with an identity mapping first, since FreeBSD does not drive the SMMU in front of it and hands the controller physical addresses. The attach reports the SMMU's view of the stream |
+
+## Compared with Leste
+
+What the Pro1X does under Leste (the main README's table) and where
+FreeBSD stands. Everything here is untested on the phone so far.
+
+| Leste | FreeBSD |
+| --- | --- |
+| display | the framebuffer Linux leaves running (`qcom_dpu`); no brightness, no panel off yet (needs DSI commands, next) |
+| GPU (Adreno 610) | none: FreeBSD's DRM has no msm driver; Mesa's software renderer |
+| touch, keyboard, keyboard light, slider | yes (`goodix`, `pro1xkbd`, `gpiokeys`, `gpioled`) |
+| status LED, vibration | yes (`qcom_lpg`, `aw86224`) |
+| battery, charging | state of charge (`pro1x_battery`); the charger itself runs as the bootloader set it |
+| clock across power off | yes, with Leste's offset (`qcom_rtc`); no wake alarms |
+| CPU frequency, all CPUs | frequency yes; all eight CPUs from `kern.smp.disabled=0` (run 10 tests it) |
+| storage | UFS on the link Linux brought up; no SD card |
+| Hildon, Xfce | yes, switchable |
+| USB (network to the PC, host) | not yet: FreeBSD's dwc3 is host only, and Linux takes the controller down at kexec |
+| Wi-Fi, Bluetooth, modem, GPS | no: all run through the modem and ADSP firmware (remoteproc, QMI over GLINK, ath10k over SNOC), none of which FreeBSD has |
+| audio | no: the codecs sit behind the ADSP (APR, LPASS macros, SoundWire) |
+| sensors, step counter | no: ADSP (FastRPC, libssc) |
+| cameras | no: CAMSS and the sensors' CCI, none in FreeBSD |
 
 ## Files
 
@@ -114,6 +148,9 @@ after boot (`patches/0013`), so that unattended tests always end.
 | `patches/0015-*` | `pro1x_battery`, the battery's state of charge |
 | `patches/0016-*` | `/dev/pro1x-host`, the mount point below `/dev` (devfs has no mkdir) |
 | `patches/0017-*` | `qcom_dpu`, the display handed over from Linux |
+| `patches/0018-*` | `freebsd/cmdline` overrides the kernel config's environment (`pro1x.env`) |
+| `patches/0019-*` | `aw86224`, the vibration motor |
+| `patches/0020-*` | `qcom_lpg`, the RGB status LED |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `pkgfetch.py`, `mkspec.py` | packages with dependencies, checked; the image's owners and modes |
 | `hildon/` | Leste's Hildon desktop cross-compiled for FreeBSD |

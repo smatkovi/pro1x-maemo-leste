@@ -1,0 +1,29 @@
+#!/bin/sh
+# pro1x-statusled: the RGB status LED shows the battery as on Leste (mce's
+# PatternBatteryCharging 255;10;0 and PatternBatteryFull 0;255;0): orange
+# while charging, green when full, off on battery. Run by
+# rc.d/pro1x_statusled; the LED is qcom_lpg's /dev/led/status_* with the
+# duty cycle dev.qcom_lpg.0.<colour> (0-511).
+led() {
+	for c in red green blue; do
+		v=$1
+		shift
+		sysctl -q dev.qcom_lpg.0.$c=$v > /dev/null
+		if [ "$v" -gt 0 ]; then echo 1; else echo 0; fi > /dev/led/status_$c
+	done
+}
+trap 'led 0 0 0; exit 0' TERM INT
+prev=
+while :; do
+	st=$(sysctl -n dev.pro1x_battery.0.status 2> /dev/null)
+	if [ "$st" != "$prev" ]; then
+		case $st in
+		charging)	led 511 20 0 ;;
+		full)		led 0 511 0 ;;
+		*)		led 0 0 0 ;;
+		esac
+		prev=$st
+	fi
+	sleep 10 &
+	wait $!
+done

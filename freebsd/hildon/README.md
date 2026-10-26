@@ -42,7 +42,10 @@ Adreno GPU).
 hildon-desktop, as Leste's Xsession.post starts them), links for the
 paths Hildon has built in (`/etc/hildon/theme`, `/usr/share/themes`, ...)
 and the GConf defaults, made from the schemas at boot. The session is
-Xfce unless `pro1x.desktop=hildon` is in `freebsd/cmdline`.
+Xfce unless `pro1x.desktop=hildon` is in `freebsd/cmdline` or X was
+started with `startx hildon`; "Xfce" in Hildon's menu and "Hildon" in
+Xfce's switch over (`pro1x-desktop`), and Hildon's menu also has Xfce's
+terminal, file manager and editor.
 
 Hildon is scaled to the N900's size at the full resolution
 (`tools/pro1x-hidpi`): `build.sh` also builds `pro1x-theme-scale` and

@@ -8,12 +8,35 @@ if [ -n "$(kenv -q pro1x.test)" ]; then
 	sysctl hw.ncpu hw.physmem dev.cpu.0.freq dev.cpu.0.freq_levels
 	df -h
 	mount
-	ls /dev/input 2>/dev/null
+	ls /dev/input /dev/led 2>/dev/null
+	# Status LED (qcom_lpg) and vibration motor (aw86224): each colour for
+	# a second, two short pulses
+	sysctl dev.qcom_lpg dev.aw86224 2>/dev/null
+	service pro1x_statusled status 2>&1
+	for c in red green blue; do
+		[ -c /dev/led/status_$c ] || continue
+		echo 1 > /dev/led/status_$c; sleep 1; echo 0 > /dev/led/status_$c
+		echo "led status_$c cycled"
+	done
+	if [ -c /dev/led/vibrator ]; then
+		echo m.. > /dev/led/vibrator; sleep 2; echo 0 > /dev/led/vibrator
+		echo "vibrator pulsed"
+	fi
 	# The desktop for 40 s: does Xorg come up on scfb with the inputs?
+	# pro1x.test=switch: after 20 s the other desktop (pro1x-desktop)
 	if [ -x /usr/local/bin/startx ]; then
 		echo "--- X"
 		(cd /root && HOME=/root startx > /var/log/startx.log 2>&1 &)
-		sleep 40
+		sleep 20
+		if [ "$(kenv -q pro1x.test)" = switch ]; then
+			cur=$(/usr/local/bin/pro1x-desktop)
+			if [ "$cur" = hildon ]; then next=xfce; else next=hildon; fi
+			echo "switch: $cur -> $next"
+			DISPLAY=:0 XAUTHORITY=/root/.Xauthority \
+			    /usr/local/bin/pro1x-desktop $next
+		fi
+		sleep 20
+		echo "desktop now: $(/usr/local/bin/pro1x-desktop)"
 		grep -E "\((EE|WW)\)|scfb|libinput|Rotate" /var/log/Xorg.0.log | head -40
 		tail -5 /var/log/startx.log
 		ps ax | grep -E "Xorg|xfce|xfwm|panel|hildon" | grep -v grep

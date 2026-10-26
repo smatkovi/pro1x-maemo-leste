@@ -47,12 +47,14 @@ device		goodix			# the touchscreen (0007)
 # The QUP serial engines: I2C (the keyboard's bus), on the setup Linux left
 device		geniiic			# FDT attachment (0008)
 device		pro1xkbd		# the keyboard matrix on it (0009)
+device		aw86224			# the vibration motor on it (0019)
 
 # CPU frequency: the firmware's lookup table per cluster (0010)
 device		cpufreq
 device		qcom_cpufreq_hw
 
-# The PMICs over SPMI: power and volume-down keys, the RTC (0011)
+# The PMICs over SPMI: power and volume-down keys, the RTC (0011), the
+# battery (0015), the RGB status LED (0020)
 device		qcom_spmi
 
 # Disks and file systems: CAM, GPT, ext4 (userdata, where the system

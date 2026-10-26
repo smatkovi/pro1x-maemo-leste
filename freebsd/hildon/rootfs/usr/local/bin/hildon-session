@@ -1,9 +1,10 @@
 #!/bin/sh
 # Hildon on FreeBSD (F(x)tec Pro1X): what Leste's Xsession.d and
 # Xsession.post scripts do, for startx:
-#   startx /usr/local/bin/hildon-session
+#   startx hildon     (~/.xinitrc), or startx /usr/local/bin/hildon-session
 # The status menu and home run beside hildon-desktop and come back when
-# they crash (Leste: dsmetool -t).
+# they crash (Leste: dsmetool -t). The session ends with hildon-desktop and
+# takes them along: X may stay for the next desktop (pro1x-desktop).
 export GTK2_RC_FILES=/etc/hildon/theme/gtk-2.0/gtkrc
 export LANG=${LANG:-en_GB.UTF-8}
 export HILDON_DESKTOP_APPS_PRESTART=auto
@@ -23,11 +24,19 @@ eval "$(/usr/local/bin/pro1x-hidpi env)"
 eval "$(dbus-launch --sh-syntax --exit-with-session)"
 
 respawn() {
+	trap 'kill $pid 2> /dev/null; exit 0' TERM
 	while :; do
-		"$@"
+		"$@" &
+		pid=$!
+		wait $pid
 		sleep 2
 	done
 }
 respawn /usr/local/bin/hildon-status-menu &
+menu=$!
 respawn /usr/local/bin/hildon-home &
-exec /usr/local/bin/hildon-desktop
+home=$!
+/usr/local/bin/hildon-desktop
+kill $menu $home 2> /dev/null
+kill "$DBUS_SESSION_BUS_PID" 2> /dev/null
+xset r 36 r 70 r 72 r 9 r 104 2> /dev/null
