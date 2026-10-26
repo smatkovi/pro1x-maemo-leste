@@ -58,12 +58,13 @@ device		qcom_cpufreq_hw
 device		qcom_spmi
 
 # Disks and file systems: CAM, GPT, ext4 (userdata, where the system
-# images live)
+# images live), ZFS (root.zfs, rootzfs.sh)
 device		scbus
 device		da
 device		pass
 options 	GEOM_PART_GPT
 options 	EXT2FS
+options 	ZFS
 
 # Frameworks for the SoC drivers to come
 device		clk

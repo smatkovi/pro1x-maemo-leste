@@ -1,0 +1,18 @@
+FreeBSD: libpython preloaded (Qt loads PyOtherSide with local symbols, Python's extension modules need them global); qmlscene from Qt's bin directory.
+
+--- a/gpodder-leste.in
++++ b/gpodder-leste.in
+@@ -5,4 +5,13 @@
+ 	mkdir -p "$d/gpodder"
+ done
+ export PYTHONPATH=@APP@/lib${PYTHONPATH:+:$PYTHONPATH}
++# FreeBSD: Qt loads PyOtherSide's plugin, and with it libpython, with its
++# symbols local, which Python's own extension modules (math, ...) then do
++# not see; preloaded, they are global
++if [ "$(uname -s)" = FreeBSD ]; then
++	p=$(ldd /usr/local/lib/qt5/qml/io/thp/pyotherside/libpyothersideplugin.so 2>/dev/null |
++	    awk '/libpython/ {print $3; exit}')
++	[ -n "$p" ] && export LD_PRELOAD=$p${LD_PRELOAD:+:$LD_PRELOAD}
++	export PATH=$PATH:/usr/local/lib/qt5/bin
++fi
+ exec qmlscene @APP@/touch/gpodder.qml "$@"

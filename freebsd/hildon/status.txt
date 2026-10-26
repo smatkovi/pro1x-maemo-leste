@@ -1,0 +1,22 @@
+# The state of each package as tried in the FreeBSD VM (vm/try-hildon.sh,
+# 2160x1080 at x2.25), for the table in README.md (apps-table.py);
+# "builds" when not listed.
+hildon-desktop|runs (VM)
+hildon-home|runs (VM)
+hildon-status-menu|runs (VM)
+hildon-session|runs (VM)
+gtk2|runs (VM)
+sapwood|runs (VM)
+osso-xterm|runs (VM)
+hildon-control-panel|runs (VM)
+osso-calculator|runs (VM)
+qalendar|runs (VM)
+easylist|runs (VM)
+maepad|runs (VM)
+braek|runs (VM)
+osso-pdf-viewer|runs (VM)
+osso-mahjong|runs (VM)
+flappybird|runs (VM, no sound: no WAV decoder)
+gpodder-leste|runs (VM)
+maefat|runs (VM)
+clock-ui|ends at start (VM)

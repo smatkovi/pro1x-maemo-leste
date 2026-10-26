@@ -1,0 +1,6 @@
+# FreeBSD: clockd started by the system bus when first asked (Leste starts
+# it from its init scripts)
+[D-BUS Service]
+Name=com.nokia.clockd
+Exec=/usr/local/bin/clockd
+User=root

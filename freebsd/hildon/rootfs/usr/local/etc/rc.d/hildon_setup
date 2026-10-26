@@ -1,0 +1,42 @@
+#!/bin/sh
+#
+# PROVIDE: hildon_setup
+# REQUIRE: DAEMON
+# BEFORE: LOGIN
+# KEYWORD: nojail
+#
+# Hildon on FreeBSD, at every boot: its GConf defaults from the installed
+# schemas (into /var: the Pro1X's root is read only; found through
+# /usr/local/etc/gconf/2/local-defaults.path) and its theme for the factor
+# in pro1x-display.conf (pro1x-hidpi: /etc/hildon/theme points into /var).
+
+. /etc/rc.subr
+
+name="hildon_setup"
+rcvar="hildon_setup_enable"
+start_cmd="hildon_setup_start"
+stop_cmd=":"
+
+hildon_setup_start()
+{
+	if [ -x /usr/local/bin/gconftool-2 ] &&
+	    [ -d /usr/local/share/gconf/schemas ]; then
+		mkdir -p /var/db/gconf
+		GCONF_CONFIG_SOURCE=xml:merged:/var/db/gconf/gconf.xml.defaults \
+		    /usr/local/bin/gconftool-2 --makefile-install-rule \
+		    /usr/local/share/gconf/schemas/*.schemas > /dev/null 2>&1
+	fi
+	if [ -x /usr/local/bin/pro1x-hidpi ]; then
+		# the Pro1X image keeps the image loaders' list in /var
+		if [ -f /var/db/gdk-pixbuf-loaders.cache ]; then
+			GDK_PIXBUF_MODULE_FILE=/var/db/gdk-pixbuf-loaders.cache \
+			    /usr/local/bin/pro1x-hidpi theme
+		else
+			/usr/local/bin/pro1x-hidpi theme
+		fi
+	fi
+}
+
+load_rc_config $name
+: ${hildon_setup_enable:="YES"}
+run_rc_command "$1"

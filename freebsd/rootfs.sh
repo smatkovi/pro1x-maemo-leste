@@ -29,7 +29,7 @@ PRUNE=${PRUNE-llvm* spirv-llvm-translator* samba* qt6-* bsdisks python3* py3*-* 
 HILDON=${HILDON-$WORK/hildon/stage}
 if [ -n "$HILDON" ] && [ -d "$HILDON" ]; then
 	. "$REPO/freebsd/hildon/deps.sh"
-	PKGS="$PKGS $HILDON_PKGS"
+	PKGS="$PKGS $HILDON_PKGS $APPS_PKGS"
 else
 	HILDON=
 fi

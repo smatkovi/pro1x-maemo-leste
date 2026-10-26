@@ -1,0 +1,120 @@
+clang has no nested functions (a GCC extension): E()/W(), tabout() and sep() as macros and a helper.
+
+--- a/src/event.c
++++ b/src/event.c
+@@ -485,39 +485,36 @@
+  * alarm_event_is_sane
+  * ------------------------------------------------------------------------- */
+ 
++static void event_sanity_msg(int *err, int bit, const char *function,
++                             const char *fmt, ...)
++  __attribute__ ((format (printf, 4, 5)));
++
++static void
++event_sanity_msg(int *err, int bit, const char *function, const char *fmt, ...)
++{
++  char *msg = 0;
++  va_list va;
++  va_start(va, fmt);
++  if( vasprintf(&msg, fmt, va) < 0 ) msg = 0;
++  va_end(va);
++  if( bit & 2 )
++    log_error("%s: %s\n", function, msg ?: "");
++  else
++    log_warning("%s: %s\n", function, msg ?: "");
++  free(msg);
++  *err |= bit;
++  (void)function;
++}
++
+ int
+ alarm_event_is_sane(const alarm_event_t *event)
+ {
+   int err = 0;
+-#if ENABLE_LOGGING
+   const char *function = __FUNCTION__;
+-#endif
+-
+-  auto void W(const char *fmt, ...) __attribute__ ((format (printf, 1, 2)));
+-  auto void E(const char *fmt, ...) __attribute__ ((format (printf, 1, 2)));
+ 
+-  auto void E(const char *fmt, ...)
+-  {
+-    char *msg = 0;
+-    va_list va;
+-    va_start(va, fmt);
+-    vasprintf(&msg, fmt, va);
+-    va_end(va);
+-    log_error("%s: %s\n", function, msg);
+-    free(msg);
+-    err |= 2;
+-  }
+-  auto void W(const char *fmt, ...)
+-  {
+-    char *msg = 0;
+-    va_list va;
+-    va_start(va, fmt);
+-    vasprintf(&msg, fmt, va);
+-    va_end(va);
+-    log_warning("%s: %s\n", function, msg);
+-    free(msg);
+-    err |= 1;
+-  }
++  /* E() and W() were nested functions (GCC only) */
++#define E(...) event_sanity_msg(&err, 2, function, __VA_ARGS__)
++#define W(...) event_sanity_msg(&err, 1, function, __VA_ARGS__)
+ 
+   /* - - - - - - - - - - - - - - - - - - - *
+    * appid must be defined
+@@ -841,6 +838,8 @@
+ 
+   return (err&2) ? -1 : err ? 0 : 1;
+ }
++#undef E
++#undef W
+ 
+ void
+ alarm_event_del_attrs(alarm_event_t *self)
+--- a/src/dbusif.c
++++ b/src/dbusif.c
+@@ -124,12 +124,8 @@
+   size_t  size = 0;
+   FILE   *file = open_memstream(&text, &size);
+ 
+-  auto void tabout(void);
+-
+-  auto void tabout(void)
+-  {
+-    for( int i = 0; i<tab; ++i ) fprintf(file, "    ");
+-  }
++  /* was a nested function (GCC only) */
++#define tabout() do { for( int i_ = 0; i_<tab; ++i_ ) fprintf(file, "    "); } while( 0 )
+ 
+   ++tab;
+ 
+--- a/src/ticker.c
++++ b/src/ticker.c
+@@ -1053,13 +1053,8 @@
+ 
+   *pos = 0;
+ 
+-  auto const char *sep(void);
+-  auto const char *sep(void) {
+-    const char *r="";
+-    //if( pos>buf ) r=" ";
+-    if( n ) r=(n<0)?"-":"+", n = 0;
+-    return r;
+-  }
++  /* was a nested function (GCC only) */
++#define sep() ({ const char *r_=""; if( n ) r_=(n<0)?"-":"+", n = 0; r_; })
+   if( d ) ticker_string_append(&pos,end,"%s%dd", sep(), d);
+   if( h ) ticker_string_append(&pos,end,"%s%dh", sep(), h);
+   if( m ) ticker_string_append(&pos,end,"%s%dm", sep(), m);
+@@ -1070,6 +1065,7 @@
+ 
+   return buf;
+ }
++#undef sep
+ 
+ /* ------------------------------------------------------------------------- *
+  * ticker_secs_parse  --  "1d2h3m4s" -> 93784

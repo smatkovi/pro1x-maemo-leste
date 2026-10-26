@@ -1,0 +1,99 @@
+FreeBSD has no glibc address locale data: languages and regions from locale -a and the locale's code. Also: room for the list's NULL end (one byte was allocated, not a pointer).
+
+--- a/libcplanguageregional.c
++++ b/libcplanguageregional.c
+@@ -1,4 +1,5 @@
+ #include <stdio.h>
++#include <string.h>
+ #include <locale.h>
+ #include <libintl.h>
+ #include <langinfo.h>
+@@ -8,6 +9,34 @@
+ 
+ 
+ #include <hildon-cp-plugin/hildon-cp-plugin-interface.h>
++
++#ifndef LC_ADDRESS
++/*
++ * FreeBSD: no glibc locale categories for addresses and no names of
++ * languages and countries in the locale data. The names come from the
++ * locale's code (de_DE.UTF-8: "de", "DE"); the list from locale -a.
++ */
++#define LC_ADDRESS LC_CTYPE
++#define NO_NL_ADDRESS 1
++
++static gchar *locale_code_part(int country)
++{
++    const char *loc = setlocale(LC_CTYPE, NULL);
++    const char *us, *dot;
++
++    if (loc == NULL)
++        return g_strdup("");
++    us = strchr(loc, '_');
++    dot = strchr(loc, '.');
++    if (dot == NULL)
++        dot = loc + strlen(loc);
++    if (!country)
++        return g_strndup(loc, (us != NULL && us < dot ? us : dot) - loc);
++    if (us == NULL || us > dot)
++        return g_strdup("");
++    return g_strndup(us + 1, dot - us - 1);
++}
++#endif
+ #include <hildon/hildon.h>
+ #include <gtk/gtk.h>
+ 
+@@ -305,7 +334,11 @@
+ 
+     int exit_status;
+     char* stdout_c;
++#ifdef NO_NL_ADDRESS
++    g_spawn_command_line_sync("locale -a", &stdout_c, NULL, &exit_status, NULL);
++#else
+     g_spawn_command_line_sync("localedef --list-archive", &stdout_c, NULL, &exit_status, NULL);
++#endif
+     if (exit_status != 0) {
+         goto done_1;
+     }
+@@ -318,6 +351,10 @@
+     char** line_iter = lines;
+     while ((line_iter) && (*line_iter != NULL) && (strlen(*line_iter) > 1)) {
+         char* ok;
++#ifdef NO_NL_ADDRESS
++        if (!strstr(*line_iter, ".UTF-8"))
++            goto skip;
++#endif
+         char* ppos = strstr(*line_iter, "utf8");
+         if (ppos) {
+             char** split = g_strsplit(*line_iter, "utf8", 0);
+@@ -340,7 +377,7 @@
+ skip:
+         line_iter++;
+     }
+-    res = realloc(res, sizeof(char*) * res_cnt + 1);
++    res = realloc(res, sizeof(char*) * (res_cnt + 1));
+     res[res_cnt] = NULL;
+ 
+     g_strfreev(lines);
+@@ -528,13 +565,21 @@
+ }
+ 
+ gchar* get_local_region_name(void) {
++#ifdef NO_NL_ADDRESS
++    return locale_code_part(1);
++#else
+     gchar* local_country_name = g_strdup(nl_langinfo(_NL_ADDRESS_COUNTRY_NAME));
+     return local_country_name;
++#endif
+ }
+ 
+ gchar* get_local_language_name(void) {
++#ifdef NO_NL_ADDRESS
++    return locale_code_part(0);
++#else
+     gchar* local_language_name = g_strdup(nl_langinfo(_NL_ADDRESS_LANG_NAME));
+     return local_language_name;
++#endif
+ }
+ 
+ int show_error_note(GtkDialog* dialog) {

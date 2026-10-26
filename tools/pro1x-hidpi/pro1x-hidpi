@@ -95,7 +95,7 @@ theme() {
 }
 
 session_env() {
-	gs=$(awk -v s="$SCALE" 'BEGIN { g = int(s + 0.5); print g < 1 ? 1 : g }')
+	gs=$(awk -v s="$SCALE" 'BEGIN { g = int(s + 0.5); print (g < 1 ? 1 : g) }')
 	cat <<-EOF
 	HILDON_SCALE=$SCALE; export HILDON_SCALE
 	GDK_SCALE=$gs; export GDK_SCALE

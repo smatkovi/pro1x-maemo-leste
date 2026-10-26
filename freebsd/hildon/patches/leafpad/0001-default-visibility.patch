@@ -1,0 +1,22 @@
+libc's headers outside the hidden-visibility block of the charset detector: declared hidden there, lld refuses the references.
+
+--- a/src/charset-detector/src/entry/impl.cpp
++++ b/src/charset-detector/src/entry/impl.cpp
+@@ -36,13 +36,15 @@
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
++/* libc outside the hidden block: its functions are not ours */
++#include <string.h>
++#include <stdlib.h>
++
+ #pragma GCC visibility push(hidden)
+ 
+ #include "chardetect.h"
+ #include "nscore.h"
+ #include "nsUniversalDetector.h"
+-#include <string.h>
+-#include <stdlib.h>
+ 
+ #ifdef _WIN32
+ #   include <windows.h>

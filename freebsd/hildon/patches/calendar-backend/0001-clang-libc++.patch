@@ -1,0 +1,23 @@
+clang/libc++: typename instead of class for a dependent type; S_IRUSR from <sys/stat.h> (glibc pulls it in through <fcntl.h>).
+
+--- a/include/CUtility.h
++++ b/include/CUtility.h
+@@ -81,7 +81,7 @@
+ 
+ template <class T> void CUtility::releaseVector(vector <T *> vec)
+ {
+-	class std::vector <T *>::iterator iIter;
++	typename std::vector <T *>::iterator iIter;
+ 	for (iIter = vec.begin(); iIter < vec.end(); iIter++) {
+ 		delete(*iIter);
+ 		(*iIter) = 0;
+--- a/src/CCalendar.cpp
++++ b/src/CCalendar.cpp
+@@ -27,6 +27,7 @@
+ #include <string>
+ #include <fcntl.h>
+ #include <sys/types.h>
++#include <sys/stat.h>
+ #include <sys/time.h>
+ #include <time.h>
+ #include "CBdayEvent.h"

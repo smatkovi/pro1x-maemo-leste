@@ -14,6 +14,12 @@
 	    __r; }))
 #endif
 
+/* Leap year (glibc's <time.h> internals, which some Maemo code uses) */
+#ifndef __isleap
+#define __isleap(year) \
+	((year) % 4 == 0 && ((year) % 100 != 0 || (year) % 400 == 0))
+#endif
+
 /* The longest host name (POSIX leaves it to <limits.h>; FreeBSD has none) */
 #ifndef HOST_NAME_MAX
 #define HOST_NAME_MAX 255

@@ -5,16 +5,19 @@
 # console, which Linux reads after the next boot). Then, as Leste's boot
 # does with its loop image: userdata read only at /dev/pro1x-host (below
 # /dev, which the kernel keeps across a reroot: patches/0012, 0016), the
-# root image freebsd/root.ufs from it (rootfs.sh) as md1, and a reroot
-# into it.
+# root image from it as md1, and a reroot into it: freebsd/root.zfs (the
+# ZFS pool "pro1x" of rootzfs.sh, imported read only) when it is there and
+# the kernel has ZFS, else freebsd/root.ufs (rootfs.sh).
 #
 # Kernel environment (freebsd/cmdline next to the kernel):
 #   pro1x.root=ram   stay here: report (userdata and the image attached
 #                    and released again), then Enter for a shell or reboot
+#   pro1x.rootfs=ufs root.ufs even when root.zfs is there
 #   pro1x.test=1     unattended test: the full system reports and reboots
 PATH=/rescue; export PATH
 HOST=/dev/pro1x-host
 IMAGE=$HOST/freebsd/root.ufs
+ZIMAGE=$HOST/freebsd/root.zfs
 
 echo "=== FreeBSD on the F(x)tec Pro1X: rc ==="
 uname -a
@@ -34,6 +37,25 @@ if [ -e /dev/gpt/userdata ] && [ -d $HOST ] &&
 	echo "--- userdata at $HOST:"
 	df -h $HOST
 	ls -la $HOST/freebsd
+	if [ -f $ZIMAGE ] && [ "$(kenv -q pro1x.rootfs)" != ufs ] &&
+	    sysctl -q vfs.zfs.version.spa > /dev/null &&
+	    mdconfig -a -t vnode -o readonly -f $ZIMAGE -u 1; then
+		if zpool import -f -N -o readonly=on -o cachefile=none \
+		    -d /dev/md1 pro1x; then
+			zfs list -o name,used,refer,compressratio
+			if [ "$(kenv -q pro1x.root)" != ram ]; then
+				kenv vfs.root.mountfrom=zfs:pro1x/ROOT/default
+				kenv vfs.root.mountfrom.options=ro
+				echo "=== rerooting into $ZIMAGE"
+				reboot -r
+				exit 0
+			fi
+			zpool export pro1x
+		else
+			echo "!! $ZIMAGE: no pool pro1x, going on with $IMAGE"
+		fi
+		mdconfig -d -u 1
+	fi
 	if [ -f $IMAGE ] && mdconfig -a -t vnode -o readonly -f $IMAGE -u 1
 	then
 		if [ "$(kenv -q pro1x.root)" != ram ]; then

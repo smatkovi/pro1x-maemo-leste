@@ -1,0 +1,126 @@
+FreeBSD: the battery from hw.acpi.battery.* and hw.acpi.acline when upowerd has none (it knows only ACPI batteries; the Pro1X's driver sets these sysctls).
+
+--- a/batmon.c
++++ b/batmon.c
+@@ -27,6 +27,10 @@
+ 
+ #include <gio/gio.h>
+ #include <upower.h>
++#ifdef __FreeBSD__
++#include <sys/types.h>
++#include <sys/sysctl.h>
++#endif
+ 
+ #include "batmon.h"
+ 
+@@ -307,6 +311,74 @@
+   return rv ? 0 : 1;
+ }
+ 
++#ifdef __FreeBSD__
++/*
++ * FreeBSD: upowerd knows only ACPI batteries (through /dev/acpi). The
++ * kernel's hw.acpi.battery sysctls are there for others too (the F(x)tec
++ * Pro1X's pro1x_battery): life in percent, state bits (1 discharging,
++ * 2 charging, 4 critical), time in minutes, hw.acpi.acline. Read every
++ * 10 seconds.
++ */
++static guint sysctl_timer;
++
++static gboolean
++sysctl_int(const char *name, int *v)
++{
++  size_t len = sizeof(*v);
++
++  return sysctlbyname(name, v, &len, NULL, 0) == 0;
++}
++
++static gboolean
++sysctl_batt_read(gpointer unused)
++{
++  BatteryData *data = &private.data;
++  BatteryData old = *data;
++  int life, st, time, acline = 0;
++
++  (void)unused;
++  if (!sysctl_int("hw.acpi.battery.life", &life) ||
++      !sysctl_int("hw.acpi.battery.state", &st))
++    return G_SOURCE_CONTINUE;
++  if (!sysctl_int("hw.acpi.battery.time", &time))
++    time = -1;
++  sysctl_int("hw.acpi.acline", &acline);
++
++  data->estimating = false;
++  data->percentage = CLAMP(life, 0, 100);
++  data->charger_online = acline != 0;
++  if (st & 2)
++    data->state = UP_DEVICE_STATE_CHARGING;
++  else if (acline && life >= 100)
++    data->state = UP_DEVICE_STATE_FULLY_CHARGED;
++  else if (st & 1)
++    data->state = UP_DEVICE_STATE_DISCHARGING;
++  else
++    data->state = acline ? UP_DEVICE_STATE_PENDING_CHARGE :
++                           UP_DEVICE_STATE_DISCHARGING;
++  data->time_to_empty = (st & 1) && time > 0 ? (gint64)time * 60 : 0;
++  data->time_to_full = 0;
++
++  if (private.cb && memcmp(&old, data, sizeof(old)) != 0)
++    private.cb(data, private.user_data);
++
++  return G_SOURCE_CONTINUE;
++}
++
++static int
++init_sysctl_batt(void)
++{
++  int life;
++
++  if (!sysctl_int("hw.acpi.battery.life", &life))
++    return 1;
++  memset(&private.data, 0, sizeof(private.data));
++  sysctl_batt_read(NULL);
++  sysctl_timer = g_timeout_add_seconds(10, sysctl_batt_read, NULL);
++  return 0;
++}
++#endif
++
+ int
+ init_batt(void)
+ {
+@@ -314,6 +386,9 @@
+   if (private.client == NULL)
+   {
+     g_printerr("Cannot connect to upowerd\n");
++#ifdef __FreeBSD__
++    return init_sysctl_batt();
++#endif
+     goto fail;
+   }
+ 
+@@ -321,6 +396,13 @@
+ 
+   if (private.battery == NULL)
+   {
++#ifdef __FreeBSD__
++    if (private.client)
++      g_object_unref(private.client);
++    private.client = NULL;
++    if (init_sysctl_batt() == 0)
++      return 0;
++#endif
+     g_warning("Failed to find battery");
+     goto fail;
+   }
+@@ -362,6 +444,11 @@
+ void
+ free_batt(void)
+ {
++#ifdef __FreeBSD__
++  if (sysctl_timer)
++    g_source_remove(sysctl_timer);
++  sysctl_timer = 0;
++#endif
+   if (private.client)
+     g_object_unref(private.client);
+   if (private.battery)

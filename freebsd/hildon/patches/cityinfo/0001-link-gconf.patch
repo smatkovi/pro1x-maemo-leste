@@ -1,0 +1,12 @@
+The library calls GConf and GLib: link them (lld refuses programs that use an under-linked library).
+
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -6,6 +6,7 @@
+ 
+ libcityinfo0_la_CFLAGS = $(CITYINFO_CFLAGS)
+ libcityinfo0_la_LDFLAGS = -Wl,--as-needed
++libcityinfo0_la_LIBADD = $(CITYINFO_LIBS)
+ 
+ libcityinfoincludedir=$(includedir)
+ libcityinfoinclude_HEADERS = \

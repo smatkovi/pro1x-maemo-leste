@@ -1,0 +1,41 @@
+No linux/fs.h (nothing of it is used); prototypes for the settings functions called before their definition.
+
+--- a/src/livewp-scene.h
++++ b/src/livewp-scene.h
+@@ -34,7 +34,9 @@
+ #include <unistd.h>
+ #include <X11/Xlib.h>
+ #include <dirent.h>
++#ifdef __linux__
+ #include <linux/fs.h>
++#endif
+ typedef struct dirent Dirent;
+ 
+ void fill_priv(Animation_WallpaperPrivate *priv);
+--- a/src/livewp-exthemes.h
++++ b/src/livewp-exthemes.h
+@@ -24,7 +24,9 @@
+ /*******************************************************************************/
+ #include "livewp-common.h"
+ #include <dirent.h>                                                                                                              
+-#include <linux/fs.h>                                                                                                                    
++#ifdef __linux__
++#include <linux/fs.h>
++#endif
+ #include <libxml/parser.h>
+ typedef struct dirent Dirent;
+ /*******************************************************************************/
+--- a/src/livewp-settings.c
++++ b/src/livewp-settings.c
+@@ -23,6 +23,11 @@
+ */
+ /*******************************************************************************/
+ #include "livewp-settings.h"
++
++/* Used before they are defined (C99 has no implicit declarations) */
++void additional_parametr_for_theme_video(GtkWidget *vbox, Animation_WallpaperPrivate *priv);
++void additional_parametr_for_theme_flash(GtkWidget *vbox, Animation_WallpaperPrivate *priv);
++void additional_parametr_for_theme_slideshow(GtkWidget *vbox, Animation_WallpaperPrivate *priv);
+ /*******************************************************************************/
+ void lw_about(void){
+ 

@@ -40,7 +40,7 @@ to the command line, e.g. `hint.ufshci.0.disabled=1`.
 
 ## The full system
 
-`rootfs.sh` builds `out/root.ufs` (2 GiB UFS) from the release's
+`rootfs.sh` builds `out/root.ufs` (UFS) from the release's
 `base.txz` with the Pro1X configuration in `rootfs/` (owners and modes
 from an mtree of the tarball). On the phone it goes to
 `/host/freebsd/root.ufs`. The RAM root (`mfsroot/etc/rc`) mounts userdata
@@ -50,6 +50,14 @@ the reroot, `0016` makes the mount point). The root stays read only, `/var` and 
 (`rootfs/etc/rc.conf`): FreeBSD does not write to userdata. Login on the
 console as root (no password). devd powers the phone off when the power
 key is held for 2 s; powerd scales the CPU frequency.
+
+`rootzfs.sh` turns `root.ufs` into `out/root.zfs`, the same system as a
+ZFS pool (`pro1x`, the root in `pro1x/ROOT/default`, zstd compressed,
+about half the size), with FreeBSD's own `zpool` and `zfs` in a FreeBSD
+machine (`vm/vm.sh`): FreeBSD's `makefs -t zfs` stops at the image's hard
+links when it runs on Linux. With `root.zfs` next to `root.ufs` on the
+phone, the RAM root imports the pool read only and reroots into it (the
+kernel has ZFS); `pro1x.rootfs=ufs` in `freebsd/cmdline` keeps UFS.
 
 The desktop: `rootfs.sh` also puts packages from pkg.freebsd.org into
 the image (`PKGS`, default Xorg with `scfb` on the framebuffer turned to
@@ -152,6 +160,8 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `patches/0019-*` | `aw86224`, the vibration motor |
 | `patches/0020-*` | `qcom_lpg`, the RGB status LED |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
+| `rootzfs.sh` | the root image as a ZFS pool |
+| `vm/` | a FreeBSD/arm64 VM on the PC (qemu): packages, ZFS image, tries |
 | `pkgfetch.py`, `mkspec.py` | packages with dependencies, checked; the image's owners and modes |
 | `hildon/` | Leste's Hildon desktop cross-compiled for FreeBSD |
 

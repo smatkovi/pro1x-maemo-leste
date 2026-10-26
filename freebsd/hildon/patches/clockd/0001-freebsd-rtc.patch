@@ -1,0 +1,34 @@
+FreeBSD: settimeofday() also sets the RTC; no linux/rtc.h.
+
+--- a/clockd/rclockd.c
++++ b/clockd/rclockd.c
+@@ -17,7 +17,9 @@
+ #include <errno.h>
+ #include <string.h>
+ 
++#ifdef __linux__
+ #include <linux/rtc.h>
++#endif
+ 
+ #include "logging.h"
+ 
+@@ -53,6 +55,11 @@
+ 
+   if (settimeofday(&tv, NULL) == 0)
+   {
++#ifndef __linux__
++    /* FreeBSD: settimeofday() sets the RTC too (resettodr) */
++    rv = 0;
++    DO_LOG(LOG_DEBUG, "time set successfully to %lu", sec);
++#else
+     /* See man 4 rtc */
+     time_t timer = sec;
+     int fd = open("/dev/rtc", O_RDWR);
+@@ -78,6 +85,7 @@
+     }
+     else
+       DO_LOG(LOG_ERR, "open(%s) error %s", "/dev/rtc", strerror(errno));
++#endif
+   }
+   else
+     DO_LOG(LOG_ERR, "settimeofday() failed (%s)", strerror(errno));

@@ -1,0 +1,18 @@
+moc from $MOC when given (a cross build runs the host's), Qt5Test only for the tests.
+
+--- a/configure.ac
++++ b/configure.ac
+@@ -15,11 +15,11 @@
+ AC_PROG_LIBTOOL
+ 
+ PKG_CHECK_MODULES([QT],    [Qt5Core])
+-PKG_CHECK_MODULES([QTEST], [Qt5Test])
++PKG_CHECK_MODULES([QTEST], [Qt5Test], [], [:])
+ PKG_CHECK_MODULES([GLIB],  [glib-2.0])
+ PKG_CHECK_MODULES([GCONF], [gconf-2.0])
+ 
+-MOC=`pkg-config Qt5Core --variable=moc_location`
++: ${MOC:=`pkg-config Qt5Core --variable=moc_location`}
+ RCC=`pkg-config Qt5Core --variable=exec_prefix`/bin/rcc
+ 
+ AC_SUBST([MOC])
