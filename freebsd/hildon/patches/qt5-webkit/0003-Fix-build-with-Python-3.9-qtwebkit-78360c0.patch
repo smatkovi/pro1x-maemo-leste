@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Konstantin Tokarev <noreply@localhost>
+Date: Mon, 26 Oct 2026 12:51:48 +0100
+Subject: [PATCH 03/19] Fix build with Python 3.9 (qtwebkit 78360c0)
+
+---
+ Source/JavaScriptCore/generate-bytecode-files | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Source/JavaScriptCore/generate-bytecode-files b/Source/JavaScriptCore/generate-bytecode-files
+index c5dab42..af34312 100644
+--- a/Source/JavaScriptCore/generate-bytecode-files
++++ b/Source/JavaScriptCore/generate-bytecode-files
+@@ -163,7 +163,7 @@ if __name__ == "__main__":
+         initBytecodesFile = openOrExit(initASMFileName, "w")
+ 
+     try:
+-        bytecodeSections = json.load(bytecodeFile, encoding = "utf-8")
++        bytecodeSections = json.load(bytecodeFile)
+     except:
+         print("Unexpected error parsing {0}: {1}".format(bytecodeJSONFile, sys.exc_info()))
+ 

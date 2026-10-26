@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FreeBSD ports <noreply@localhost>
+Date: Mon, 26 Oct 2026 12:51:49 +0100
+Subject: [PATCH 18/19] FreeBSD port:
+ Source_WebCore_platform_graphics_surfaces_GraphicsSurfaceToken.h
+
+---
+ .../WebCore/platform/graphics/surfaces/GraphicsSurfaceToken.h   | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/platform/graphics/surfaces/GraphicsSurfaceToken.h b/Source/WebCore/platform/graphics/surfaces/GraphicsSurfaceToken.h
+index f4f1a1c..8391517 100644
+--- a/Source/WebCore/platform/graphics/surfaces/GraphicsSurfaceToken.h
++++ b/Source/WebCore/platform/graphics/surfaces/GraphicsSurfaceToken.h
+@@ -33,7 +33,7 @@ struct GraphicsSurfaceToken {
+ 
+ #if OS(DARWIN)
+     typedef mach_port_t BufferHandle;
+-#elif OS(LINUX)
++#elif OS(LINUX) || OS(FREEBSD)
+     typedef uint32_t BufferHandle;
+ #elif OS(WINDOWS)
+     typedef HANDLE BufferHandle;

@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FreeBSD ports <noreply@localhost>
+Date: Mon, 26 Oct 2026 12:51:49 +0100
+Subject: [PATCH 15/19] FreeBSD port:
+ Source_ThirdParty_ANGLE_src_compiler_preprocessor_ExpressionParser.y
+
+---
+ .../ANGLE/src/compiler/preprocessor/ExpressionParser.y          | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Source/ThirdParty/ANGLE/src/compiler/preprocessor/ExpressionParser.y b/Source/ThirdParty/ANGLE/src/compiler/preprocessor/ExpressionParser.y
+index 0933736..7e3bbd0 100644
+--- a/Source/ThirdParty/ANGLE/src/compiler/preprocessor/ExpressionParser.y
++++ b/Source/ThirdParty/ANGLE/src/compiler/preprocessor/ExpressionParser.y
+@@ -68,7 +68,7 @@ struct Context
+ }  // namespace
+ %}
+ 
+-%pure-parser
++%define api.pure
+ %name-prefix "pp"
+ %parse-param {Context *context}
+ %lex-param {Context *context}

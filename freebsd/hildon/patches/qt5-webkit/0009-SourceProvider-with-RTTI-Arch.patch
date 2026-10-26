@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Arch Linux <noreply@localhost>
+Date: Mon, 26 Oct 2026 12:51:48 +0100
+Subject: [PATCH 09/19] SourceProvider with RTTI (Arch)
+
+---
+ Source/JavaScriptCore/PlatformQt.cmake | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/Source/JavaScriptCore/PlatformQt.cmake b/Source/JavaScriptCore/PlatformQt.cmake
+index 34a3727..f2a2aa2 100644
+--- a/Source/JavaScriptCore/PlatformQt.cmake
++++ b/Source/JavaScriptCore/PlatformQt.cmake
+@@ -30,3 +30,14 @@ if (WIN32)
+         inspector/JSGlobalObjectInspectorController.cpp
+     )
+ endif ()
++
++# SourceProvider needs RTTI so its typeinfo is available to WebKit files
++# compiled with -frtti (e.g. qwebelement.cpp). Without this, GCC 16+
++# refuses to link because the base-class typeinfo is missing.
++if (COMPILER_IS_GCC_OR_CLANG)
++    set_source_files_properties(
++        parser/SourceProvider.cpp
++    PROPERTIES
++        COMPILE_FLAGS -frtti
++    )
++endif ()

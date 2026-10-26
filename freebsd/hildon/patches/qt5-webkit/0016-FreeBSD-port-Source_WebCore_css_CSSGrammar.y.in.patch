@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FreeBSD ports <noreply@localhost>
+Date: Mon, 26 Oct 2026 12:51:49 +0100
+Subject: [PATCH 16/19] FreeBSD port: Source_WebCore_css_CSSGrammar.y.in
+
+---
+ Source/WebCore/css/CSSGrammar.y.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/css/CSSGrammar.y.in b/Source/WebCore/css/CSSGrammar.y.in
+index 0aad456..95bf6f6 100644
+--- a/Source/WebCore/css/CSSGrammar.y.in
++++ b/Source/WebCore/css/CSSGrammar.y.in
+@@ -21,7 +21,7 @@
+  *
+  */
+ 
+-%pure-parser
++%define api.pure
+ 
+ %parse-param { CSSParser* parser }
+ %lex-param { CSSParser* parser }

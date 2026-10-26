@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FreeBSD ports <noreply@localhost>
+Date: Mon, 26 Oct 2026 12:51:48 +0100
+Subject: [PATCH 13/19] FreeBSD port:
+ Source_JavaScriptCore_assembler_ARM64Assembler.h
+
+---
+ Source/JavaScriptCore/assembler/ARM64Assembler.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Source/JavaScriptCore/assembler/ARM64Assembler.h b/Source/JavaScriptCore/assembler/ARM64Assembler.h
+index e573620..dfa9bda 100644
+--- a/Source/JavaScriptCore/assembler/ARM64Assembler.h
++++ b/Source/JavaScriptCore/assembler/ARM64Assembler.h
+@@ -2683,6 +2683,8 @@ public:
+             linuxPageFlush(current, current + page);
+ 
+         linuxPageFlush(current, end);
++#elif OS(FREEBSD)
++        __clear_cache(code, reinterpret_cast<char*>(code) + size);
+ #else
+ #error "The cacheFlush support is missing on this platform."
+ #endif

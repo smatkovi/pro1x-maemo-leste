@@ -27,7 +27,9 @@ for n in sorted(os.listdir(META)):
     m = json.load(open(f))
     src = m.get('annotations', {}).get('source', m['www'])
     rev = m.get('annotations', {}).get('revision', '')
-    rev = rev[:12] if re.fullmatch(r'[0-9a-f]{40}', rev) else ''
+    # a git revision, or a tarball's or FreeBSD package's SHA-256
+    rev = rev[:12] if re.fullmatch(r'[0-9a-f]{40}', rev) else \
+        'sha256 ' + rev[:12] if re.fullmatch(r'[0-9a-f]{64}', rev) else ''
     name = re.sub(r'\.git$', '', src).rstrip('/').split('/')[-1]
     link = '[%s](%s)' % (name, re.sub(r'\.git$', '', src)) if src.startswith('http') else src
     rows.append('| %s | %s | %s | %s | %s | %s |' % (

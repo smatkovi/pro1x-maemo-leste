@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fetch FreeBSD packages with their dependencies, on any host.
 
-    pkgfetch.py [-x PATTERN]... SITE CACHE URL NAME...
+    pkgfetch.py [-n] [-x PATTERN]... SITE CACHE URL NAME...
 
 SITE is the unpacked, already verified packagesite (packagesite.yaml: one
 JSON object per package), URL the repository (e.g.
@@ -11,6 +11,7 @@ against the repository's checksum (BLAKE2b-512 of the file, in pkg's
 legacy base32: type 2). Prints the package files, dependencies first.
 -x leaves out packages matching PATTERN (fnmatch), with what only they
 pull in: dependencies needed at build time or by optional parts only.
+-n fetches the packages NAME only, without their dependencies.
 """
 
 import fnmatch
@@ -83,8 +84,14 @@ def checksum_ok(path, want):
 
 def main():
     args = sys.argv[1:]
-    prune = []
-    while len(args) >= 2 and args[0] == "-x":
+    prune, nodeps = [], False
+    while args and args[0] in ("-x", "-n"):
+        if args[0] == "-n":
+            nodeps = True
+            args = args[1:]
+            continue
+        if len(args) < 2:
+            sys.exit(__doc__)
         prune.append(args[1])
         args = args[2:]
     if len(args) < 4:
@@ -106,7 +113,7 @@ def main():
         if name not in pkgs:
             sys.exit(f"pkgfetch: no package {name} (needed by {' <- '.join(chain)})")
         seen.add(name)
-        for dep in sorted(pkgs[name].get("deps", {})):
+        for dep in [] if nodeps else sorted(pkgs[name].get("deps", {})):
             visit(dep, chain + [name])
         order.append(name)
 

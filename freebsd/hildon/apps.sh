@@ -66,6 +66,15 @@ APPS=(
 	"qshot|!"
 	"mihphoto|!"
 	"hamsterfiler|!"
+	# The web engines, which FreeBSD's quarterly packages no longer have for
+	# arm64: QtWebEngine as FreeBSD 15.1 built it (its release_1 set), with
+	# the FFmpeg 8.1 libraries it links; QtWebKit from its last release.
+	# Then the apps that need them.
+	"ffmpeg8-libs|!"
+	"qt5-webengine|pkg"
+	"qt5-webkit|!"
+	"jib|!"
+	"dorian|!"
 	# Maemo 5 apps ported to Leste (github.com/smatkovi), at their releases
 	"headphoned|!"
 	"pedometerhomewidget|!"
@@ -104,6 +113,10 @@ REV+=(
 	[countdowntimer]=ddc1f7027af9 [easylist]=d5c5bcc6c677 [flappybird]=21f81151207a
 	[qshot]=f10335de9c66 [mihphoto]=bab0cb18bc0e
 	[hamsterfiler]=19ac58143e2e
+	[ffmpeg8-libs]=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
+	[qt5-webengine]=c5de7df005189a2ef727a40b13408ff3a14a0bbedce07af986aac59722d4cf09
+	[qt5-webkit]=9ca126da9273664dd23a3ccd0c9bebceb7bb534bddd743db31caf6a5a6d4a9e6
+	[jib]=5dd4a340d20d [dorian]=da92eda1d5d9
 	[headphoned]=d476cb4a8bf9 [pedometerhomewidget]=06d5246191fa
 	[wifi-assistant]=604bbe98d8b5 [gpodder-leste]=2759445563b5
 )
@@ -118,6 +131,10 @@ URL+=(
 	[flappybird]=$GM_EXTRAS/flappybird.git [qshot]=$GH_EXTRAS/qshot.git
 	[mihphoto]=$GH_EXTRAS/mihphoto.git
 	[hamsterfiler]=$GH_EXTRAS/hamsterfiler.git
+	[ffmpeg8-libs]=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+	[qt5-webengine]=pkg:release_1
+	[qt5-webkit]=https://github.com/qtwebkit/qtwebkit/releases/download/qtwebkit-5.212.0-alpha4/qtwebkit-5.212.0-alpha4.tar.xz
+	[jib]=$GH_EXTRAS/jib.git [dorian]=$GH_EXTRAS/dorian.git
 	[headphoned]=https://github.com/smatkovi/headphoned.git
 	[pedometerhomewidget]=https://github.com/smatkovi/pedometerhomewidget.git
 	[wifi-assistant]=https://github.com/smatkovi/wifi-assistant.git
@@ -241,23 +258,42 @@ custom_gpodder_leste() {
 qt_host() {
 	local q=$H/qt5host t c
 	# FreeBSD's Qt packages make qconfig-modules.h at install (a trigger
-	# the sysroot does not run): one include per module's qconfig-*.h
+	# the sysroot does not run): one include per module's qconfig-*.h,
+	# rewritten only when that changes (builds running meanwhile read it)
 	c=$SYSROOT/usr/local/include/qt5/QtCore
 	for t in "$c"/qconfig-*.h; do
 		case ${t##*/} in qconfig-modules.h|qconfig-bootstrapped.h) continue ;; esac
 		echo "#include <QtCore/${t##*/}>"
-	done > "$c/qconfig-modules.h"
+	done > "$q.modules.h"
+	if cmp -s "$q.modules.h" "$c/qconfig-modules.h"; then rm "$q.modules.h"
+	else mv "$q.modules.h" "$c/qconfig-modules.h"; fi
 	# Qt's CMake files name /usr/local absolutely: copies that name the
 	# sysroot, in a root of their own searched before the sysroot
-	# (toolchain.cmake)
-	rm -rf "$q/cmakeroot"
-	mkdir -p "$q/cmakeroot/usr/local/lib/cmake"
+	# (toolchain.cmake). Only changed files are replaced: a CMake build
+	# running meanwhile (QtWebKit's) would configure itself again.
+	rm -rf "$q/cmakeroot.new"
+	mkdir -p "$q/cmakeroot.new/usr/local/lib/cmake"
 	for t in "$SYSROOT"/usr/local/lib/cmake/Qt5*; do
-		cp -a "$t" "$q/cmakeroot/usr/local/lib/cmake/"
+		cp -a "$t" "$q/cmakeroot.new/usr/local/lib/cmake/"
 	done
-	find "$q/cmakeroot" -name '*.cmake' -exec sed -i \
+	find "$q/cmakeroot.new" -name '*.cmake' -exec sed -i \
 	    -e "s|_install_prefix \"/usr/local\"|_install_prefix \"$SYSROOT/usr/local\"|" \
 	    -e "s|\"/usr/local/|\"$SYSROOT/usr/local/|g" {} +
+	mkdir -p "$q/cmakeroot"
+	rsync -rlc --delete "$q/cmakeroot.new/" "$q/cmakeroot/"
+	rm -rf "$q/cmakeroot.new"
+	# qmake -query with the target's paths (no sysroot), for CMake projects
+	# that install where Qt's own files are (QtWebKit's KDEInstallDirs)
+	mkdir -p "$q/bin"
+	cat > "$q/bin/qmake-target" <<-QMAKE
+	#!/bin/sh
+	[ "\$1" = -query ] && [ -n "\$2" ] || exit 1
+	case \$2 in QT_HOST_DATA) v=QT_INSTALL_ARCHDATA ;; *) v=\$2 ;; esac
+	r=\$(/usr/bin/qmake-qt5 -query -qtconf "$q/qt.conf" "\$v/raw" 2> /dev/null) &&
+	    { echo "\$r"; exit 0; }
+	exec /usr/bin/qmake-qt5 -query -qtconf "$q/qt.conf" "\$2"
+	QMAKE
+	chmod 755 "$q/bin/qmake-target"
 	[ -f "$q/qt.conf" ] && return 0
 	mkdir -p "$q/bin"
 	for t in moc uic rcc qdbusxml2cpp qdbuscpp2xml lrelease lupdate qmlcachegen; do
@@ -404,6 +440,58 @@ custom_flappybird() { qt_qmake flappybird.pro; }
 custom_qshot() { qt_qmake screenshot.pro; }
 custom_mihphoto() { qt_qmake mihphoto.pro; }
 custom_hamsterfiler() { qt_cmake; }
+
+# --- the web engines -------------------------------------------------------
+# FFmpeg 8.1's shared libraries (the release FreeBSD's port had last): what
+# release_1's QtWebEngine links (libavcodec.so.62, ...), beside quarterly's
+# FFmpeg 9. Only the versioned libraries: no headers, no unversioned links,
+# so nothing else builds on them. LGPL (no GPL or non-free parts); its own
+# decoders only, as Chromium uses them.
+custom_ffmpeg8_libs() {
+	# configure takes CPPFLAGS and the like from the environment: not
+	# the Leste parts' (glibc-compat.h)
+	local e=(env -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS)
+	"${e[@]}" ./configure --prefix=/usr/local --enable-cross-compile --target-os=freebsd \
+	    --arch=aarch64 --cc="clang --target=$TARGET" --cxx="clang++ --target=$TARGET" \
+	    --ld="clang --target=$TARGET -fuse-ld=lld" --sysroot="$SYSROOT" \
+	    --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm --strip=llvm-strip \
+	    --pkg-config=pkg-config --extra-cflags="-ffile-prefix-map=$BUILD/=/usr/src/" \
+	    --enable-shared --disable-static --disable-programs --disable-doc \
+	    --disable-autodetect --enable-zlib --disable-avdevice --disable-avfilter \
+	    --disable-swscale > configure.out 2>&1 || { tail -30 configure.out; exit 1; }
+	"${e[@]}" make -j"$JOBS" > make.out 2>&1 ||
+	    { grep -m20 -E "error:|Error [0-9]" make.out; tail -20 make.out; exit 1; }
+	"${e[@]}" make install DESTDIR="$PWD/_inst" > install.out 2>&1 ||
+	    { tail -20 install.out; exit 1; }
+	install -d "$PR/usr/local/lib"
+	cp -a _inst/usr/local/lib/lib*.so.* "$PR/usr/local/lib/"
+}
+
+# QtWebKit's last release (2020), with the patches of FreeBSD's port (until
+# 2023) and Arch's (ICU, Python, bison, compilers) in patches/qt5-webkit.
+# WebKit 1, the widgets (QWebView), which the Maemo apps use; no WebKit 2
+# (QML), video, geolocation or XSLT. Installed where FreeBSD's Qt has its
+# files: KDEInstallDirs asks qmake (qmake-target: the target's paths).
+custom_qt5_webkit() {
+	local CPPFLAGS="-ffile-prefix-map=$SYSROOT= -ffile-prefix-map=$BUILD/=/usr/src/"
+	local CXXFLAGS="-O2 -pipe -w -DNDEBUG" CFLAGS="-O2 -pipe -w"
+	qt_cmake -G Ninja -DPORT=Qt -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+	    -DQMAKE_EXECUTABLE="$H/qt5host/bin/qmake-target" \
+	    -DPYTHON_EXECUTABLE=/usr/bin/python3 -DRUBY_EXECUTABLE=/usr/bin/ruby \
+	    -DPERL_EXECUTABLE=/usr/bin/perl -DBISON_EXECUTABLE=/usr/bin/bison \
+	    -DGPERF_EXECUTABLE=/usr/bin/gperf \
+	    -DENABLE_WEBKIT2=OFF -DENABLE_TOOLS=OFF -DENABLE_API_TESTS=OFF \
+	    -DENABLE_TEST_SUPPORT=OFF -DENABLE_QT_WEBCHANNEL=OFF \
+	    -DENABLE_GEOLOCATION=OFF -DENABLE_DEVICE_ORIENTATION=OFF \
+	    -DENABLE_VIDEO=OFF -DENABLE_WEB_AUDIO=OFF -DUSE_GSTREAMER=OFF \
+	    -DUSE_QT_MULTIMEDIA=OFF -DUSE_LIBHYPHEN=OFF -DUSE_WOFF2=OFF \
+	    -DENABLE_XSLT=OFF -DUSE_LD_GOLD=OFF \
+	    -DECM_PKGCONFIG_INSTALL_DIR=/usr/local/libdata/pkgconfig
+}
+
+custom_jib() { qt_cmake -DMAEMO=On; }
+# Dorian installs its menu entry and icons below /usr/share
+custom_dorian() { qt_qmake dorian.pro && usr_to_local "$PR"; }
 
 # maemo-launcher starts apps built as shared objects from a preloaded
 # process (Linux-specific). On FreeBSD apps are plain programs: only

@@ -15,6 +15,8 @@
 # $WORK/hildon/stage (under /usr/local), which rootfs.sh puts into the
 # root image, and into the sysroot, for the parts built after it. An app
 # that fails is reported at the end; a desktop part stops the build.
+# BUILD=<directory> puts the build trees elsewhere (QtWebKit's needs some
+# 6 GB).
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}
 WORK=${WORK:?set WORK=<build directory>}
@@ -22,7 +24,7 @@ H=$WORK/hildon
 SRC=$H/src
 SYSROOT=$H/sysroot
 STAGE=$H/stage
-BUILD=$H/build
+BUILD=${BUILD:-$H/build}
 TARGET=aarch64-unknown-freebsd15.0
 ABI=FreeBSD:15:aarch64
 PKGURL=${PKGURL:-https://pkg.freebsd.org/$ABI/quarterly}
@@ -211,10 +213,54 @@ custom_osso_bookmark_engine() {
 	    "$PR/usr/local/libdata/pkgconfig/osso-bookmark-engine.pc"
 }
 
-# The source at its pinned revision (REV), from URL or maemo-leste
+# The index of one of FreeBSD's package sets ($WORK/pkgs-<set>/site), signed
+# with a key the base system trusts, as rootfs.sh checks quarterly's
+pkg_site() {
+	local d=$WORK/pkgs-$1 trusted
+	[ -f "$d/site/packagesite.yaml" ] && return 0
+	mkdir -p "$d/site"
+	curl -sSfL -o "$d/packagesite.pkg" "https://pkg.freebsd.org/$ABI/$1/packagesite.pkg"
+	bsdtar -xf "$d/packagesite.pkg" -C "$d/site"
+	trusted=$(sed -n 's/^fingerprint: "\(.*\)"/\1/p' \
+	    "$SYSROOT"/usr/share/keys/pkg/trusted/pkg.freebsd.org.*)
+	echo "$trusted" | grep -qx "$(sha256sum < "$d/site/packagesite.yaml.pub" | cut -d' ' -f1)" &&
+	    sha256sum < "$d/site/packagesite.yaml" | cut -d' ' -f1 | tr -d '\n' |
+	    openssl dgst -sha256 -verify "$d/site/packagesite.yaml.pub" \
+	    -signature "$d/site/packagesite.yaml.sig" > /dev/null ||
+	    { rm -rf "$d/site"; echo "$1: package index does not verify"; return 1; }
+}
+
+# The source at its pinned revision (REV), from URL or maemo-leste. URL
+# may also be a release tarball (REV: its SHA-256), unpacked to
+# $SRC/<part>, or "pkg:<set>", FreeBSD's package of that name from one of
+# its package sets (REV: its SHA-256, as that set's index has it), for a
+# part FreeBSD no longer builds for quarterly (kept as $SRC/<part>.pkg)
 fetch_src() {
 	local name=$1 url=${URL[$1]:-https://github.com/maemo-leste/$1.git}
-	local rev=${REV[$1]:?no pinned revision for $1}
+	local rev=${REV[$1]:?no pinned revision for $1} f
+	case $url in
+	pkg:*)
+		pkg_site "${url#pkg:}" || return 1
+		f=$(python3 -I "$REPO/freebsd/pkgfetch.py" -n "$WORK/pkgs-${url#pkg:}/site" \
+		    "$WORK/pkgs-${url#pkg:}/cache" "https://pkg.freebsd.org/$ABI/${url#pkg:}" \
+		    "$name" 2> /dev/null)
+		[ "$(sha256sum < "$f" | cut -d' ' -f1)" = "$rev" ] ||
+		    { echo "$name: not the pinned package ($f)"; return 1; }
+		ln -sf "$f" "$SRC/$name.pkg"
+		return ;;
+	*.tar.*)
+		f=$WORK/dl/${url##*/}
+		[ -f "$f" ] || curl -sSfL -o "$f" "$url"
+		echo "$rev  $f" | sha256sum -c --quiet - ||
+		    { echo "$f: not the pinned tarball"; return 1; }
+		if [ "$(cat "$SRC/$name/.sha256" 2> /dev/null)" != "$rev" ]; then
+			rm -rf "${SRC:?}/$name"
+			mkdir -p "$SRC/$name"
+			bsdtar -xf "$f" -C "$SRC/$name" --strip-components 1
+			echo "$rev" > "$SRC/$name/.sha256"
+		fi
+		return ;;
+	esac
 	[ -d "$SRC/$name/.git" ] || git clone -q "$url" "$SRC/$name"
 	git -C "$SRC/$name" cat-file -e "$rev^{commit}" 2> /dev/null ||
 	    git -C "$SRC/$name" fetch -q origin
@@ -223,13 +269,22 @@ fetch_src() {
 
 # Into the part's own root, then the stage and the sysroot
 build_part() {
-	local name=$1 args=${2%%|*} b=$BUILD/$1 p
+	local name=$1 args=${2%%|*} b=$BUILD/$1 p PREBUILT=
 	local CPPFLAGS="$CPPFLAGS"
 	PR=$H/pkgroot/$1
 	case "$2" in *"|"*) CPPFLAGS="$CPPFLAGS ${2#*|}" ;; esac
 	log "$name"
 	rm -rf "$b" "$PR"
 	mkdir -p "$PR"
+	# FreeBSD's own package (fetch_src): its files as they are, its
+	# manifest for pkgmeta.py
+	if [ "$args" = pkg ]; then
+		PREBUILT=1
+		bsdtar -xf "$SRC/$name.pkg" -C "$PR" --exclude '+*'
+		bsdtar -xOf "$SRC/$name.pkg" +MANIFEST > "$PR.manifest"
+		finish_part
+		return
+	fi
 	cp -a "$SRC/$name" "$b"
 	# Debian's own patches (quilt), but those patches/<part>/skip-debian lists
 	if [ -f "$b/debian/patches/series" ]; then
@@ -294,6 +349,34 @@ finish_part() {
 			rm -rf "${PR:?}/usr/$x"
 		fi
 	done
+	# FreeBSD's own packages stay as FreeBSD built them
+	[ -n "${PREBUILT:-}" ] || fix_elf
+	unsysroot "$PR"
+	find "$PR" -name '*.la' -delete
+	# FreeBSD keeps pkg-config files in libdata
+	if [ -d "$PR/usr/local/lib/pkgconfig" ]; then
+		mkdir -p "$PR/usr/local/libdata/pkgconfig"
+		mv "$PR"/usr/local/lib/pkgconfig/* "$PR/usr/local/libdata/pkgconfig/"
+		rmdir "$PR/usr/local/lib/pkgconfig"
+	fi
+	# FreeBSD's additions to a part (extra/<part>: D-Bus activation where
+	# Leste starts a daemon from its init scripts, ...)
+	if [ -d "$REPO/freebsd/hildon/extra/$name" ]; then
+		cp -a "$REPO/freebsd/hildon/extra/$name/." "$PR/"
+	fi
+	fix_entries "$PR"
+	if [ -d "$SRC/$name/.git" ]; then git -C "$SRC/$name" rev-parse HEAD
+	else echo "${REV[$name]}"; fi > "$PR.rev"
+	case ${URL[$name]:-} in
+	pkg:*) echo "https://pkg.freebsd.org/$ABI/${URL[$name]#pkg:}/All/Hashed/$(basename "$(readlink "$SRC/$name.pkg")")" ;;
+	*) echo "${URL[$name]:-https://github.com/maemo-leste/$name.git}" ;;
+	esac > "$PR.url"
+	cp -a "$PR/." "$STAGE/"
+	cp -a "$PR/." "$SYSROOT/"
+}
+
+# The ELF files: no build paths in them
+fix_elf() {
 	# No run path into the sysroot (libtool adds one)
 	find "$PR" -type f \( -name '*.so*' -o -perm -u+x \) -exec sh -c \
 	    'for f; do if head -c4 "$f" | grep -q ELF &&
@@ -314,24 +397,7 @@ finish_part() {
 	    "$BUILD/$name"/make.out "$BUILD/$name"/*/make.out 2> /dev/null |
 	    sort -u > "$PR.implicit" || true
 	[ -s "$PR.implicit" ] && log "$name: $(sed "s/.*function //" "$PR.implicit" | tr '\n' ' ')"
-	unsysroot "$PR"
-	find "$PR" -name '*.la' -delete
-	# FreeBSD keeps pkg-config files in libdata
-	if [ -d "$PR/usr/local/lib/pkgconfig" ]; then
-		mkdir -p "$PR/usr/local/libdata/pkgconfig"
-		mv "$PR"/usr/local/lib/pkgconfig/* "$PR/usr/local/libdata/pkgconfig/"
-		rmdir "$PR/usr/local/lib/pkgconfig"
-	fi
-	# FreeBSD's additions to a part (extra/<part>: D-Bus activation where
-	# Leste starts a daemon from its init scripts, ...)
-	if [ -d "$REPO/freebsd/hildon/extra/$name" ]; then
-		cp -a "$REPO/freebsd/hildon/extra/$name/." "$PR/"
-	fi
-	fix_entries "$PR"
-	git -C "$SRC/$name" rev-parse HEAD > "$PR.rev"
-	echo "${URL[$name]:-https://github.com/maemo-leste/$name.git}" > "$PR.url"
-	cp -a "$PR/." "$STAGE/"
-	cp -a "$PR/." "$SYSROOT/"
+	return 0
 }
 
 # Menu entries and D-Bus services name programs and files below /usr

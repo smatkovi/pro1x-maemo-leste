@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FreeBSD ports <noreply@localhost>
+Date: Mon, 26 Oct 2026 12:51:49 +0100
+Subject: [PATCH 19/19] FreeBSD port:
+ Source_JavaScriptCore_heap_MachineStackMarker.cpp
+
+---
+ Source/JavaScriptCore/heap/MachineStackMarker.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Source/JavaScriptCore/heap/MachineStackMarker.cpp b/Source/JavaScriptCore/heap/MachineStackMarker.cpp
+index 883914f..613a54d 100644
+--- a/Source/JavaScriptCore/heap/MachineStackMarker.cpp
++++ b/Source/JavaScriptCore/heap/MachineStackMarker.cpp
+@@ -86,7 +86,7 @@ static void pthreadSignalHandlerSuspendResume(int, siginfo_t*, void* ucontext)
+     }
+ 
+     ucontext_t* userContext = static_cast<ucontext_t*>(ucontext);
+-#if CPU(PPC)
++#if CPU(PPC) && defined(WTF_OS_LINUX)
+     thread->suspendedMachineContext = *userContext->uc_mcontext.uc_regs;
+ #else
+     thread->suspendedMachineContext = userContext->uc_mcontext;

@@ -38,6 +38,20 @@ LOCAL = {
                     "theme for the configured factor and the session's environment "
                     '(tools/pro1x-hidpi).', ['UNKNOWN']),
 }
+# Parts from a release tarball (build.sh fetch_src): version, comment,
+# description, licences, home page
+TARBALL = {
+    'ffmpeg8-libs': ('8.1.2', "FFmpeg 8.1's libraries, for FreeBSD 15.1's QtWebEngine",
+                     "libavcodec, libavformat, libavutil and libswresample of FFmpeg "
+                     "8.1 (LGPL parts only), which the qt5-webengine package of FreeBSD "
+                     "15.1 (release_1) links; beside FFmpeg 9 of FreeBSD's quarterly "
+                     "packages, without headers.", ['LGPL21+'], 'https://ffmpeg.org/'),
+    'qt5-webkit': ('5.212.0.a4', 'QtWebKit with a more modern WebKit code base',
+                   "QtWebKit 5.212.0-alpha4, the last release of the Qt port of WebKit, "
+                   "with the patches of FreeBSD's port and Arch's: WebKit 1 (QWebView, "
+                   "QtWebKitWidgets) for the Maemo apps; without WebKit 2, video, "
+                   "geolocation and XSLT.", ['LGPL21'], 'https://github.com/qtwebkit/qtwebkit'),
+}
 MAINTAINER = 'sebastian.matkovich@gmail.com'
 # What a part needs besides the libraries it links: interpreters, the
 # modules it loads, the session around it
@@ -48,6 +62,9 @@ RUNTIME = {
                       'qt5-quickcontrols', 'qt5-quickcontrols2', 'qt5-graphicaleffects'],
     'pro1x-hidpi': ['xrdb'],
     'wifi-assistant': ['curl'],
+    # QtSql's SQLite driver, a package of its own on FreeBSD
+    'jib': ['qt5-sqldrivers-sqlite3'],
+    'dorian': ['qt5-sqldrivers-sqlite3'],
 }
 # Where debian/copyright says only "GPL" (any version) or nothing
 LICENSES = {
@@ -234,6 +251,7 @@ parts = sorted(p for p in os.listdir(ROOTS)
 meta = {}
 for part in parts:
     root = os.path.join(ROOTS, part)
+    meta_extra = {}
     name = RENAME.get(part, part)
     conflicts = []
     if name in site and part not in RENAME:
@@ -267,6 +285,16 @@ for part in parts:
         lic = ['UNKNOWN']
         www = 'https://maedevu.maemo.org/leste'
         url = www
+    elif os.path.exists(root + '.manifest'):
+        # FreeBSD's own package of another package set (build.sh: "pkg"),
+        # as FreeBSD describes it
+        fm = json.loads(read(root + '.manifest'))
+        version, comment, desc = fm['version'], fm['comment'], fm['desc']
+        lic, www = fm.get('licenses') or ['UNKNOWN'], fm.get('www', url)
+        meta_extra = {'origin': fm['origin'], 'logic': fm.get('licenselogic', 'single'),
+                      'scripts': fm.get('scripts')}
+    elif part in TARBALL:
+        version, comment, desc, lic, www = TARBALL[part]
     elif part in LOCAL:
         # this repository's own (tools/)
         version, comment, desc, lic = LOCAL[part]
@@ -297,6 +325,7 @@ for part in parts:
     meta[part] = dict(name=name, version=version, comment=comment, desc=desc,
                       licenses=lic, www=www, url=url, rev=rev, root=root,
                       conflicts=conflicts)
+    meta[part].update(meta_extra)
 
 # Leste's GTK as FreeBSD's gtk2, one step above FreeBSD's version
 if 'gtk' in meta:
@@ -420,6 +449,9 @@ for part, m in meta.items():
         'deps': deps,
         'annotations': {'source': m['url'] or m['www'], 'revision': m['rev']},
     }
+    if m.get('scripts'):
+        # FreeBSD's own (ldconfig, Qt's qconfig-modules.h)
+        manifest['scripts'] = m['scripts']
     with open(os.path.join(d, '+MANIFEST'), 'w') as f:
         json.dump(manifest, f, indent=1)
     with open(os.path.join(d, 'plist'), 'w') as f:
