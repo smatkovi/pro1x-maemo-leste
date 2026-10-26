@@ -1,0 +1,157 @@
+FreeBSD has no remoteproc class to name the firmware's directories: the JSON files of pro1x-dsp's firmware directory (freebsd/dsp).
+
+diff --git a/pd-mapper.c b/pd-mapper.c
+index 1167e02..8860256 100644
+--- a/pd-mapper.c
++++ b/pd-mapper.c
+@@ -193,6 +193,15 @@ static int pd_load_map(const char *file)
+ 	return 0;
+ }
+ 
++#ifdef __FreeBSD__
++/*
++ * FreeBSD has no remoteproc class: the DSPs' firmware is in one directory,
++ * pro1x-dsp's (pro1x-maemo-leste, freebsd/dsp)
++ */
++#ifndef FIRMWARE_DIR
++#define FIRMWARE_DIR	"/usr/local/share/pro1x/firmware/qcom/sm6115/Fxtec/QX1050"
++#endif
++#else
+ static int concat_path(char *base_path, char *firmware_path, char *path, size_t path_len)
+ {
+ 	if (strlen(base_path) + 1 + strlen(firmware_path) + 1 >= path_len) {
+@@ -265,6 +274,7 @@ DIR opendir_firmware(char *firmware_path)
+ 	return open_concat_path("/vendor/firmware/", firmware_path);
+ }
+ #endif
++#endif /* !__FreeBSD__ */
+ 
+ static char *known_extensions[] = {
+   ".jsn.xz",
+@@ -272,21 +282,75 @@ static char *known_extensions[] = {
+   NULL,
+ };
+ 
++/* The JSON files in an open firmware directory, which it closes */
++static void pd_add_jsons(struct assoc *json_set, const char *path, DIR *fw_dir)
++{
++	char json_path[PATH_MAX];
++	struct dirent *fw_de;
++	size_t len;
++
++	while ((fw_de = readdir(fw_dir)) != NULL) {
++		int extens_index;
++		bool found = false;
++
++		if (!strcmp(fw_de->d_name, ".") || !strcmp(fw_de->d_name, ".."))
++			continue;
++
++		len = strlen(fw_de->d_name);
++
++		for (extens_index = 0; known_extensions[extens_index] != NULL; extens_index++) {
++			int extens_len = strlen(known_extensions[extens_index]);
++			if (len > extens_len &&
++			    !strcmp(&fw_de->d_name[len - extens_len], known_extensions[extens_index])) {
++				found = true;
++				break;
++			}
++		}
++
++		if (!found)
++			continue;
++
++		if (strlen(path) + 1 + strlen(fw_de->d_name) + 1 > sizeof(json_path))
++			continue;
++
++		strcpy(json_path, path);
++		strcat(json_path, "/");
++		strcat(json_path, fw_de->d_name);
++
++		assoc_set(json_set, json_path, NULL);
++	}
++
++	closedir(fw_dir);
++}
++
++#ifdef __FreeBSD__
++static int pd_enumerate_jsons(struct assoc *json_set)
++{
++	DIR *fw_dir;
++
++	fw_dir = opendir(FIRMWARE_DIR);
++	if (!fw_dir) {
++		warn("Cannot open firmware path: %s", FIRMWARE_DIR);
++		return -1;
++	}
++
++	pd_add_jsons(json_set, FIRMWARE_DIR, fw_dir);
++
++	return 0;
++}
++#else
+ static int pd_enumerate_jsons(struct assoc *json_set)
+ {
+ 	char firmware_value[PATH_MAX];
+ 	char *firmware_value_copy = NULL;
+ 	char *firmware_path = NULL;
+-	char json_path[PATH_MAX];
+ 	char firmware_attr[32];
+-	struct dirent *fw_de;
+ 	char path[PATH_MAX];
+ 	struct dirent *de;
+ 	int firmware_fd;
+ 	DIR *class_dir;
+ 	int class_fd;
+ 	DIR *fw_dir;
+-	size_t len;
+ 	size_t n;
+ 
+ 	class_fd = open("/sys/class/remoteproc", O_RDONLY | O_DIRECTORY);
+@@ -330,38 +394,7 @@ static int pd_enumerate_jsons(struct assoc *json_set)
+ 		if (!fw_dir)
+ 			continue;
+ 
+-		while ((fw_de = readdir(fw_dir)) != NULL) {
+-			int extens_index;
+-			bool found = false;
+-
+-			if (!strcmp(fw_de->d_name, ".") || !strcmp(fw_de->d_name, ".."))
+-				continue;
+-
+-			len = strlen(fw_de->d_name);
+-
+-			for (extens_index = 0; known_extensions[extens_index] != NULL; extens_index++) {
+-				int extens_len = strlen(known_extensions[extens_index]);
+-				if (len > extens_len &&
+-				    !strcmp(&fw_de->d_name[len - extens_len], known_extensions[extens_index])) {
+-					found = true;
+-					break;
+-				}
+-			}
+-
+-			if (!found)
+-				continue;
+-
+-			if (strlen(path) + 1 + strlen(fw_de->d_name) + 1 > sizeof(json_path))
+-				continue;
+-
+-			strcpy(json_path, path);
+-			strcat(json_path, "/");
+-			strcat(json_path, fw_de->d_name);
+-
+-			assoc_set(json_set, json_path, NULL);
+-		}
+-
+-		closedir(fw_dir);
++		pd_add_jsons(json_set, path, fw_dir);
+ 		free(firmware_value_copy);
+ 	}
+ 
+@@ -371,6 +404,7 @@ close_class:
+ 
+ 	return 0;
+ }
++#endif
+ 
+ static int pd_load_maps(void)
+ {

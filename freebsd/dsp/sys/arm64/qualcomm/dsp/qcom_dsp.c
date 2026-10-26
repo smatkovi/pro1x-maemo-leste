@@ -37,6 +37,8 @@ qcom_dsp_modevent(module_t mod, int what, void *arg)
 		printf("qcom_dsp: secure monitor %s (%d)\n",
 		    error == 0 ? "answers" : "does not answer", error);
 		qcom_smem_report();
+		/* the modem's EFS memory, shared with it before it starts */
+		qcom_rmtfs_init();
 		return (0);
 	case MOD_UNLOAD:
 		/* the drivers keep SMEM mapped and their state shared */

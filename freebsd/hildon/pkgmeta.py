@@ -60,6 +60,43 @@ TARBALL = {
                    "QtWebKitWidgets) for the Maemo apps; without WebKit 2, video, "
                    "geolocation and XSLT.", ['LGPL21'], 'https://github.com/qtwebkit/qtwebkit'),
 }
+# Parts from git without a debian/ directory (the DSPs' userland from
+# Linux): version (git describe), comment, description, licences, and the
+# licence logic if more than one
+UPSTREAM = {
+    'hexagonrpc': ('0.5.0.24', "FastRPC file server for the Qualcomm DSPs",
+                   "hexagonrpcd serves a Hexagon DSP the files it asks for over "
+                   "FastRPC: the ADSP its sensor configuration and registry. With "
+                   "the sensor registry interface the SM6115's ADSP needs.",
+                   ['GPLv3+']),
+    'libqrtr-glib': ('1.4.0', 'QRTR sockets for GLib',
+                     "libqrtr-glib, the Qualcomm IPC router (QRTR) for GLib "
+                     "programs: libqmi's transport to the DSPs' QMI services.",
+                     ['LGPL21+']),
+    'libqmi': ('1.34.0', 'QMI protocol library and qmicli',
+               "libqmi-glib and qmicli as Leste builds them (1.34), over QRTR; "
+               "without udev, RMNET links, QMI over MBIM and the firmware updater.",
+               ['LGPL21+', 'GPLv2+'], 'multi'),
+    'libssc': ('0.4.4', 'Qualcomm Sensor Core client library',
+               "libssc reads the sensors of a Qualcomm DSP (accelerometer, light, "
+               "proximity, the step counter) over QMI, with Leste's two patches.",
+               ['GPLv3+']),
+    'qrtr': ('1.2.18', 'Qualcomm IPC router library and lookup tool',
+             "libqrtr, QRTR sockets and QMI encoding for C programs, and "
+             "qrtr-lookup, which lists the services of the name service.",
+             ['BSD3CLAUSE']),
+    'rmtfs': ('1.3', "Qualcomm modem's remote file system service",
+              "rmtfs gives the modem its file systems (modemst1, modemst2, fsg, "
+              "fsc) from the GPT partitions through the shared memory of "
+              "qcom_rmtfs, read-only as on Leste.", ['BSD3CLAUSE']),
+    'tqftpserv': ('1.3.2', 'TFTP over QRTR for the Qualcomm DSPs',
+                  "tqftpserv serves the DSPs files over QRTR's TFTP: the modem "
+                  "its configuration and the Wi-Fi's firmware (wlanmdsp.mbn).",
+                  ['BSD3CLAUSE']),
+    'pd-mapper': ('1.1', 'Qualcomm protection domain mapper',
+                  "pd-mapper tells the DSPs which of them serves which protection "
+                  "domain, from the firmware's .jsn files.", ['BSD3CLAUSE']),
+}
 MAINTAINER = 'sebastian.matkovich@gmail.com'
 # What a part needs besides the libraries it links: interpreters, the
 # modules it loads, the session around it
@@ -72,6 +109,8 @@ RUNTIME = {
     'wifi-assistant': ['curl'],
     'pro1x-steps': ['hexagonrpc', 'dbus'],
     'pro1x-gnss': ['gpsd'],
+    # the modem asks for its files and domains before its file systems
+    'rmtfs': ['tqftpserv', 'pd-mapper'],
     # QtSql's SQLite driver, a package of its own on FreeBSD
     'jib': ['qt5-sqldrivers-sqlite3'],
     'dorian': ['qt5-sqldrivers-sqlite3'],
@@ -305,6 +344,11 @@ for part in parts:
                       'scripts': fm.get('scripts')}
     elif part in TARBALL:
         version, comment, desc, lic, www = TARBALL[part]
+    elif part in UPSTREAM:
+        version, comment, desc, lic = UPSTREAM[part][:4]
+        if len(UPSTREAM[part]) > 4:
+            meta_extra = {'logic': UPSTREAM[part][4]}
+        www = re.sub(r'\.git$', '', url)
     elif part in LOCAL:
         # this repository's own (tools/)
         version, comment, desc, lic = LOCAL[part]

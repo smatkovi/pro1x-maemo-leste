@@ -20,7 +20,12 @@
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/malloc.h>
 #include <sys/sx.h>
+
+#include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/vm_extern.h>
 
 #include "qcom_dsp.h"
 
@@ -30,9 +35,13 @@
 #define	SCM_FNID(svc, cmd)	((((svc) & 0xff) << 8) | ((cmd) & 0xff))
 #define	SCM_CALL(svc, cmd)	(SMCCC_YIELDING | SMCCC_SMC64 | SMCCC_OWNER_SIP | \
 				    SCM_FNID(svc, cmd))
-/* x1: number of arguments, then two bits of type each (0 value, 2 rw) */
+/* x1: number of arguments, then two bits of type each (0 value, 1 ro, 2 rw) */
 #define	SCM_ARGS(n)		((n) & 0xf)
+#define	SCM_ARG_RO(i)		(1U << (4 + 2 * (i)))
 #define	SCM_ARG_RW(i)		(2U << (4 + 2 * (i)))
+/* x2..x5 hold four arguments; with more, x5 points to the 4th on */
+#define	SCM_REG_ARGS		4
+#define	SCM_MAX_ARGS		10
 
 #define	SCM_SVC_PIL		0x02
 #define	SCM_PAS_INIT_IMAGE	0x01
@@ -42,6 +51,9 @@
 #define	SCM_PAS_IS_SUPPORTED	0x07
 #define	SCM_SVC_INFO		0x06
 #define	SCM_INFO_IS_CALL_AVAIL	0x01
+#define	SCM_SVC_MP		0x0c
+#define	SCM_MP_ASSIGN		0x16
+#define	SCM_VMID_HLOS		0x3
 
 #define	SCM_INTERRUPTED		1
 #define	SCM_WAITQ_SLEEP		2
@@ -82,25 +94,38 @@ scm_smc(uint64_t a[8], uint64_t *x6, struct scm_res *res)
 	*x6 = r6;
 }
 
-/* A call of up to four value arguments; *result is x1 of the answer */
+/*
+ * A call; *result is x1 of the answer. Beyond four arguments the 4th and
+ * the rest go in a buffer TrustZone reads, its address in x5.
+ */
 static int
 scm_call(u_int svc, u_int cmd, uint32_t arginfo, const uint64_t *args,
     int nargs, uint64_t *result)
 {
 	struct scm_res res;
-	uint64_t a[8], x6;
+	uint64_t a[8], x6, *ext = NULL;
 	int64_t status;
 	int i, retries;
 
-	KASSERT(nargs <= 4, ("scm_call: %d arguments", nargs));
+	KASSERT(nargs <= SCM_MAX_ARGS, ("scm_call: %d arguments", nargs));
+	if (nargs > SCM_REG_ARGS) {
+		ext = kmem_alloc_contig(PAGE_SIZE, M_WAITOK | M_ZERO, 0,
+		    ~(vm_paddr_t)0, PAGE_SIZE, 0, VM_MEMATTR_UNCACHEABLE);
+		if (ext == NULL)
+			return (ENOMEM);
+		for (i = SCM_REG_ARGS - 1; i < nargs; i++)
+			ext[i - (SCM_REG_ARGS - 1)] = args[i];
+	}
 	retries = 0;
 	sx_xlock(&scm_lock);
 	for (;;) {
 		memset(a, 0, sizeof(a));
 		a[0] = SCM_CALL(svc, cmd);
 		a[1] = arginfo;
-		for (i = 0; i < nargs; i++)
+		for (i = 0; i < MIN(nargs, SCM_REG_ARGS); i++)
 			a[2 + i] = args[i];
+		if (ext != NULL)
+			a[2 + SCM_REG_ARGS - 1] = pmap_kextract((vm_offset_t)ext);
 		x6 = 0;
 		for (;;) {
 			scm_smc(a, &x6, &res);
@@ -118,6 +143,8 @@ scm_call(u_int svc, u_int cmd, uint32_t arginfo, const uint64_t *args,
 		sx_xlock(&scm_lock);
 	}
 	sx_xunlock(&scm_lock);
+	if (ext != NULL)
+		kmem_free(ext, PAGE_SIZE);
 	if (result != NULL)
 		*result = res.x1;
 	switch (status) {
@@ -230,5 +257,67 @@ qcom_scm_pas_shutdown(uint32_t pas_id)
 	arg = pas_id;
 	error = scm_call(SCM_SVC_PIL, SCM_PAS_SHUTDOWN, SCM_ARGS(1), &arg, 1,
 	    &result);
+	return (error != 0 ? error : (result != 0 ? EIO : 0));
+}
+
+/*
+ * Memory shared from this processor (HLOS) with others (Linux's
+ * qcom_scm_assign_mem with HLOS as the only source): TrustZone reads the
+ * source VMIDs, the region and the destinations with their permissions
+ * from one buffer.
+ */
+struct scm_vmperm_info {
+	uint32_t	vmid;
+	uint32_t	perm;
+	uint64_t	ctx;
+	uint32_t	ctx_size;
+	uint32_t	unused;
+};
+
+struct scm_mem_map_info {
+	uint64_t	addr;
+	uint64_t	size;
+};
+
+int
+qcom_scm_assign_mem(vm_paddr_t addr, vm_size_t size, const uint32_t *vmids,
+    const uint32_t *perms, int n)
+{
+	struct scm_vmperm_info *dst;
+	struct scm_mem_map_info *map;
+	uint32_t *src;
+	uint64_t args[7], result;
+	vm_paddr_t pa;
+	char *buf;
+	int i, error;
+
+	if (n < 1 || n > 8)
+		return (EINVAL);
+	/* src at 0, the region at 64, the destinations at 128 */
+	buf = kmem_alloc_contig(PAGE_SIZE, M_WAITOK | M_ZERO, 0, ~(vm_paddr_t)0,
+	    PAGE_SIZE, 0, VM_MEMATTR_UNCACHEABLE);
+	if (buf == NULL)
+		return (ENOMEM);
+	pa = pmap_kextract((vm_offset_t)buf);
+	src = (uint32_t *)buf;
+	src[0] = SCM_VMID_HLOS;
+	map = (struct scm_mem_map_info *)(buf + 64);
+	map->addr = addr;
+	map->size = size;
+	dst = (struct scm_vmperm_info *)(buf + 128);
+	for (i = 0; i < n; i++) {
+		dst[i].vmid = vmids[i];
+		dst[i].perm = perms[i];
+	}
+	args[0] = pa + 64;
+	args[1] = sizeof(*map);
+	args[2] = pa;
+	args[3] = sizeof(uint32_t);
+	args[4] = pa + 128;
+	args[5] = n * sizeof(*dst);
+	args[6] = 0;
+	error = scm_call(SCM_SVC_MP, SCM_MP_ASSIGN, SCM_ARGS(7) | SCM_ARG_RO(0) |
+	    SCM_ARG_RO(2) | SCM_ARG_RO(4), args, 7, &result);
+	kmem_free(buf, PAGE_SIZE);
 	return (error != 0 ? error : (result != 0 ? EIO : 0));
 }

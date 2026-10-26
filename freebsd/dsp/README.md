@@ -18,20 +18,30 @@ protocol code (GLINK, QRTR, QMI) by host tests against itself.
 | Layer | Linux | Here | For |
 | --- | --- | --- | --- |
 | Secure monitor calls: load and start signed firmware (PAS) | `qcom_scm` | `qcom_scm.c` | every DSP |
-| Hardware mutex (TCSR) | `qcom_hwspinlock` | `qcom_hwlock.c` | SMEM |
-| Shared memory items (SMEM) | `qcom_smem` | `qcom_smem.c` | all below |
+| Shared memory items (SMEM) and their hardware mutex (TCSR) | `qcom_smem`, `qcom_hwspinlock` | `qcom_smem.c` | all below |
+| Doorbells to the other processors (APCS IPC) | `qcom_apcs_ipc` | `qcom_ipc.c` | SMP2P, GLINK |
 | Bit states between processors (SMP2P) | `qcom_smp2p`, `smem_state` | `qcom_smp2p.c` | start, stop, crash |
 | Remote processors (PAS) | `qcom_q6v5_pas`, `mdt_loader` | `qcom_pas.c` + `pro1x-dsp` (userspace loader) | ADSP, modem, CDSP |
 | Message channels (GLINK over SMEM) | `qcom_glink_native`, `qcom_glink_smem` | `qcom_glink.c` | QRTR, APR, FastRPC |
-| IPC router (QRTR) and its name service | `net/qrtr` | `qrtr.c` (socket family) | QMI services |
+| IPC router (QRTR) and its name service | `net/qrtr` | `qrtr_core.c`, `qrtr_sock.c` (socket family 45), `qrtr_glink.c` | QMI services |
 | QMI (requests in TLV) | `qmi_interface`, `qmi_encdec` | LinuxKPI `qmi.c` | ath10k |
-| Modem file system memory | `rmtfs_mem` | `qcom_rmtfs.c` | modem |
+| Modem file system memory, shared with the modem through TrustZone | `rmtfs_mem`, `qcom_scm_assign_mem` | `qcom_rmtfs.c` | modem |
 | Remote procedure calls to the DSPs | `fastrpc` | `qcom_fastrpc.c` | sensors |
 | Wi-Fi (WCN3950 through the modem) | `ath10k_snoc` | FreeBSD's ath10k (LinuxKPI) + SNOC attachment | Wi-Fi |
 | Audio services on the ADSP (APR, q6afe, q6asm), LPASS, SoundWire, WCD937x | ASoC drivers | not yet | audio |
 
-Userspace, from Linux (`apps.sh` parts for FreeBSD): `qrtr` (tools and
-library), `rmtfs`, `tqftpserv`, `pd-mapper`, `hexagonrpcd`, `libssc`.
+Userspace, from Linux (`apps.sh` parts for FreeBSD, `hildon/patches/<part>`
+for what differs): `qrtr` (library and `qrtr-lookup`), `rmtfs`, `tqftpserv`,
+`pd-mapper`, `hexagonrpcd`, `libqrtr-glib`, `libqmi`, `libssc`.
+
+The modem's side, as Leste runs it: `rmtfs -r -P` reads the modem's EFS
+partitions (`/dev/gpt/modemst1`, `modemst2`, `fsg`, `fsc`) and keeps its
+writes in memory, so the IMEI and calibration partitions are never written;
+`tqftpserv` serves the modem files from the firmware directory (among them
+`wlanmdsp.mbn`, the Wi-Fi's firmware); `pd-mapper` answers which DSP serves
+which protection domain (the firmware's `.jsn` files; Linux has it in the
+kernel). Each has an rc.d script (`hildon/extra/<part>`); the modem starts
+after them (`pro1x-dsp start modem`).
 
 ## Order
 
@@ -71,7 +81,7 @@ the next boot (`fbsdtest.sh`). One layer per run:
 | dsp3 | `pro1x-dsp start adsp` | PAS init, mem setup, auth and reset OK; "ready" over SMP2P |
 | dsp4 | GLINK on the ADSP's edge, QRTR | the ADSP's channels open; its services in `qrtr-lookup` |
 | dsp5 | FastRPC, hexagonrpcd, libssc (`pro1x.dsp=sensors`) | the sensor registry served, QRTR service 400, accelerometer values, a step count |
-| dsp6 | rmtfs, tqftpserv, pd-mapper, `pro1x-dsp start modem` | modem ready, its QMI services listed |
+| dsp6 | rmtfs, tqftpserv, pd-mapper, `pro1x-dsp start modem` (`pro1x.dsp=modem`, without the ADSP) | the region shared (`qcom_rmtfs: ... 0`), modem ready, its QMI services listed, `qmicli --dms-get-revision` answers |
 | dsp7 | ath10k | `wlan0` scans |
 
 ## Risks

@@ -1,0 +1,33 @@
+#!/bin/sh
+#
+# PROVIDE: pd_mapper
+# REQUIRE: FILESYSTEMS
+# BEFORE: rmtfs
+# KEYWORD: nojail shutdown
+#
+# pd-mapper tells the DSPs which of them serves which protection domain
+# (the firmware's .jsn files: the modem's Wi-Fi, the ADSP's audio and
+# sensors). Linux has it in the kernel (Leste's QCOM_PD_MAPPER), FreeBSD
+# in userspace (freebsd/dsp/README.md).
+#
+#   pd_mapper_enable="YES"
+
+. /etc/rc.subr
+
+name=pd_mapper
+rcvar=pd_mapper_enable
+load_rc_config $name
+: ${pd_mapper_enable:=NO}
+
+pidfile=/var/run/${name}.pid
+procname=/usr/local/bin/pd-mapper
+command=/usr/sbin/daemon
+command_args="-r -R 1 -P ${pidfile} -o /var/log/pd-mapper.log ${procname}"
+start_precmd=pd_mapper_prestart
+
+pd_mapper_prestart()
+{
+	kldload -n qrtr
+}
+
+run_rc_command "$1"

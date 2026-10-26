@@ -1,0 +1,33 @@
+#!/bin/sh
+#
+# PROVIDE: tqftpserv
+# REQUIRE: FILESYSTEMS
+# BEFORE: rmtfs
+# KEYWORD: nojail shutdown
+#
+# tqftpserv serves the modem files over QRTR's TFTP: among them
+# wlanmdsp.mbn, the Wi-Fi's firmware, from the DSPs' firmware directory
+# (freebsd/dsp/README.md). Leste runs it the same way (pro1x-tqftpserv).
+#
+#   tqftpserv_enable="YES"
+
+. /etc/rc.subr
+
+name=tqftpserv
+rcvar=tqftpserv_enable
+load_rc_config $name
+: ${tqftpserv_enable:=NO}
+
+pidfile=/var/run/${name}.pid
+procname=/usr/local/bin/tqftpserv
+command=/usr/sbin/daemon
+command_args="-r -R 1 -P ${pidfile} -o /var/log/${name}.log ${procname}"
+start_precmd=tqftpserv_prestart
+
+tqftpserv_prestart()
+{
+	kldload -n qrtr || return 1
+	mkdir -p /var/db/tqftpserv
+}
+
+run_rc_command "$1"

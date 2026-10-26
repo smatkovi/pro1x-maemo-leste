@@ -76,11 +76,16 @@ APPS=(
 	"jib|!"
 	"dorian|!"
 	# The DSPs' userland (freebsd/dsp/README.md): the sensors' file server,
-	# QMI over QRTR, the sensor client library, the step counter
+	# QMI over QRTR, the sensor client library; for the modem libqrtr, its
+	# remote file system, its TFTP server and the protection domain mapper
 	"hexagonrpc|!"
 	"libqrtr-glib|!"
 	"libqmi|!"
 	"libssc|!"
+	"qrtr|!"
+	"rmtfs|!"
+	"tqftpserv|!"
+	"pd-mapper|!"
 	# Maemo 5 apps ported to Leste (github.com/smatkovi), at their releases
 	"headphoned|!"
 	"pedometerhomewidget|!"
@@ -125,6 +130,8 @@ REV+=(
 	[jib]=5dd4a340d20d [dorian]=da92eda1d5d9
 	[hexagonrpc]=40e50412812a
 	[libqrtr-glib]=69791f8f2a09 [libqmi]=3f07d6e5b467 [libssc]=0cf77b93b557
+	[qrtr]=29e36ae16438 [rmtfs]=b30a3eb38f9a [tqftpserv]=0bf5b98c2422
+	[pd-mapper]=5ecd2fe926ac
 	[headphoned]=d476cb4a8bf9 [pedometerhomewidget]=06d5246191fa
 	[wifi-assistant]=604bbe98d8b5 [gpodder-leste]=2759445563b5
 )
@@ -147,6 +154,10 @@ URL+=(
 	[libqrtr-glib]=https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
 	[libqmi]=https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
 	[libssc]=https://codeberg.org/DylanVanAssche/libssc.git
+	[qrtr]=https://github.com/linux-msm/qrtr.git
+	[rmtfs]=https://github.com/linux-msm/rmtfs.git
+	[tqftpserv]=https://github.com/linux-msm/tqftpserv.git
+	[pd-mapper]=https://github.com/linux-msm/pd-mapper.git
 	[headphoned]=https://github.com/smatkovi/headphoned.git
 	[pedometerhomewidget]=https://github.com/smatkovi/pedometerhomewidget.git
 	[wifi-assistant]=https://github.com/smatkovi/wifi-assistant.git
@@ -574,6 +585,48 @@ custom_libqmi() {
 # The ADSP's sensors over QMI (Leste: v0.4.4 with its two patches)
 custom_libssc() {
 	meson_cross
+}
+
+# libqrtr and qrtr-lookup (the name service is the kernel's)
+custom_qrtr() {
+	local MESON_CFLAGS="-I$DSP_INCLUDE"
+	meson_cross
+}
+
+# linux-msm's plain Makefiles: the cross compiler, libqrtr and LIBS,
+# installed below /usr/local without their systemd units and udev rules
+# (FreeBSD has rc.d scripts: extra/<part>)
+msm_make() {
+	make -j"$JOBS" CC="$CC" CFLAGS="$CPPFLAGS $CFLAGS -I$DSP_INCLUDE -Wall" \
+	    LDFLAGS="$LDFLAGS $1" prefix=/usr/local > make.out 2>&1 ||
+	    { grep -m20 -E "error:|Error [0-9]" make.out; tail -20 make.out; exit 1; }
+	make install DESTDIR="$PR" prefix=/usr/local > install.out 2>&1 ||
+	    { tail -20 install.out; exit 1; }
+	rm -rf "$PR/usr/local/lib/systemd" "$PR/usr/local/lib/udev"
+	rmdir "$PR/usr/local/lib" 2> /dev/null || :
+}
+
+# The modem's file systems (EFS) from its partitions, as Leste runs it
+# (-r -P: read from /dev/gpt, the modem's writes kept in memory). The QMI
+# code is generated already: newer than its .qmi, no qmic needed.
+custom_rmtfs() {
+	touch qmi_rmtfs.c qmi_rmtfs.h
+	msm_make "-lqrtr -lpthread"
+}
+
+# The modem's files over QRTR's TFTP (wlanmdsp.mbn for the Wi-Fi); the
+# script that copies the persist partition's files is Linux's
+custom_tqftpserv() {
+	local MESON_CFLAGS="-I$DSP_INCLUDE"
+	meson_cross
+	rm -f "$PR/usr/local/bin/populate-readwrite.sh"
+}
+
+# Which DSP serves which protection domain (the firmware's .jsn files):
+# Linux's kernel has it built in, FreeBSD runs it in userspace
+custom_pd_mapper() {
+	touch servreg_loc.c servreg_loc.h
+	msm_make "-lqrtr -llzma"
 }
 
 custom_jib() { qt_cmake -DMAEMO=On; }

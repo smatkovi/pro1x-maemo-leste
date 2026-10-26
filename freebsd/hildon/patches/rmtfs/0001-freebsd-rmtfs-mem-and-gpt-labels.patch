@@ -1,0 +1,97 @@
+FreeBSD's qcom_rmtfs (freebsd/dsp): the region's address and size as sysctls (hw.qcom_rmtfs.*) instead of udev's sysfs attributes; the GPT partitions by GEOM's labels (/dev/gpt) instead of /dev/disk/by-partlabel. sig_int_count declared once (sig_atomic_t is long on FreeBSD/arm64, not int).
+
+diff --git a/rmtfs.c b/rmtfs.c
+index ec33a19..a4630d9 100644
+--- a/rmtfs.c
++++ b/rmtfs.c
+@@ -420,8 +420,6 @@ static int handle_rmtfs(int sock)
+ 	return ret;
+ }
+ 
+-static int sig_int_count;
+-
+ static int run_rmtfs(int rprocfd)
+ {
+ 	bool sig_int_handled = false;
+diff --git a/sharedmem.c b/sharedmem.c
+index c37a58d..7234f33 100644
+--- a/sharedmem.c
++++ b/sharedmem.c
+@@ -5,7 +5,9 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <inttypes.h>
+-#ifndef ANDROID
++#if defined(__FreeBSD__)
++#include <sys/sysctl.h>
++#elif !defined(ANDROID)
+ #include <libudev.h>
+ #else
+ #include <sys/endian.h>
+@@ -27,7 +29,48 @@ struct rmtfs_mem {
+ 	int fd;
+ };
+ 
+-#ifndef ANDROID
++#if defined(__FreeBSD__)
++/*
++ * FreeBSD's qcom_rmtfs (pro1x-maemo-leste, freebsd/dsp): the device, and
++ * the region's address and size as sysctls instead of sysfs attributes
++ */
++static int rmtfs_mem_open_rfsa(struct rmtfs_mem *rmem, int client_id)
++{
++	int saved_errno;
++	char path[32];
++	size_t len;
++
++	snprintf(path, sizeof(path), "/dev/qcom_rmtfs_mem%d", client_id);
++	rmem->fd = open(path, O_RDWR);
++	if (rmem->fd < 0) {
++		saved_errno = errno;
++		fprintf(stderr, "failed to open %s: %s\n", path, strerror(errno));
++		return -saved_errno;
++	}
++
++	len = sizeof(rmem->address);
++	if (sysctlbyname("hw.qcom_rmtfs.phys_addr", &rmem->address, &len, NULL, 0) < 0)
++		goto err_close_fd;
++	len = sizeof(rmem->size);
++	if (sysctlbyname("hw.qcom_rmtfs.size", &rmem->size, &len, NULL, 0) < 0)
++		goto err_close_fd;
++
++	return 0;
++
++err_close_fd:
++	saved_errno = errno;
++	fprintf(stderr, "failed to read hw.qcom_rmtfs: %s\n", strerror(errno));
++	close(rmem->fd);
++	return -saved_errno;
++}
++
++static int rmtfs_mem_open_uio(struct rmtfs_mem *rmem, int client_id)
++{
++	fprintf(stderr, "uio access is not supported on FreeBSD\n");
++	return -EINVAL;
++}
++
++#elif !defined(ANDROID)
+ 
+ static int parse_hex_sysattr(struct udev_device *dev, const char *name,
+ 			     uint64_t *value)
+diff --git a/storage.c b/storage.c
+index ee9d526..33e4345 100644
+--- a/storage.c
++++ b/storage.c
+@@ -11,7 +11,12 @@
+ #define MAX_CALLERS 10
+ #define STORAGE_MAX_SIZE (16 * 1024 * 1024)
+ 
++#ifdef __FreeBSD__
++/* GEOM's labels of the GPT partitions */
++#define BY_PARTLABEL_PATH "/dev/gpt"
++#else
+ #define BY_PARTLABEL_PATH "/dev/disk/by-partlabel"
++#endif
+ 
+ #define MIN(x, y) ((x) < (y) ? (x) : (y))
+ 

@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# PROVIDE: rmtfs
+# REQUIRE: FILESYSTEMS tqftpserv pd_mapper
+# KEYWORD: nojail shutdown
+#
+# rmtfs gives the modem its file systems (modemst1, modemst2, fsg, fsc)
+# through the memory it shares with qcom_rmtfs (/dev/qcom_rmtfs_mem1),
+# read from the GPT partitions (/dev/gpt). As on Leste, -r: the modem's
+# writes stay in memory, the partitions (IMEI, calibration) are never
+# written. The modem starts after it (pro1x-dsp start modem).
+#
+#   rmtfs_enable="YES"
+
+. /etc/rc.subr
+
+name=rmtfs
+rcvar=rmtfs_enable
+load_rc_config $name
+: ${rmtfs_enable:=NO}
+
+pidfile=/var/run/${name}.pid
+procname=/usr/local/bin/rmtfs
+command=/usr/sbin/daemon
+command_args="-r -R 1 -P ${pidfile} -o /var/log/${name}.log ${procname} -r -P"
+start_precmd=rmtfs_prestart
+
+rmtfs_prestart()
+{
+	kldload -n qcom_dsp qrtr || return 1
+	[ -c /dev/qcom_rmtfs_mem1 ] || { warn "no /dev/qcom_rmtfs_mem1"; return 1; }
+	[ -c /dev/gpt/modemst1 ] || { warn "no /dev/gpt/modemst1"; return 1; }
+}
+
+run_rc_command "$1"

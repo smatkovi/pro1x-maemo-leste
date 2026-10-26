@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <stdint.h>
+#include <linux/types.h>
 
 #include "../../sys/arm64/qualcomm/dsp/qrtr_sock.h"
 

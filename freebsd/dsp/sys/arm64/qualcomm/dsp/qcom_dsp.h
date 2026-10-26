@@ -22,6 +22,11 @@ int	qcom_scm_pas_init_image(uint32_t pas_id, vm_paddr_t metadata);
 int	qcom_scm_pas_mem_setup(uint32_t pas_id, vm_paddr_t addr, vm_size_t size);
 int	qcom_scm_pas_auth_and_reset(uint32_t pas_id);
 int	qcom_scm_pas_shutdown(uint32_t pas_id);
+/* share memory of this processor with others: vmids with their perms */
+#define	QCOM_SCM_VMID_HLOS	0x3
+#define	QCOM_SCM_PERM_RW	0x6
+int	qcom_scm_assign_mem(vm_paddr_t addr, vm_size_t size,
+	    const uint32_t *vmids, const uint32_t *perms, int n);
 
 /* Shared memory (qcom_smem.c); host: the remote's SMEM host id, or ANY */
 #define	QCOM_SMEM_HOST_ANY	(-1)
@@ -61,5 +66,8 @@ int	qcom_smmu_bypass(phandle_t smmu, uint32_t sid, uint32_t mask,
 
 /* FastRPC (qcom_fastrpc.c): /dev/fastrpc-<dsp> once a DSP opens its channel */
 void	qcom_fastrpc_init(void);
+
+/* The modem's remote file system memory (qcom_rmtfs.c) */
+void	qcom_rmtfs_init(void);
 
 #endif /* _QCOM_DSP_H_ */

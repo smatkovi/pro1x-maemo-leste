@@ -1,0 +1,22 @@
+FreeBSD has no netlink: qrtr-cfg (setting the node address) is Linux's only; FreeBSD's QRTR (freebsd/dsp) is node 1 always.
+
+diff --git a/src/meson.build b/src/meson.build
+index a9bd342..ec47e2f 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -1,5 +1,7 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ 
++# qrtr-cfg sets the node address over netlink, which only Linux has
++if host_machine.system() == 'linux'
+ cfg_srcs = ['addr.c',
+             'cfg.c']
+ executable('qrtr-cfg',
+@@ -7,6 +9,7 @@ executable('qrtr-cfg',
+            link_with : libqrtr,
+            include_directories : inc,
+            install : true)
++endif
+ 
+ executable('qrtr-lookup',
+            'lookup.c',

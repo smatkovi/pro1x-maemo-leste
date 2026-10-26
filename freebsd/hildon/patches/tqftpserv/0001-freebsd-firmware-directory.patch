@@ -1,0 +1,53 @@
+FreeBSD has no remoteproc class to name the firmware's directory: the DSPs' firmware directory of pro1x-dsp (freebsd/dsp); the persistent files in /var/db.
+
+diff --git a/translate.c b/translate.c
+index 19fdd48..7d62678 100644
+--- a/translate.c
++++ b/translate.c
+@@ -28,7 +28,16 @@
+ #define READONLY_VENDOR_PATH		"/readonly/vendor/firmware/"
+ #define READONLY_VENDOR_MNT_PATH	"/readonly/vendor/firmware_mnt/image/"
+ 
+-#ifndef ANDROID
++#if defined(__FreeBSD__)
++/*
++ * FreeBSD has no remoteproc class: the DSPs' firmware is in one directory,
++ * pro1x-dsp's (pro1x-maemo-leste, freebsd/dsp)
++ */
++#ifndef FIRMWARE_DIR
++#define FIRMWARE_DIR	"/usr/local/share/pro1x/firmware/qcom/sm6115/Fxtec/QX1050"
++#endif
++#define TQFTPSERV_RW_DIR	"/var/db/tqftpserv"
++#elif !defined(ANDROID)
+ #define FIRMWARE_BASE	"/lib/firmware/"
+ #define TQFTPSERV_RW_DIR	"/var/lib/tqftpserv"
+ #else
+@@ -38,6 +47,20 @@
+ 
+ static int open_maybe_compressed(const char *path);
+ 
++#ifdef __FreeBSD__
++static int translate_readonly(const char *file)
++{
++	char path[PATH_MAX];
++
++	if (snprintf(path, sizeof(path), "%s/%s", FIRMWARE_DIR, file) >=
++	    (int)sizeof(path)) {
++		errno = ENAMETOOLONG;
++		return -1;
++	}
++
++	return open_maybe_compressed(path);
++}
++#else
+ static void read_fw_path_from_sysfs(char *outbuffer, size_t bufsize)
+ {
+ 	size_t pathsize;
+@@ -167,6 +190,7 @@ static int translate_readonly(const char *file)
+ 
+ 	return fd;
+ }
++#endif
+ 
+ /**
+  * translate_readwrite() - open "file" from the persistent readwrite directory

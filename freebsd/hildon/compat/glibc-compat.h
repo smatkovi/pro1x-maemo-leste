@@ -25,4 +25,9 @@
 #define HOST_NAME_MAX 255
 #endif
 
+/* Read a mapping's pages in at mmap(2) (Linux's name for FreeBSD's flag) */
+#ifndef MAP_POPULATE
+#define MAP_POPULATE MAP_PREFAULT_READ
+#endif
+
 #endif

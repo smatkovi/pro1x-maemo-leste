@@ -4,8 +4,10 @@
 # set in the boot menu's freebsd/cmdline): load (the substrate), adsp (the
 # ADSP started and stopped again), sensors (the ADSP left running: its
 # GLINK channels, QRTR services, FastRPC, hexagonrpcd, the sensors through
-# libssc and the step counter). Everything goes to the console, which the
-# RAM console keeps for Linux after the next boot.
+# libssc and the step counter); modem (on the substrate, without the ADSP:
+# rmtfs, tqftpserv, pd-mapper, the modem and its QMI services).
+# Everything goes to the console, which the RAM console keeps for Linux
+# after the next boot.
 step=${1:-$(kenv -q pro1x.dsp)}
 step=${step:-load}
 echo "=== DSP test up to: $step"
@@ -20,6 +22,40 @@ dmesg | grep -E "qcom_(dsp|smem|smp2p|pas)|qrtr" | tail -30
 sysctl hw.qcom_socinfo
 ls -la /dev/qcom_pas 2>&1
 [ "$step" = load ] && exit 0
+
+# wait_service SERVICE: up to a minute for a QRTR service to appear
+wait_service() {
+	i=0
+	while [ $i -lt 60 ] && ! sysctl -n net.qrtr.servers | grep -q "^$1 "; do
+		sleep 1
+		i=$((i + 1))
+	done
+}
+
+if [ "$step" = modem ]; then
+	echo "--- modem"
+	sysctl hw.qcom_rmtfs
+	dmesg | grep -E "qcom_(rmtfs|scm)" | tail -5
+	ls -la /dev/qcom_rmtfs_mem* /dev/gpt 2>&1
+	for s in tqftpserv pd_mapper rmtfs; do
+		service $s onestart
+	done
+	sleep 2
+	pro1x-dsp start modem
+	echo "start: $?"
+	# its device management service (QMI 2) once it is up
+	wait_service 2
+	pro1x-dsp status modem
+	sysctl net.qrtr.servers
+	dmesg | grep -E "qcom_(smp2p|pas)|glink|qrtr" | tail -20
+	for l in tqftpserv pd-mapper rmtfs; do
+		echo "- $l"
+		tail -15 /var/log/$l.log
+	done
+	node=$(sysctl -n net.qrtr.servers | awk '$1 == 2 { print $3; exit }')
+	[ -n "$node" ] && qmicli -d qrtr://"$node" --dms-get-revision 2>&1
+	exit 0
+fi
 
 echo "--- ADSP"
 pro1x-dsp status
@@ -42,11 +78,7 @@ ls -la /dev/fastrpc-* 2>&1
 service dbus onestatus > /dev/null 2>&1 || service dbus onestart
 service hexagonrpcd onestart
 # the sensor service (QRTR 400) once the ADSP has its configuration
-i=0
-while [ $i -lt 60 ] && ! sysctl -n net.qrtr.servers | grep -q "^400 "; do
-	sleep 1
-	i=$((i + 1))
-done
+wait_service 400
 sysctl net.qrtr.servers
 tail -20 /var/log/hexagonrpcd.log
 for s in accelerometer light proximity; do
