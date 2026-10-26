@@ -45,6 +45,12 @@ LOCAL = {
                    "pro1x-gnss starts the modem's location service over QMI and "
                    'writes its NMEA sentences for gpsd (tools/pro1x-gnss).',
                    ['UNKNOWN']),
+    'pro1x-standby': ('1.0', "The Nokia N9's stand-by screen as the X screen saver",
+                      'pro1x-standby shows the time, unread notifications and the '
+                      "charging state in the style of the N9's low power mode when "
+                      'X blanks the screen, the rest black for the AMOLED panel '
+                      "(tools/pro1x-standby); Nokia's icons and font are not "
+                      'included.', ['UNKNOWN']),
 }
 # Parts from a release tarball (build.sh fetch_src): version, comment,
 # description, licences, home page

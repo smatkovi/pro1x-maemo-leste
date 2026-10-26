@@ -27,6 +27,8 @@ PKGS=${PKGS-xorg-minimal xf86-video-scfb xf86-input-libinput xinit xfce xfce4-te
 PRUNE=${PRUNE-llvm* spirv-llvm-translator* samba* qt6-* bsdisks python3* py3*-* perl5*}
 # Hildon (freebsd/hildon/build.sh), when built: HILDON= leaves it out
 HILDON=${HILDON-$WORK/hildon/stage}
+# Private, Nokia's: the stand-by screen's icons and font (see below)
+HARMATTAN=${HARMATTAN-$WORK/private/harmattan}
 if [ -n "$HILDON" ] && [ -d "$HILDON" ]; then
 	. "$REPO/freebsd/hildon/deps.sh"
 	PKGS="$PKGS $HILDON_PKGS $APPS_PKGS"
@@ -109,6 +111,17 @@ for s in m.get("scripts", {}).values():
 		    -e '^\./usr/local/share/man/' -e '^\./usr/local/share/gtk-doc/') |
 		    (cd "$HILDON" && cpio -pdm --quiet "$R")
 		cp -a "$REPO/freebsd/hildon/rootfs/." "$R/"
+		# Nokia's files for the stand-by screen (icons, Nokia Pure),
+		# never in this repository: from a private directory when
+		# there is one (HARMATTAN=, standby/*.png and fonts/*.ttf)
+		if [ -d "$HARMATTAN/standby" ]; then
+			mkdir -p "$R/usr/local/share/pro1x/harmattan/standby" \
+			    "$R/usr/local/share/fonts/nokia"
+			cp "$HARMATTAN"/standby/*.png \
+			    "$R/usr/local/share/pro1x/harmattan/standby/"
+			cp "$HARMATTAN"/fonts/*.ttf "$R/usr/local/share/fonts/nokia/"
+			log "Nokia's stand-by icons and font from $HARMATTAN"
+		fi
 		# HiDPI (tools/pro1x-hidpi): the theme for the default factor
 		# made here, other factors at boot into /var
 		s=$(sed -n 's/^DEFAULT=//p' "$REPO/tools/pro1x-hidpi/pro1x-hidpi")

@@ -74,12 +74,16 @@ which also fills root's home, a tmpfs, from `/usr/local/share/pro1x/root`).
 Hildon, Leste's desktop, is in the image too when `hildon/build.sh` has
 built it (`hildon/README.md`). As root on the console: `startx` (Xfce,
 scaled twice for the 400 dpi screen, the battery in the panel through
-genmon, black after 3 minutes since scfb has no DPMS), `startx hildon` or
+genmon; after 3 minutes, or on a short press of the power key, the
+Nokia N9's stand-by screen: the time, unread notifications and the
+charging state on black, `tools/pro1x-standby`, plain black with
+`pro1x.standby=off`; scfb has no DPMS), `startx hildon` or
 `startx xfce`; without an argument `pro1x.desktop=hildon` in
 `freebsd/cmdline` picks Hildon. "Hildon" in Xfce's menu and "Xfce" in
 Hildon's (`pro1x-desktop hildon|xfce`) switch without leaving X:
 `~/.xinitrc` runs the desktops one after the other on the same server.
-A short press on the power key blanks the screen or brings it back, held
+A short press on the power key starts the stand-by screen (or blanks it)
+or brings the desktop back, held
 for 2 s it powers the phone off (`pro1x-powerkey`). The RGB status LED
 shows charging (orange) and full (green), as on Leste
 (`rc.d/pro1x_statusled`).

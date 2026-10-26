@@ -1,10 +1,18 @@
 # The image loaders' list is built at boot (rc.d/pro1x_setup): the root is
 # read only.
 export GDK_PIXBUF_MODULE_FILE=/var/db/gdk-pixbuf-loaders.cache
-# scfb has no DPMS: black after 3 minutes, which the AMOLED panel shows
-# with its pixels off
+# scfb has no DPMS: the screen saver after 3 minutes (or the power key's
+# `xset s activate`). With pro1x-standby that is the N9's stand-by screen,
+# the time and the notifications on black (the Pro1X: 403 dpi, for the
+# N9's sizes in mm); pro1x.standby=off in freebsd/cmdline, or without it,
+# plain black. The AMOLED panel shows black with its pixels off.
 xset s 180 0
-xset s blank
+if [ -x /usr/local/bin/pro1x-standby ] && [ "$(kenv -q pro1x.standby)" != off ]; then
+	xset s noblank
+	/usr/local/bin/pro1x-standby -d 403 &
+else
+	xset s blank
+fi
 
 # Xfce or Hildon: `startx hildon` / `startx xfce`, else pro1x.desktop=hildon
 # in freebsd/cmdline, else Xfce. pro1x-desktop switches between them: it
