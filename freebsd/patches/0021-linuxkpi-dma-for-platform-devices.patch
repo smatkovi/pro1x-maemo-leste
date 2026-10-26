@@ -1,0 +1,108 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 26 Oct 2026 17:37:37 +0100
+Subject: [PATCH] linuxkpi: DMA state for devices other than PCI
+
+LinuxKPI sets up a device's DMA state (its bus_dma tags, which
+dma_alloc_coherent and dma_map_single use) only when a PCI device
+attaches. linux_dma_priv_init and linux_dma_priv_uninit do the same for
+any struct device, so that a driver attaching a Linux driver to a
+device-tree device (ath10k on the SoC's WCN3990, freebsd/dsp) can give
+it DMA; PCI uses them as before.
+---
+diff --git a/sys/compat/linuxkpi/common/include/linux/dma-mapping.h b/sys/compat/linuxkpi/common/include/linux/dma-mapping.h
+index 5e5d40ef8..db0cd1ff9 100644
+--- a/sys/compat/linuxkpi/common/include/linux/dma-mapping.h
++++ b/sys/compat/linuxkpi/common/include/linux/dma-mapping.h
+@@ -92,6 +92,8 @@ struct dma_map_ops {
+ 
+ int linux_dma_tag_init(struct device *, u64);
+ int linux_dma_tag_init_coherent(struct device *, u64);
++int linux_dma_priv_init(struct device *);
++void linux_dma_priv_uninit(struct device *);
+ void *linux_dma_alloc_coherent(struct device *dev, size_t size,
+     dma_addr_t *dma_handle, gfp_t flag);
+ void *linuxkpi_dmam_alloc_coherent(struct device *dev, size_t size,
+diff --git a/sys/compat/linuxkpi/common/src/linux_pci.c b/sys/compat/linuxkpi/common/src/linux_pci.c
+index c4f0564c7..075f8a627 100644
+--- a/sys/compat/linuxkpi/common/src/linux_pci.c
++++ b/sys/compat/linuxkpi/common/src/linux_pci.c
+@@ -166,24 +166,30 @@ lkpi_pci_bar_id_valid(int bar)
+ 	return (true);
+ }
+ 
+-static int
+-linux_pdev_dma_uninit(struct pci_dev *pdev)
++/*
++ * A device's DMA state (its tags): PCI devices get it when they attach,
++ * devices of other buses (platform devices of the device tree, attached by
++ * a driver of their own) through these.
++ */
++void
++linux_dma_priv_uninit(struct device *dev)
+ {
+ 	struct linux_dma_priv *priv;
+ 
+-	priv = pdev->dev.dma_priv;
++	priv = dev->dma_priv;
++	if (priv == NULL)
++		return;
+ 	if (priv->dmat)
+ 		bus_dma_tag_destroy(priv->dmat);
+ 	if (priv->dmat_coherent)
+ 		bus_dma_tag_destroy(priv->dmat_coherent);
+ 	mtx_destroy(&priv->lock);
+-	pdev->dev.dma_priv = NULL;
++	dev->dma_priv = NULL;
+ 	free(priv, M_DEVBUF);
+-	return (0);
+ }
+ 
+-static int
+-linux_pdev_dma_init(struct pci_dev *pdev)
++int
++linux_dma_priv_init(struct device *dev)
+ {
+ 	struct linux_dma_priv *priv;
+ 	int error;
+@@ -193,24 +199,37 @@ linux_pdev_dma_init(struct pci_dev *pdev)
+ 	mtx_init(&priv->lock, "lkpi-priv-dma", NULL, MTX_DEF);
+ 	pctrie_init(&priv->ptree);
+ 
+-	pdev->dev.dma_priv = priv;
++	dev->dma_priv = priv;
+ 
+ 	/* Create a default DMA tags. */
+-	error = linux_dma_tag_init(&pdev->dev, DMA_BIT_MASK(64));
++	error = linux_dma_tag_init(dev, DMA_BIT_MASK(64));
+ 	if (error != 0)
+ 		goto err;
+ 	/* Coherent is lower 32bit only by default in Linux. */
+-	error = linux_dma_tag_init_coherent(&pdev->dev, DMA_BIT_MASK(32));
++	error = linux_dma_tag_init_coherent(dev, DMA_BIT_MASK(32));
+ 	if (error != 0)
+ 		goto err;
+ 
+ 	return (error);
+ 
+ err:
+-	linux_pdev_dma_uninit(pdev);
++	linux_dma_priv_uninit(dev);
+ 	return (error);
+ }
+ 
++static int
++linux_pdev_dma_uninit(struct pci_dev *pdev)
++{
++	linux_dma_priv_uninit(&pdev->dev);
++	return (0);
++}
++
++static int
++linux_pdev_dma_init(struct pci_dev *pdev)
++{
++	return (linux_dma_priv_init(&pdev->dev));
++}
++
+ int
+ linux_dma_tag_init(struct device *dev, u64 dma_mask)
+ {
