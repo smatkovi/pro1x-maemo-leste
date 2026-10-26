@@ -45,6 +45,11 @@ LOCAL = {
                    "pro1x-gnss starts the modem's location service over QMI and "
                    'writes its NMEA sentences for gpsd (tools/pro1x-gnss).',
                    ['UNKNOWN']),
+    'pro1x-proximity': ('1.0', "The Pro1X's proximity sensor on D-Bus, while watched",
+                        "pro1x-proximity reads the ADSP's proximity sensor through "
+                        'libssc while a client watches it and serves it as '
+                        'org.pro1x.Proximity on the system bus (tools/pro1x-proximity), '
+                        'with its rc.d script.', ['UNKNOWN']),
     'pro1x-standby': ('1.0', "The Nokia N9's stand-by screen as the X screen saver",
                       'pro1x-standby shows the time, unread notifications and the '
                       "charging state in the style of the N9's low power mode when "
@@ -114,6 +119,7 @@ RUNTIME = {
     'pro1x-hidpi': ['xrdb'],
     'wifi-assistant': ['curl'],
     'pro1x-steps': ['hexagonrpc', 'dbus'],
+    'pro1x-proximity': ['hexagonrpc', 'dbus'],
     'pro1x-gnss': ['gpsd'],
     # the modem asks for its files and domains before its file systems
     'rmtfs': ['tqftpserv', 'pd-mapper'],

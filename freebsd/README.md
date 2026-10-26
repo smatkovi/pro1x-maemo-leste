@@ -74,12 +74,16 @@ which also fills root's home, a tmpfs, from `/usr/local/share/pro1x/root`).
 Hildon, Leste's desktop, is in the image too when `hildon/build.sh` has
 built it (`hildon/README.md`). As root on the console: `startx` (Xfce,
 scaled twice for the 400 dpi screen, the battery in the panel through
-genmon; as on the Nokia N9, after the display time-out of 30 s
-(`pro1x.display_timeout`) and 3 s more, or on a short press of the power
-key, the N9's stand-by screen: the time, unread notifications and the
-charging state on black, woken up by a double tap or the power key,
-`tools/pro1x-standby`; with `pro1x.standby=off` black after 3 minutes,
-since scfb has no DPMS), `startx hildon` or
+genmon; as on the Nokia N9, dimmed after the display time-out of 30 s
+(`pro1x.display_timeout`) and 3 s later, or on a short press of the
+power key, the N9's stand-by screen: the time, unread notifications and
+the charging state on black, in the panel's low power mode at a low
+brightness, the panel off while the proximity sensor is covered, woken
+up by a double tap or the power key; the keyboard light on with key
+presses and off 30 s after the last one, as on the N950
+(`tools/pro1x-standby`, sleeping on X's idle time alarms until something
+happens; with `pro1x.standby=off` black after 3 minutes, since scfb has
+no DPMS), `startx hildon` or
 `startx xfce`; without an argument `pro1x.desktop=hildon` in
 `freebsd/cmdline` picks Hildon. "Hildon" in Xfce's menu and "Xfce" in
 Hildon's (`pro1x-desktop hildon|xfce`) switch without leaving X:
@@ -92,7 +96,9 @@ shows charging (orange) and full (green), as on Leste
 
 `freebsd/cmdline` on userdata (it overrides `pro1x.env`, `patches/0018`;
 `kern.smp.disabled=0` starts all eight CPUs): `pro1x.root=ram` stays in
-the RAM root; `pro1x.test=1` makes the full system report, cycle the
+the RAM root; `pro1x.test=panel` steps through brightness, low power
+mode and panel off/on with times on the console; `pro1x.test=1` makes
+the full system report, cycle the
 status LED and the vibration motor, start X for 40 s
 (`pro1x.test=switch`: switching to the other desktop after 20 s), keep a
 screenshot in `/dev/pro1xshot` (`patches/0014`: at 0x5cc00000, for Linux
@@ -105,7 +111,7 @@ after boot (`patches/0013`), so that unattended tests always end.
 | | |
 | --- | --- |
 | console | `vt_simplefb` on the bootloader's framebuffer; RAM console (`0003`) |
-| display | `qcom_dpu` (`0017`): Linux's msm keeps the display running across kexec (`device/kernel/patches/0005`), FreeBSD points its scanout at the bootloader's framebuffer (SMMU context of the display bypassed): without it the screen stays black, since msm drives the display from the boot menu on |
+| display | `qcom_dpu` (`0017`): Linux's msm keeps the display running across kexec (`device/kernel/patches/0005`), FreeBSD points its scanout at the bootloader's framebuffer (SMMU context of the display bypassed): without it the screen stays black, since msm drives the display from the boot menu on. `0022`: DCS commands to the panel the way msm sends them (command DMA between frames, low power mode): the brightness as `backlight(4)` (`backlight(8)`, 0-100 %), `dev.qcom_dpu.0.display` (panel off/on), `dev.qcom_dpu.0.lpm` (the panel's idle mode, 8 colours at a reduced refresh, as the N9's panel driver did for its stand-by screen) |
 | watchdog | `qcom_wdt` (`0004`): the boot menu arms the APSS watchdog before the jump, FreeBSD feeds it; a hang resets the phone into the boot menu |
 | GPIOs | `qcom_tlmm_sm6115` (`0006`): GPIOs and their interrupts; on them `gpiokeys` (Shift, Ctrl, Alt, Fn, Home, camera key, the slider switch), `gpioiic` (the touchscreen's bus), `gpioled` (keyboard backlight) |
 | touchscreen | `goodix` (`0007`), GT9286, multi-touch through evdev |
@@ -124,7 +130,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 
 | Leste | FreeBSD |
 | --- | --- |
-| display | the framebuffer Linux leaves running (`qcom_dpu`); no brightness, no panel off yet (needs DSI commands, next) |
+| display | the framebuffer Linux leaves running (`qcom_dpu`); brightness, panel off and low power mode by DCS commands (untested on the phone) |
 | GPU (Adreno 610) | none: FreeBSD's DRM has no msm driver; Mesa's software renderer |
 | touch, keyboard, keyboard light, slider | yes (`goodix`, `pro1xkbd`, `gpiokeys`, `gpioled`) |
 | status LED, vibration | yes (`qcom_lpg`, `aw86224`) |
@@ -137,7 +143,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | USB (network to the PC, host) | not yet: FreeBSD's dwc3 is host only, and Linux takes the controller down at kexec |
 | Wi-Fi, Bluetooth, modem, GPS | no: all run through the modem and ADSP firmware (remoteproc, QMI over GLINK, ath10k over SNOC), none of which FreeBSD has |
 | audio | no: the codecs sit behind the ADSP (APR, LPASS macros, SoundWire) |
-| sensors, step counter | no: ADSP (FastRPC, libssc) |
+| sensors, step counter | built, untested on the phone: the DSP stack (`dsp/`), `pro1x-steps`, `pro1x-proximity` (the proximity sensor on D-Bus only while the stand-by screen watches it) |
 | cameras | no: CAMSS and the sensors' CCI, none in FreeBSD |
 
 ## Files
@@ -168,6 +174,8 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `patches/0018-*` | `freebsd/cmdline` overrides the kernel config's environment (`pro1x.env`) |
 | `patches/0019-*` | `aw86224`, the vibration motor |
 | `patches/0020-*` | `qcom_lpg`, the RGB status LED |
+| `patches/0021-*` | LinuxKPI DMA for platform devices (the DSP stack's Wi-Fi, in progress) |
+| `patches/0022-*` | `qcom_dpu`: brightness, panel off/on, low power mode by DCS commands |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `rootzfs.sh` | the root image as a ZFS pool |
 | `vm/` | a FreeBSD/arm64 VM on the PC (qemu): packages, ZFS image, tries |

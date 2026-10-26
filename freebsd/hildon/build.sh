@@ -457,9 +457,9 @@ hidpi_tool() {
 	cp -a "$PR/." "$STAGE/"
 }
 
-# This repository's small tools (tools/): the step counter (libssc), the
-# modem's GNSS for gpsd (QMI), the stand-by screen, with their files
-# (extra/<tool>)
+# This repository's small tools (tools/): the step counter and the
+# proximity sensor (libssc), the modem's GNSS for gpsd (QMI), the stand-by
+# screen, with their files (extra/<tool>)
 dsp_tool() {
 	local name=$1 bindir=$2 deps=$3 b=$BUILD/$1
 	log "$name"
@@ -637,8 +637,12 @@ fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-gnss "* ]]; then
 	dsp_tool pro1x-gnss bin "qmi-glib qrtr-glib" || failed+=(pro1x-gnss)
 fi
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-proximity "* ]]; then
+	dsp_tool pro1x-proximity sbin "libssc gio-unix-2.0" ||
+	    failed+=(pro1x-proximity)
+fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-standby "* ]]; then
-	dsp_tool pro1x-standby bin "x11 xscrnsaver cairo pangocairo sqlite3 dbus-1" ||
+	dsp_tool pro1x-standby bin "x11 xext xi cairo pangocairo sqlite3 dbus-1" ||
 	    failed+=(pro1x-standby)
 fi
 [ ${#failed[@]} -eq 0 ] || log "apps that failed: ${failed[*]}"

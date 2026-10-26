@@ -3,7 +3,29 @@
 # report on the console, which the RAM console keeps for Linux, and go back
 # to the boot menu.
 # pro1x.test=dsp: only the DSP stack (pro1x-dsptest), then back
-if [ "$(kenv -q pro1x.test)" = dsp ]; then
+# pro1x.test=panel: the DCS commands of qcom_dpu (patches/0022), each step
+# with its time on the console: brightness 100/10/50 %, the low power mode
+# (idle mode) and the panel off and on, 4 s each; then back. With a
+# watchdog lifetime hint a hanging DSI ends in a reset.
+if [ "$(kenv -q pro1x.test)" = panel ]; then
+	echo "=== FreeBSD multi-user: panel test ==="
+	dmesg | grep -E "qcom_dpu|DCS|DSI"
+	sysctl dev.qcom_dpu.0 2>&1
+	ls -la /dev/backlight 2>&1
+	step() { echo "$(date +%T) $*"; }
+	for b in 100 10 50; do
+		step "backlight $b"; backlight -f /dev/backlight/backlight0 $b 2>&1
+		sleep 4
+	done
+	step "lpm 1"; sysctl dev.qcom_dpu.0.lpm=1; sleep 4
+	step "lpm 0"; sysctl dev.qcom_dpu.0.lpm=0; sleep 4
+	step "display 0"; sysctl dev.qcom_dpu.0.display=0; sleep 4
+	step "display 1"; sysctl dev.qcom_dpu.0.display=1; sleep 4
+	backlight -f /dev/backlight/backlight0 2>&1
+	dmesg | grep -E "CMD_DMA|qcom_dpu" | tail -5
+	echo "=== test done, rebooting in 20 s"
+	(sleep 20; shutdown -r now "pro1x panel test done") > /dev/null 2>&1 &
+elif [ "$(kenv -q pro1x.test)" = dsp ]; then
 	echo "=== FreeBSD multi-user: DSP test ==="
 	/usr/local/libexec/pro1x-dsptest 2>&1
 	echo "=== test done, rebooting in 20 s"

@@ -1,0 +1,433 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 26 Oct 2026 20:54:50 +0100
+Subject: [PATCH] qcom_dpu: DCS commands to the panel: brightness, display, low
+ power mode
+
+The DSI controller Linux leaves running can send DCS commands the way
+Linux's msm does: the packet in msm's format in a buffer below 4 GiB
+(the display's streams bypass the SMMU since 0017), the controller in
+command mode as well, the DMA started in the blanking after a frame's
+video, done when CMD_DMA_DONE latches (polled, the interrupt stays
+unused; waits of a millisecond or more sleep, so that the CPU can
+idle). Linux's settings are checked first and kept: video mode, the
+command DMA triggered by software, commands in low power mode as the
+panel (BOE BF060Y8M-AJ0) asks.
+
+On top:
+- the panel's brightness as a backlight(9) device (0-100 % for the
+  panel's 0-255; no DCS reads yet, so the status is the last value
+  written, 50 % = Linux's 127 until then),
+- dev.qcom_dpu.0.display: DCS display off/on (a pocket),
+- dev.qcom_dpu.0.lpm: the panel's idle mode (8 colours, reduced
+  refresh), which the Nokia N9's panel driver (panel-nokia-dsi, "lpm")
+  used for its stand-by screen.
+
+Untested on the phone.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/arm64/qualcomm/qcom_dpu_handover.c | 333 ++++++++++++++++++++++++-
+ 1 file changed, 330 insertions(+), 3 deletions(-)
+
+diff --git a/sys/arm64/qualcomm/qcom_dpu_handover.c b/sys/arm64/qualcomm/qcom_dpu_handover.c
+index 7a0806108..d6537b668 100644
+--- a/sys/arm64/qualcomm/qcom_dpu_handover.c
++++ b/sys/arm64/qualcomm/qcom_dpu_handover.c
+@@ -18,15 +18,31 @@
+  * DPU 6.3 (SM6115) offsets from Linux's catalog, relative to the "mdp"
+  * registers: CTL_0 0x1000, SSPP VIG0 0x4000, DMA0 0x24000.
+  *
+- * The DSI controller's registers go to the console as they are (read
+- * only), for switching the panel off with DCS commands later.
++ * The DSI controller's registers go to the console as they are, and it
++ * sends DCS commands to the panel the way Linux's msm does (command DMA
++ * between two frames of video, in low power mode as the panel asks): the
++ * brightness as a backlight(9) device (backlight(8), 0-100 % for the
++ * panel's 0-255), the display switched off and on (sysctl
++ * dev.qcom_dpu.0.display) and the panel's idle mode, 8 colours at a
++ * reduced refresh (dev.qcom_dpu.0.lpm), which is what the Nokia N9's
++ * panel driver (panel-nokia-dsi, "lpm") used for its stand-by screen, for
++ * the stand-by screen and a pocket. Linux's DSI and DMA trigger settings
++ * are kept as they are and checked first.
+  */
+ 
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/bus.h>
++#include <sys/conf.h>
+ #include <sys/kernel.h>
++#include <sys/lock.h>
+ #include <sys/module.h>
++#include <sys/sx.h>
++#include <sys/sysctl.h>
++#include <sys/time.h>
++
++#include <machine/atomic.h>
++#include <machine/bus.h>
+ 
+ #include <vm/vm.h>
+ #include <vm/pmap.h>
+@@ -36,6 +52,10 @@
+ #include <dev/ofw/ofw_bus_subr.h>
+ #include <dev/ofw/ofw_subr.h>
+ 
++#include <dev/backlight/backlight.h>
++
++#include "backlight_if.h"
++
+ #define	CTL0			0x1000
+ #define	 CTL_FLUSH		0x018
+ #define	 FLUSH_CTL		(1u << 17)
+@@ -59,6 +79,61 @@ static const struct {
+ #define	SMMU_S2CR(n)		(0xc00 + 4 * (n))
+ #define	SMMU_CB_SCTLR		0x000
+ 
++/*
++ * DSI 6G (SM6115: 2.4.1), 4 bytes into the controller's block; values from
++ * Linux's dsi.xml
++ */
++#define	DSI_REG_SHIFT		4
++#define	DSI_CTRL		0x000
++#define	 DSI_CTRL_ENABLE	(1u << 0)
++#define	 DSI_CTRL_VID_MODE_EN	(1u << 1)
++#define	 DSI_CTRL_CMD_MODE_EN	(1u << 2)
++#define	DSI_STATUS0		0x004
++#define	 DSI_STATUS0_VIDEO_BUSY	(1u << 3)
++#define	DSI_CMD_DMA_CTRL	0x038
++#define	 DSI_CMD_DMA_LOW_POWER	(1u << 26)
++#define	DSI_DMA_BASE		0x044
++#define	DSI_DMA_LEN		0x048
++#define	DSI_TRIG_CTRL		0x080
++#define	 DSI_TRIG_DMA_MASK	0x7
++#define	 DSI_TRIG_DMA_SW	4
++#define	DSI_TRIG_DMA		0x08c
++#define	DSI_INTR_CTRL		0x10c
++#define	 DSI_IRQ_CMD_DMA_DONE	(1u << 0)
++#define	 DSI_IRQ_VIDEO_DONE	(1u << 16)
++/* each status bit has its mask (enable) bit after it; status: write 1 */
++#define	 DSI_IRQ_MASKS		0x02220202u
++#define	DSI_TX_SIZE		256
++
++/* MIPI DCS */
++#define	DCS_SET_DISPLAY_OFF	0x28
++#define	DCS_SET_DISPLAY_ON	0x29
++#define	DCS_EXIT_IDLE_MODE	0x38
++#define	DCS_ENTER_IDLE_MODE	0x39
++#define	DCS_SET_BRIGHTNESS	0x51
++/* DSI data types */
++#define	DSI_DCS_SHORT_WRITE	0x05
++#define	DSI_DCS_SHORT_WRITE_PARAM 0x15
++#define	DSI_DCS_LONG_WRITE	0x39
++/* the msm command header's flags */
++#define	DSI_HDR_LAST		0x80
++#define	DSI_HDR_LONG		0x40
++
++struct qcom_dpu_softc {
++	device_t	dev;
++	struct sx	lock;
++	vm_offset_t	dsi;		/* 0: no DSI commands */
++	bus_size_t	dsi_size;
++	bus_dma_tag_t	tag;
++	bus_dmamap_t	map;
++	uint8_t		*buf;
++	bus_addr_t	buf_pa;
++	struct cdev	*bl;
++	u_int		brightness;	/* percent, the last one written */
++	int		display_on;
++	int		lpm;		/* idle mode */
++};
++
+ static struct ofw_compat_data compat_data[] = {
+ 	{ "qcom,sm6115-mdss",	1 },
+ 	{ NULL,			0 }
+@@ -177,6 +252,250 @@ dpu_dump_dsi(device_t dev, phandle_t node)
+ 	}
+ }
+ 
++static uint32_t
++dsi_rd(struct qcom_dpu_softc *sc, bus_size_t off)
++{
++	return (*reg32(sc->dsi, DSI_REG_SHIFT + off));
++}
++
++static void
++dsi_wr(struct qcom_dpu_softc *sc, bus_size_t off, uint32_t v)
++{
++	*reg32(sc->dsi, DSI_REG_SHIFT + off) = v;
++}
++
++/*
++ * One packet from the command buffer, as msm's dsi_cmd_dma_tx does: the
++ * controller in command mode as well, the transfer started after a
++ * frame's video (in the blanking that follows), done when CMD_DMA_DONE
++ * latches. The interrupt itself stays unused (the status is polled).
++ */
++static int
++dsi_dma_tx(struct qcom_dpu_softc *sc, u_int len)
++{
++	uint32_t ctrl, masks;
++	int i, error;
++
++	sx_assert(&sc->lock, SA_XLOCKED);
++	ctrl = dsi_rd(sc, DSI_CTRL);
++	if (!(ctrl & DSI_CTRL_ENABLE))
++		return (ENXIO);
++	dsi_wr(sc, DSI_CTRL, ctrl | DSI_CTRL_CMD_MODE_EN | DSI_CTRL_ENABLE);
++	masks = dsi_rd(sc, DSI_INTR_CTRL) & DSI_IRQ_MASKS;
++	dsi_wr(sc, DSI_INTR_CTRL, masks | (DSI_IRQ_CMD_DMA_DONE << 1) |
++	    (DSI_IRQ_VIDEO_DONE << 1) | DSI_IRQ_CMD_DMA_DONE |
++	    DSI_IRQ_VIDEO_DONE);
++	/* Waits of a millisecond or more sleep, so that the CPU can idle */
++	if (dsi_rd(sc, DSI_STATUS0) & DSI_STATUS0_VIDEO_BUSY) {
++		for (i = 0; i < 70 &&
++		    !(dsi_rd(sc, DSI_INTR_CTRL) & DSI_IRQ_VIDEO_DONE); i++)
++			pause_sbt("dsivid", SBT_1MS, SBT_1MS / 4, 0);
++		/* past the blanking's first line (BLLP), as msm waits */
++		pause_sbt("dsibllp", 3 * SBT_1MS, SBT_1MS, 0);
++	}
++	bus_dmamap_sync(sc->tag, sc->map, BUS_DMASYNC_PREWRITE);
++	dsb(sy);
++	dsi_wr(sc, DSI_DMA_BASE, (uint32_t)sc->buf_pa);
++	dsi_wr(sc, DSI_DMA_LEN, len);
++	dsi_wr(sc, DSI_TRIG_DMA, 1);
++	/* a few bytes in low power mode: microseconds, rarely a frame */
++	for (i = 0; i < 20 &&
++	    !(dsi_rd(sc, DSI_INTR_CTRL) & DSI_IRQ_CMD_DMA_DONE); i++)
++		DELAY(10);
++	for (i = 0; i < 200 &&
++	    !(dsi_rd(sc, DSI_INTR_CTRL) & DSI_IRQ_CMD_DMA_DONE); i++)
++		pause_sbt("dsidma", SBT_1MS, SBT_1MS / 4, 0);
++	error = (dsi_rd(sc, DSI_INTR_CTRL) & DSI_IRQ_CMD_DMA_DONE) ? 0 :
++	    ETIMEDOUT;
++	bus_dmamap_sync(sc->tag, sc->map, BUS_DMASYNC_POSTWRITE);
++	/* Linux's masks back, the two statuses cleared */
++	dsi_wr(sc, DSI_INTR_CTRL, masks | DSI_IRQ_CMD_DMA_DONE |
++	    DSI_IRQ_VIDEO_DONE);
++	dsi_wr(sc, DSI_CTRL, ctrl);
++	if (error != 0)
++		device_printf(sc->dev, "DCS %#x: no CMD_DMA_DONE\n", sc->buf[0]);
++	return (error);
++}
++
++/* A DCS write: command byte and parameters, in msm's packet format */
++static int
++dsi_dcs_write(struct qcom_dpu_softc *sc, const uint8_t *p, u_int n)
++{
++	uint8_t *d = sc->buf;
++	u_int len;
++
++	if (sc->dsi == 0)
++		return (ENXIO);
++	if (n == 0 || 4 + n > DSI_TX_SIZE)
++		return (EINVAL);
++	if (n <= 2) {
++		d[0] = p[0];
++		d[1] = n == 2 ? p[1] : 0;
++		d[2] = n == 2 ? DSI_DCS_SHORT_WRITE_PARAM : DSI_DCS_SHORT_WRITE;
++		d[3] = DSI_HDR_LAST;
++		len = 4;
++	} else {
++		d[0] = n & 0xff;
++		d[1] = n >> 8;
++		d[2] = DSI_DCS_LONG_WRITE;
++		d[3] = DSI_HDR_LAST | DSI_HDR_LONG;
++		memcpy(d + 4, p, n);
++		len = roundup2(4 + n, 4);
++		memset(d + 4 + n, 0xff, len - 4 - n);
++	}
++	return (dsi_dma_tx(sc, len));
++}
++
++static int
++qcom_dpu_bl_update(device_t dev, struct backlight_props *props)
++{
++	struct qcom_dpu_softc *sc = device_get_softc(dev);
++	u_int raw;
++	uint8_t cmd[3];
++	int error;
++
++	if (props->brightness > 100)
++		return (ERANGE);
++	/* the panel's 0-255, as Linux's panel-boe-bf060y8m-aj0 writes it */
++	raw = (props->brightness * 255 + 50) / 100;
++	cmd[0] = DCS_SET_BRIGHTNESS;
++	cmd[1] = raw & 0xff;
++	cmd[2] = raw >> 8;
++	sx_xlock(&sc->lock);
++	error = dsi_dcs_write(sc, cmd, sizeof(cmd));
++	if (error == 0)
++		sc->brightness = props->brightness;
++	sx_xunlock(&sc->lock);
++	return (error);
++}
++
++static int
++qcom_dpu_bl_status(device_t dev, struct backlight_props *props)
++{
++	struct qcom_dpu_softc *sc = device_get_softc(dev);
++
++	/* no DCS reads yet: the last brightness written */
++	props->brightness = sc->brightness;
++	props->nlevels = 0;
++	return (0);
++}
++
++static int
++qcom_dpu_bl_info(device_t dev, struct backlight_info *info)
++{
++	strlcpy(info->name, "panel", sizeof(info->name));
++	info->type = BACKLIGHT_TYPE_PANEL;
++	return (0);
++}
++
++/* A switch made of two DCS commands without parameters (arg2: which) */
++#define	SWITCH_DISPLAY		0
++#define	SWITCH_LPM		1
++
++static int
++qcom_dpu_switch_sysctl(SYSCTL_HANDLER_ARGS)
++{
++	struct qcom_dpu_softc *sc = arg1;
++	int *state = arg2 == SWITCH_LPM ? &sc->lpm : &sc->display_on;
++	uint8_t cmd;
++	int on, error;
++
++	on = *state;
++	error = sysctl_handle_int(oidp, &on, 0, req);
++	if (error != 0 || req->newptr == NULL)
++		return (error);
++	on = on != 0;
++	if (on == *state)
++		return (0);
++	if (arg2 == SWITCH_LPM)
++		cmd = on ? DCS_ENTER_IDLE_MODE : DCS_EXIT_IDLE_MODE;
++	else
++		cmd = on ? DCS_SET_DISPLAY_ON : DCS_SET_DISPLAY_OFF;
++	sx_xlock(&sc->lock);
++	error = dsi_dcs_write(sc, &cmd, 1);
++	if (error == 0)
++		*state = on;
++	sx_xunlock(&sc->lock);
++	return (error);
++}
++
++static void
++dsi_dma_cb(void *arg, bus_dma_segment_t *segs, int nseg, int error)
++{
++	if (error == 0 && nseg == 1)
++		*(bus_addr_t *)arg = segs[0].ds_addr;
++}
++
++/*
++ * DCS commands, if the DSI controller is as expected: on, in video mode,
++ * the command DMA started by software, commands in low power mode (the
++ * panel's MIPI_DSI_MODE_LPM)
++ */
++static void
++qcom_dpu_dsi_setup(struct qcom_dpu_softc *sc, phandle_t node)
++{
++	device_t dev = sc->dev;
++	struct sysctl_ctx_list *ctx;
++	phandle_t c;
++	bus_addr_t pa;
++	uint32_t ctrl, trig, dma;
++	int error;
++
++	for (c = OF_child(node); c > 0; c = OF_peer(c))
++		if (ofw_bus_node_is_compatible(c, "qcom,mdss-dsi-ctrl") &&
++		    ofw_bus_node_status_okay(c))
++			break;
++	if (c <= 0 || ofw_reg_to_paddr(c, 0, &pa, &sc->dsi_size, NULL) != 0)
++		return;
++	sc->dsi = (vm_offset_t)pmap_mapdev(pa, sc->dsi_size);
++	ctrl = dsi_rd(sc, DSI_CTRL);
++	trig = dsi_rd(sc, DSI_TRIG_CTRL);
++	dma = dsi_rd(sc, DSI_CMD_DMA_CTRL);
++	if ((ctrl & (DSI_CTRL_ENABLE | DSI_CTRL_VID_MODE_EN)) !=
++	    (DSI_CTRL_ENABLE | DSI_CTRL_VID_MODE_EN) ||
++	    (trig & DSI_TRIG_DMA_MASK) != DSI_TRIG_DMA_SW ||
++	    !(dma & DSI_CMD_DMA_LOW_POWER)) {
++		device_printf(dev, "DSI not as expected (CTRL %#x, TRIG_CTRL "
++		    "%#x, CMD_DMA_CTRL %#x): no DCS commands\n", ctrl, trig,
++		    dma);
++		goto fail;
++	}
++	/* DMA_BASE is 32 bits; the display's streams bypass the SMMU */
++	error = bus_dma_tag_create(bus_get_dma_tag(dev), PAGE_SIZE, 0,
++	    BUS_SPACE_MAXADDR_32BIT, BUS_SPACE_MAXADDR, NULL, NULL,
++	    DSI_TX_SIZE, 1, DSI_TX_SIZE, 0, NULL, NULL, &sc->tag);
++	if (error == 0)
++		error = bus_dmamem_alloc(sc->tag, (void **)&sc->buf,
++		    BUS_DMA_WAITOK | BUS_DMA_ZERO | BUS_DMA_COHERENT, &sc->map);
++	if (error == 0)
++		error = bus_dmamap_load(sc->tag, sc->map, sc->buf, DSI_TX_SIZE,
++		    dsi_dma_cb, &sc->buf_pa, BUS_DMA_NOWAIT);
++	if (error != 0 || sc->buf_pa == 0) {
++		device_printf(dev, "no DSI command buffer: %d\n", error);
++		goto fail;
++	}
++	/* Linux's default: 127 of 255 */
++	sc->brightness = 50;
++	sc->display_on = 1;
++	sc->bl = backlight_register("panel", dev);
++	ctx = device_get_sysctl_ctx(dev);
++	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
++	    OID_AUTO, "display", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
++	    sc, SWITCH_DISPLAY, qcom_dpu_switch_sysctl, "I",
++	    "Panel on (1) or off (0), by DCS display on/off");
++	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
++	    OID_AUTO, "lpm", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
++	    sc, SWITCH_LPM, qcom_dpu_switch_sysctl, "I",
++	    "Low power mode: the panel's idle mode (8 colours, reduced "
++	    "refresh), as the N9's stand-by screen");
++	device_printf(dev, "DCS commands over DSI at %#jx (buffer %#jx)\n",
++	    (uintmax_t)pa, (uintmax_t)sc->buf_pa);
++	return;
++fail:
++	pmap_unmapdev((void *)sc->dsi, sc->dsi_size);
++	sc->dsi = 0;
++}
++
+ static int
+ qcom_dpu_probe(device_t dev)
+ {
+@@ -191,6 +510,7 @@ qcom_dpu_probe(device_t dev)
+ static int
+ qcom_dpu_attach(device_t dev)
+ {
++	struct qcom_dpu_softc *sc = device_get_softc(dev);
+ 	phandle_t node = ofw_bus_get_node(dev), mdp;
+ 	bus_addr_t mdp_pa, fb_pa;
+ 	bus_size_t mdp_size;
+@@ -243,19 +563,26 @@ qcom_dpu_attach(device_t dev)
+ 	    (uintmax_t)fb_pa, stride);
+ 	pmap_unmapdev((void *)va, mdp_size);
+ 	dpu_dump_dsi(dev, node);
++	sc->dev = dev;
++	sx_init(&sc->lock, "qcom_dpu");
++	qcom_dpu_dsi_setup(sc, node);
+ 	return (0);
+ }
+ 
+ static device_method_t qcom_dpu_methods[] = {
+ 	DEVMETHOD(device_probe,		qcom_dpu_probe),
+ 	DEVMETHOD(device_attach,	qcom_dpu_attach),
++
++	DEVMETHOD(backlight_update_status, qcom_dpu_bl_update),
++	DEVMETHOD(backlight_get_status,	qcom_dpu_bl_status),
++	DEVMETHOD(backlight_get_info,	qcom_dpu_bl_info),
+ 	DEVMETHOD_END
+ };
+ 
+ static driver_t qcom_dpu_driver = {
+ 	"qcom_dpu",
+ 	qcom_dpu_methods,
+-	0,
++	sizeof(struct qcom_dpu_softc),
+ };
+ 
+ DRIVER_MODULE(qcom_dpu, simplebus, qcom_dpu_driver, 0, 0);
+-- 
+2.56.0
+

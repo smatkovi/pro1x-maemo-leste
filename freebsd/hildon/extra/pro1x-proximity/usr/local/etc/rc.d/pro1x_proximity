@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_proximity
+# REQUIRE: dbus hexagonrpcd
+# KEYWORD: nojail shutdown
+#
+# The ADSP's proximity sensor on the system bus while a client watches it
+# (org.pro1x.Proximity, tools/pro1x-proximity): the stand-by screen goes
+# dark in a pocket.
+#
+#   pro1x_proximity_enable="YES"
+
+. /etc/rc.subr
+
+name=pro1x_proximity
+rcvar=pro1x_proximity_enable
+load_rc_config $name
+: ${pro1x_proximity_enable:=NO}
+
+pidfile=/var/run/${name}.pid
+procname=/usr/local/sbin/pro1x-proximity
+command=/usr/sbin/daemon
+command_args="-r -R 5 -P ${pidfile} -o /var/log/pro1x-proximity.log ${procname}"
+
+run_rc_command "$1"

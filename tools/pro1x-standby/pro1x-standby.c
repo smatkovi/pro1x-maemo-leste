@@ -15,9 +15,19 @@
  * power key goes there at once (SIGUSR1, from pro1x-powerkey, toggles).
  * Single touches then do nothing (DisableTSImmediately=2: only a double
  * tap after blanking), so that the phone stays dark in a pocket: a double
- * tap or the power key wake it up. Not like the N9 (the hardware for it is
- * missing where this runs): no dimming before, no proximity sensor to stay
- * black in a pocket, no lock screen after.
+ * tap or the power key wake it up. Not like the N9: no lock screen after.
+ *
+ * Power, as Nokia saved it: the panel dims to a fifth first; the stand-by
+ * screen runs in the panel's low power mode (idle mode, 8 colours at a
+ * reduced refresh: the N9 panel driver's "lpm") at -b % brightness; while
+ * the proximity sensor is covered (pro1x-proximity, on only while the
+ * stand-by screen shows) the panel is off and nothing is drawn. The
+ * keyboard light follows the N950's mce: on with key presses, off 30 s
+ * (-k) after the last one and when the display dims. The program itself
+ * sleeps until something happens: X tells it when the idle time passes a
+ * mark (SYNC's IDLETIME alarms), the clock wakes it once a minute only
+ * while the stand-by screen is visible, the notifications database is
+ * read again only when it changed.
  *
  * Sizes and timings are those of Harmattan's screen lock style
  * (LockScreenLowPowerMode* in libsysuid-screenlock-nokia.css), in mm of the
@@ -31,8 +41,8 @@
  * battery from sysctl hw.acpi.* (FreeBSD) or /sys/class/power_supply
  * (Linux), the profile from profiled on the session bus.
  *
- *   pro1x-standby [-s timeout] [-P pidfile] [-t themedir] [-d dpi]
- *                 [-f font] [-2]
+ *   pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout]
+ *                 [-P pidfile] [-t themedir] [-d dpi] [-f font] [-2]
  *       runs in the X session (with X's own screen saver off, xset s off)
  *   pro1x-standby -p out.png WIDTHxHEIGHT [options]
  *       draws one frame into a PNG and exits (for tests)
@@ -51,7 +61,8 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xresource.h>
-#include <X11/extensions/scrnsaver.h>
+#include <X11/extensions/sync.h>
+#include <X11/extensions/XInput2.h>
 #include <cairo.h>
 #include <cairo-xlib.h>
 #include <pango/pangocairo.h>
@@ -60,7 +71,9 @@
 
 #ifdef __FreeBSD__
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <sys/sysctl.h>
+#include <sys/backlight.h>
 #endif
 
 #define DEFAULT_THEME "/usr/local/share/pro1x/harmattan/standby"
@@ -68,6 +81,8 @@
 #define MOVE_S 180		/* animation-interval: 180000 */
 #define DIM_TIMEOUT_S 30	/* display_dim_timeout, the N9's default */
 #define BLANK_TIMEOUT_S 3	/* display_blank_timeout, after dimming */
+#define STANDBY_BL 20		/* % brightness of the stand-by screen */
+#define KBD_TIMEOUT_S 30	/* the N950's [KeyPad] BacklightTimeout */
 #define DOUBLE_TAP_MS 400	/* two touches this close wake it up */
 #define DOUBLE_TAP_MM 10.0	/* and this near each other */
 #define DEFAULT_PIDFILE "/var/run/pro1x-standby.pid"
@@ -88,11 +103,15 @@ static const char *font = DEFAULT_FONT;
 static double dpi;
 static int twelve_hour;
 static int dim_timeout = DIM_TIMEOUT_S;
+static int standby_bl = STANDBY_BL;
+static int kbd_timeout = KBD_TIMEOUT_S;
 static const char *pidfile = DEFAULT_PIDFILE;
 
 enum charge { CHARGE_NONE, CHARGE_CHARGING, CHARGE_FULL, CHARGE_FAILED };
 
 struct state {
+	time_t db_mtime;		/* the notifications as read then */
+	int db_read;
 	char time[16];
 	enum charge charge;
 	int level;			/* 0-4 */
@@ -133,20 +152,29 @@ static const char *note_icon(const char *category, const char *icon)
 	return NULL;
 }
 
+/* Only when the database changed: a stat a minute, no SQLite */
 static void read_notifications(struct state *st)
 {
 	char path[1024];
+	struct stat sb;
 	sqlite3 *db;
 	sqlite3_stmt *q;
 	const char *home = getenv("HOME");
 
-	st->nnotes = 0;
 	if (!home)
 		return;
 	snprintf(path, sizeof(path), "%s/.config/hildon-desktop/notifications.db",
 		 home);
-	if (access(path, R_OK) ||
-	    sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK)
+	if (stat(path, &sb) != 0) {
+		st->nnotes = 0;
+		return;
+	}
+	if (st->db_read && sb.st_mtime == st->db_mtime)
+		return;
+	st->db_read = 1;
+	st->db_mtime = sb.st_mtime;
+	st->nnotes = 0;
+	if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK)
 		return;
 	if (sqlite3_prepare_v2(db,
 	    "SELECT h.value, n.icon_name FROM notifications n "
@@ -250,7 +278,8 @@ static void read_profile(struct state *st, DBusConnection *bus)
 	dbus_message_unref(r);
 }
 
-static void read_state(struct state *st, DBusConnection *bus)
+/* full: the profile too (a D-Bus call; once when the screen comes up) */
+static void read_state(struct state *st, DBusConnection *bus, int full)
 {
 	time_t t = time(NULL);
 	struct tm tm;
@@ -259,7 +288,8 @@ static void read_state(struct state *st, DBusConnection *bus)
 	strftime(st->time, sizeof(st->time), twelve_hour ? "%l:%M" : "%R", &tm);
 	read_notifications(st);
 	read_battery(st);
-	read_profile(st, bus);
+	if (full)
+		read_profile(st, bus);
 }
 
 /* --- drawing ----------------------------------------------------------- */
@@ -441,6 +471,76 @@ static void place(int w, int h, int moves, double *right, double *top)
 	}
 }
 
+/* --- the hardware's power: panel, keyboard light -------------------------
+ *
+ * As the N9 does it: dimmed before the stand-by screen, which runs in the
+ * panel's low power mode (idle mode: 8 colours, reduced refresh, as the
+ * N9's panel-nokia-dsi "lpm") at a low brightness, the panel off while the
+ * proximity sensor is covered; the keyboard light (the N950's mce:
+ * [KeyPad] BacklightTimeout=30) on with key presses, off 30 s after the
+ * last one and whenever the display dims. FreeBSD's qcom_dpu
+ * (patches/0022) and gpioled; elsewhere these do nothing.
+ */
+#define KBD_LED "/dev/led/kbd-backlight"
+
+static int bl_get(void)
+{
+#ifdef __FreeBSD__
+	struct backlight_props p;
+	int fd = open("/dev/backlight/backlight0", O_RDWR), r = -1;
+
+	if (fd >= 0) {
+		if (ioctl(fd, BACKLIGHTGETSTATUS, &p) == 0)
+			r = p.brightness;
+		close(fd);
+	}
+	return r;
+#else
+	return -1;
+#endif
+}
+
+static void bl_set(int pct)
+{
+#ifdef __FreeBSD__
+	struct backlight_props p = { 0 };
+	int fd;
+
+	if (pct < 0 || (fd = open("/dev/backlight/backlight0", O_RDWR)) < 0)
+		return;
+	p.brightness = pct > 100 ? 100 : pct;
+	ioctl(fd, BACKLIGHTUPDATESTATUS, &p);
+	close(fd);
+#else
+	(void)pct;
+#endif
+}
+
+/* dev.qcom_dpu.0.display / .lpm */
+static void panel_set(const char *what, int on)
+{
+#ifdef __FreeBSD__
+	char name[64];
+
+	snprintf(name, sizeof(name), "dev.qcom_dpu.0.%s", what);
+	sysctlbyname(name, NULL, NULL, &on, sizeof(on));
+#else
+	(void)what, (void)on;
+#endif
+}
+
+static void kbd_light(int on)
+{
+	int fd = open(KBD_LED, O_WRONLY);
+
+	if (fd < 0)
+		return;
+	if (write(fd, on ? "1" : "0", 1) < 0) {
+		/* nothing to do about it */
+	}
+	close(fd);
+}
+
 /* --- X ----------------------------------------------------------------- */
 
 static double x_dpi(Display *dpy, int scr)
@@ -477,17 +577,40 @@ static void on_usr1(int sig)
 	errno = e;
 }
 
+enum mode { ACTIVE, DIMMED, STANDBY };
+
+/* PRO1X_STANDBY_DEBUG: what happens, on stderr */
+static void debug(const char *what)
+{
+	static int on = -1;
+
+	if (on < 0)
+		on = getenv("PRO1X_STANDBY_DEBUG") != NULL;
+	if (on)
+		fprintf(stderr, "%ld %s\n", (long)time(NULL), what);
+}
+
 struct standby {
 	Display *dpy;
 	int scr, w, h;
 	Window win;
-	DBusConnection *bus;
-	int shown, moves;
+	DBusConnection *bus;		/* session: the profile */
+	DBusConnection *sys;		/* system: the proximity sensor */
+	enum mode mode;
+	int near;			/* the proximity sensor is covered */
+	int saved_bl;			/* brightness before dimming, or -1 */
+	int moves;
 	time_t moved, shown_min;
 	double right, top;
-	long long woken_ms;		/* when it last went away */
+	struct state st;
 	Time tap_time;			/* the last touch, for double taps */
 	int tap_x, tap_y;
+	/* X's idle time (SYNC's IDLETIME counter): alarms, no polling */
+	int sync_ev;
+	XSyncCounter idle;
+	XSyncAlarm up, down;
+	int xi_opcode;			/* key presses (XInput 2), or -1 */
+	long long kbd_off_ms;		/* when the keyboard light goes, or 0 */
 };
 
 static long long now_ms(void)
@@ -498,15 +621,88 @@ static long long now_ms(void)
 	return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
 }
 
-static void sb_draw(struct standby *sb)
+static long long idle_now(struct standby *sb)
 {
-	cairo_surface_t *s = cairo_xlib_surface_create(sb->dpy, sb->win,
-	    DefaultVisual(sb->dpy, sb->scr), sb->w, sb->h);
-	cairo_t *cr = cairo_create(s);
-	struct state st;
+	XSyncValue v;
 
-	read_state(&st, sb->bus);
-	draw(cr, &st, sb->right, sb->top);
+	if (!XSyncQueryCounter(sb->dpy, sb->idle, &v))
+		return 0;
+	return ((long long)XSyncValueHigh32(v) << 32) |
+	    (unsigned)XSyncValueLow32(v);
+}
+
+/*
+ * up: when the idle time rises past `up` ms; down: when it falls below
+ * `down` (input); 0 for either: never. "Never" is a mark 24 days away,
+ * not further: the X server turns the distance into a timer, and a larger
+ * one overflowed it into a busy loop (seen on Xvfb).
+ */
+#define NEVER_MS 0x7fffffffLL
+
+static void set_value(XSyncValue *v, long long ms)
+{
+	XSyncIntsToValue(v, (unsigned)(ms & 0xffffffff), (int)(ms >> 32));
+}
+
+static void arm(struct standby *sb, long long up, long long down)
+{
+	XSyncAlarmAttributes a;
+	unsigned long flags = XSyncCAValue | XSyncCATestType | XSyncCAEvents;
+
+	a.events = True;
+	a.trigger.test_type = XSyncPositiveTransition;
+	set_value(&a.trigger.wait_value, up ? up : NEVER_MS);
+	XSyncChangeAlarm(sb->dpy, sb->up, flags, &a);
+	if (down) {
+		a.trigger.test_type = XSyncNegativeTransition;
+		set_value(&a.trigger.wait_value, down);
+	} else {
+		set_value(&a.trigger.wait_value, NEVER_MS);
+	}
+	XSyncChangeAlarm(sb->dpy, sb->down, flags, &a);
+}
+
+static XSyncAlarm new_alarm(struct standby *sb)
+{
+	XSyncAlarmAttributes a;
+
+	a.trigger.counter = sb->idle;
+	a.trigger.value_type = XSyncAbsolute;
+	a.trigger.test_type = XSyncPositiveTransition;
+	set_value(&a.trigger.wait_value, NEVER_MS);
+	XSyncIntToValue(&a.delta, 0);
+	a.events = True;
+	return XSyncCreateAlarm(sb->dpy, XSyncCACounter | XSyncCAValueType |
+				XSyncCAValue | XSyncCATestType | XSyncCADelta |
+				XSyncCAEvents, &a);
+}
+
+/*
+ * Active: dim after the time-out, counted from now's idle time (after the
+ * power key woke it up without input, X's idle time is old); input before
+ * then counts from zero again
+ */
+static void go_active(struct standby *sb)
+{
+	long long base = idle_now(sb);
+
+	sb->mode = ACTIVE;
+	debug("active");
+	arm(sb, base + dim_timeout * 1000LL, base > 500 ? base : 0);
+}
+
+static void sb_draw(struct standby *sb, int full)
+{
+	cairo_surface_t *s;
+	cairo_t *cr;
+
+	if (sb->near)
+		return;
+	s = cairo_xlib_surface_create(sb->dpy, sb->win,
+	    DefaultVisual(sb->dpy, sb->scr), sb->w, sb->h);
+	cr = cairo_create(s);
+	read_state(&sb->st, sb->bus, full);
+	draw(cr, &sb->st, sb->right, sb->top);
 	cairo_destroy(cr);
 	cairo_surface_destroy(s);
 	XFlush(sb->dpy);
@@ -522,31 +718,85 @@ static void sb_grab(struct standby *sb)
 		      CurrentTime);
 }
 
+/* The proximity sensor on while the stand-by screen shows (pro1x-proximity) */
+static void proximity_watch(struct standby *sb, int on)
+{
+	DBusMessage *m;
+
+	if (!sb->sys)
+		return;
+	m = dbus_message_new_method_call("org.pro1x.Proximity",
+	    "/org/pro1x/Proximity", "org.pro1x.Proximity",
+	    on ? "Watch" : "Unwatch");
+	if (!m)
+		return;
+	dbus_message_set_no_reply(m, TRUE);
+	dbus_message_set_auto_start(m, FALSE);
+	dbus_connection_send(sb->sys, m, NULL);
+	dbus_message_unref(m);
+	dbus_connection_flush(sb->sys);
+}
+
+static void dim(struct standby *sb)
+{
+	int cur = bl_get();
+
+	sb->mode = DIMMED;
+	debug("dimmed");
+	sb->saved_bl = cur;
+	if (cur > 0)
+		bl_set(cur / 5 > 0 ? cur / 5 : 1);
+	kbd_light(0);
+	sb->kbd_off_ms = 0;
+}
+
+static void undim(struct standby *sb)
+{
+	if (sb->saved_bl >= 0)
+		bl_set(sb->saved_bl);
+	sb->saved_bl = -1;
+}
+
 static void sb_show(struct standby *sb)
 {
-	if (sb->shown)
+	if (sb->mode == STANDBY)
 		return;
+	if (sb->mode == ACTIVE)
+		sb->saved_bl = bl_get();
+	sb->mode = STANDBY;
+	debug("standby");
+	sb->near = 0;
+	arm(sb, 0, 0);
+	kbd_light(0);
+	sb->kbd_off_ms = 0;
 	XMoveResizeWindow(sb->dpy, sb->win, 0, 0, sb->w, sb->h);
 	XMapRaised(sb->dpy, sb->win);
 	sb_grab(sb);
-	sb->shown = 1;
 	sb->moves = 0;
 	sb->moved = time(NULL);
 	sb->tap_time = 0;
 	place(sb->w, sb->h, 0, &sb->right, &sb->top);
-	sb_draw(sb);
+	sb_draw(sb, 1);
+	panel_set("lpm", 1);
+	bl_set(standby_bl);
+	proximity_watch(sb, 1);
 }
 
 static void sb_hide(struct standby *sb)
 {
-	if (!sb->shown)
+	if (sb->mode != STANDBY)
 		return;
+	proximity_watch(sb, 0);
+	if (sb->near)
+		panel_set("display", 1);
+	sb->near = 0;
+	panel_set("lpm", 0);
 	XUngrabPointer(sb->dpy, CurrentTime);
 	XUngrabKeyboard(sb->dpy, CurrentTime);
 	XUnmapWindow(sb->dpy, sb->win);
 	XFlush(sb->dpy);
-	sb->shown = 0;
-	sb->woken_ms = now_ms();
+	undim(sb);
+	go_active(sb);
 }
 
 /* A touch while shown: the second of two close ones wakes it up */
@@ -565,14 +815,35 @@ static void sb_tap(struct standby *sb, XButtonEvent *b)
 	sb->tap_y = b->y;
 }
 
-/* Milliseconds without input, counting from the last wake-up at most */
-static long long idle_ms(struct standby *sb, XScreenSaverInfo *info)
+static void proximity(struct standby *sb, int near)
 {
-	long long since_wake = now_ms() - sb->woken_ms;
+	if (sb->mode != STANDBY || near == sb->near)
+		return;
+	sb->near = near;
+	debug(near ? "near" : "far");
+	if (near) {
+		/* in a pocket: the panel off, nothing to draw until it is out */
+		panel_set("display", 0);
+	} else {
+		panel_set("display", 1);
+		sb_draw(sb, 0);
+	}
+}
 
-	XScreenSaverQueryInfo(sb->dpy, RootWindow(sb->dpy, sb->scr), info);
-	return (long long)info->idle < since_wake ? (long long)info->idle :
-	    since_wake;
+static void sys_bus_input(struct standby *sb)
+{
+	DBusMessage *m;
+
+	dbus_connection_read_write(sb->sys, 0);
+	while ((m = dbus_connection_pop_message(sb->sys))) {
+		dbus_bool_t near;
+
+		if (dbus_message_is_signal(m, "org.pro1x.Proximity", "Changed") &&
+		    dbus_message_get_args(m, NULL, DBUS_TYPE_BOOLEAN, &near,
+					  DBUS_TYPE_INVALID))
+			proximity(sb, near != 0);
+		dbus_message_unref(m);
+	}
 }
 
 /* The X server went away (the session ended): no pid file left behind */
@@ -599,29 +870,66 @@ static void write_pidfile(void)
 	fclose(f);
 }
 
+static int setup_sync(struct standby *sb)
+{
+	int err, major, minor, n;
+	XSyncSystemCounter *c;
+
+	if (!XSyncQueryExtension(sb->dpy, &sb->sync_ev, &err) ||
+	    !XSyncInitialize(sb->dpy, &major, &minor))
+		return -1;
+	c = XSyncListSystemCounters(sb->dpy, &n);
+	for (int i = 0; i < n; i++)
+		if (!strcmp(c[i].name, "IDLETIME"))
+			sb->idle = c[i].counter;
+	XSyncFreeSystemCounterList(c);
+	if (!sb->idle)
+		return -1;
+	sb->up = new_alarm(sb);
+	sb->down = new_alarm(sb);
+	return 0;
+}
+
+/* Key presses anywhere, for the keyboard light (XInput 2 raw events) */
+static void setup_keys(struct standby *sb)
+{
+	int ev, err, major = 2, minor = 0;
+	unsigned char bits[XIMaskLen(XI_LASTEVENT)] = { 0 };
+	XIEventMask mask = { XIAllMasterDevices, sizeof(bits), bits };
+
+	sb->xi_opcode = -1;
+	if (access(KBD_LED, W_OK) != 0 ||
+	    !XQueryExtension(sb->dpy, "XInputExtension", &sb->xi_opcode, &ev,
+			     &err) ||
+	    XIQueryVersion(sb->dpy, &major, &minor) != Success) {
+		sb->xi_opcode = -1;
+		return;
+	}
+	XISetMask(bits, XI_RawKeyPress);
+	XISelectEvents(sb->dpy, RootWindow(sb->dpy, sb->scr), &mask, 1);
+}
+
 static int run_x(void)
 {
 	struct standby sb = { 0 };
-	XScreenSaverInfo *info;
 	XSetWindowAttributes a;
-	int ev_base, err_base;
-	long long timeout = (dim_timeout + BLANK_TIMEOUT_S) * 1000LL;
 
 	if (!(sb.dpy = XOpenDisplay(NULL))) {
 		fprintf(stderr, "pro1x-standby: no X display\n");
-		return 1;
-	}
-	if (!XScreenSaverQueryExtension(sb.dpy, &ev_base, &err_base) ||
-	    !(info = XScreenSaverAllocInfo())) {
-		fprintf(stderr, "pro1x-standby: no MIT-SCREEN-SAVER extension\n");
 		return 1;
 	}
 	XSetIOErrorHandler(x_gone);
 	sb.scr = DefaultScreen(sb.dpy);
 	sb.w = DisplayWidth(sb.dpy, sb.scr);
 	sb.h = DisplayHeight(sb.dpy, sb.scr);
+	sb.saved_bl = -1;
 	if (dpi <= 0)
 		dpi = x_dpi(sb.dpy, sb.scr);
+	if (setup_sync(&sb) != 0) {
+		fprintf(stderr, "pro1x-standby: no SYNC extension with IDLETIME\n");
+		return 1;
+	}
+	setup_keys(&sb);
 	a.background_pixel = BlackPixel(sb.dpy, sb.scr);
 	a.override_redirect = True;
 	a.event_mask = ExposureMask | ButtonPressMask | KeyPressMask |
@@ -633,8 +941,11 @@ static int run_x(void)
 	XStoreName(sb.dpy, sb.win, "pro1x-standby");
 	XSelectInput(sb.dpy, RootWindow(sb.dpy, sb.scr), StructureNotifyMask);
 	sb.bus = dbus_bus_get(DBUS_BUS_SESSION, NULL);
-	sb.woken_ms = now_ms();
+	if ((sb.sys = dbus_bus_get(DBUS_BUS_SYSTEM, NULL)))
+		dbus_bus_add_match(sb.sys, "type='signal',"
+		    "interface='org.pro1x.Proximity',member='Changed'", NULL);
 	srandom(time(NULL));
+	go_active(&sb);
 
 	if (pipe(sigpipe) == 0) {
 		fcntl(sigpipe[0], F_SETFL, O_NONBLOCK);
@@ -644,30 +955,68 @@ static int run_x(void)
 	}
 
 	for (;;) {
-		struct pollfd p[2] = {
+		struct pollfd p[3] = {
 			{ ConnectionNumber(sb.dpy), POLLIN, 0 },
 			{ sigpipe[0], POLLIN, 0 },
+			{ -1, POLLIN, 0 },
 		};
+		long long wait = -1, t;
 		time_t now;
-		long long wait;
 		char c;
 
 		while (XPending(sb.dpy)) {
 			XEvent e;
 
 			XNextEvent(sb.dpy, &e);
+			if (e.type == sb.sync_ev + XSyncAlarmNotify) {
+				XSyncAlarmNotifyEvent *n = (void *)&e;
+
+				if (sb.mode == STANDBY)
+					continue;
+				if (n->alarm == sb.down) {
+					/* input: back from dimmed, count anew */
+					if (sb.mode == DIMMED)
+						undim(&sb);
+					go_active(&sb);
+				} else if (n->alarm == sb.up) {
+					if (sb.mode == ACTIVE) {
+						long long base = idle_now(&sb);
+
+						dim(&sb);
+						arm(&sb, base + BLANK_TIMEOUT_S *
+						    1000LL, base);
+					} else {
+						sb_show(&sb);
+					}
+				}
+				continue;
+			}
+			if (e.type == GenericEvent && sb.xi_opcode >= 0 &&
+			    e.xcookie.extension == sb.xi_opcode) {
+				/* a key: the keyboard light for 30 s */
+				if (XGetEventData(sb.dpy, &e.xcookie)) {
+					if (sb.mode == ACTIVE) {
+						if (!sb.kbd_off_ms)
+							kbd_light(1);
+						sb.kbd_off_ms = now_ms() +
+						    kbd_timeout * 1000LL;
+					}
+					XFreeEventData(sb.dpy, &e.xcookie);
+				}
+				continue;
+			}
 			switch (e.type) {
 			case ButtonPress:
-				if (sb.shown)
+				if (sb.mode == STANDBY)
 					sb_tap(&sb, &e.xbutton);
 				break;
 			case Expose:
-				if (sb.shown && e.xexpose.count == 0)
-					sb_draw(&sb);
+				if (sb.mode == STANDBY && e.xexpose.count == 0)
+					sb_draw(&sb, 0);
 				break;
 			case VisibilityNotify:
 				/* something mapped above it: back on top */
-				if (sb.shown &&
+				if (sb.mode == STANDBY &&
 				    e.xvisibility.state != VisibilityUnobscured) {
 					XRaiseWindow(sb.dpy, sb.win);
 					sb_grab(&sb);
@@ -678,7 +1027,7 @@ static int run_x(void)
 				    RootWindow(sb.dpy, sb.scr)) {
 					sb.w = e.xconfigure.width;
 					sb.h = e.xconfigure.height;
-					if (sb.shown) {
+					if (sb.mode == STANDBY) {
 						XMoveResizeWindow(sb.dpy, sb.win,
 							0, 0, sb.w, sb.h);
 						place(sb.w, sb.h, sb.moves,
@@ -689,35 +1038,48 @@ static int run_x(void)
 			}
 		}
 		while (read(sigpipe[0], &c, 1) == 1) {
-			if (sb.shown)
+			if (sb.mode == STANDBY)
 				sb_hide(&sb);
 			else
 				sb_show(&sb);
 		}
 
+		/* sleep until the next event; timers only while needed */
 		now = time(NULL);
-		if (sb.shown) {
+		if (sb.mode == STANDBY && !sb.near) {
 			if (now - sb.moved >= MOVE_S) {
 				sb.moved = now;
 				place(sb.w, sb.h, ++sb.moves, &sb.right, &sb.top);
-				sb_draw(&sb);
+				sb_draw(&sb, 0);
 			} else if (now / 60 != sb.shown_min) {
-				sb_draw(&sb);
+				sb_draw(&sb, 0);
 			}
-			/* until the next minute */
 			wait = (60 - now % 60) * 1000LL;
-		} else {
-			long long idle = idle_ms(&sb, info);
-
-			if (idle >= timeout) {
-				sb_show(&sb);
-				continue;
-			}
-			wait = timeout - idle;
 		}
-		if (poll(p, 2, wait > 0x7fffffff ? 0x7fffffff : (int)wait) < 0 &&
+		if (sb.kbd_off_ms) {
+			t = sb.kbd_off_ms - now_ms();
+			if (t <= 0) {
+				kbd_light(0);
+				sb.kbd_off_ms = 0;
+			} else if (wait < 0 || t < wait) {
+				wait = t;
+			}
+		}
+		if (sb.sys) {
+			int fd;
+
+			/* what libdbus read already, before sleeping */
+			if (dbus_connection_get_dispatch_status(sb.sys) ==
+			    DBUS_DISPATCH_DATA_REMAINS)
+				sys_bus_input(&sb);
+			if (dbus_connection_get_unix_fd(sb.sys, &fd))
+				p[2].fd = fd;
+		}
+		if (poll(p, 3, wait > 0x7fffffff ? 0x7fffffff : (int)wait) < 0 &&
 		    errno != EINTR)
 			return 1;
+		if (p[2].revents)
+			sys_bus_input(&sb);
 	}
 }
 
@@ -742,7 +1104,8 @@ static int run_preview(const char *out, const char *size)
 	cr = cairo_create(s);
 	bus = getenv("DBUS_SESSION_BUS_ADDRESS") ?
 	    dbus_bus_get(DBUS_BUS_SESSION, NULL) : NULL;
-	read_state(&st, bus);
+	memset(&st, 0, sizeof(st));
+	read_state(&st, bus, 1);
 	/* PRO1X_STANDBY_TEST: icons to show instead of the real state */
 	if (getenv("PRO1X_STANDBY_TEST")) {
 		static char buf[256];
@@ -777,8 +1140,8 @@ static int run_preview(const char *out, const char *size)
 static void usage(void)
 {
 	fprintf(stderr,
-	    "usage: pro1x-standby [-s timeout] [-P pidfile] [-t themedir] [-d dpi]\n"
-	    "                     [-f font] [-2]\n"
+	    "usage: pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout]\n"
+	    "                     [-P pidfile] [-t themedir] [-d dpi] [-f font] [-2]\n"
 	    "       pro1x-standby -p out.png WIDTHxHEIGHT [options]\n");
 	exit(2);
 }
@@ -788,9 +1151,11 @@ int main(int argc, char **argv)
 	const char *preview = NULL;
 	int c;
 
-	while ((c = getopt(argc, argv, "s:P:t:d:f:p:2h")) != -1) {
+	while ((c = getopt(argc, argv, "s:b:k:P:t:d:f:p:2h")) != -1) {
 		switch (c) {
 		case 's': dim_timeout = atoi(optarg); break;
+		case 'b': standby_bl = atoi(optarg); break;
+		case 'k': kbd_timeout = atoi(optarg); break;
 		case 'P': pidfile = optarg; break;
 		case 't': theme = optarg; break;
 		case 'd': dpi = atof(optarg); break;

@@ -10,6 +10,7 @@
 #
 #   WORK=/path/to/freebsd-build bash freebsd/build.sh
 #   KERNFAST=1 ...   the kernel and modules again without a clean build
+#   NOCLEAN=1 ...    the same after a change to PRO1X (config runs again)
 #
 # Steps: FreeBSD's sources (releng/15.1) with patches/, the cross toolchain
 # (tools/build/make.py), a root filesystem from the release's /rescue
@@ -77,7 +78,8 @@ sed -e "s|@MFS_IMAGE@|$OUT/mfsroot.ufs|" -e "s|@ENV_FILE@|$REPO/freebsd/pro1x.en
 cp -a "$REPO/freebsd/dsp/sys/." "$SRC/sys/"
 MODULES=${MODULES:-qcom_dsp qrtr}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
-	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} buildkernel)
+	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
+	buildkernel)
 K=$(find "$WORK/obj" -path '*/sys/PRO1X/kernel.bin' | head -1)
 [ -f "$K" ] || { echo "kernel.bin not built"; exit 1; }
 cp "$K" "$OUT/kernel.bin"

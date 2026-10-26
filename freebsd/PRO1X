@@ -30,6 +30,7 @@ device		vt
 device		vt_simplefb
 device		kbdmux
 device		qcom_dpu
+device		backlight	# the panel's brightness, by DCS (0022)
 
 # Pro1X drivers (patches/0004 on)
 device		qcom_wdt		# APSS watchdog: a hang resets the phone
