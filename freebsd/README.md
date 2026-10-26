@@ -57,7 +57,9 @@ about half the size), with FreeBSD's own `zpool` and `zfs` in a FreeBSD
 machine (`vm/vm.sh`): FreeBSD's `makefs -t zfs` stops at the image's hard
 links when it runs on Linux. With `root.zfs` next to `root.ufs` on the
 phone, the RAM root imports the pool read only and reroots into it (the
-kernel has ZFS); `pro1x.rootfs=ufs` in `freebsd/cmdline` keeps UFS.
+kernel has ZFS); `pro1x.rootfs=ufs` in `freebsd/cmdline` keeps UFS. Tried
+in the VM (`vm/try-zfsroot.sh`): the pool from a memory disk, the reroot,
+the Pro1X's system up to its login (2026-10-26); on the phone not yet.
 
 The desktop: `rootfs.sh` also puts packages from pkg.freebsd.org into
 the image (`PKGS`, default Xorg with `scfb` on the framebuffer turned to
