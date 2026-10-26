@@ -1,0 +1,13 @@
+sscregistrygen: <sys/stat.h> for the S_I* modes (glibc's <fcntl.h> brings
+it along, FreeBSD's does not).
+
+--- a/tools/sscregistrygen.c
++++ b/tools/sscregistrygen.c
+@@ -28,6 +28,7 @@
+ #include <dirent.h>
+ #include <errno.h>
+ #include <fcntl.h>
++#include <sys/stat.h>
+ #include <stdbool.h>
+ #include <stdio.h>
+ #include <string.h>

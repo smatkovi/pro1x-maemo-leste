@@ -75,6 +75,8 @@ APPS=(
 	"qt5-webkit|!"
 	"jib|!"
 	"dorian|!"
+	# The DSPs' userland (freebsd/dsp/README.md): the sensors' file server
+	"hexagonrpc|!"
 	# Maemo 5 apps ported to Leste (github.com/smatkovi), at their releases
 	"headphoned|!"
 	"pedometerhomewidget|!"
@@ -117,6 +119,7 @@ REV+=(
 	[qt5-webengine]=c5de7df005189a2ef727a40b13408ff3a14a0bbedce07af986aac59722d4cf09
 	[qt5-webkit]=9ca126da9273664dd23a3ccd0c9bebceb7bb534bddd743db31caf6a5a6d4a9e6
 	[jib]=5dd4a340d20d [dorian]=da92eda1d5d9
+	[hexagonrpc]=40e50412812a
 	[headphoned]=d476cb4a8bf9 [pedometerhomewidget]=06d5246191fa
 	[wifi-assistant]=604bbe98d8b5 [gpodder-leste]=2759445563b5
 )
@@ -135,6 +138,7 @@ URL+=(
 	[qt5-webengine]=pkg:release_1
 	[qt5-webkit]=https://github.com/qtwebkit/qtwebkit/releases/download/qtwebkit-5.212.0-alpha4/qtwebkit-5.212.0-alpha4.tar.xz
 	[jib]=$GH_EXTRAS/jib.git [dorian]=$GH_EXTRAS/dorian.git
+	[hexagonrpc]=https://github.com/linux-msm/hexagonrpc.git
 	[headphoned]=https://github.com/smatkovi/headphoned.git
 	[pedometerhomewidget]=https://github.com/smatkovi/pedometerhomewidget.git
 	[wifi-assistant]=https://github.com/smatkovi/wifi-assistant.git
@@ -489,6 +493,59 @@ custom_qt5_webkit() {
 	    -DUSE_QT_MULTIMEDIA=OFF -DUSE_LIBHYPHEN=OFF -DUSE_WOFF2=OFF \
 	    -DENABLE_XSLT=OFF -DUSE_LD_GOLD=OFF \
 	    -DECM_PKGCONFIG_INSTALL_DIR=/usr/local/libdata/pkgconfig
+}
+
+# --- meson ---------------------------------------------------------------------
+# meson [options...]: configure for the sysroot (a cross file from the
+# environment build.sh sets up), build, install into $PR
+meson_cross() {
+	local cf=$PWD/cross.ini
+	{
+		echo "[binaries]"
+		echo "c = ['clang', '--target=$TARGET', '--sysroot=$SYSROOT']"
+		echo "cpp = ['clang++', '--target=$TARGET', '--sysroot=$SYSROOT']"
+		echo "ar = 'llvm-ar'"
+		echo "strip = 'llvm-strip'"
+		echo "pkg-config = '$H/hostbin/pkg-config'"
+		echo "[host_machine]"
+		echo "system = 'freebsd'"
+		echo "cpu_family = 'aarch64'"
+		echo "cpu = 'aarch64'"
+		echo "endian = 'little'"
+		echo "[built-in options]"
+		printf "c_args = [%s]\n" "$(meson_list $CPPFLAGS $CFLAGS $MESON_CFLAGS)"
+		printf "cpp_args = [%s]\n" "$(meson_list $CPPFLAGS $CXXFLAGS $MESON_CFLAGS)"
+		printf "c_link_args = [%s]\n" "$(meson_list $LDFLAGS)"
+		printf "cpp_link_args = [%s]\n" "$(meson_list $LDFLAGS)"
+	} > "$cf"
+	meson setup _build --cross-file "$cf" --prefix=/usr/local --libdir=lib \
+	    --buildtype=release -Dwerror=false "$@" > meson.out 2>&1 ||
+	    { tail -30 meson.out; exit 1; }
+	ninja -C _build -j"$JOBS" > make.out 2>&1 ||
+	    { grep -m20 -E "error:|FAILED" make.out; tail -20 make.out; exit 1; }
+	DESTDIR="$PR" meson install -C _build --no-rebuild > install.out 2>&1 ||
+	    { tail -20 install.out; exit 1; }
+}
+
+# words as a meson list: 'a', 'b'
+meson_list() {
+	local w out=
+	for w in "$@"; do
+		out="$out${out:+, }'$w'"
+	done
+	printf '%s' "$out"
+}
+
+# Ported Linux programs find their kernel interfaces here (misc/fastrpc.h,
+# linux/qrtr.h)
+DSP_INCLUDE=$REPO/freebsd/dsp/include
+
+# hexagonrpcd: serves the ADSP its sensor configuration and registry
+custom_hexagonrpc() {
+	local MESON_CFLAGS="-I$DSP_INCLUDE"
+	meson_cross
+	# systemd's units: FreeBSD has rc.d/hexagonrpcd (extra/hexagonrpc)
+	rm -rf "$PR/usr/local/lib/systemd"
 }
 
 custom_jib() { qt_cmake -DMAEMO=On; }

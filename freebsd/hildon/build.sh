@@ -264,6 +264,9 @@ fetch_src() {
 	[ -d "$SRC/$name/.git" ] || git clone -q "$url" "$SRC/$name"
 	git -C "$SRC/$name" cat-file -e "$rev^{commit}" 2> /dev/null ||
 	    git -C "$SRC/$name" fetch -q origin
+	# a revision of a pull request only (GitHub)
+	git -C "$SRC/$name" cat-file -e "$rev^{commit}" 2> /dev/null ||
+	    git -C "$SRC/$name" fetch -q origin '+refs/pull/*/head:refs/remotes/origin/pr/*'
 	git -C "$SRC/$name" checkout -q -f "$rev"
 }
 

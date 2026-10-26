@@ -1,0 +1,13 @@
+The tests mock ioctl() with Linux's prototype and cannot run on the build
+host anyway: not built when cross-compiling.
+
+--- a/meson.build
++++ b/meson.build
+@@ -21,4 +21,6 @@
+ subdir('data')
+ subdir('tools')
+ 
+-subdir('tests')
++if not meson.is_cross_build()
++  subdir('tests')
++endif

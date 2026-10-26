@@ -20,6 +20,8 @@
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/sbuf.h>
+#include <sys/sysctl.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
@@ -483,3 +485,45 @@ qcom_smem_report(void)
 		    i, smem.part[i].size / 1024, h->offset_free_uncached);
 	}
 }
+
+/*
+ * The SoC's identity (SMEM item 137, Linux's socinfo), as the files of
+ * Linux's /sys/devices/soc0, which the ADSP reads through hexagonrpcd:
+ * "name value" lines, sysctl hw.qcom_socinfo.
+ */
+#define	SMEM_HW_SW_BUILD_ID	137
+
+struct socinfo {
+	uint32_t	fmt;
+	uint32_t	id;
+	uint32_t	ver;
+	char		build_id[32];
+};
+
+static int
+sysctl_socinfo(SYSCTL_HANDLER_ARGS)
+{
+	const struct socinfo *si;
+	struct sbuf sb;
+	size_t len;
+	int error;
+
+	sbuf_new_for_sysctl(&sb, NULL, 128, req);
+	si = qcom_smem_get(QCOM_SMEM_HOST_ANY, SMEM_HW_SW_BUILD_ID, &len,
+	    &error);
+	if (si != NULL && len >= sizeof(*si)) {
+		sbuf_printf(&sb, "family Snapdragon\n");
+		sbuf_printf(&sb, "machine %s\n", si->id == 417 ? "SM6115" :
+		    "unknown");
+		sbuf_printf(&sb, "soc_id %u\n", si->id);
+		sbuf_printf(&sb, "revision %u.%u\n", si->ver >> 16,
+		    si->ver & 0xffff);
+	}
+	error = sbuf_finish(&sb);
+	sbuf_delete(&sb);
+	return (error);
+}
+
+SYSCTL_PROC(_hw, OID_AUTO, qcom_socinfo, CTLTYPE_STRING | CTLFLAG_RD |
+    CTLFLAG_MPSAFE, NULL, 0, sysctl_socinfo, "A",
+    "The SoC's identity from SMEM (Linux's /sys/devices/soc0)");

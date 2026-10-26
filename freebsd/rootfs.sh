@@ -171,6 +171,14 @@ if [ -f "$LESTE_IMG" ] && command -v debugfs > /dev/null; then
 else
 	log "no Leste image ($LESTE_IMG): the root image has no DSP firmware"
 fi
+# The phone's sensor configuration and registry for hexagonrpcd, as Leste
+# installs them (scripts/46-sensor-stack.sh): from the NixOS port's checkout
+NIXOS=${NIXOS:-$WORK/../build/nixos-pro1x}
+if [ -d "$NIXOS/device/hexagonfs" ]; then
+	mkdir -p "$R/usr/local/share/pro1x"
+	rm -rf "$R/usr/local/share/pro1x/hexagonfs"
+	cp -R "$NIXOS/device/hexagonfs" "$R/usr/local/share/pro1x/hexagonfs"
+fi
 # A fixed host id: rc would write one into /etc, which is read only.
 uuidgen > "$R/etc/hostid"
 tr -d '-' < "$R/etc/hostid" > "$R/etc/machine-id"

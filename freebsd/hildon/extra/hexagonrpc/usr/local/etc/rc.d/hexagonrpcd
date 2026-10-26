@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# PROVIDE: hexagonrpcd
+# REQUIRE: FILESYSTEMS
+# KEYWORD: nojail shutdown
+#
+# hexagonrpcd serves the ADSP its sensor configuration and registry over
+# FastRPC (Leste's pro1x-hexagonrpcd, freebsd/dsp/README.md). The ADSP has
+# to run first (pro1x-dsp start adsp: /dev/fastrpc-adsp). The sensor files
+# (the phone's own) come from the Leste image into
+# /usr/local/share/pro1x/hexagonfs (rootfs.sh).
+#
+#   hexagonrpcd_enable="YES"
+
+. /etc/rc.subr
+
+name=hexagonrpcd
+rcvar=hexagonrpcd_enable
+load_rc_config $name
+: ${hexagonrpcd_enable:=NO}
+
+SRC=/usr/local/share/pro1x/hexagonfs
+STATE=/var/lib/hexagonrpcd
+pidfile=/var/run/${name}.pid
+procname=/usr/local/bin/hexagonrpcd
+command=/usr/sbin/daemon
+command_args="-r -R 10 -P ${pidfile} -o /var/log/hexagonrpcd.log ${procname} \
+    -f /dev/fastrpc-adsp -d adsp -s -R ${STATE}"
+start_precmd=hexagonrpcd_prestart
+
+hexagonrpcd_prestart()
+{
+	[ -d "$SRC/sensors" ] || { err 1 "$SRC missing"; }
+	[ -c /dev/fastrpc-adsp ] || { warn "no /dev/fastrpc-adsp (pro1x-dsp start adsp)"; return 1; }
+	mkdir -p "$STATE/sensors"
+	rm -rf "$STATE/sensors/config"
+	cp -R "$SRC/sensors/config" "$STATE/sensors/config"
+	cp -f "$SRC/sensors/sns_reg.conf" "$STATE/sensors/sns_reg.conf"
+	rm -rf "$STATE/dsp"
+	[ -d "$SRC/dsp" ] && cp -R "$SRC/dsp" "$STATE/dsp"
+	# the ADSP rewrites its registry: a writable copy
+	reg="$STATE/sensors/persist/registry"
+	if [ ! -d "$reg/registry" ]; then
+		mkdir -p "$reg"
+		cp -R "$SRC/sensors/registry/." "$reg/registry/"
+	fi
+	# platform properties ("QRD": the bengal_qrd_* configuration files)
+	rm -rf "$STATE/properties"
+	mkdir -p "$STATE/properties"
+	echo QRD > "$STATE/properties/hw_platform"
+	# Linux's /sys/devices/soc0, from SMEM
+	rm -rf "$STATE/socinfo"
+	mkdir -p "$STATE/socinfo"
+	sysctl -n hw.qcom_socinfo | while read -r k v; do
+		[ -n "$k" ] && echo "$v" > "$STATE/socinfo/$k"
+	done
+}
+
+run_rc_command "$1"

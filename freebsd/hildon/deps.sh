@@ -17,4 +17,5 @@ APPS_PKGS="gtk3 vte poppler-glib upower gstreamer1 gstreamer1-plugins pulseaudio
 	qt5-linguisttools phonon-qt5 evolution-data-server
 	qt5-location qt5-webchannel qt5-printsupport qt5-opengl libXScrnSaver libevent
 	libpci libvpx minizip nss nspr openh264 opus re2 snappy webp jsoncpp lcms2
-	double-conversion alsa-lib libxslt jpeg-turbo icu qt5-sqldrivers-sqlite3"
+	double-conversion alsa-lib libxslt jpeg-turbo icu qt5-sqldrivers-sqlite3
+	json-c protobuf-c"
