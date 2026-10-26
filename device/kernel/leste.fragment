@@ -14,3 +14,18 @@ CONFIG_MTD_BLOCK2MTD=m
 CONFIG_PSTORE_RAM=y
 CONFIG_PSTORE_CONSOLE=y
 CONFIG_PSTORE_PMSG=y
+
+# Power, checked against the Nokia N9 (docs/power-management.md):
+# RCU callbacks of idle CPUs batched by offload threads (lazy RCU) instead
+# of waking the CPU for each grace period;
+CONFIG_RCU_NOCB_CPU=y
+CONFIG_RCU_NOCB_CPU_DEFAULT_ALL=y
+CONFIG_RCU_LAZY=y
+# transparent huge pages only where asked for (khugepaged otherwise scans
+# every 10 s);
+# CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS is not set
+CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
+# the LED trigger for hardware patterns (the PMI632's LPG runs a blink
+# pattern itself, as the N9's LP5523 engines did, instead of mce toggling
+# it from a timer)
+CONFIG_LEDS_TRIGGER_PATTERN=y

@@ -1,0 +1,11 @@
+# USB runtime power management for the Pro1X (to try, not active: copy to
+# /etc/udev/rules.d/ and reboot; docs/power-management.md).
+#
+# dwc3 and its Qualcomm glue forbid runtime PM by default, so the USB
+# controller, both PHYs and its DDR bandwidth vote stay on with no cable in,
+# also in the RPM sleep set. With "auto" the controller may suspend while
+# nothing is connected, as the N9's musb did on cable removal. Risk: the
+# USB network to the PC is the way into the phone; check that it comes back
+# after unplugging and replugging before keeping this.
+ACTION=="add|change", SUBSYSTEM=="platform", KERNEL=="4ef8800.usb", ATTR{power/control}="auto"
+ACTION=="add|change", SUBSYSTEM=="platform", KERNEL=="4e00000.usb", ATTR{power/control}="auto"

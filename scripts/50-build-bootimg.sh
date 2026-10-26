@@ -34,6 +34,11 @@ CMDLINE="$CMDLINE pro1x.backing=$BACKING pro1x.image=$IMAGE_PATH"
 # console write blocks -- including init's, which then never changes runlevel
 # (reboot and shutdown silently did nothing). A getty still runs on ttyGS0.
 CMDLINE="$CMDLINE loglevel=4 earlycon=msm_geni_serial,0x4a90000"
+# Interconnect and other providers keep their boot-time maximum until every
+# consumer has probed; with consumers that never probe (modules not loaded,
+# nodes without a driver) that is for ever: give up waiting after the
+# deferred probe timeout instead, so DDR and the NoCs can scale down
+CMDLINE="$CMDLINE fw_devlink.sync_state=timeout"
 CMDLINE="$CMDLINE console=ttyMSM0,115200n8 console=tty1"
 
 for f in "$OUT/Image.gz" "$OUT/initrd.img-$KVER" "$OUT/sm6115-fxtec-pro1x.dtb"; do

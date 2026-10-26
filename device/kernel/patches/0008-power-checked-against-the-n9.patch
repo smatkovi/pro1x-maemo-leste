@@ -1,0 +1,235 @@
+diff --git a/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts b/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
+index 1f7686f20c..07106fd57f 100644
+--- a/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
++++ b/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
+@@ -530,7 +530,12 @@ ts_i2c: i2c-touchscreen {
+ 		compatible = "i2c-gpio";
+ 		sda-gpios = <&tlmm 6 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+ 		scl-gpios = <&tlmm 7 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+-		i2c-gpio,delay-us = <5>;
++		/*
++		 * 2 us half-periods (about 250 kHz, the GT9286 takes 400): every
++		 * touch report is bit-banged with the CPU busy waiting, so a
++		 * shorter wait is less CPU time per report (5 us before)
++		 */
++		i2c-gpio,delay-us = <2>;
+ 
+ 		pinctrl-0 = <&ts_i2c_gpio>;
+ 		pinctrl-names = "default";
+@@ -1410,7 +1415,12 @@ bluetooth {
+ 		vddxo-supply = <&pm6125_l16a>;
+ 		vddrf-supply = <&pm6125_l17a>;
+ 		vddch0-supply = <&pm6125_l23a>;
+-		max-speed = <3200000>;
++		/*
++		 * 3 Mbaud, not 3.2: the UART clock for 3.2 Mbaud (102.4 MHz)
++		 * needs the CX rail at its nominal corner, 3 Mbaud fits a lower
++		 * one, and the UART's vote holds CX while Bluetooth is up
++		 */
++		max-speed = <3000000>;
+ 
+ 		/*
+ 		 * The chip has no unique address of its own; without one the kernel
+diff --git a/drivers/input/misc/aw86224.c b/drivers/input/misc/aw86224.c
+index fdae931bb9..0886220df6 100644
+--- a/drivers/input/misc/aw86224.c
++++ b/drivers/input/misc/aw86224.c
+@@ -116,8 +116,12 @@ static int aw_stop(struct aw86224 *aw)
+ 		if (ret)
+ 			return ret;
+ 		v &= 0x0f;
+-		if (v == 0 || v == 0x0a)
++		if (v == 0 || v == 0x0a) {
++			/* idle until the next effect, as the N9's vibra was off */
++			regmap_update_bits(aw->regmap, AW_REG_SYSCTRL2, AW_STANDBY,
++					   AW_STANDBY);
+ 			return 0;
++		}
+ 		usleep_range(2000, 3000);
+ 	}
+ 	return -ETIMEDOUT;
+@@ -197,6 +201,7 @@ static void aw_play_work(struct work_struct *work)
+ 	d1 = max(1u, DIV_ROUND_UP(mag * min(drv1_lvl, 0x7fu), 0xffff));
+ 	d2 = max(1u, DIV_ROUND_UP(mag * min(drv2_lvl, 0x7fu), 0xffff));
+ 
++	regmap_update_bits(r, AW_REG_SYSCTRL2, AW_STANDBY, 0);
+ 	regmap_update_bits(r, AW_REG_SYSCTRL7, AW_D2S_GAIN_MASK, min(d2s_gain, 7u));
+ 	regmap_update_bits(r, AW_REG_PLAYCFG3, AW_PLAY_MODE_MASK, AW_PLAY_MODE_CONT);
+ 	regmap_write(r, AW_REG_CONTCFG6, AW_TRACK_EN | d1);
+diff --git a/drivers/power/supply/pro1x-adc-battery.c b/drivers/power/supply/pro1x-adc-battery.c
+index 15d16cfa34..ccf22ac56b 100644
+--- a/drivers/power/supply/pro1x-adc-battery.c
++++ b/drivers/power/supply/pro1x-adc-battery.c
+@@ -36,6 +36,13 @@
+ #include <linux/regmap.h>
+ #include <linux/unaligned.h>
+ 
++/*
++ * Every 5 s on a charger, every poll_battery_ms (30 s) on the battery, on
++ * the freezable power efficient workqueue: the N9's fuel gauge integrated
++ * in hardware and was read every 360 s; this estimate needs ADC readings,
++ * but not every 5 s while the phone lies idle. The filters count in 5 s
++ * steps (POLL_MS) and scale with the real interval.
++ */
+ #define POLL_MS			5000
+ #define ANCHOR_POLLS		24	/* OCV pulls the charge count with a 2 minute time constant */
+ #define ANCHOR_MAX_UA_DISCH	400000	/* ... when the discharge current is below this */
+@@ -43,7 +50,7 @@
+ #define ANCHOR_POLLS_LOAD	96	/* above that, up to ANCHOR_LOAD_MAX_UA: a slower pull (8 minutes) */
+ #define ANCHOR_LOAD_MAX_UA	1500000	/* (the idle current with the screen on is already 400-500 mA) */
+ #define REANCHOR_RETRY_POLLS	36	/* after a long sleep keep trying to re-anchor for this long */
+-#define GAP_MS			(3 * POLL_MS)	/* longer than this between polls: suspended */
++#define GAP_MS(b)		(3 * (s64)(b)->interval_ms)	/* longer than this between polls: suspended */
+ #define LONG_GAP_MS		120000	/* only a sleep this long resets the filters / re-anchors */
+ #define GAP_REANCHOR_MAX_UA	600000	/* hard re-anchor after a gap if the current is below this */
+ #define CHG_EFFICIENCY_PCT	97
+@@ -81,6 +88,10 @@ MODULE_PARM_DESC(esr_learn, "Learn esr_mohm from voltage vs current (set 0 to ke
+ 
+ static bool debug;
+ module_param(debug, bool, 0644);
++
++static unsigned int poll_battery_ms = 30000;
++module_param(poll_battery_ms, uint, 0644);
++MODULE_PARM_DESC(poll_battery_ms, "Milliseconds between readings on the battery (5000-360000)");
+ MODULE_PARM_DESC(debug, "Log every poll: voltage, current, ESR, OCV, estimate");
+ 
+ struct adc_battery {
+@@ -115,6 +126,7 @@ struct adc_battery {
+ 	int cap;		/* reported (%), -1 until the first sample */
+ 	int status;
+ 	unsigned int ticks;
++	unsigned int interval_ms;	/* until the next poll */
+ };
+ 
+ /* IIO "processed" values of the SPMI ADC are in micro-units for voltages. */
+@@ -259,7 +271,7 @@ static bool adc_battery_update(struct adc_battery *b)
+ 	now = ktime_get_boottime();	/* counts suspended time too */
+ 	if (b->have_t) {
+ 		dt_ms = ktime_to_ms(ktime_sub(now, b->last_t));
+-		if (dt_ms > GAP_MS) {
++		if (dt_ms > GAP_MS(b)) {
+ 			gap = true;
+ 			gap_ms = min_t(s64, dt_ms, GAP_MAX_CHARGE_MS);
+ 			dt_ms = 0;
+@@ -332,9 +344,13 @@ static bool adc_battery_update(struct adc_battery *b)
+ 				b->reanchor_left = 0;
+ 			}
+ 		} else if (abs(b->i_f) < max_anchor_ua && est > 0) {
+-			b->q_uah += div_s64(est_q - b->q_uah, ANCHOR_POLLS);
++			b->q_uah += div_s64((est_q - b->q_uah) *
++					    min_t(s64, dt_ms, ANCHOR_POLLS * POLL_MS),
++					    ANCHOR_POLLS * POLL_MS);
+ 		} else if (!charging && abs(b->i_f) < ANCHOR_LOAD_MAX_UA && est > 0) {
+-			b->q_uah += div_s64(est_q - b->q_uah, ANCHOR_POLLS_LOAD);
++			b->q_uah += div_s64((est_q - b->q_uah) *
++					    min_t(s64, dt_ms, ANCHOR_POLLS_LOAD * POLL_MS),
++					    ANCHOR_POLLS_LOAD * POLL_MS);
+ 		}
+ 	}
+ 
+@@ -360,6 +376,7 @@ static bool adc_battery_update(struct adc_battery *b)
+ 	}
+ 	b->cap = new_cap;
+ 	b->status = adc_battery_status(b, b->v_f, usb);
++	b->interval_ms = usb ? POLL_MS : clamp(poll_battery_ms, 5000U, 360000U);
+ 
+ 	if (debug)
+ 		dev_info(b->dev, "v=%d uV i=%d uA esr=%u mOhm ocv=%d uV est=%d%% q=%lld uAh cap=%d%% usb=%d gap=%lldms\n",
+@@ -375,7 +392,7 @@ static int adc_battery_get_property(struct power_supply *psy,
+ 				    union power_supply_propval *val)
+ {
+ 	struct adc_battery *b = power_supply_get_drvdata(psy);
+-	int vbat, cap, status, ocv, ibat, ret;
++	int vbat, cap, status, ocv, ibat;
+ 
+ 	switch (psp) {
+ 	case POWER_SUPPLY_PROP_PRESENT:
+@@ -399,15 +416,15 @@ static int adc_battery_get_property(struct power_supply *psy,
+ 	status = b->status;
+ 	ocv = b->ocv_uv;
+ 	ibat = b->i_f;
++	vbat = b->v_f;
+ 	mutex_unlock(&b->lock);
+ 	if (cap < 0)
+ 		return -ENODATA;
+ 
+ 	switch (psp) {
+ 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+-		ret = adc_battery_read_vbat(b, &vbat);
+-		if (ret)
+-			return ret;
++		/* the last reading: a new burst of conversions per read woke
++		 * the ADC for every upower refresh */
+ 		val->intval = vbat;
+ 		break;
+ 	case POWER_SUPPLY_PROP_VOLTAGE_OCV:
+@@ -474,7 +491,8 @@ static void adc_battery_poll(struct work_struct *work)
+ 		b->last_notify = jiffies;
+ 		power_supply_changed(b->psy);
+ 	}
+-	schedule_delayed_work(&b->work, msecs_to_jiffies(POLL_MS));
++	queue_delayed_work(system_freezable_power_efficient_wq, &b->work,
++			   msecs_to_jiffies(b->interval_ms));
+ }
+ 
+ /* No polling while the system sleeps; the first poll after resume re-anchors the count. */
+@@ -490,7 +508,7 @@ static int adc_battery_resume(struct device *dev)
+ {
+ 	struct adc_battery *b = dev_get_drvdata(dev);
+ 
+-	mod_delayed_work(system_wq, &b->work, 0);
++	mod_delayed_work(system_freezable_power_efficient_wq, &b->work, 0);
+ 	return 0;
+ }
+ 
+@@ -559,8 +577,10 @@ static int adc_battery_probe(struct platform_device *pdev)
+ 	ret = devm_delayed_work_autocancel(dev, &b->work, adc_battery_poll);
+ 	if (ret)
+ 		return ret;
++	b->interval_ms = POLL_MS;
+ 	adc_battery_update(b);
+-	schedule_delayed_work(&b->work, msecs_to_jiffies(POLL_MS));
++	queue_delayed_work(system_freezable_power_efficient_wq, &b->work,
++			   msecs_to_jiffies(b->interval_ms));
+ 	dev_info(dev, "fuel gauge subtype 0x%02x, initial ESR %u mOhm\n", subtype, esr_mohm);
+ 	return 0;
+ }
+diff --git a/drivers/power/supply/pro1x-charger-icl.c b/drivers/power/supply/pro1x-charger-icl.c
+index b68dc24b68..c8bdf21b95 100644
+--- a/drivers/power/supply/pro1x-charger-icl.c
++++ b/drivers/power/supply/pro1x-charger-icl.c
+@@ -49,7 +49,14 @@
+ #define  SNK_RP_3P0		(BIT(1) | BIT(4))
+ 
+ #define ICL_STEP_UA		50000
++/*
++ * With a charger in, every 2 s (the charger's watchdog wants petting, the
++ * limit follows the source); without one only every 20 s on the power
++ * efficient workqueue, to notice the next plug-in: the N9's charging was
++ * driven by BME's events, not by polling.
++ */
+ #define POLL_MS			2000
++#define POLL_IDLE_MS		20000
+ 
+ static unsigned int max_icl_ma = 1500;
+ module_param(max_icl_ma, uint, 0644);
+@@ -182,7 +189,8 @@ static void pro1x_chg_work(struct work_struct *w)
+ 		pro1x_chg_apply(c, want);
+ 	}
+ out:
+-	schedule_delayed_work(&c->work, msecs_to_jiffies(POLL_MS));
++	queue_delayed_work(system_power_efficient_wq, &c->work,
++			   msecs_to_jiffies(c->present ? POLL_MS : POLL_IDLE_MS));
+ }
+ 
+ static int pro1x_chg_probe(struct platform_device *pdev)
+@@ -212,7 +220,8 @@ static int pro1x_chg_probe(struct platform_device *pdev)
+ 	c->last_state = -1;
+ 	INIT_DELAYED_WORK(&c->work, pro1x_chg_work);
+ 	platform_set_drvdata(pdev, c);
+-	schedule_delayed_work(&c->work, msecs_to_jiffies(POLL_MS));
++	queue_delayed_work(system_power_efficient_wq, &c->work,
++			   msecs_to_jiffies(POLL_MS));
+ 
+ 	return 0;
+ }

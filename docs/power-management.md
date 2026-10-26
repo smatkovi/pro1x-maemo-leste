@@ -201,6 +201,61 @@ Not possible on this panel: the N9's link power-down between updates
 one runs in video mode, so the display controller keeps sending 60 frames
 a second. A lower refresh in the stand-by screen would be the next step.
 
+## Every driver checked against the N9 (2026-10-26, built, untested)
+
+An audit of the Linux side with the Nokia N9's kernel, mce and dsme as the
+model. The N9 never suspended: cpuidle took the SoC to OFF whenever
+nothing held it (`/etc/pmconfig`: `enable_off_mode 1`, `sleep_while_idle
+1`). The Pro1X's equivalent is cluster power-collapse -> MPM -> RPM vmin
+from idle (patch 0006), which works only when nothing votes in the RPM
+sleep set; so the votes come first.
+
+Done (`device/kernel/patches/0008-power-checked-against-the-n9.patch`,
+`device/kernel/leste.fragment`, `scripts/`):
+
+- `pro1x-adc-battery`: every 30 s on the battery (`poll_battery_ms`), 5 s
+  on a charger, on the freezable power efficient workqueue, the filters
+  scaled by time; `VOLTAGE_NOW` from the last reading instead of a new
+  burst of eight conversions per upower read. (The N9 read its gauge every
+  360 s.)
+- `pro1x-charger-icl`: every 20 s without a charger (2 s with one), power
+  efficient workqueue.
+- `aw86224`: the chip in standby between effects.
+- Device tree: the touchscreen's bit-banged I2C at 2 us half-periods
+  instead of 5 (each touch report is busy-waited); Bluetooth at 3 Mbaud
+  instead of 3.2, whose 102.4 MHz UART clock needed the CX rail at its
+  nominal corner.
+- Kernel config: lazy RCU on offloaded CPUs, transparent huge pages only on
+  request (no khugepaged scans), the LED pattern trigger.
+- `fw_devlink.sync_state=timeout` on the command line: providers no longer
+  keep the boot-time maximum (DDR, NoCs) for ever when a consumer never
+  probes.
+- No getty on `ttyMSM0` (the debug UART is disabled; init respawned it).
+
+To try on the phone (with someone there):
+
+- `dmesg | grep sync_state` before and after the new command line; the
+  interconnect summary in debugfs.
+- USB runtime PM: `rootfs-overlay/usr/share/pro1x/60-usb-runtime-pm.rules`
+  into `/etc/udev/rules.d/` (dwc3 forbids it, so the controller, both PHYs
+  and a GB/s DDR vote stay on without a cable, in the sleep set too; the
+  N9's musb suspended on cable removal). Check that the USB network comes
+  back after replugging.
+- Bluetooth at 3 Mbaud: throughput and that the controller still comes up.
+- The audio card suspends after 300 s of silence because of the
+  loudspeaker pop (`50-pro1x.pa`); the N9 used 1-5 s. Fixing the pop in
+  the aw87339 sequencing would allow 5 s.
+- MPM: GPIOs 106, 107 (keyboard) and 112 are not in the MPM map, so the
+  keyboard cannot wake the SoC from vmin; the MPM's timer wake-up is not
+  programmed by mainline.
+
+Larger, not done: the touchscreen asleep while dt2w is off or the phone is
+in a pocket (needs mce's proximity), the LED patterns in the LPG instead of
+mce's timer, sensor batching in the ADSP requests (libssc asks for every
+sample as a wake-up), the panel's ELVDD/ELVSS enable (gpio65) as a
+regulator, the Bluetooth UART clock off between transfers (`hci_qca`'s
+empty `__serial_clock_off`).
+
 ## FreeBSD
 
 What FreeBSD 15 does on the Pro1X (`freebsd/`), in the same terms:
@@ -247,6 +302,9 @@ What FreeBSD 15 does on the Pro1X (`freebsd/`), in the same terms:
     of every second for ever (Nokia: `respawn limit 3 300`).
   - ZFS root: lz4 instead of zstd, a transaction group every 30 s instead
     of 5 (`vfs.zfs.txg.timeout=30`).
+  - The touchscreen's bit-banged I2C follows the bus frequency, not the
+    device tree's delay: `hint.iicbus.N.frequency=250000` for its bus
+    once the unit number is seen on the phone.
   - Not done, larger: PSCI idle states (above), the I2C of the touchscreen
     in hardware instead of bit-banged (GPI DMA), sensor batching in the
     ADSP requests, iphbd (Hildon's shared wake-up heartbeat) as a daemon.

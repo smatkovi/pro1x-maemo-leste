@@ -113,10 +113,10 @@ if [ -f "$SSH_PUBKEY" ]; then
   sudo -n tee "$DST_MNT/root/.ssh/authorized_keys" < "$SSH_PUBKEY" >/dev/null
   sudo -n chmod 0600 "$DST_MNT/root/.ssh/authorized_keys"
 fi
-# Serial console for the bring-up phase (Pro1X: ttyMSM0 via USB debug)
-grep -q ttyMSM0 "$DST_MNT/etc/inittab" || \
-  echo 'T0:23:respawn:/sbin/agetty -L 115200 ttyMSM0 vt100' | \
-  sudo -n tee -a "$DST_MNT/etc/inittab" >/dev/null
+# No getty on ttyMSM0: the debug UART (uart4) is disabled in the device tree,
+# so the line only made init respawn a failing agetty every few minutes
+# (an earlier image has it: removed). The consoles are tty1 and USB (ttyGS0).
+sudo -n sed -i '/ttyMSM0/d' "$DST_MNT/etc/inittab"
 
 sudo -n mount -t proc proc "$DST_MNT/proc"
 sudo -n mount -t sysfs sys "$DST_MNT/sys"
