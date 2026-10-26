@@ -18,6 +18,7 @@ CONFIG_PSTORE_PMSG=y
 # Power, checked against the Nokia N9 (docs/power-management.md):
 # RCU callbacks of idle CPUs batched by offload threads (lazy RCU) instead
 # of waking the CPU for each grace period;
+CONFIG_RCU_EXPERT=y
 CONFIG_RCU_NOCB_CPU=y
 CONFIG_RCU_NOCB_CPU_DEFAULT_ALL=y
 CONFIG_RCU_LAZY=y
