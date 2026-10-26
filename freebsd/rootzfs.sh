@@ -18,11 +18,24 @@ log() { echo ">> $*"; }
 
 log "root.ufs to the FreeBSD machine"
 $VM 'rm -rf /root/rootzfs && mkdir -p /root/rootzfs'
-gzip -1 -c "$OUT/root.ufs" | $VM 'gzip -dc > /root/rootzfs/root.ufs'
+# sparse in the VM: the image's free space takes no room there; dd skips
+# trailing zeros without writing them, so the file gets its size back
+# (the link to the VM has broken a transfer now and then: checked, up to
+# three tries)
+size=$(stat -c %s "$OUT/root.ufs")
+sum=$(sha256sum "$OUT/root.ufs" | cut -d' ' -f1)
+for try in 1 2 3; do
+	gzip -1 -c "$OUT/root.ufs" | $VM "gzip -dc | dd of=/root/rootzfs/root.ufs bs=1m conv=sparse status=none && truncate -s $size /root/rootzfs/root.ufs" &&
+	    [ "$($VM 'sha256 -q /root/rootzfs/root.ufs')" = "$sum" ] && break
+	log "transfer $try failed"
+	[ "$try" = 3 ] && exit 1
+done
 
 log "pool from the UFS image"
-$VM "SIZE=${SIZE:-2g} sh -s" <<'REMOTE'
+# lz4 packs less than zstd did (2 GB then): 3 GB of pool
+$VM "SIZE=${SIZE:-3g} sh -s" <<'REMOTE'
 set -e
+set -o pipefail
 cd /root/rootzfs
 u=$(mdconfig -a -t vnode -o readonly -f root.ufs)
 truncate -s "$SIZE" root.zfs
@@ -36,6 +49,9 @@ zfs create -o mountpoint=/ pro1x/ROOT/default
 zpool set bootfs=pro1x/ROOT/default pro1x
 tar -cf - -C ufs . | tar -xpf - -C zfs
 zfs list -o name,used,refer,compressratio pro1x/ROOT/default
+# an empty pool means the copy failed: never hand that back
+used=$(zfs get -Hpo value used pro1x/ROOT/default)
+[ "$used" -gt 536870912 ] || { echo "only $used bytes in the pool"; exit 1; }
 umount ufs
 zpool export pro1x
 mdconfig -d -u "${z#md}"
@@ -43,7 +59,17 @@ mdconfig -d -u "${u#md}"
 REMOTE
 
 log "back"
-$VM 'gzip -1 -c /root/rootzfs/root.zfs' | gzip -dc > "$OUT/root.zfs.new"
+# checked and up to three tries, as on the way in; the old image goes
+# first, the disk may not hold two
+sum=$($VM 'sha256 -q /root/rootzfs/root.zfs')
+rm -f "$OUT/root.zfs" "$OUT/root.zfs.new"
+for try in 1 2 3; do
+	$VM 'gzip -1 -c /root/rootzfs/root.zfs' | gzip -dc > "$OUT/root.zfs.new" &&
+	    [ "$(sha256sum "$OUT/root.zfs.new" | cut -d' ' -f1)" = "$sum" ] && break
+	log "transfer back $try failed"
+	rm -f "$OUT/root.zfs.new"
+	[ "$try" = 3 ] && exit 1
+done
 mv "$OUT/root.zfs.new" "$OUT/root.zfs"
 $VM 'rm -rf /root/rootzfs'
 ls -las "$OUT/root.zfs"
