@@ -9,6 +9,7 @@
 #                         phone's bootloader, which starts it from RAM
 #
 #   WORK=/path/to/freebsd-build bash freebsd/build.sh
+#   KERNFAST=1 ...   the kernel and modules again without a clean build
 #
 # Steps: FreeBSD's sources (releng/15.1) with patches/, the cross toolchain
 # (tools/build/make.py), a root filesystem from the release's /rescue
@@ -71,10 +72,37 @@ cp -a "$REPO/freebsd/mfsroot/." "$ROOT/"
 log "kernel PRO1X"
 sed -e "s|@MFS_IMAGE@|$OUT/mfsroot.ufs|" -e "s|@ENV_FILE@|$REPO/freebsd/pro1x.env|" \
 	"$REPO/freebsd/PRO1X" > "$SRC/sys/arm64/conf/PRO1X"
-(cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X NO_MODULES=yes -DWITH_KERNEL_BIN buildkernel)
+# The DSP stack's drivers (dsp/, kernel modules for the root image): only
+# these modules are built
+cp -a "$REPO/freebsd/dsp/sys/." "$SRC/sys/"
+MODULES=${MODULES:-qcom_dsp}
+(cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
+	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} buildkernel)
 K=$(find "$WORK/obj" -path '*/sys/PRO1X/kernel.bin' | head -1)
 [ -f "$K" ] || { echo "kernel.bin not built"; exit 1; }
 cp "$K" "$OUT/kernel.bin"
+rm -rf "$OUT/modules"
+mkdir -p "$OUT/modules"
+for m in $MODULES; do
+	ko=$(find "$WORK/obj" -path "*/sys/PRO1X/modules/*/$m.ko" | head -1)
+	[ -f "$ko" ] || { echo "module $m not built"; exit 1; }
+	cp "$ko" "$OUT/modules/"
+done
+# Their tools (dsp/tools), against the release's headers and libraries
+BASEROOT=$WORK/base-sysroot
+if [ ! -f "$BASEROOT/.done" ]; then
+	rm -rf "$BASEROOT"
+	mkdir -p "$BASEROOT"
+	bsdtar -xf "$B" -C "$BASEROOT" ./usr/include ./usr/lib ./lib
+	touch "$BASEROOT/.done"
+fi
+mkdir -p "$OUT/dsp-tools"
+for t in "$REPO"/freebsd/dsp/tools/*/; do
+	t=$(basename "$t")
+	clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" \
+	    -fuse-ld=lld -O2 -Wall -I"$REPO/freebsd/dsp/sys/arm64/qualcomm/dsp" \
+	    -o "$OUT/dsp-tools/$t" "$REPO/freebsd/dsp/tools/$t/$t.c"
+done
 # The Linux arm64 Image header: magic "ARMd" at 0x38. image_size (0x10)
 # covers the kernel up to _end; FreeBSD then copies the device tree and
 # builds its first page tables right behind _end. 8 MiB more, so that
