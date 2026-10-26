@@ -1,0 +1,14 @@
+qmicli-wds: struct in6_addr and AF_INET* from their own headers (glibc's
+<arpa/inet.h> brings them along, FreeBSD's does not).
+
+--- a/src/qmicli/qmicli-wds.c
++++ b/src/qmicli/qmicli-wds.c
+@@ -25,6 +25,8 @@
+ #include <stdlib.h>
+ #include <locale.h>
+ #include <string.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
+ #include <arpa/inet.h>
+ 
+ #include <glib.h>

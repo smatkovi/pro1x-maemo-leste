@@ -457,6 +457,25 @@ hidpi_tool() {
 	cp -a "$PR/." "$STAGE/"
 }
 
+# This repository's tools for the DSPs (tools/): the step counter (libssc)
+# and the modem's GNSS for gpsd (QMI), with their files (extra/<tool>)
+dsp_tool() {
+	local name=$1 bindir=$2 deps=$3 b=$BUILD/$1
+	log "$name"
+	mkdir -p "$b"
+	# shellcheck disable=SC2046,SC2086
+	$CC $CFLAGS $LDFLAGS -o "$b/$name" "$REPO/tools/$name/$name.c" \
+	    $(pkg-config --cflags --libs $deps) > "$b/make.out" 2>&1 ||
+	    { grep -m20 error "$b/make.out"; return 1; }
+	PR=$H/pkgroot/$name
+	rm -rf "$PR"
+	install -D -m 755 "$b/$name" "$PR/usr/local/$bindir/$name"
+	if [ -d "$REPO/freebsd/hildon/extra/$name" ]; then
+		cp -a "$REPO/freebsd/hildon/extra/$name/." "$PR/"
+	fi
+	cp -a "$PR/." "$STAGE/"
+}
+
 # pkg-config puts the sysroot in front of path variables, which some
 # parts install to: those files back where they belong
 unsysroot() {
@@ -610,6 +629,12 @@ if [ $# -eq 0 ] || [[ " $* " == *" data "* ]]; then
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-hidpi "* ]]; then
 	hidpi_tool
+fi
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-steps "* ]]; then
+	dsp_tool pro1x-steps sbin "libssc gio-unix-2.0" || failed+=(pro1x-steps)
+fi
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-gnss "* ]]; then
+	dsp_tool pro1x-gnss bin "qmi-glib qrtr-glib" || failed+=(pro1x-gnss)
 fi
 [ ${#failed[@]} -eq 0 ] || log "apps that failed: ${failed[*]}"
 log "done: $STAGE"

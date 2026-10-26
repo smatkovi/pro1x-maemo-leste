@@ -1,0 +1,598 @@
+Leste's patches/libssc-pedometer.patch (scripts/46-sensor-stack.sh), the same for FreeBSD.
+
+diff --git a/libssc.map b/libssc.map
+index d5a2ee2..11d7eaf 100644
+--- a/libssc.map
++++ b/libssc.map
+@@ -71,6 +71,16 @@ LIBSSC_0.4.0 {
+ 		ssc_sensor_magnetometer_get_type;
+ 		ssc_sensor_proximity_get_type;
+ 		ssc_sensor_error_quark;
++		ssc_sensor_pedometer_new;
++		ssc_sensor_pedometer_new_finish;
++		ssc_sensor_pedometer_new_sync;
++		ssc_sensor_pedometer_open;
++		ssc_sensor_pedometer_open_finish;
++		ssc_sensor_pedometer_open_sync;
++		ssc_sensor_pedometer_close;
++		ssc_sensor_pedometer_close_finish;
++		ssc_sensor_pedometer_close_sync;
++		ssc_sensor_pedometer_get_type;
+ 	local:
+ 		*;
+ };
+diff --git a/src/libssc-cli-private.h b/src/libssc-cli-private.h
+index e210167..d5f9b27 100644
+--- a/src/libssc-cli-private.h
++++ b/src/libssc-cli-private.h
+@@ -36,6 +36,7 @@
+ #include "libssc-sensor-magnetometer.h"
+ #include "libssc-sensor-compass.h"
+ #include "libssc-sensor-gyroscope.h"
++#include "libssc-sensor-pedometer.h"
+ 
+ typedef struct {
+ 	GMainLoop *loop;
+diff --git a/src/libssc-cli.c b/src/libssc-cli.c
+index 5560862..00f3cb6 100644
+--- a/src/libssc-cli.c
++++ b/src/libssc-cli.c
+@@ -134,6 +134,28 @@ static void proximity_measurement (SSCSensorProximity *sensor, gboolean near, gp
+ 
+ /*****************************************************************************/
+ 
++static gboolean
++pedometer_close_cb (SSCSensorPedometer *self)
++{
++	g_autoptr (GError) err = NULL;
++
++	if (!ssc_sensor_pedometer_close_sync (self, NULL, &err))
++		g_printf ("Unable to close pedometer sensor: %s\n", err ? err->message : "UNKNOWN");
++
++	g_debug ("Pedometer sensor disabled");
++	exit(0);
++
++	return G_SOURCE_REMOVE;
++}
++
++static void pedometer_measurement (SSCSensorPedometer *sensor, guint steps, gpointer user_data)
++{
++	g_printf ("Pedometer sensor measurement: %u steps\n", steps);
++	fflush(stdout);
++}
++
++/*****************************************************************************/
++
+ static gboolean
+ gyroscope_close_cb (SSCSensorGyroscope *self)
+ {
+@@ -168,7 +190,7 @@ int main(int argc, char *argv[])
+ 	const GOptionEntry options[] = {
+ 		{ "version", 0, 0, G_OPTION_ARG_NONE, &print_version, "Print version information and exit.", NULL },
+ 		{ "debug", 'v', 0, G_OPTION_ARG_NONE, &debug, "Enable debug logs.", NULL },
+-		{ "sensor", 0, 0, G_OPTION_ARG_STRING, &sensor_str, "Enable a sensor. Supported sensors: 'proximity', 'light', 'accelerometer', 'magnetometer', 'compass'", NULL },
++		{ "sensor", 0, 0, G_OPTION_ARG_STRING, &sensor_str, "Enable a sensor. Supported sensors: 'proximity', 'light', 'accelerometer', 'magnetometer', 'compass', 'pedometer'", NULL },
+ 		{ "timeout", 0, 0, G_OPTION_ARG_INT64, &timeout, "Number of seconds before this will timeout [default 10]", NULL },
+ 		{ NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL, NULL }
+ 	};
+@@ -199,7 +221,22 @@ int main(int argc, char *argv[])
+ 
+ 	g_info("libssc %d.%d.%d starting", LIBSSC_MAJOR_VERSION, LIBSSC_MINOR_VERSION, LIBSSC_PATCH_VERSION);
+ 
+-	if (g_strcmp0 (sensor_str, "proximity") == 0) {
++	if (g_strcmp0 (sensor_str, "pedometer") == 0) {
++		SSCSensorPedometer *pedometer = ssc_sensor_pedometer_new_sync (NULL, &err);
++		if (!pedometer) {
++			g_printf ("Unable to initialize pedometer sensor: %s\n", err ? err->message : "UNKNOWN");
++			return INIT_FAIL_EXIT_CODE;
++		}
++		g_signal_connect (pedometer,
++			  	  "measurement",
++			  	  G_CALLBACK (pedometer_measurement),
++			  	  NULL);
++		if (!ssc_sensor_pedometer_open_sync (pedometer, NULL, &err)) {
++			g_printf ("Unable to open pedometer sensor: %s\n", err ? err->message : "UNKNOWN");
++			return OPEN_FAIL_EXIT_CODE;
++		}
++		g_timeout_add_seconds (timeout, (GSourceFunc)pedometer_close_cb, pedometer);
++	} else if (g_strcmp0 (sensor_str, "proximity") == 0) {
+ 		SSCSensorProximity *proximity = ssc_sensor_proximity_new_sync (NULL, &err);
+ 		if (!proximity) {
+ 			g_printf ("Unable to initialize proximity sensor: %s\n", err ? err->message : "UNKNOWN");
+diff --git a/src/libssc-common-private.h b/src/libssc-common-private.h
+index e427c11..ba9ab12 100644
+--- a/src/libssc-common-private.h
++++ b/src/libssc-common-private.h
+@@ -35,6 +35,7 @@
+ #define SSC_MSG_RESPONSE_GET_ATTRIBUTES			128
+ #define SSC_MSG_REPORT_MEASUREMENT_PROXIMITY		769
+ #define SSC_MSG_REPORT_MEASUREMENT			1025
++#define SSC_MSG_REPORT_PEDOMETER			775	/* step count (Pro1X, SM6115) */
+ 
+ #define SSC_ACCURACY_UNRELIABLE				0
+ #define SSC_ACCURACY_LOW				1
+diff --git a/src/libssc-sensor-pedometer.c b/src/libssc-sensor-pedometer.c
+new file mode 100644
+index 0000000..f05b054
+--- /dev/null
++++ b/src/libssc-sensor-pedometer.c
+@@ -0,0 +1,384 @@
++/*
++ * libssc: Library to expose Qualcomm Sensor Core sensors
++ * Copyright (C) 2022-2026 Dylan Van Assche
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program. If not, see <https://www.gnu.org/licenses/>.
++ */
++
++#include <string.h>
++
++#include "ssc-common.pb-c.h"
++#include "libssc-client-private.h"
++#include "libssc-common-private.h"
++#include "libssc-sensor-pedometer.h"
++
++/*
++ * The ADSP's step counter ("pedometer"). It counts on the sensor core from
++ * the accelerometer, so the application processor may sleep while walking.
++ * A report carries the steps counted since the sensor was enabled: on the
++ * Pro1X (SM6115) message 775 with the count as field 1 (varint). Other
++ * firmware may send a standard sensor event with the count as its first
++ * float, so the report is read with a small protobuf scanner instead of a
++ * .proto.
++ */
++
++enum {
++	SIGNAL_MEASUREMENT,
++	N_SIGNALS
++};
++static guint signals[N_SIGNALS];
++
++typedef struct _SSCSensorPedometerPrivate {
++	guint report_id;
++	guint steps;
++	gboolean reported_once;
++} SSCSensorPedometerPrivate;
++
++G_DEFINE_TYPE_WITH_CODE (SSCSensorPedometer, ssc_sensor_pedometer, SSC_TYPE_SENSOR,
++			 G_ADD_PRIVATE (SSCSensorPedometer))
++
++typedef struct {
++	SSCSensorPedometer *sensor;
++	guint steps;
++} SignalContext;
++
++static void
++signal_context_free (SignalContext *ctx)
++{
++	g_slice_free (SignalContext, ctx);
++}
++
++/*****************************************************************************/
++
++static gboolean
++emit_signal (gpointer user_data) {
++	SignalContext *ctx = user_data;
++
++	g_signal_emit (ctx->sensor, signals[SIGNAL_MEASUREMENT], 0, ctx->steps);
++
++	return G_SOURCE_REMOVE;
++}
++
++static gboolean
++read_varint (const guint8 **p, const guint8 *end, guint64 *value)
++{
++	guint shift = 0;
++
++	*value = 0;
++	while (*p < end && shift < 64) {
++		guint8 b = *(*p)++;
++		*value |= (guint64)(b & 0x7f) << shift;
++		if (!(b & 0x80))
++			return TRUE;
++		shift += 7;
++	}
++	return FALSE;
++}
++
++/* Field 1 of the report: a varint, a float or packed floats. */
++static gboolean
++parse_steps (const guint8 *buf, gsize len, guint *steps)
++{
++	const guint8 *p = buf, *end = buf + len;
++	guint64 key, value;
++	gfloat f;
++
++	while (p < end) {
++		if (!read_varint (&p, end, &key))
++			return FALSE;
++		switch (key & 7) {
++		case 0:
++			if (!read_varint (&p, end, &value))
++				return FALSE;
++			if ((key >> 3) == 1) {
++				*steps = (guint) value;
++				return TRUE;
++			}
++			break;
++		case 1:
++			p += 8;
++			break;
++		case 2:
++			if (!read_varint (&p, end, &value) || value > (guint64)(end - p))
++				return FALSE;
++			if ((key >> 3) == 1 && value >= sizeof (f)) {
++				memcpy (&f, p, sizeof (f));
++				*steps = f > 0 ? (guint)(f + 0.5f) : 0;
++				return TRUE;
++			}
++			p += value;
++			break;
++		case 5:
++			if (end - p < 4)
++				return FALSE;
++			if ((key >> 3) == 1) {
++				memcpy (&f, p, sizeof (f));
++				*steps = f > 0 ? (guint)(f + 0.5f) : 0;
++				return TRUE;
++			}
++			p += 4;
++			break;
++		default:
++			return FALSE;
++		}
++	}
++	return FALSE;
++}
++
++static void
++report_received (SSCClient *self, guint32 msg_id, guint64 uid_high, guint64 uid_low, GArray *buf, gpointer user_data)
++{
++	SSCSensorPedometer *sensor = SSC_SENSOR_PEDOMETER (user_data);
++	SSCSensorPedometerPrivate *priv = NULL;
++	SignalContext *ctx = NULL;
++	guint64 sensor_uid_low;
++	guint64 sensor_uid_high;
++	guint steps = 0;
++
++	g_object_get (SSC_SENSOR (sensor),
++		      SSC_SENSOR_UID_HIGH, &sensor_uid_high,
++		      SSC_SENSOR_UID_LOW, &sensor_uid_low,
++		      NULL);
++
++	if (sensor_uid_high != uid_high || sensor_uid_low != uid_low)
++		return;
++
++	if (g_log_writer_default_would_drop (G_LOG_LEVEL_DEBUG, G_LOG_DOMAIN) == FALSE) {
++		g_autofree gchar *hex = g_malloc0 (buf->len * 2 + 1);
++		for (guint i = 0; i < buf->len; i++)
++			g_snprintf (hex + 2 * i, 3, "%02x", (guint8) buf->data[i]);
++		g_debug ("Pedometer report %u: %s", msg_id, hex);
++	}
++
++	/* Answers to the attribute and enable requests; the step event itself
++	 * comes as message 775 on the Pro1X (SM6115) */
++	if (msg_id == SSC_MSG_RESPONSE_GET_ATTRIBUTES || msg_id == SSC_MSG_RESPONSE_ENABLE_REPORT)
++		return;
++	if (!parse_steps ((const guint8 *) buf->data, buf->len, &steps)) {
++		g_warning ("Failed to read pedometer report %u", msg_id);
++		return;
++	}
++
++	priv = ssc_sensor_pedometer_get_instance_private (sensor);
++	if (priv->steps != steps || !priv->reported_once) {
++		priv->steps = steps;
++		priv->reported_once = TRUE;
++
++		/* Emit signal in main context instead of thread's context */
++		ctx = g_slice_new0 (SignalContext);
++		ctx->sensor = sensor;
++		ctx->steps = steps;
++		g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, emit_signal, ctx, (GDestroyNotify)signal_context_free);
++	}
++}
++
++/*****************************************************************************/
++
++static void
++pedometer_close_ready (SSCSensor *sensor, GAsyncResult *result, gpointer user_data)
++{
++	GTask *task = G_TASK (user_data);
++	g_autoptr (GError) error = NULL;
++
++	if (!SSC_SENSOR_CLASS (ssc_sensor_pedometer_parent_class)->close_finish (sensor, result, &error)) {
++		g_task_return_boolean (task, FALSE);
++		g_object_unref (task);
++		return;
++	}
++
++	g_task_return_boolean (task, TRUE);
++	g_object_unref (task);
++}
++
++gboolean
++ssc_sensor_pedometer_close_finish (SSCSensorPedometer *self, GAsyncResult *result, GError **error)
++{
++	return g_task_propagate_boolean (G_TASK (result), error);
++}
++
++void
++ssc_sensor_pedometer_close (SSCSensorPedometer *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data)
++{
++	GTask *task = NULL;
++	SSCClient *client = NULL;
++	SSCSensorPedometerPrivate *priv = NULL;
++
++	g_assert (SSC_SENSOR_CLASS (ssc_sensor_pedometer_parent_class)->close &&
++		  SSC_SENSOR_CLASS (ssc_sensor_pedometer_parent_class)->close_finish);
++
++	task = g_task_new (self, cancellable, callback, user_data);
++	priv = ssc_sensor_pedometer_get_instance_private (self);
++
++	/* Stop listening for reports */
++	g_object_get (SSC_SENSOR (self),
++		      SSC_SENSOR_CLIENT, &client,
++		      NULL);
++	if (priv->report_id)
++		g_signal_handler_disconnect (client, priv->report_id);
++
++	/* Close sensor */
++	SSC_SENSOR_CLASS (ssc_sensor_pedometer_parent_class)->close (SSC_SENSOR (self), cancellable, (GAsyncReadyCallback)pedometer_close_ready, task);
++}
++
++gboolean
++ssc_sensor_pedometer_close_sync (SSCSensorPedometer *self, GCancellable *cancellable, GError **error)
++{
++	gboolean success = FALSE;
++	SyncContext ctx;
++
++	ssc_common_init_sync_context (&ctx);
++	ssc_sensor_pedometer_close (self, cancellable, ssc_common_callback_sync_context, &ctx);
++	ssc_common_wait_sync_context (&ctx);
++	success = ssc_sensor_pedometer_close_finish (self, ctx.result, error);
++	ssc_common_clear_sync_context (&ctx);
++
++	return success;
++}
++
++/*****************************************************************************/
++
++static void
++pedometer_open_ready (SSCSensor *sensor, GAsyncResult *result, gpointer user_data)
++{
++	GTask *task = G_TASK (user_data);
++	g_autoptr (GError) error = NULL;
++
++	if (!SSC_SENSOR_CLASS (ssc_sensor_pedometer_parent_class)->open_finish (sensor, result, &error)) {
++		g_task_return_boolean (task, FALSE);
++		g_object_unref (task);
++		return;
++	}
++
++	g_task_return_boolean (task, TRUE);
++	g_object_unref (task);
++}
++
++gboolean
++ssc_sensor_pedometer_open_finish (SSCSensorPedometer *self, GAsyncResult *result, GError **error)
++{
++	return g_task_propagate_boolean (G_TASK (result), error);
++}
++
++void
++ssc_sensor_pedometer_open (SSCSensorPedometer *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data)
++{
++	SSCClient *client = NULL;
++	SSCSensorPedometerPrivate *priv = NULL;
++	GTask *task = NULL;
++
++	g_assert (SSC_SENSOR_CLASS (ssc_sensor_pedometer_parent_class)->open &&
++		  SSC_SENSOR_CLASS (ssc_sensor_pedometer_parent_class)->open_finish);
++
++	priv = ssc_sensor_pedometer_get_instance_private (self);
++	priv->reported_once = FALSE;
++
++	task = g_task_new (self, cancellable, callback, user_data);
++
++	/* Start listening for reports before opening sensor so we don't miss the first measurement */
++	g_object_get (SSC_SENSOR (self),
++		      SSC_SENSOR_CLIENT, &client,
++		      NULL);
++	priv->report_id = g_signal_connect (client,
++					    "report",
++					    G_CALLBACK (report_received),
++					    self);
++
++	/* Open sensor */
++	SSC_SENSOR_CLASS (ssc_sensor_pedometer_parent_class)->open (SSC_SENSOR (self), cancellable, (GAsyncReadyCallback)pedometer_open_ready, task);
++}
++
++gboolean
++ssc_sensor_pedometer_open_sync (SSCSensorPedometer *self, GCancellable *cancellable, GError **error)
++{
++	gboolean success = FALSE;
++	SyncContext ctx;
++
++	ssc_common_init_sync_context (&ctx);
++	ssc_sensor_pedometer_open (self, cancellable, ssc_common_callback_sync_context, &ctx);
++	ssc_common_wait_sync_context (&ctx);
++	success = ssc_sensor_pedometer_open_finish (self, ctx.result, error);
++	ssc_common_clear_sync_context (&ctx);
++
++	return success;
++}
++
++/*****************************************************************************/
++
++static void
++ssc_sensor_pedometer_class_init (SSCSensorPedometerClass *klass)
++{
++	signals[SIGNAL_MEASUREMENT] = g_signal_new ("measurement",
++		G_TYPE_FROM_CLASS (klass),
++		G_SIGNAL_RUN_FIRST,
++		0, NULL, NULL, NULL,
++		G_TYPE_NONE,
++		1, G_TYPE_UINT);
++}
++
++static void
++ssc_sensor_pedometer_init (SSCSensorPedometer *self)
++{
++}
++
++SSCSensorPedometer *
++ssc_sensor_pedometer_new_finish (GAsyncResult *result, GError **error)
++{
++	GObject *sensor;
++	GObject *source;
++	SSCSensorPedometerPrivate *priv = NULL;
++
++	source = g_async_result_get_source_object (result);
++	sensor = g_async_initable_new_finish (G_ASYNC_INITABLE (source), result, error);
++
++	if (!sensor) {
++		g_object_unref (source);
++		return NULL;
++	}
++
++	priv = ssc_sensor_pedometer_get_instance_private (SSC_SENSOR_PEDOMETER (sensor));
++
++	/* Only bypass reporting once if the sensor is opened, not during initialization */
++	priv->reported_once = TRUE;
++
++	g_object_unref (source);
++	return SSC_SENSOR_PEDOMETER (sensor);
++}
++
++void
++ssc_sensor_pedometer_new (GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data)
++{
++	g_async_initable_new_async (
++			SSC_TYPE_SENSOR_PEDOMETER,
++			G_PRIORITY_DEFAULT,
++			cancellable,
++			callback,
++			user_data,
++			SSC_SENSOR_DATA_TYPE, "pedometer",
++			NULL);
++}
++
++SSCSensorPedometer *
++ssc_sensor_pedometer_new_sync (GCancellable *cancellable, GError **error)
++{
++	SSCSensorPedometer *self = NULL;
++	SyncContext ctx;
++
++	ssc_common_init_sync_context (&ctx);
++	ssc_sensor_pedometer_new (cancellable, ssc_common_callback_sync_context, &ctx);
++	ssc_common_wait_sync_context (&ctx);
++	self = ssc_sensor_pedometer_new_finish (ctx.result, error);
++	ssc_common_clear_sync_context (&ctx);
++
++	return self;
++}
+diff --git a/src/libssc-sensor-pedometer.h b/src/libssc-sensor-pedometer.h
+new file mode 100644
+index 0000000..81150d6
+--- /dev/null
++++ b/src/libssc-sensor-pedometer.h
+@@ -0,0 +1,44 @@
++/*
++ * libssc: Library to expose Qualcomm Sensor Core sensors
++ * Copyright (C) 2022-2026 Dylan Van Assche
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++#ifndef _LIBSSC_SENSOR_PEDOMETER_H_
++#define _LIBSSC_SENSOR_PEDOMETER_H_
++
++#include <glib.h>
++#include <gio/gio.h>
++#include "libssc-sensor.h"
++
++#define SSC_TYPE_SENSOR_PEDOMETER (ssc_sensor_pedometer_get_type())
++
++typedef struct _SSCSensorPedometer {
++	SSCSensor parent;
++} SSCSensorPedometer;
++
++G_DECLARE_FINAL_TYPE (SSCSensorPedometer, ssc_sensor_pedometer, SSC, SENSOR_PEDOMETER, SSCSensor);
++
++void		 	 ssc_sensor_pedometer_new (GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
++SSCSensorPedometer 	*ssc_sensor_pedometer_new_finish (GAsyncResult *result, GError **error);
++SSCSensorPedometer 	*ssc_sensor_pedometer_new_sync (GCancellable *cancellable, GError **error);
++void			 ssc_sensor_pedometer_open (SSCSensorPedometer *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
++gboolean		 ssc_sensor_pedometer_open_finish (SSCSensorPedometer *self, GAsyncResult *result, GError **error);
++gboolean		 ssc_sensor_pedometer_open_sync (SSCSensorPedometer *self, GCancellable *cancellable, GError **error);
++void			 ssc_sensor_pedometer_close (SSCSensorPedometer *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
++gboolean		 ssc_sensor_pedometer_close_finish (SSCSensorPedometer *self, GAsyncResult *result, GError **error);
++gboolean		 ssc_sensor_pedometer_close_sync (SSCSensorPedometer *self, GCancellable *cancellable, GError **error);
++
++#endif /* _LIBSSC_SENSOR_PEDOMETER_H_ */
+diff --git a/src/libssc-sensor.c b/src/libssc-sensor.c
+index 2cf686f..9618164 100644
+--- a/src/libssc-sensor.c
++++ b/src/libssc-sensor.c
+@@ -483,7 +483,8 @@ report_received (SSCClient *self, guint32 msg_id, guint64 uid_high, guint64 uid_
+ 	 * Apply this for any sensor to cover new sensors in the future as well.
+ 	 * Either a configuration update or measurement will complete the task and disconnect the listener.
+ 	 */
+-	} else if (uid_high == priv->uid_high && uid_low == priv->uid_low && (msg_id == SSC_MSG_REPORT_MEASUREMENT || msg_id == SSC_MSG_REPORT_MEASUREMENT_PROXIMITY)) {
++	} else if (uid_high == priv->uid_high && uid_low == priv->uid_low && (msg_id == SSC_MSG_REPORT_MEASUREMENT || msg_id == SSC_MSG_REPORT_MEASUREMENT_PROXIMITY ||
++										      msg_id == SSC_MSG_REPORT_PEDOMETER)) {
+ 		g_debug ("Measurement received for '%s' sensor (%" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT "), assuming enabled", priv->data_type, priv->uid_high, priv->uid_low);
+ 
+ 		if (ctx->task) {
+diff --git a/src/libssc.h b/src/libssc.h
+index 4b42241..cd77b57 100644
+--- a/src/libssc.h
++++ b/src/libssc.h
+@@ -25,5 +25,6 @@
+ #include <libssc-sensor-light.h>
+ #include <libssc-sensor-proximity.h>
+ #include <libssc-sensor-gyroscope.h>
++#include <libssc-sensor-pedometer.h>
+ 
+ #endif /* _LIBSSC_H_ */
+diff --git a/src/meson.build b/src/meson.build
+index 5ea1dff..bfb6730 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -35,6 +35,7 @@ headers += files(
+   'libssc-sensor-magnetometer.h',
+   'libssc-sensor-compass.h',
+   'libssc-sensor-gyroscope.h',
++  'libssc-sensor-pedometer.h',
+ )
+ 
+ install_headers(
+@@ -52,6 +53,7 @@ sources += files(
+   'libssc-sensor-magnetometer.c',
+   'libssc-sensor-compass.c',
+   'libssc-sensor-gyroscope.c',
++  'libssc-sensor-pedometer.c',
+ )
+ 
+ cli_sources = files(

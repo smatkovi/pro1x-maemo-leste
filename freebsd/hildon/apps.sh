@@ -75,8 +75,12 @@ APPS=(
 	"qt5-webkit|!"
 	"jib|!"
 	"dorian|!"
-	# The DSPs' userland (freebsd/dsp/README.md): the sensors' file server
+	# The DSPs' userland (freebsd/dsp/README.md): the sensors' file server,
+	# QMI over QRTR, the sensor client library, the step counter
 	"hexagonrpc|!"
+	"libqrtr-glib|!"
+	"libqmi|!"
+	"libssc|!"
 	# Maemo 5 apps ported to Leste (github.com/smatkovi), at their releases
 	"headphoned|!"
 	"pedometerhomewidget|!"
@@ -120,6 +124,7 @@ REV+=(
 	[qt5-webkit]=9ca126da9273664dd23a3ccd0c9bebceb7bb534bddd743db31caf6a5a6d4a9e6
 	[jib]=5dd4a340d20d [dorian]=da92eda1d5d9
 	[hexagonrpc]=40e50412812a
+	[libqrtr-glib]=69791f8f2a09 [libqmi]=3f07d6e5b467 [libssc]=0cf77b93b557
 	[headphoned]=d476cb4a8bf9 [pedometerhomewidget]=06d5246191fa
 	[wifi-assistant]=604bbe98d8b5 [gpodder-leste]=2759445563b5
 )
@@ -139,6 +144,9 @@ URL+=(
 	[qt5-webkit]=https://github.com/qtwebkit/qtwebkit/releases/download/qtwebkit-5.212.0-alpha4/qtwebkit-5.212.0-alpha4.tar.xz
 	[jib]=$GH_EXTRAS/jib.git [dorian]=$GH_EXTRAS/dorian.git
 	[hexagonrpc]=https://github.com/linux-msm/hexagonrpc.git
+	[libqrtr-glib]=https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
+	[libqmi]=https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
+	[libssc]=https://codeberg.org/DylanVanAssche/libssc.git
 	[headphoned]=https://github.com/smatkovi/headphoned.git
 	[pedometerhomewidget]=https://github.com/smatkovi/pedometerhomewidget.git
 	[wifi-assistant]=https://github.com/smatkovi/wifi-assistant.git
@@ -546,6 +554,26 @@ custom_hexagonrpc() {
 	meson_cross
 	# systemd's units: FreeBSD has rc.d/hexagonrpcd (extra/hexagonrpc)
 	rm -rf "$PR/usr/local/lib/systemd"
+}
+
+# QRTR sockets for GLib (libqmi's QRTR transport)
+custom_libqrtr_glib() {
+	local MESON_CFLAGS="-I$DSP_INCLUDE"
+	meson_cross -Dintrospection=false -Dgtk_doc=false
+}
+
+# libqmi as Leste builds it (1.34), without what is Linux's own: udev,
+# RMNET links (netlink), QMI over MBIM, the firmware updater
+custom_libqmi() {
+	local MESON_CFLAGS="-I$DSP_INCLUDE"
+	meson_cross -Dqrtr=true -Dmbim_qmux=false -Drmnet=false -Dudev=false \
+	    -Dfirmware_update=false -Dmm_runtime_check=false -Dintrospection=false \
+	    -Dgtk_doc=false -Dman=false -Dbash_completion=false
+}
+
+# The ADSP's sensors over QMI (Leste: v0.4.4 with its two patches)
+custom_libssc() {
+	meson_cross
 }
 
 custom_jib() { qt_cmake -DMAEMO=On; }

@@ -2,7 +2,9 @@
 # pro1x-dsptest [STEP]: the DSP test runs of freebsd/dsp/README.md, each
 # layer after the one below it, up to STEP (kernel environment pro1x.dsp,
 # set in the boot menu's freebsd/cmdline): load (the substrate), adsp (the
-# ADSP started and stopped again). Everything goes to the console, which the
+# ADSP started and stopped again), sensors (the ADSP left running: its
+# GLINK channels, QRTR services, FastRPC, hexagonrpcd, the sensors through
+# libssc and the step counter). Everything goes to the console, which the
 # RAM console keeps for Linux after the next boot.
 step=${1:-$(kenv -q pro1x.dsp)}
 step=${step:-load}
@@ -10,10 +12,12 @@ echo "=== DSP test up to: $step"
 fw=/usr/local/share/pro1x/firmware/qcom/sm6115/Fxtec/QX1050
 ls -la $fw 2>&1 | head -20
 
-echo "--- load qcom_dsp"
+echo "--- load qcom_dsp, qrtr"
 kldload qcom_dsp && echo "qcom_dsp loaded"
-kldstat | grep qcom
-dmesg | grep -E "qcom_(dsp|smem|smp2p|pas)" | tail -30
+kldload qrtr && echo "qrtr loaded"
+kldstat | grep -E "qcom|qrtr"
+dmesg | grep -E "qcom_(dsp|smem|smp2p|pas)|qrtr" | tail -30
+sysctl hw.qcom_socinfo
 ls -la /dev/qcom_pas 2>&1
 [ "$step" = load ] && exit 0
 
@@ -23,8 +27,34 @@ pro1x-dsp start adsp
 echo "start: $?"
 sleep 5
 pro1x-dsp status adsp
-dmesg | grep -E "qcom_(smp2p|pas)" | tail -20
-[ "$step" = adsp ] || exit 0
-pro1x-dsp stop adsp
-echo "stop: $?"
-pro1x-dsp status adsp
+dmesg | grep -E "qcom_(smp2p|pas)|glink|qrtr|fastrpc|qcom_smmu" | tail -30
+if [ "$step" = adsp ]; then
+	pro1x-dsp stop adsp
+	echo "stop: $?"
+	pro1x-dsp status adsp
+	exit 0
+fi
+
+echo "--- sensors"
+sleep 5
+sysctl net.qrtr.servers
+ls -la /dev/fastrpc-* 2>&1
+service dbus onestatus > /dev/null 2>&1 || service dbus onestart
+service hexagonrpcd onestart
+# the sensor service (QRTR 400) once the ADSP has its configuration
+i=0
+while [ $i -lt 60 ] && ! sysctl -n net.qrtr.servers | grep -q "^400 "; do
+	sleep 1
+	i=$((i + 1))
+done
+sysctl net.qrtr.servers
+tail -20 /var/log/hexagonrpcd.log
+for s in accelerometer light proximity; do
+	echo "- $s"
+	ssccli --sensor $s --timeout 3 2>&1 | tail -5
+done
+service pro1x_steps onestart
+sleep 3
+dbus-send --system --print-reply --dest=org.pro1x.Steps /org/pro1x/Steps \
+    org.pro1x.Steps.GetSteps 2>&1
+tail -10 /var/log/pro1x-steps.log

@@ -37,6 +37,14 @@ LOCAL = {
                     'matchbox decorations) by one factor; pro1x-hidpi makes the '
                     "theme for the configured factor and the session's environment "
                     '(tools/pro1x-hidpi).', ['UNKNOWN']),
+    'pro1x-steps': ('1.0', "The Pro1X's hardware step counter on D-Bus",
+                    "pro1x-steps reads the ADSP's pedometer through libssc and "
+                    'serves the count as org.pro1x.Steps on the system bus '
+                    '(tools/pro1x-steps), with its rc.d script.', ['UNKNOWN']),
+    'pro1x-gnss': ('1.0', "The Pro1X modem's GNSS as NMEA for gpsd",
+                   "pro1x-gnss starts the modem's location service over QMI and "
+                   'writes its NMEA sentences for gpsd (tools/pro1x-gnss).',
+                   ['UNKNOWN']),
 }
 # Parts from a release tarball (build.sh fetch_src): version, comment,
 # description, licences, home page
@@ -62,6 +70,8 @@ RUNTIME = {
                       'qt5-quickcontrols', 'qt5-quickcontrols2', 'qt5-graphicaleffects'],
     'pro1x-hidpi': ['xrdb'],
     'wifi-assistant': ['curl'],
+    'pro1x-steps': ['hexagonrpc', 'dbus'],
+    'pro1x-gnss': ['gpsd'],
     # QtSql's SQLite driver, a package of its own on FreeBSD
     'jib': ['qt5-sqldrivers-sqlite3'],
     'dorian': ['qt5-sqldrivers-sqlite3'],

@@ -70,7 +70,7 @@ the next boot (`fbsdtest.sh`). One layer per run:
 | dsp2 | SMMU probe: the ADSP's FastRPC context bank set to bypass | context bank reads back as bypass |
 | dsp3 | `pro1x-dsp start adsp` | PAS init, mem setup, auth and reset OK; "ready" over SMP2P |
 | dsp4 | GLINK on the ADSP's edge, QRTR | the ADSP's channels open; its services in `qrtr-lookup` |
-| dsp5 | FastRPC, hexagonrpcd | the sensor registry served, QRTR service 400 |
+| dsp5 | FastRPC, hexagonrpcd, libssc (`pro1x.dsp=sensors`) | the sensor registry served, QRTR service 400, accelerometer values, a step count |
 | dsp6 | rmtfs, tqftpserv, pd-mapper, `pro1x-dsp start modem` | modem ready, its QMI services listed |
 | dsp7 | ath10k | `wlan0` scans |
 
