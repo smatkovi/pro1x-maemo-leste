@@ -2,7 +2,13 @@
 # Unattended tests (hint pro1x.test set by the boot menu's freebsd/cmdline):
 # report on the console, which the RAM console keeps for Linux, and go back
 # to the boot menu.
-if [ -n "$(kenv -q pro1x.test)" ]; then
+# pro1x.test=dsp: only the DSP stack (pro1x-dsptest), then back
+if [ "$(kenv -q pro1x.test)" = dsp ]; then
+	echo "=== FreeBSD multi-user: DSP test ==="
+	/usr/local/libexec/pro1x-dsptest 2>&1
+	echo "=== test done, rebooting in 20 s"
+	(sleep 20; shutdown -r now "pro1x dsp test done") > /dev/null 2>&1 &
+elif [ -n "$(kenv -q pro1x.test)" ]; then
 	echo "=== FreeBSD multi-user: test report ==="
 	uname -a
 	sysctl hw.ncpu hw.physmem dev.cpu.0.freq dev.cpu.0.freq_levels

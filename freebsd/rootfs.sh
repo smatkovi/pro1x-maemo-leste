@@ -150,6 +150,27 @@ log "Pro1X configuration (rootfs/)"
 mkdir -p "$R/usr/local/share/pro1x/root"
 cp -a "$R/root/." "$R/usr/local/share/pro1x/root/"
 cp -a "$REPO/freebsd/rootfs/." "$R/"
+# The DSP stack (dsp/): its kernel modules and tools from build.sh, and the
+# DSPs' firmware, signed by the phone's maker, from the local Leste image
+# only (LESTE_IMG; not in this repository or its releases)
+if [ -d "$OUT/modules" ]; then
+	mkdir -p "$R/boot/modules" "$R/usr/local/sbin"
+	cp "$OUT"/modules/*.ko "$R/boot/modules/"
+	cp "$OUT"/dsp-tools/* "$R/usr/local/sbin/"
+fi
+LESTE_IMG=${LESTE_IMG:-$WORK/../out/maemo-leste.img}
+FW=usr/local/share/pro1x/firmware
+if [ -f "$LESTE_IMG" ] && command -v debugfs > /dev/null; then
+	log "DSP firmware from $LESTE_IMG"
+	mkdir -p "$R/$FW/qcom/sm6115/Fxtec" "$R/$FW/ath10k"
+	debugfs -R "rdump /lib/firmware/qcom/sm6115/Fxtec/QX1050 $R/$FW/qcom/sm6115/Fxtec" \
+	    "$LESTE_IMG" > /dev/null 2>&1
+	debugfs -R "rdump /lib/firmware/ath10k/WCN3990 $R/$FW/ath10k" \
+	    "$LESTE_IMG" > /dev/null 2>&1
+	ls "$R/$FW/qcom/sm6115/Fxtec/QX1050" | tr '\n' ' '; echo
+else
+	log "no Leste image ($LESTE_IMG): the root image has no DSP firmware"
+fi
 # A fixed host id: rc would write one into /etc, which is read only.
 uuidgen > "$R/etc/hostid"
 tr -d '-' < "$R/etc/hostid" > "$R/etc/machine-id"

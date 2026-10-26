@@ -10,7 +10,11 @@
 #define	_QCOM_PAS_IOCTL_H_
 
 #include <sys/types.h>
+#ifdef __FreeBSD__
 #include <sys/ioccom.h>
+#else
+#include <sys/ioctl.h>	/* the loader's dry run on other systems */
+#endif
 
 /* The ELF header with the program headers, then the hash segment */
 struct qcom_pas_init {

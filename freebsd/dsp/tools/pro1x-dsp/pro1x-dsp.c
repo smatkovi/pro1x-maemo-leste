@@ -7,6 +7,7 @@
  *   pro1x-dsp start NAME [FIRMWARE]   NAME: adsp, cdsp or modem
  *   pro1x-dsp stop NAME
  *   pro1x-dsp status [NAME]
+ *   pro1x-dsp -n start NAME FIRMWARE   only show what would be loaded
  *
  * The firmware is a signed ELF image (.mbn, or .mdt with .bNN segment
  * files), read as Linux's mdt_loader reads it: TrustZone gets the ELF and
@@ -55,6 +56,7 @@ struct elf32_phdr {
 #define	MDT_RELOCATABLE		(1U << 27)
 
 static const char *states[] = { "off", "loading", "running", "crashed" };
+static int dry;		/* -n: no device, only the plan */
 
 static int
 open_dev(const char *name)
@@ -194,8 +196,10 @@ start(const char *name, const char *fw)
 		free(data);
 	}
 
-	dev = open_dev(name);
-	if (ioctl(dev, QCOM_PAS_STATUS, &st) < 0)
+	memset(&st, 0, sizeof(st));
+	st.mem_size = UINT64_MAX;
+	dev = dry ? -1 : open_dev(name);
+	if (!dry && ioctl(dev, QCOM_PAS_STATUS, &st) < 0)
 		err(1, "%s: status", name);
 	if (st.state == QCOM_PAS_STATE_RUNNING)
 		errx(1, "%s is running (pro1x-dsp stop %s)", name, name);
@@ -207,11 +211,15 @@ start(const char *name, const char *fw)
 
 	init.meta = (uintptr_t)meta;
 	init.meta_len = ehdr_size + hash_size;
-	if (ioctl(dev, QCOM_PAS_INIT, &init) < 0)
+	if (dry)
+		printf("metadata: %zu bytes (headers %zu, hash %zu)%s\n",
+		    ehdr_size + hash_size, ehdr_size, hash_size,
+		    relocate ? ", memory setup" : "");
+	else if (ioctl(dev, QCOM_PAS_INIT, &init) < 0)
 		err(1, "%s: TrustZone did not take the metadata", name);
 	if (relocate) {
 		size = max - min;
-		if (ioctl(dev, QCOM_PAS_MEM_SETUP, &size) < 0)
+		if (!dry && ioctl(dev, QCOM_PAS_MEM_SETUP, &size) < 0)
 			err(1, "%s: memory setup", name);
 	}
 	reloc = relocate ? min : st.mem_phys;
@@ -233,10 +241,16 @@ start(const char *name, const char *fw)
 			data = split_segment(fw, i, ph[i].p_filesz);
 			seg.data = (uintptr_t)data;
 		}
-		if (ioctl(dev, QCOM_PAS_LOAD, &seg) < 0)
+		if (dry)
+			printf("segment %2d: offset %#9jx, %#8jx bytes, %#8jx in memory\n",
+			    i, (uintmax_t)seg.offset, (uintmax_t)seg.filesz,
+			    (uintmax_t)seg.memsz);
+		else if (ioctl(dev, QCOM_PAS_LOAD, &seg) < 0)
 			err(1, "%s: segment %d", name, i);
 		free(data);
 	}
+	if (dry)
+		return;
 	if (ioctl(dev, QCOM_PAS_START, &timeout) < 0) {
 		warn("%s: start", name);
 		close(dev);
@@ -268,6 +282,7 @@ usage(void)
 	fprintf(stderr, "usage: pro1x-dsp start NAME [FIRMWARE]\n"
 	    "       pro1x-dsp stop NAME\n"
 	    "       pro1x-dsp status [NAME]\n"
+	    "       pro1x-dsp -n start NAME FIRMWARE\n"
 	    "NAME: adsp, cdsp or modem\n");
 	exit(2);
 }
@@ -277,6 +292,11 @@ main(int argc, char **argv)
 {
 	char fw[1024];
 
+	if (argc > 1 && strcmp(argv[1], "-n") == 0) {
+		dry = 1;
+		argc--;
+		argv++;
+	}
 	if (argc < 2)
 		usage();
 	if (strcmp(argv[1], "status") == 0 && argc == 2) {

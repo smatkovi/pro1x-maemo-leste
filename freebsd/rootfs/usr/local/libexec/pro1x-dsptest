@@ -1,0 +1,30 @@
+#!/bin/sh
+# pro1x-dsptest [STEP]: the DSP test runs of freebsd/dsp/README.md, each
+# layer after the one below it, up to STEP (kernel environment pro1x.dsp,
+# set in the boot menu's freebsd/cmdline): load (the substrate), adsp (the
+# ADSP started and stopped again). Everything goes to the console, which the
+# RAM console keeps for Linux after the next boot.
+step=${1:-$(kenv -q pro1x.dsp)}
+step=${step:-load}
+echo "=== DSP test up to: $step"
+fw=/usr/local/share/pro1x/firmware/qcom/sm6115/Fxtec/QX1050
+ls -la $fw 2>&1 | head -20
+
+echo "--- load qcom_dsp"
+kldload qcom_dsp && echo "qcom_dsp loaded"
+kldstat | grep qcom
+dmesg | grep -E "qcom_(dsp|smem|smp2p|pas)" | tail -30
+ls -la /dev/qcom_pas 2>&1
+[ "$step" = load ] && exit 0
+
+echo "--- ADSP"
+pro1x-dsp status
+pro1x-dsp start adsp
+echo "start: $?"
+sleep 5
+pro1x-dsp status adsp
+dmesg | grep -E "qcom_(smp2p|pas)" | tail -20
+[ "$step" = adsp ] || exit 0
+pro1x-dsp stop adsp
+echo "stop: $?"
+pro1x-dsp status adsp
