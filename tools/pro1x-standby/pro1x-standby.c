@@ -1,14 +1,23 @@
 /*
- * pro1x-standby -- the N9's stand-by screen for an X session.
+ * pro1x-standby -- the Nokia N9's stand-by screen for an X session.
  *
- * When the screen goes blank (X's screen saver: after the timeout, or
- * `xset s activate` from the power key), the AMOLED panel shows what the
- * N9 showed in its low power mode instead of black: the time in large thin
- * digits in the top right corner, and under it a row of small icons for
- * unread notifications, the charging state and a silent or beep profile.
- * Everything else stays black, so the panel lights only those pixels. The
- * content moves every three minutes so that nothing burns in; a touch or a
- * key ends the screen saver as before.
+ * Instead of going black, the screen then shows what the N9 showed in its
+ * low power mode: the time in large thin digits in the top right corner,
+ * and under it a row of small icons for unread notifications, the charging
+ * state and a silent or beep profile. Everything else stays black, so the
+ * AMOLED panel lights only those pixels. The content moves every three
+ * minutes so that nothing burns in.
+ *
+ * When, as on the N9 (gconf /system/osso/dsm/display, mce.ini [TKLock]):
+ * after the display time-out without input (display_dim_timeout, 30 s,
+ * -s) the N9 dims, and display_blank_timeout (3 s) later it blanks and
+ * locks, which with use_low_power_mode on is the stand-by screen; the
+ * power key goes there at once (SIGUSR1, from pro1x-powerkey, toggles).
+ * Single touches then do nothing (DisableTSImmediately=2: only a double
+ * tap after blanking), so that the phone stays dark in a pocket: a double
+ * tap or the power key wake it up. Not like the N9 (the hardware for it is
+ * missing where this runs): no dimming before, no proximity sensor to stay
+ * black in a pocket, no lock screen after.
  *
  * Sizes and timings are those of Harmattan's screen lock style
  * (LockScreenLowPowerMode* in libsysuid-screenlock-nokia.css), in mm of the
@@ -22,16 +31,17 @@
  * battery from sysctl hw.acpi.* (FreeBSD) or /sys/class/power_supply
  * (Linux), the profile from profiled on the session bus.
  *
- *   pro1x-standby [-t themedir] [-d dpi] [-f font] [-2]
- *       registers the stand-by window with X and draws it while the screen
- *       saver is on; run it in the session (and `xset s noblank`, else the
- *       server may blank in hardware instead of mapping the window)
+ *   pro1x-standby [-s timeout] [-P pidfile] [-t themedir] [-d dpi]
+ *                 [-f font] [-2]
+ *       runs in the X session (with X's own screen saver off, xset s off)
  *   pro1x-standby -p out.png WIDTHxHEIGHT [options]
  *       draws one frame into a PNG and exits (for tests)
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <math.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +66,11 @@
 #define DEFAULT_THEME "/usr/local/share/pro1x/harmattan/standby"
 #define DEFAULT_FONT "Nokia Pure Text Light, Open Sans Light, Sans Light"
 #define MOVE_S 180		/* animation-interval: 180000 */
+#define DIM_TIMEOUT_S 30	/* display_dim_timeout, the N9's default */
+#define BLANK_TIMEOUT_S 3	/* display_blank_timeout, after dimming */
+#define DOUBLE_TAP_MS 400	/* two touches this close wake it up */
+#define DOUBLE_TAP_MM 10.0	/* and this near each other */
+#define DEFAULT_PIDFILE "/var/run/pro1x-standby.pid"
 #define MAX_ICONS 5		/* NotificationIconAreaStyle max-icons */
 
 /* LockScreenLowPowerMode* styles, in mm */
@@ -72,6 +87,8 @@ static const char *theme = DEFAULT_THEME;
 static const char *font = DEFAULT_FONT;
 static double dpi;
 static int twelve_hour;
+static int dim_timeout = DIM_TIMEOUT_S;
+static const char *pidfile = DEFAULT_PIDFILE;
 
 enum charge { CHARGE_NONE, CHARGE_CHARGING, CHARGE_FULL, CHARGE_FAILED };
 
@@ -446,104 +463,261 @@ static double x_dpi(Display *dpy, int scr)
 	return d > 0 ? d : 96;
 }
 
-static void set_saver(Display *dpy, int scr, int w, int h)
-{
-	XSetWindowAttributes a = { .background_pixel = BlackPixel(dpy, scr) };
+/* SIGUSR1 (the power key) toggles, through a pipe into the main loop */
+static int sigpipe[2];
 
-	XScreenSaverSetAttributes(dpy, RootWindow(dpy, scr), 0, 0, w, h, 0,
-				  CopyFromParent, InputOutput,
-				  (Visual *)CopyFromParent, CWBackPixel, &a);
+static void on_usr1(int sig)
+{
+	int e = errno;
+
+	(void)sig;
+	if (write(sigpipe[1], "t", 1) < 0) {
+		/* full: a toggle is pending already */
+	}
+	errno = e;
+}
+
+struct standby {
+	Display *dpy;
+	int scr, w, h;
+	Window win;
+	DBusConnection *bus;
+	int shown, moves;
+	time_t moved, shown_min;
+	double right, top;
+	long long woken_ms;		/* when it last went away */
+	Time tap_time;			/* the last touch, for double taps */
+	int tap_x, tap_y;
+};
+
+static long long now_ms(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
+}
+
+static void sb_draw(struct standby *sb)
+{
+	cairo_surface_t *s = cairo_xlib_surface_create(sb->dpy, sb->win,
+	    DefaultVisual(sb->dpy, sb->scr), sb->w, sb->h);
+	cairo_t *cr = cairo_create(s);
+	struct state st;
+
+	read_state(&st, sb->bus);
+	draw(cr, &st, sb->right, sb->top);
+	cairo_destroy(cr);
+	cairo_surface_destroy(s);
+	XFlush(sb->dpy);
+	sb->shown_min = time(NULL) / 60;
+}
+
+/* All input to the stand-by window, so that touches and keys reach nothing */
+static void sb_grab(struct standby *sb)
+{
+	XGrabPointer(sb->dpy, sb->win, False, ButtonPressMask,
+		     GrabModeAsync, GrabModeAsync, sb->win, None, CurrentTime);
+	XGrabKeyboard(sb->dpy, sb->win, False, GrabModeAsync, GrabModeAsync,
+		      CurrentTime);
+}
+
+static void sb_show(struct standby *sb)
+{
+	if (sb->shown)
+		return;
+	XMoveResizeWindow(sb->dpy, sb->win, 0, 0, sb->w, sb->h);
+	XMapRaised(sb->dpy, sb->win);
+	sb_grab(sb);
+	sb->shown = 1;
+	sb->moves = 0;
+	sb->moved = time(NULL);
+	sb->tap_time = 0;
+	place(sb->w, sb->h, 0, &sb->right, &sb->top);
+	sb_draw(sb);
+}
+
+static void sb_hide(struct standby *sb)
+{
+	if (!sb->shown)
+		return;
+	XUngrabPointer(sb->dpy, CurrentTime);
+	XUngrabKeyboard(sb->dpy, CurrentTime);
+	XUnmapWindow(sb->dpy, sb->win);
+	XFlush(sb->dpy);
+	sb->shown = 0;
+	sb->woken_ms = now_ms();
+}
+
+/* A touch while shown: the second of two close ones wakes it up */
+static void sb_tap(struct standby *sb, XButtonEvent *b)
+{
+	double dx = b->x - sb->tap_x, dy = b->y - sb->tap_y;
+	double r = mm(DOUBLE_TAP_MM);
+
+	if (sb->tap_time && b->time - sb->tap_time <= DOUBLE_TAP_MS &&
+	    dx * dx + dy * dy <= r * r) {
+		sb_hide(sb);
+		return;
+	}
+	sb->tap_time = b->time;
+	sb->tap_x = b->x;
+	sb->tap_y = b->y;
+}
+
+/* Milliseconds without input, counting from the last wake-up at most */
+static long long idle_ms(struct standby *sb, XScreenSaverInfo *info)
+{
+	long long since_wake = now_ms() - sb->woken_ms;
+
+	XScreenSaverQueryInfo(sb->dpy, RootWindow(sb->dpy, sb->scr), info);
+	return (long long)info->idle < since_wake ? (long long)info->idle :
+	    since_wake;
+}
+
+/* The X server went away (the session ended): no pid file left behind */
+static int x_gone(Display *dpy)
+{
+	(void)dpy;
+	if (pidfile && *pidfile)
+		unlink(pidfile);
+	exit(0);
+}
+
+static void write_pidfile(void)
+{
+	FILE *f;
+
+	if (!pidfile || !*pidfile)
+		return;
+	if (!(f = fopen(pidfile, "w"))) {
+		fprintf(stderr, "pro1x-standby: %s: %s (the power key cannot "
+			"reach it)\n", pidfile, strerror(errno));
+		return;
+	}
+	fprintf(f, "%ld\n", (long)getpid());
+	fclose(f);
 }
 
 static int run_x(void)
 {
-	Display *dpy = XOpenDisplay(NULL);
-	DBusConnection *bus;
-	int ev_base, err_base, scr, w, h, moves = 0;
-	Window root, saver = None;
-	time_t shown_min = 0, moved = 0;
-	struct state st;
-	double right = 0, top = 0;
+	struct standby sb = { 0 };
+	XScreenSaverInfo *info;
+	XSetWindowAttributes a;
+	int ev_base, err_base;
+	long long timeout = (dim_timeout + BLANK_TIMEOUT_S) * 1000LL;
 
-	if (!dpy) {
+	if (!(sb.dpy = XOpenDisplay(NULL))) {
 		fprintf(stderr, "pro1x-standby: no X display\n");
 		return 1;
 	}
-	if (!XScreenSaverQueryExtension(dpy, &ev_base, &err_base)) {
+	if (!XScreenSaverQueryExtension(sb.dpy, &ev_base, &err_base) ||
+	    !(info = XScreenSaverAllocInfo())) {
 		fprintf(stderr, "pro1x-standby: no MIT-SCREEN-SAVER extension\n");
 		return 1;
 	}
-	scr = DefaultScreen(dpy);
-	root = RootWindow(dpy, scr);
+	XSetIOErrorHandler(x_gone);
+	sb.scr = DefaultScreen(sb.dpy);
+	sb.w = DisplayWidth(sb.dpy, sb.scr);
+	sb.h = DisplayHeight(sb.dpy, sb.scr);
 	if (dpi <= 0)
-		dpi = x_dpi(dpy, scr);
-	w = DisplayWidth(dpy, scr);
-	h = DisplayHeight(dpy, scr);
-	set_saver(dpy, scr, w, h);
-	XScreenSaverSelectInput(dpy, root, ScreenSaverNotifyMask);
-	XSelectInput(dpy, root, StructureNotifyMask);
-	bus = dbus_bus_get(DBUS_BUS_SESSION, NULL);
+		dpi = x_dpi(sb.dpy, sb.scr);
+	a.background_pixel = BlackPixel(sb.dpy, sb.scr);
+	a.override_redirect = True;
+	a.event_mask = ExposureMask | ButtonPressMask | KeyPressMask |
+	    VisibilityChangeMask;
+	sb.win = XCreateWindow(sb.dpy, RootWindow(sb.dpy, sb.scr), 0, 0,
+			       sb.w, sb.h, 0, CopyFromParent, InputOutput,
+			       CopyFromParent,
+			       CWBackPixel | CWOverrideRedirect | CWEventMask, &a);
+	XStoreName(sb.dpy, sb.win, "pro1x-standby");
+	XSelectInput(sb.dpy, RootWindow(sb.dpy, sb.scr), StructureNotifyMask);
+	sb.bus = dbus_bus_get(DBUS_BUS_SESSION, NULL);
+	sb.woken_ms = now_ms();
 	srandom(time(NULL));
 
-	for (;;) {
-		int redraw = 0;
-		time_t now = time(NULL);
+	if (pipe(sigpipe) == 0) {
+		fcntl(sigpipe[0], F_SETFL, O_NONBLOCK);
+		fcntl(sigpipe[1], F_SETFL, O_NONBLOCK);
+		signal(SIGUSR1, on_usr1);
+		write_pidfile();
+	}
 
-		while (XPending(dpy)) {
+	for (;;) {
+		struct pollfd p[2] = {
+			{ ConnectionNumber(sb.dpy), POLLIN, 0 },
+			{ sigpipe[0], POLLIN, 0 },
+		};
+		time_t now;
+		long long wait;
+		char c;
+
+		while (XPending(sb.dpy)) {
 			XEvent e;
 
-			XNextEvent(dpy, &e);
-			if (e.type == ev_base + ScreenSaverNotify) {
-				XScreenSaverNotifyEvent *n = (void *)&e;
-
-				if (n->state == ScreenSaverOn) {
-					saver = n->window;
-					XSelectInput(dpy, saver, ExposureMask);
-					moves = 0;
-					moved = now;
-					place(w, h, moves, &right, &top);
-					redraw = 1;
-				} else if (n->state == ScreenSaverOff) {
-					saver = None;
+			XNextEvent(sb.dpy, &e);
+			switch (e.type) {
+			case ButtonPress:
+				if (sb.shown)
+					sb_tap(&sb, &e.xbutton);
+				break;
+			case Expose:
+				if (sb.shown && e.xexpose.count == 0)
+					sb_draw(&sb);
+				break;
+			case VisibilityNotify:
+				/* something mapped above it: back on top */
+				if (sb.shown &&
+				    e.xvisibility.state != VisibilityUnobscured) {
+					XRaiseWindow(sb.dpy, sb.win);
+					sb_grab(&sb);
 				}
-			} else if (e.type == ConfigureNotify &&
-				   e.xconfigure.window == root) {
-				w = e.xconfigure.width;
-				h = e.xconfigure.height;
-				set_saver(dpy, scr, w, h);
-			} else if (e.type == Expose && e.xexpose.count == 0) {
-				redraw = 1;
+				break;
+			case ConfigureNotify:
+				if (e.xconfigure.window ==
+				    RootWindow(sb.dpy, sb.scr)) {
+					sb.w = e.xconfigure.width;
+					sb.h = e.xconfigure.height;
+					if (sb.shown) {
+						XMoveResizeWindow(sb.dpy, sb.win,
+							0, 0, sb.w, sb.h);
+						place(sb.w, sb.h, sb.moves,
+						      &sb.right, &sb.top);
+					}
+				}
+				break;
 			}
 		}
-		if (saver != None) {
-			if (now - moved >= MOVE_S) {
-				moved = now;
-				place(w, h, ++moves, &right, &top);
-				redraw = 1;
+		while (read(sigpipe[0], &c, 1) == 1) {
+			if (sb.shown)
+				sb_hide(&sb);
+			else
+				sb_show(&sb);
+		}
+
+		now = time(NULL);
+		if (sb.shown) {
+			if (now - sb.moved >= MOVE_S) {
+				sb.moved = now;
+				place(sb.w, sb.h, ++sb.moves, &sb.right, &sb.top);
+				sb_draw(&sb);
+			} else if (now / 60 != sb.shown_min) {
+				sb_draw(&sb);
 			}
-			if (now / 60 != shown_min)
-				redraw = 1;
-		}
-		if (redraw && saver != None) {
-			cairo_surface_t *s = cairo_xlib_surface_create(dpy, saver,
-			    DefaultVisual(dpy, scr), w, h);
-			cairo_t *cr = cairo_create(s);
+			/* until the next minute */
+			wait = (60 - now % 60) * 1000LL;
+		} else {
+			long long idle = idle_ms(&sb, info);
 
-			read_state(&st, bus);
-			draw(cr, &st, right, top);
-			cairo_destroy(cr);
-			cairo_surface_destroy(s);
-			XFlush(dpy);
-			shown_min = now / 60;
+			if (idle >= timeout) {
+				sb_show(&sb);
+				continue;
+			}
+			wait = timeout - idle;
 		}
-		/* sleep until the next event or the next minute */
-		{
-			struct pollfd p = { ConnectionNumber(dpy), POLLIN, 0 };
-			int ms = saver != None ? (60 - now % 60) * 1000 : -1;
-
-			if (poll(&p, 1, ms) < 0 && errno != EINTR)
-				return 1;
-		}
+		if (poll(p, 2, wait > 0x7fffffff ? 0x7fffffff : (int)wait) < 0 &&
+		    errno != EINTR)
+			return 1;
 	}
 }
 
@@ -603,7 +777,8 @@ static int run_preview(const char *out, const char *size)
 static void usage(void)
 {
 	fprintf(stderr,
-	    "usage: pro1x-standby [-t themedir] [-d dpi] [-f font] [-2]\n"
+	    "usage: pro1x-standby [-s timeout] [-P pidfile] [-t themedir] [-d dpi]\n"
+	    "                     [-f font] [-2]\n"
 	    "       pro1x-standby -p out.png WIDTHxHEIGHT [options]\n");
 	exit(2);
 }
@@ -613,8 +788,10 @@ int main(int argc, char **argv)
 	const char *preview = NULL;
 	int c;
 
-	while ((c = getopt(argc, argv, "t:d:f:p:2h")) != -1) {
+	while ((c = getopt(argc, argv, "s:P:t:d:f:p:2h")) != -1) {
 		switch (c) {
+		case 's': dim_timeout = atoi(optarg); break;
+		case 'P': pidfile = optarg; break;
 		case 't': theme = optarg; break;
 		case 'd': dpi = atof(optarg); break;
 		case 'f': font = optarg; break;
