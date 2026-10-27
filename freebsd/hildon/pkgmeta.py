@@ -108,9 +108,15 @@ UPSTREAM = {
     'qt-components': ('1.4.9', "MeeGo Harmattan's Qt Quick components for Qt 5",
                       "com.nokia.meego, the Qt Quick components of the Nokia N9's "
                       "MeeGo Harmattan, in Nemo Mobile's port to Qt 5 (import "
-                      "com.nokia.meego 2.0), for MeeGo apps; their look comes from a "
-                      "meegotouch theme in /usr/local/share/themes, which is not "
-                      "included.", ['BSD3CLAUSE']),
+                      "com.nokia.meego 2.0), for MeeGo apps, with the fixes Qt 5.15 "
+                      "needs; their look comes from a meegotouch theme in "
+                      "/usr/local/share/themes (the N9's blanco from one's own "
+                      "firmware), which is not included.", ['BSD3CLAUSE']),
+    'meego-clock': ('0.1', "The Nokia N9's clock for Hildon",
+                    "meego-clock: the analog clock and the alarms, and the alarm "
+                    "editor with the N9's two-circle time picker, in QML with "
+                    "com.nokia.meego, on alarmd; it draws with the N9's blanco "
+                    "theme, which is not included.", ['BSD3CLAUSE']),
     'pd-mapper': ('1.1', 'Qualcomm protection domain mapper',
                   "pd-mapper tells the DSPs which of them serves which protection "
                   "domain, from the firmware's .jsn files.", ['BSD3CLAUSE']),
@@ -140,6 +146,8 @@ RUNTIME = {
     'alarmd': ['clockd'],
     'osso-systemui-alarm': ['osso-systemui', 'alarmd', 'osso-sounds-ui'],
     'statusbar-alarm': ['alarmd'],
+    # QML on the MeeGo components; its alarms are alarmd's
+    'meego-clock': ['qt-components', 'alarmd', 'clockd'],
 }
 # Where debian/copyright says only "GPL" (any version) or nothing
 LICENSES = {

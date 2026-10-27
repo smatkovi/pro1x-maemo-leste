@@ -95,6 +95,22 @@ needs its bus. `../vm/try-alarm.sh` sets an alarm as clock-ui does and
 takes a screenshot of the dialog (`RESPOND=snooze` or `stop` taps a
 button).
 
+MeeGo apps: `qt-components` is com.nokia.meego, the Nokia N9's Qt Quick
+components, in Nemo Mobile's port to Qt 5 (`import com.nokia.meego 2.0`),
+with what Qt 5.15 needs (`patches/qt-components`): Harmattan's fonts
+(Nokia Pure Text), the theme's `images/` directory, the window at its own
+size below Hildon's title bar, and Qt Quick 2's ways that the port missed
+(a subtype's style shadowed unseen, closed dialogs and hidden banners that
+took taps). They draw with a meegotouch theme in
+`/usr/local/share/themes`; the N9's own, blanco, and the Nokia Pure fonts
+are Nokia's and come from one's own firmware (the image takes them from
+the private `$WORK/private/harmattan`, `HARMATTAN=`). `meego-clock`
+(github.com/smatkovi/meego-clock) is the N9's clock written anew on them:
+the analog clock, the alarms, and the alarm editor with the two-circle time
+picker, its alarms alarmd's as clock-ui makes them. `../vm/session.sh`
+keeps a Hildon session open in the VM, to drive an app step by step with
+xdotool and screenshots.
+
 Qt apps build with the PC's `moc`, `uic` and `rcc` (the same Qt 5.15 as
 FreeBSD's) against FreeBSD's Qt in the sysroot (`qt_qmake`, `qt_cmake` in
 `apps.sh`), with Leste's "maemo" qmake spec on FreeBSD's.

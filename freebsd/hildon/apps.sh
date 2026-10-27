@@ -89,6 +89,8 @@ APPS=(
 	# MeeGo apps; their theme is a meegotouch theme in
 	# /usr/local/share/themes
 	"qt-components|!"
+	# the Nokia N9's clock in QML on them (github.com/smatkovi)
+	"meego-clock|!"
 	# The web engines, which FreeBSD's quarterly packages no longer have for
 	# arm64: QtWebEngine as FreeBSD 15.1 built it (its release_1 set), with
 	# the FFmpeg 8.1 libraries it links; QtWebKit from its last release.
@@ -154,6 +156,7 @@ REV+=(
 	[countdowntimer]=ddc1f7027af9 [easylist]=d5c5bcc6c677 [flappybird]=21f81151207a
 	[qshot]=f10335de9c66 [mihphoto]=bab0cb18bc0e
 	[hamsterfiler]=19ac58143e2e [qt-components]=c967fbd79e75
+	[meego-clock]=8c9e205
 	[ffmpeg8-libs]=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
 	[qt5-webengine]=c5de7df005189a2ef727a40b13408ff3a14a0bbedce07af986aac59722d4cf09
 	[qt5-webkit]=9ca126da9273664dd23a3ccd0c9bebceb7bb534bddd743db31caf6a5a6d4a9e6
@@ -179,6 +182,7 @@ URL+=(
 	[mihphoto]=$GH_EXTRAS/mihphoto.git
 	[hamsterfiler]=$GH_EXTRAS/hamsterfiler.git
 	[qt-components]=https://github.com/sailfishos/qt-components.git
+	[meego-clock]=https://github.com/smatkovi/meego-clock.git
 	[ffmpeg8-libs]=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
 	[qt5-webengine]=pkg:release_1
 	[qt5-webkit]=https://github.com/qtwebkit/qtwebkit/releases/download/qtwebkit-5.212.0-alpha4/qtwebkit-5.212.0-alpha4.tar.xz
@@ -754,6 +758,8 @@ custom_qt_components() {
 	echo "CONFIG += meego" > features/qt-components-config.prf
 	QMAKEFEATURES=$PWD/features qt_qmake qt-components.pro -r CONFIG+=meego
 }
+
+custom_meego_clock() { qt_qmake meego-clock.pro; }
 
 # Dorian installs its menu entry and icons below /usr/share
 custom_dorian() { qt_qmake dorian.pro && usr_to_local "$PR"; }
