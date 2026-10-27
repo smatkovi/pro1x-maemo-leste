@@ -31,6 +31,8 @@ for m in proc sys dev dev/pts; do
 	mountpoint -q "$MNT/$m" || mount --bind "/$m" "$MNT/$m"
 done
 cleanup() {
+	# the gpg-agent pacman starts to check signatures keeps /dev busy
+	chroot "$MNT" gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
 	for m in dev/pts dev sys proc; do
 		! mountpoint -q "$MNT/$m" || umount "$MNT/$m" || umount -l "$MNT/$m"
 	done
@@ -176,6 +178,8 @@ systemctl enable pro1x-rtc.service pro1x-hexagonrpcd.service pro1x-sensors.servi
 	pro1x-gnss.service pro1x-steps.service pro1x-audio-init.service pro1x-usb0.service \
 	rmtfs.service tqftpserv.service gpsd.service \
 	NetworkManager.service ModemManager.service bluetooth.service sshd.service phosh.service
+# NetworkManager has the interfaces, not Arch Linux ARM's systemd-networkd
+systemctl disable systemd-networkd.service systemd-networkd.socket 2> /dev/null || true
 # replaced by pro1x-sensors.service (libssc)
 ! systemctl list-unit-files iio-sensor-proxy.service > /dev/null 2>&1 ||
 	systemctl mask iio-sensor-proxy.service

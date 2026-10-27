@@ -9,7 +9,7 @@ No partition is touched.
 | Step | Script | What it does |
 | --- | --- | --- |
 | 10 | `10-make-rootfs.sh` | Arch Linux ARM's generic aarch64 root filesystem (signature checked against the Arch Linux ARM build key) into `/host/arch.img` |
-| 20 | `20-pro1x-hardware.sh` | without Arch's kernel package; Phosh (with phoc and squeekboard) as the phone shell, NetworkManager, ModemManager, BlueZ, PipeWire, gpsd; Leste's kernel modules and firmware (`/usr/lib/firmware/updates`); the Pro1X stack from scripts/46 in `/usr/lib/pro1x` (hexagonrpcd, libssc, iio-sensor-proxy with SSC, pro1x-gnss, pro1x-steps), and the modem's rmtfs, tqftpserv and qrtr-ns from Leste where Arch Linux ARM has none; Kali's systemd units for them; `rootfs-overlay/` (phoc's output: landscape, scale 2) |
+| 20 | `20-pro1x-hardware.sh` | without Arch's kernel package; Phosh (with phoc and squeekboard) as the phone shell, NetworkManager, ModemManager, BlueZ, PipeWire, gpsd; Leste's kernel modules and firmware (`/usr/lib/firmware/updates`); the Pro1X stack from scripts/46 in `/usr/lib/pro1x` (hexagonrpcd, libssc, iio-sensor-proxy with SSC, pro1x-gnss, pro1x-steps), and the modem's rmtfs, tqftpserv and qrtr-ns from Leste where Arch Linux ARM has none; Kali's systemd units for them; `rootfs-overlay/` (phoc's output: landscape, scale 2; `phosh.service`, which starts Phosh for `alarm` without a display manager, as Debian's does: Arch's phosh package has no system unit) |
 
 Both run as root on the phone in Maemo Leste:
 

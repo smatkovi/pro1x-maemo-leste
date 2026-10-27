@@ -1,0 +1,34 @@
+# Phosh for Arch Linux ARM's user alarm on the first virtual terminal it
+# can have, without a display manager (Arch's phosh package has no system
+# unit; this one follows Debian's): a logind session of type wayland
+# through PAM, phosh-session (phoc, the shell, the keyboard) in it.
+[Unit]
+Description=Phosh, the phone shell
+Documentation=https://gitlab.gnome.org/World/Phosh/phosh
+After=systemd-user-sessions.service dbus.socket systemd-logind.service
+Wants=dbus.socket systemd-logind.service
+Conflicts=getty@tty7.service
+After=getty@tty7.service
+ConditionPathExists=/dev/tty0
+
+[Service]
+Type=simple
+User=alarm
+WorkingDirectory=~
+PAMName=phosh
+Environment=XDG_SESSION_TYPE=wayland XDG_SESSION_CLASS=user
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty7
+UtmpMode=user
+ExecStart=/usr/bin/phosh-session
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=graphical.target
