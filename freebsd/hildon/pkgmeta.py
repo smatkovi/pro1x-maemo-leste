@@ -603,9 +603,11 @@ own_version = '1.0.' + (subprocess.run(['git', '-C', REPO, 'rev-list', '--count'
 apps = sorted(x['name'] for x in meta.values()
               if any(os.path.isdir(os.path.join(x['root'], d, 'share/applications'))
                      for d in ('usr/local', 'usr')))
-# and what works without an entry: the on-screen keyboard, daemons
+# and what works without an entry: the on-screen keyboard, daemons, the
+# alarm dialog (with alarmd and the system UI)
 apps = sorted(set(apps) | {x['name'] for x in meta.values() if x['name'] in (
-    'hildon-input-method-plugins', 'headphoned', 'wifi-assistant', 'hildon-status-menu')})
+    'hildon-input-method-plugins', 'headphoned', 'wifi-assistant', 'hildon-status-menu',
+    'osso-systemui-alarm')})
 for name, comment, desc, root, deps in (
         ('hildon-session', "Maemo Leste's Hildon session for FreeBSD",
          'hildon-session (startx hildon-session, or "startx hildon" on the Pro1X) '
