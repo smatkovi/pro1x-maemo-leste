@@ -247,6 +247,9 @@ REVISION = {
     'alarmd': 1,
     # 2026-10-27: Leste's hildon-libs texts, not libhildon's (EXCLUDE)
     'libhildon': 1, 'leste-l10n-en': 1,
+    # 2026-10-27: Qt 5.15 fixes (fonts, theme images, window size, styles,
+    # dialogs and banners that took taps)
+    'qt-components': 1,
 }
 
 
