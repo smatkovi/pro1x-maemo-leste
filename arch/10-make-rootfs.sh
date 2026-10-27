@@ -21,6 +21,11 @@ KEYSERVER=${KEYSERVER:-hkps://keyserver.ubuntu.com}
 [ -e "$IMG" ] && { echo "$IMG exists"; exit 1; }
 log() { echo ">> $*"; }
 
+# bsdtar: the tarball is libarchive's, with file capabilities and ACLs
+# that GNU tar drops
+command -v bsdtar > /dev/null ||
+	DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends libarchive-tools > /dev/null
+
 mkdir -p "$DL"
 T=$DL/${URL##*/}
 [ -f "$T" ] || { log "downloading $URL"; curl -sSfL -o "$T.part" "$URL"; mv "$T.part" "$T"; }
@@ -40,5 +45,5 @@ truncate -s "$SIZE" "$IMG"
 mkfs.ext4 -q -L arch "$IMG"
 mkdir -p "$MNT"
 mount -o loop "$IMG" "$MNT"
-tar --numeric-owner --xattrs --xattrs-include='*' --acls -xpzf "$T" -C "$MNT"
+bsdtar --numeric-owner -xpf "$T" -C "$MNT"
 log "done: $IMG mounted on $MNT"
