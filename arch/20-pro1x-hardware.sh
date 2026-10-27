@@ -42,8 +42,14 @@ cp /etc/resolv.conf "$MNT/etc/resolv.conf"
 # --- Arch packages -------------------------------------------------------------
 log "Arch Linux ARM packages"
 chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
+# pacman's download sandbox needs Landlock, which Leste's kernel (the one
+# Arch runs with) does not have
+grep -q '^DisableSandbox' /etc/pacman.conf ||
+	sed -i '/^\[options\]/a DisableSandbox' /etc/pacman.conf
 pacman-key --init > /dev/null
 pacman-key --populate archlinuxarm > /dev/null
+# its gpg-agent would keep /dev busy
+gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
 # Leste's kernel boots this image: no kernel or initramfs of Arch's own
 for p in linux-aarch64 linux-aarch64-headers mkinitcpio; do
 	! pacman -Q "$p" > /dev/null 2>&1 || pacman -Rdd --noconfirm "$p" > /dev/null
