@@ -198,8 +198,9 @@ REVISION = {
     'easylist': 1, 'flappybird': 1, 'hamsterfiler': 1, 'maepad': 1,
     'mihphoto': 1, 'osso-mahjong': 1, 'profilesx': 1, 'qshot': 1,
     # 2026-10-27: the launcher's menu below /usr/local (it was empty), the
-    # MeeGo-like pages (patches/meego, off by default)
-    'hildon-desktop': 1,
+    # MeeGo-like pages (patches/meego, off by default); 2: the edge
+    # gestures, no more crash when a thumbnail zooms in (isnanf, 0003)
+    'hildon-desktop': 2,
 }
 
 

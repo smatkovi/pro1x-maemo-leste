@@ -2,7 +2,7 @@
 # Hildon at the N900's size on the Pro1X's full resolution
 # (tools/pro1x-hidpi): the theme scaler, its boot service and session
 # hook, and the Hildon packages with patches/hidpi/ (their lengths times
-# HILDON_SCALE), rebuilt as <version>+pro1x1 and held, so an apt upgrade
+# HILDON_SCALE), rebuilt as <version>+pro1x<N> and held, so an apt upgrade
 # does not put the unpatched ones back.
 #
 # Runs as root INSIDE the target (chroot or the running phone), after
@@ -24,14 +24,15 @@ export DEBIAN_FRONTEND=noninteractive
 export DEB_BUILD_OPTIONS="nocheck nodoc parallel=$(nproc)"
 log() { echo ">> $*"; }
 
-# part|revision on maemo/daedalus, in build order
+# part|revision on maemo/daedalus|N of +pro1xN (raise it when this
+# repository's patches for the part change), in build order
 PARTS=(
-  "gtk|d1e3c3b3e5e3"
-  "libhildon|e734f0d533aa"
-  "hildon-status-menu|33ba47660e7c"
-  "hildon-home|0d34886acdc2"
-  "hildon-desktop|1273f9eee252"
-  "mce|422d5f2bd618"
+  "gtk|d1e3c3b3e5e3|1"
+  "libhildon|e734f0d533aa|1"
+  "hildon-status-menu|33ba47660e7c|1"
+  "hildon-home|0d34886acdc2|1"
+  "hildon-desktop|1273f9eee252|2"
+  "mce|422d5f2bd618|1"
 )
 if [ -n "$ONLY" ]; then
   sel=()
@@ -68,7 +69,8 @@ install_ours() {
     fi
   done
   log "install ${debs[*]##*/}"
-  apt-get install -y -q "${debs[@]}"
+  # ours from an earlier run are held
+  apt-get install -y -q --allow-change-held-packages "${debs[@]}"
   if [ -n "$OUT" ]; then
     mkdir -p "$OUT"
     cp "${debs[@]}" "$OUT/"
@@ -90,7 +92,7 @@ apt-get install -y -q --no-install-recommends git build-essential debhelper \
 # wants its own libgtk2.0-0 exactly) could no longer be installed.
 mkdir -p "$SRC"
 for entry in "${PARTS[@]}"; do
-  name=${entry%%|*} rev=${entry#*|}
+  name=${entry%%|*} rev=${entry#*|} n=${rev#*|} rev=${rev%%|*}
   d=$SRC/$name
   log "$name: source at $rev"
   [ -d "$d/.git" ] || git clone -q -b maemo/daedalus "https://github.com/maemo-leste/$name.git" "$d"
@@ -111,7 +113,7 @@ for entry in "${PARTS[@]}"; do
       patch -s -d "$d" -p1 < "$p"
     fi
   done
-  (cd "$d" && DEBEMAIL="pro1x-maemo-leste" dch -v "$(dpkg-parsechangelog -S Version)+pro1x1" \
+  (cd "$d" && DEBEMAIL="pro1x-maemo-leste" dch -v "$(dpkg-parsechangelog -S Version)+pro1x$n" \
     -D unstable "F(x)tec Pro1X: HiDPI, MeeGo-like home, low power mode (pro1x-maemo-leste patches/).")
   (cd "$d" && mk-build-deps -i -r -t "apt-get -y -q --no-install-recommends" debian/control)
 done

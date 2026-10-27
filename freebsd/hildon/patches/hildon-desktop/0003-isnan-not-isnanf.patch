@@ -1,0 +1,27 @@
+FreeBSD: isnan() instead of isnanf(), which FreeBSD's math.h declares only
+for BSD code, not with the build's -D_XOPEN_SOURCE=500. Called undeclared,
+the float went in as a double, in the register isnanf() does not read on
+arm64: never NAN, so linear_effect() ran past its two values and asserted
+as soon as a thumbnail zoomed in (a tap on an application in the task
+navigator ended hildon-desktop).
+
+--- a/src/home/hd-task-navigator.c
++++ b/src/home/hd-task-navigator.c
+@@ -1153,7 +1153,7 @@
+     {
+       /* @init and @diff are parameters of the line. */
+       closure = new_effect (timeline, actor, frame_fun, complete_fun);
+-      for (i = 0; !isnanf (init = va_arg (list, gdouble)); i++)
++      for (i = 0; !isnan (init = va_arg (list, gdouble)); i++)
+         { g_assert (i < G_N_ELEMENTS (closure->linear));
+           closure->linear[i].init = init;
+           closure->linear[i].diff = va_arg (list, gdouble) - init;
+@@ -1169,7 +1169,7 @@
+        * As @timeline may not be the already running one ignore it.
+        */
+       gfloat now = clutter_timeline_get_progress (closure->timeline);
+-      for (i = 0; !isnanf (init = va_arg (list, gdouble)); i++)
++      for (i = 0; !isnan (init = va_arg (list, gdouble)); i++)
+         { g_assert (i < G_N_ELEMENTS (closure->linear));
+           final = va_arg (list, gdouble);
+           closure->linear[i].diff = (final-init) / (1-now);

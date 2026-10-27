@@ -1,6 +1,9 @@
-MeeGo-like home pages (pro1x-maemo-leste patches/meego): the home views,
-the launcher and the task navigator in a ring, changed by swiping, without
-the top left buttons; GConf /apps/osso/hildon-desktop/meego_pages.
+MeeGo-like home (pro1x-maemo-leste patches/meego), on with GConf
+/apps/osso/hildon-desktop/meego_pages: the home views, the launcher and the
+task navigator in a ring, changed by swiping, without the top left buttons;
+in applications, swipes from the left or right edge to the open
+applications, from the top edge down to close, a tap on the top edge for
+the menu.
 
 diff --git a/src/hildon-desktop-views.schemas b/src/hildon-desktop-views.schemas
 index 8da5ccc..a493524 100644
@@ -136,7 +139,7 @@ index f3cf6e3..b7e99b4 100644
  
  ClutterActor *hd_home_get_edit_button (HdHome *home);
 diff --git a/src/home/hd-render-manager.c b/src/home/hd-render-manager.c
-index c039af9..9d82830 100644
+index c039af9..3e55c3d 100644
 --- a/src/home/hd-render-manager.c
 +++ b/src/home/hd-render-manager.c
 @@ -46,6 +46,7 @@
@@ -168,6 +171,15 @@ index c039af9..9d82830 100644
          clutter_actor_show(CLUTTER_ACTOR(priv->home));
          blur |=  HDRM_BLUR_HOME |
                   HDRM_ZOOM_FOR_TASK_NAV |
+@@ -1864,6 +1868,8 @@ out:
+     g_warning("Set state complete %s ",	hd_render_manager_state_str(priv->state));
+ 
+   priv->in_set_state = FALSE;
++  /* the MeeGo-like edge swipes follow the state (hd-meego.c) */
++  hd_meego_state_changed ();
+ }
+ 
+ /* Upgrade the current state to portrait. */
 diff --git a/src/main.c b/src/main.c
 index 35f9d99..a7601df 100644
 --- a/src/main.c
@@ -210,10 +222,10 @@ index 84c1bb1..1ed349f 100644
  noinst_LTLIBRARIES = libutil.la
 diff --git a/src/util/hd-meego.c b/src/util/hd-meego.c
 new file mode 100644
-index 0000000..5789aa7
+index 0000000..cc41cd5
 --- /dev/null
 +++ b/src/util/hd-meego.c
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,377 @@
 +/*
 + * MeeGo-like home: the home views (Hildon's desktops, up to four), the
 + * launcher and the task navigator as pages side by side in a ring,
@@ -229,13 +241,24 @@ index 0000000..5789aa7
 + * The thresholds are those of Harmattan's home screen (meegotouchhome,
 + * PagedPanning): a page changes after a third of the screen, or after a
 + * quicker flick of a tenth.
++ *
++ * In an application, swipes from the screen's edges as on the N9: from the
++ * left or right edge inwards to the open applications, from the top edge
++ * down to close it; a tap on the top edge opens its menu. Thin input-only
++ * windows along those edges catch them, above the application, only while
++ * one is in front.
 + */
 +
 +#include <gconf/gconf-client.h>
 +#include <glib.h>
 +
++#include <X11/Xutil.h>
++#include <matchbox/core/mb-wm.h>
++
 +#include "hd-meego.h"
++#include "hd-comp-mgr.h"
 +#include "hd-home.h"
++#include "hd-wm.h"
 +#include "hd-render-manager.h"
 +#include "hd-task-navigator.h"
 +#include "hd-util.h"
@@ -254,6 +277,21 @@ index 0000000..5789aa7
 +static int press_x, press_y;
 +static Time press_time;
 +
++/* Edge swipes in applications */
++enum edge { EDGE_LEFT, EDGE_RIGHT, EDGE_TOP, N_EDGES };
++/* a strip of 1.5 % of the screen's width (32 px at 2160) */
++#define EDGE_FRACTION       66
++/* a swipe goes a tenth of the screen in, a tap less than 2 % */
++#define EDGE_SWIPE_FRACTION 10
++#define EDGE_TAP_FRACTION   50
++static Window edges[N_EDGES];
++static gboolean edges_shown;
++static int edge_pressed = -1;
++
++extern MBWindowManager *hd_mb_wm;
++
++static void edges_update (void);
++
 +static void
 +meego_pages_changed (GConfClient *client, guint id, GConfEntry *entry,
 +                     gpointer data)
@@ -263,6 +301,7 @@ index 0000000..5789aa7
 +  if (on != enabled)
 +    {
 +      enabled = on;
++      edges_update ();
 +      /* the top left buttons come and go with the pages */
 +      hd_render_manager_set_state (hd_render_manager_get_state ());
 +      hd_render_manager_restack ();
@@ -279,6 +318,167 @@ index 0000000..5789aa7
 +                        GCONF_CLIENT_PRELOAD_NONE, NULL);
 +  gconf_client_notify_add (client, GCONF_KEY_MEEGO_PAGES,
 +                           meego_pages_changed, NULL, NULL, NULL);
++}
++
++static void
++edges_place (void)
++{
++  Display *dpy = hd_mb_wm->xdpy;
++  int w = hd_util_display_width (), h = hd_util_display_height ();
++  HDRMStateEnum state = hd_render_manager_get_state ();
++  int sw, sh, strip;
++
++  sw = STATE_IS_PORTRAIT (state) ? h : w;
++  sh = STATE_IS_PORTRAIT (state) ? w : h;
++  strip = MAX (8, MAX (sw, sh) / EDGE_FRACTION);
++  XMoveResizeWindow (dpy, edges[EDGE_LEFT], 0, strip, strip, sh - strip);
++  XMoveResizeWindow (dpy, edges[EDGE_RIGHT], sw - strip, strip, strip, sh - strip);
++  XMoveResizeWindow (dpy, edges[EDGE_TOP], 0, 0, sw, strip);
++}
++
++static void
++edges_create (void)
++{
++  Display *dpy = hd_mb_wm->xdpy;
++  XSetWindowAttributes a;
++  int i;
++
++  a.override_redirect = True;
++  a.event_mask = ButtonPressMask | ButtonReleaseMask;
++  for (i = 0; i < N_EDGES; i++)
++    {
++      edges[i] = XCreateWindow (dpy, hd_mb_wm->root_win->xwindow, 0, 0, 1, 1,
++                                0, 0, InputOnly, CopyFromParent,
++                                CWOverrideRedirect | CWEventMask, &a);
++      XStoreName (dpy, edges[i], "hildon-desktop meego edge");
++    }
++}
++
++/* The edges above the application in front, only then */
++static void
++edges_update (void)
++{
++  gboolean show = enabled && STATE_IS_APP (hd_render_manager_get_state ())
++    && !STATE_ONE_OF (hd_render_manager_get_state (),
++                      HDRM_STATE_NON_COMPOSITED | HDRM_STATE_NON_COMP_PORT)
++    && !hd_wm_has_modal_blockers (hd_mb_wm);
++  Display *dpy;
++  int i;
++
++  if (!hd_mb_wm)
++    return;
++  dpy = hd_mb_wm->xdpy;
++  if (show && !edges[0])
++    edges_create ();
++  if (!edges[0])
++    return;
++  if (show)
++    {
++      edges_place ();
++      for (i = 0; i < N_EDGES; i++)
++        XMapRaised (dpy, edges[i]);
++    }
++  else if (edges_shown)
++    {
++      for (i = 0; i < N_EDGES; i++)
++        XUnmapWindow (dpy, edges[i]);
++      edge_pressed = -1;
++    }
++  edges_shown = show;
++}
++
++void
++hd_meego_state_changed (void)
++{
++  edges_update ();
++}
++
++/* Open the menu of the application in front (as its title does) */
++static void
++app_menu (void)
++{
++  HdCompMgr *cmgr = HD_COMP_MGR (hd_mb_wm->comp_mgr);
++  HdCompMgrClient *client = hd_comp_mgr_get_current_client (cmgr);
++  MBWindowManagerClient *c;
++
++  if (!client)
++    return;
++  c = MB_WM_COMP_MGR_CLIENT (client)->wm_client;
++  mb_wm_client_deliver_message (c, hd_mb_wm->atoms[MBWM_ATOM_MB_GRAB_TRANSFER],
++                                CurrentTime, c->window->xwindow,
++                                hd_mb_wm->root_win->xwindow, 0, 0);
++  XSync (hd_mb_wm->xdpy, False);
++  XUngrabPointer (hd_mb_wm->xdpy, CurrentTime);
++}
++
++static gboolean
++edge_action (gpointer data)
++{
++  int action = GPOINTER_TO_INT (data);
++  HDRMStateEnum state = hd_render_manager_get_state ();
++  HdCompMgr *cmgr;
++  HdCompMgrClient *client;
++
++  if (!STATE_IS_APP (state))
++    return FALSE;
++  switch (action)
++    {
++    case EDGE_LEFT:
++    case EDGE_RIGHT:
++      /* to the open applications */
++      hd_render_manager_set_state (STATE_IS_PORTRAIT (state) ?
++                                   HDRM_STATE_TASK_NAV_PORTRAIT :
++                                   HDRM_STATE_TASK_NAV);
++      break;
++    case EDGE_TOP:
++      /* close it */
++      cmgr = HD_COMP_MGR (hd_mb_wm->comp_mgr);
++      client = hd_comp_mgr_get_current_client (cmgr);
++      if (client)
++        hd_comp_mgr_close_client (cmgr, &client->parent);
++      break;
++    default:
++      app_menu ();
++      break;
++    }
++  return FALSE;
++}
++
++static void
++edge_event (XEvent *xev)
++{
++  int i, dx, dy, sw, sh;
++
++  if (xev->type == ButtonPress)
++    {
++      for (i = 0; i < N_EDGES && edges[i] != xev->xbutton.window; i++)
++        ;
++      edge_pressed = i < N_EDGES ? i : -1;
++      press_x = xev->xbutton.x_root;
++      press_y = xev->xbutton.y_root;
++      press_time = xev->xbutton.time;
++      return;
++    }
++  if (edge_pressed < 0)
++    return;
++  /* the release goes to the window that had the press */
++  dx = xev->xbutton.x_root - press_x;
++  dy = xev->xbutton.y_root - press_y;
++  sw = STATE_IS_PORTRAIT (hd_render_manager_get_state ()) ?
++       hd_util_display_height () : hd_util_display_width ();
++  sh = STATE_IS_PORTRAIT (hd_render_manager_get_state ()) ?
++       hd_util_display_width () : hd_util_display_height ();
++  i = edge_pressed;
++  edge_pressed = -1;
++  if ((int) (xev->xbutton.time - press_time) > SWIPE_MAX_MS)
++    return;
++  if ((i == EDGE_LEFT && dx >= sw / EDGE_SWIPE_FRACTION && dx > 2 * ABS (dy)) ||
++      (i == EDGE_RIGHT && -dx >= sw / EDGE_SWIPE_FRACTION && -dx > 2 * ABS (dy)) ||
++      (i == EDGE_TOP && dy >= sh / EDGE_SWIPE_FRACTION && dy > 2 * ABS (dx)))
++    g_idle_add (edge_action, GINT_TO_POINTER (i));
++  else if (i == EDGE_TOP && ABS (dx) < sw / EDGE_TAP_FRACTION &&
++           ABS (dy) < sh / EDGE_TAP_FRACTION)
++    g_idle_add (edge_action, GINT_TO_POINTER (N_EDGES));
 +}
 +
 +gboolean
@@ -342,8 +542,30 @@ index 0000000..5789aa7
 +  HDRMStateEnum state;
 +  int width, dx, dy, dt;
 +
-+  if (!enabled || (xev->type != ButtonPress && xev->type != ButtonRelease))
++  if (!enabled)
 +    return;
++  /* windows mapped or restacked above the edges: the edges on top again
++   * (the window the event is about, not the root that reports it; raising
++   * the edges reports them, which must not raise them again) */
++  if (edges_shown && (xev->type == MapNotify || xev->type == ConfigureNotify))
++    {
++      Window w = xev->type == MapNotify ? xev->xmap.window
++                                        : xev->xconfigure.window;
++      int i;
++
++      if (w != edges[0] && w != edges[1] && w != edges[2])
++        for (i = 0; i < N_EDGES; i++)
++          XRaiseWindow (hd_mb_wm->xdpy, edges[i]);
++    }
++  if (xev->type != ButtonPress && xev->type != ButtonRelease)
++    return;
++  if (edges_shown && (edge_pressed >= 0 || (xev->type == ButtonPress &&
++      (xev->xbutton.window == edges[0] || xev->xbutton.window == edges[1] ||
++       xev->xbutton.window == edges[2]))))
++    {
++      edge_event (xev);
++      return;
++    }
 +
 +  /* the home views see their swipes themselves (hd-home.c) */
 +  state = hd_render_manager_get_state ();
@@ -383,10 +605,10 @@ index 0000000..5789aa7
 +}
 diff --git a/src/util/hd-meego.h b/src/util/hd-meego.h
 new file mode 100644
-index 0000000..5bfb74f
+index 0000000..e480c0b
 --- /dev/null
 +++ b/src/util/hd-meego.h
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,14 @@
 +#ifndef __HD_MEEGO_H__
 +#define __HD_MEEGO_H__
 +
@@ -398,6 +620,7 @@ index 0000000..5bfb74f
 +gboolean hd_meego_pages_enabled (void);
 +void hd_meego_x_event (XEvent *xev);
 +void hd_meego_leave_home (int dir);
++void hd_meego_state_changed (void);
 +
 +#endif
 diff --git a/src/util/hd-xinput.c b/src/util/hd-xinput.c
