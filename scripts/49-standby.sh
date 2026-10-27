@@ -22,4 +22,4 @@ install -m 644 "$REPO/rootfs-overlay/etc/X11/Xsession.post/45pro1x-standby" \
 install -m 644 "$REPO/rootfs-overlay/etc/mce/mce.ini.d/50-pro1x.ini" \
   /etc/mce/mce.ini.d/
 echo ">> done: pro1x-standby -M from the next X session; mce's low power mode"
-echo "   needs mce 1.10.17+pro1x1 (49-hidpi.sh ONLY=mce)"
+echo "   needs mce 1.10.17+pro1x2 (49-hidpi.sh ONLY=mce)"
