@@ -21,6 +21,7 @@ APPS=(
 	"hildon-im-vkbrenderer3|"
 	"wpeditor|"
 	"osso-games-startup|"
+	"hildon-games-wrapper|!"
 	"cityinfo|"
 	"clockd|"
 	"alarmd|!"
@@ -47,6 +48,10 @@ APPS=(
 	"maepad|"
 	"mstardict||-D_LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR -Wno-reserved-user-defined-literal"
 	"osso-mahjong|"
+	# the N900's games that are free software (smatkovi's ports); chess
+	# compiles its .c files as C++, so no C-only -std= in its CFLAGS
+	"osso-chess-ui|--with-gnuchess=/usr/local/bin/gnuchess CFLAGS=-O2"
+	"osso-lmarbles|"
 	"leafpad|"
 	"desktop-cmd-exec|"
 	"live-wallpaper|"
@@ -117,6 +122,8 @@ REV+=(
 	[hildon-input-method-plugins]=04c1d47222d0
 	[maepad]=b50c9caadd86 [mstardict]=48f7924faed8
 	[osso-mahjong]=fbe179709a15 [leafpad]=9ae1e0314158
+	[osso-chess-ui]=4674e8e [osso-lmarbles]=97dcd65
+	[hildon-games-wrapper]=2b36c80
 	[desktop-cmd-exec]=e3ac73e7b031 [live-wallpaper]=d950d1e44e66
 	[cal-home-widget]=52ef149cdca0 [maefat]=11bc84b6fccb [braek]=77ceda0d3d92
 	[qtstyleplugins]=c371b3232025 [libgq-gconf]=8617c495b6ac
@@ -138,6 +145,8 @@ REV+=(
 URL+=(
 	[maepad]=$GM_EXTRAS/maepad.git
 	[mstardict]=$GH_EXTRAS/mstardict.git [osso-mahjong]=$GH_EXTRAS/osso-mahjong.git
+	[osso-chess-ui]=https://github.com/smatkovi/osso-chess-ui.git
+	[osso-lmarbles]=https://github.com/smatkovi/osso-lmarbles.git
 	[leafpad]=$GH_EXTRAS/leafpad.git [desktop-cmd-exec]=$GH_EXTRAS/desktop-cmd-exec.git
 	[live-wallpaper]=$GH_EXTRAS/live-wallpaper.git
 	[cal-home-widget]=$GH_EXTRAS/cal-home-widget.git [maefat]=$GH_EXTRAS/maefat.git
@@ -166,6 +175,24 @@ URL+=(
 
 # A plain Makefile: built with the cross compiler, installed below /usr,
 # then moved below /usr/local (pkg-config files to libdata/pkgconfig)
+custom_hildon_games_wrapper() {
+	# plain Makefiles that take their flags from pkg-config with CFLAGS+=,
+	# which a CFLAGS on the command line would replace
+	make -C libhgw CC="$CC" CFLAGS="$CPPFLAGS $CFLAGS $(pkg-config --cflags dbus-1 gconf-2.0) -I. -fPIC" \
+	    LDFLAGS="$LDFLAGS -shared $(pkg-config --libs dbus-1)" > make.out 2>&1 &&
+	make -C wrapper2 CC="$CC" CFLAGS="$CPPFLAGS $CFLAGS" LDFLAGS="$LDFLAGS" >> make.out 2>&1 ||
+	    { grep -m20 -E "error:|Error [0-9]" make.out; tail -20 make.out; exit 1; }
+	make -C libhgw install DESTDIR="$PR" PREFIX=/usr/local > install.out 2>&1 &&
+	make -C wrapper2 install DESTDIR="$PR" PREFIX=/usr/local >> install.out 2>&1 ||
+	    { tail -20 install.out; exit 1; }
+	# its links name /usr/local/lib/libhgw.so.N: relative, for the sysroot
+	local l
+	for l in "$PR"/usr/local/lib/lib*.so*; do
+		[ -L "$l" ] && ln -sf "$(basename "$(readlink "$l")")" "$l"
+	done
+	return 0
+}
+
 custom_make() {
 	# one job: such Makefiles often miss dependencies between targets
 	make -j1 CC="$CC" CXX="$CXX" AR="$AR" \

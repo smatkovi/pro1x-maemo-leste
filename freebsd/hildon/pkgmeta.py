@@ -126,12 +126,24 @@ RUNTIME = {
     # QtSql's SQLite driver, a package of its own on FreeBSD
     'jib': ['qt5-sqldrivers-sqlite3'],
     'dorian': ['qt5-sqldrivers-sqlite3'],
+    # the chess engine the game runs
+    'osso-chess-ui': ['gnuchess'],
 }
 # Where debian/copyright says only "GPL" (any version) or nothing
 LICENSES = {
     'hildon-im-vkbrenderer3': ['GPLv2+'],
     'hildon-input-method-plugins': ['GPLv2+'],
     'osso-mahjong': ['GPLv2+'],
+    'osso-chess-ui': ['GPLv2+'],
+    'osso-lmarbles': ['GPLv2+'],
+    'hildon-games-wrapper': ['LGPL21'],
+}
+# Where debian/control describes a part badly
+DESCRIBE = {
+    'hildon-games-wrapper': ('Wrapper that starts and pauses full screen games',
+                             "hildon-games-wrapper (libhgw and its wrapper) runs a "
+                             "game such as Marbles from osso-games-startup and passes "
+                             "it D-Bus and GConf messages: pause, quit, its settings."),
 }
 # Files FreeBSD's packages own already (and what the part then needs)
 EXCLUDE = {
@@ -342,7 +354,7 @@ for part in parts:
         cl = read(os.path.join(src, 'debian/changelog'))
         m = re.match(r'\S+ \(([^)]+)\)', cl)
         version = version_of(m.group(1) if m else '0')
-        comment, desc = describe(control, part)
+        comment, desc = DESCRIBE.get(part, describe(control, part))
         lic = licences(read(os.path.join(src, 'debian/copyright')),
                        [read(os.path.join(src, f)) for f in
                         ('COPYING', 'LICENSE', 'COPYING.LIB', 'LICENSE.txt')])

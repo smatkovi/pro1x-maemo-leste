@@ -174,14 +174,15 @@ licence statement. The sources are the pinned revisions in the table and
 | hexagonrpc | 0.5.0.24 | GPLv3+ | [hexagonrpc](https://github.com/linux-msm/hexagonrpc) | `40e50412812a` | builds; needs the Pro1X's ADSP (untested on the phone) |
 | hildon-control-panel | 2.2.32.2 | LGPL21 | [hildon-control-panel](https://github.com/maemo-leste/hildon-control-panel) | `359e43a8a899` | runs (VM) |
 | hildon-control-panel-personalisation | 1.0.8 | GPLv3 | [hildon-control-panel-personalisation](https://github.com/maemo-leste/hildon-control-panel-personalisation) | `4f6086c7e69b` | builds |
-| hildon-desktop | 2.2.197 | GPLv2 | [hildon-desktop](https://github.com/maemo-leste/hildon-desktop) | `7f8ce2104a48` | runs (VM) |
+| hildon-desktop | 2.2.197_2 | GPLv2 | [hildon-desktop](https://github.com/maemo-leste/hildon-desktop) | `7f8ce2104a48` | runs (VM) |
+| hildon-games-wrapper | 1.9.5 | LGPL21 | [hildon-games-wrapper](https://github.com/maemo-leste/hildon-games-wrapper) | `2b36c80334d4` | runs (VM, through Marbles) |
 | hildon-home | 0.3.80 | LGPL21 | [hildon-home](https://github.com/maemo-leste/hildon-home) | `8dd16c59f867` | runs (VM) |
 | hildon-im-vkbrenderer3 | 3.3.27.1 | GPLv2+ | [hildon-im-vkbrenderer3](https://github.com/maemo-leste/hildon-im-vkbrenderer3) | `b8b4dbe0993b` | builds |
 | hildon-input-method | 2.1.61.1 | LGPL21 | [hildon-input-method](https://github.com/maemo-leste/hildon-input-method) | `0977df548b0b` | builds |
 | hildon-input-method-framework | 2.1.71.1 | LGPL21 | [hildon-input-method-framework](https://github.com/maemo-leste/hildon-input-method-framework) | `99afab2e2e78` | builds |
 | hildon-input-method-plugins | 3.9.91 | GPLv2+ | [hildon-input-method-plugins](https://github.com/maemo-leste/hildon-input-method-plugins) | `04c1d47222d0` | builds |
-| hildon-meta | 1.0.116 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `bd220b122264` | builds |
-| hildon-session | 1.0.116 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `bd220b122264` | runs (VM) |
+| hildon-meta | 1.0.121 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | builds |
+| hildon-session | 1.0.121 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | runs (VM) |
 | hildon-status-menu | 0.3.43.1 | LGPL21 | [hildon-status-menu](https://github.com/maemo-leste/hildon-status-menu) | `796dbd7ca973` | runs (VM) |
 | hildon-theme-alpha | 9.7 | GPLv3 | [maemo-leste](https://github.com/maemo-leste) |  | builds |
 | hildon-thumbnail | 3.1.4 | LGPL21 | [hildon-thumbnail](https://github.com/maemo-leste/hildon-thumbnail) | `86bd10f3f620` | builds |
@@ -221,19 +222,21 @@ licence statement. The sources are the pinned revisions in the table and
 | osso-applet-textinput | 3.2.3 | UNKNOWN | [osso-applet-textinput](https://github.com/maemo-leste/osso-applet-textinput) | `0b32f803ace8` | builds |
 | osso-bookmark-engine | 2.0.0 | GPLv3 | [osso-bookmark-engine](https://github.com/maemo-leste/osso-bookmark-engine) | `0a8ff94e3cfe` | builds |
 | osso-calculator | 2.1 | GPLv3+ | [osso-calculator](https://github.com/maemo-leste/osso-calculator) | `6fff52bb301f` | runs (VM) |
+| osso-chess-ui | 1.8.3.2.leste1 | GPLv2+ | [osso-chess-ui](https://github.com/smatkovi/osso-chess-ui) | `4674e8e999e7` | runs (VM: against GNU Chess 6.3, drag and tap moves, scaled to 2160x1080) |
 | osso-games-startup | 1.7.53 | LGPL21 | [osso-games-startup](https://github.com/maemo-leste/osso-games-startup) | `1740aa8daaf4` | builds |
 | osso-icons-default | 2.5.3.5m7 | UNKNOWN | [leste](https://maedevu.maemo.org/leste) |  | builds |
+| osso-lmarbles | 1.6.38.2.leste1 | GPLv2+ | [osso-lmarbles](https://github.com/smatkovi/osso-lmarbles) | `97dcd6572031` | runs (VM: start screen, first level; red and blue swapped in the VM's picture, to check on a device) |
 | osso-mahjong | 1.9.1_1 | GPLv2+ | [osso-mahjong](https://github.com/maemo-leste-extras/osso-mahjong) | `fbe179709a15` | runs (VM) |
 | osso-pdf-viewer | 1.10.3 | GPLv2 | [osso-pdf-viewer](https://github.com/maemo-leste/osso-pdf-viewer) | `a5c944ebff05` | runs (VM) |
 | osso-sounds-ui | 5.6.0m5 | UNKNOWN | [leste](https://maedevu.maemo.org/leste) |  | builds |
 | osso-xterm | 0.17 | GPLv2 | [osso-xterm](https://github.com/maemo-leste/osso-xterm) | `6c912f73983e` | runs (VM) |
 | pd-mapper | 1.1 | BSD3CLAUSE | [pd-mapper](https://github.com/linux-msm/pd-mapper) | `5ecd2fe926ac` | builds |
 | pedometerhomewidget | 0.4.0 | GPLv3+ | [pedometerhomewidget](https://github.com/smatkovi/pedometerhomewidget) | `06d5246191fa` | builds |
-| pro1x-gnss | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `bd220b122264` | builds; needs the Pro1X's modem (untested on the phone) |
-| pro1x-hidpi | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `bd220b122264` | builds |
-| pro1x-proximity | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `bd220b122264` | builds; needs the Pro1X's ADSP (untested on the phone) |
-| pro1x-standby | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `bd220b122264` | runs (VM: time-out, dimming, double tap, power key, proximity signals; no system calls while in use) |
-| pro1x-steps | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `bd220b122264` | builds; needs the Pro1X's ADSP (untested on the phone) |
+| pro1x-gnss | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | builds; needs the Pro1X's modem (untested on the phone) |
+| pro1x-hidpi | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | builds |
+| pro1x-proximity | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | builds; needs the Pro1X's ADSP (untested on the phone) |
+| pro1x-standby | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | runs (VM: time-out, dimming, double tap, power key, proximity signals; no system calls while in use) |
+| pro1x-steps | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | builds; needs the Pro1X's ADSP (untested on the phone) |
 | profiled | 1.0.8 | BSD3CLAUSE | [profiled](https://github.com/maemo-leste/profiled) | `8e16f3dc9d42` | builds |
 | profilesx | 1.9_1 | GPLv2+ | [profilesx](https://github.com/maemo-leste/profilesx) | `4c89c9701fdc` | builds |
 | qalendar | 1.0.3.1 | GPLv3 | [qalendar](https://github.com/maemo-leste/qalendar) | `04ccfca3ca17` | runs (VM) |
