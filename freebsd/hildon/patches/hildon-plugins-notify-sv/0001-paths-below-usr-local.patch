@@ -1,0 +1,57 @@
+FreeBSD: the sounds below /usr/local.
+
+--- a/lib/nsv-plugin.c
++++ b/lib/nsv-plugin.c
+@@ -124,19 +124,19 @@
+     const gchar *nc = g_value_get_string(val);
+ 
+     if (g_str_equal(nc, "presence.online"))
+-      sound_file = g_strdup("/usr/share/sounds/presence-online.wav");
++      sound_file = g_strdup("/usr/local/share/sounds/presence-online.wav");
+     else if (g_str_equal(nc, "presence.offline"))
+-      sound_file = g_strdup("/usr/share/sounds/presence-offline.wav");
++      sound_file = g_strdup("/usr/local/share/sounds/presence-offline.wav");
+     else if(g_str_equal(nc, "email") || g_str_equal(nc, "presence") ||
+             g_str_equal(nc, "transfer") || g_str_equal(nc, "im"))
+     {
+-      sound_file = g_strdup("/usr/share/sounds/ui-information_note.wav");
++      sound_file = g_strdup("/usr/local/share/sounds/ui-information_note.wav");
+     }
+     else if (g_str_equal(nc, "transfer.complete") ||
+              g_str_equal(nc, "transfer.error") ||
+              g_str_equal(nc, "email.bounced") || g_str_equal(nc, "im.error"))
+     {
+-      sound_file = g_strdup("/usr/share/sounds/ui-operation_ready.wav");
++      sound_file = g_strdup("/usr/local/share/sounds/ui-operation_ready.wav");
+     }
+     else
+       sound_file = NULL;
+--- a/lib/nsv-util.c
++++ b/lib/nsv-util.c
+@@ -245,7 +245,7 @@
+     return FALSE;
+ 
+   path = g_file_get_path(f);
+-  rv = g_str_has_prefix(path, "/usr/share/sounds") &&
++  rv = g_str_has_prefix(path, "/usr/local/share/sounds") &&
+       g_str_has_suffix(path, "wav") &&
+       nsv_util_valid_sound_file(file);
+   g_free(path);
+--- a/lib/nsv-profile.c
++++ b/lib/nsv-profile.c
+@@ -185,13 +185,13 @@
+     NSV_CATEGORY_CALENDAR,
+     NULL,
+     PROFILE_VALUE_TYPE_GCONF,
+-    "/usr/share/sounds/ui-calendar_alarm_default.aac"
++    "/usr/local/share/sounds/ui-calendar_alarm_default.aac"
+   },
+   {
+     NSV_CATEGORY_CLOCK,
+     NULL,
+     PROFILE_VALUE_TYPE_GCONF,
+-    "/usr/share/sounds/ui-clock_alarm_default.aac"
++    "/usr/local/share/sounds/ui-clock_alarm_default.aac"
+   },
+   {
+     NSV_CATEGORY_SMS,

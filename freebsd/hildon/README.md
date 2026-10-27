@@ -84,6 +84,17 @@ theme engine's image server (sapwood) and puts an index of hicolor that
 includes the Hildon icon directories in front (FreeBSD's hicolor package
 owns the plain one).
 
+Alarms work as on Leste, from the Hildon session: `alarmd` keeps the
+queue (`/var/cache/alarmd`, kept over a reboot with the writable ZFS root
+only) and follows clockd's time changes, the system UI (`osso-systemui`)
+shows its dialog through `osso-systemui-alarm`, and the status area clock
+(`statusbar-alarm`) shows that an alarm is set. FreeBSD has no RTC wake-up
+alarm (Linux's `RTC_WKALM_SET`): an alarm rings while the system runs, it
+does not power the phone up. Both start with the session, since alarmd
+needs its bus. `../vm/try-alarm.sh` sets an alarm as clock-ui does and
+takes a screenshot of the dialog (`RESPOND=snooze` or `stop` taps a
+button).
+
 Qt apps build with the PC's `moc`, `uic` and `rcc` (the same Qt 5.15 as
 FreeBSD's) against FreeBSD's Qt in the sysroot (`qt_qmake`, `qt_cmake` in
 `apps.sh`), with Leste's "maemo" qmake spec on FreeBSD's.

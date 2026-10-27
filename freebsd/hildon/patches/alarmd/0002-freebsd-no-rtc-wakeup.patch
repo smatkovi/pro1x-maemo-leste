@@ -1,0 +1,64 @@
+FreeBSD: no linux/rtc.h and no RTC wake-up alarm: alarms ring while the
+system runs (the software timeout); setting the hardware one is a no-op.
+
+--- a/src/hwrtc.c
++++ b/src/hwrtc.c
+@@ -34,11 +34,14 @@
+ #include <stdlib.h>
+ #include <errno.h>
+ 
++#ifdef __linux__
+ #include <sys/ioctl.h>
+ #include <linux/rtc.h>
+ 
+ static const char hwrtc_path[] = "/dev/rtc0";
++#endif
+ 
++#ifdef __linux__
+ static
+ void
+ rtc_from_tm(struct rtc_time *rtc, const struct tm *tm)
+@@ -54,6 +57,7 @@
+   X(tm_year)
+ #undef X
+ }
++#endif
+ 
+ #ifdef DEAD_CODE
+ static
+@@ -119,10 +123,12 @@
+ 
+   int error = -1;
+ 
++#ifdef __linux__
+   if( access(hwrtc_path, R_OK) != 0 )
+   {
+     log_warning("%s: read access -> %s\n", hwrtc_path, strerror(errno));
+   }
++#endif
+   error = 0;
+ 
+   return error;
+@@ -221,6 +227,16 @@
+ int
+ hwrtc_set_alarm(const struct tm *utc, int enabled)
+ {
++#ifndef __linux__
++  /* FreeBSD has no RTC wake-up alarm: the device does not power up for an
++   * alarm, it rings while running (the software timeout) */
++  log_debug("hwrtc: no wake-up alarm on this system: %04d-%02d-%02d "
++            "%02d:%02d:%02d %s\n",
++            utc->tm_year + 1900, utc->tm_mon + 1, utc->tm_mday,
++            utc->tm_hour, utc->tm_min, utc->tm_sec,
++            enabled ? "on" : "off");
++  return 0;
++#else
+   int err = -1;
+   int fd  = -1;
+ 
+@@ -258,4 +274,5 @@
+   if( fd != -1 ) close(fd);
+ 
+   return err;
++#endif
+ }

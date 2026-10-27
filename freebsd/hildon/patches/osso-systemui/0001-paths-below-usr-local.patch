@@ -1,0 +1,46 @@
+FreeBSD: its plugins, texts, sounds and headers below /usr/local.
+
+--- a/osso-systemui.pc
++++ b/osso-systemui.pc
+@@ -1,4 +1,4 @@
+-prefix=/usr
++prefix=/usr/local
+ exec_prefix=${prefix}
+ libdir=${exec_prefix}/lib
+ includedir=${prefix}/include/systemui
+--- a/src/plugin.c
++++ b/src/plugin.c
+@@ -121,7 +121,7 @@
+   if (!path)
+   {
+     ULOG_INFO("GConf key for plugin path not found, using default path");
+-    path = g_strdup("/usr/lib/systemui/");
++    path = g_strdup("/usr/local/lib/systemui/");
+   }
+ 
+   if (prefix && path)
+--- a/src/systemui.c
++++ b/src/systemui.c
+@@ -399,9 +399,9 @@
+             PACKAGE_NAME,
+             PACKAGE_VERSION,
+             TEXT_DOMAIN,
+-            "/usr/share/locale");
++            "/usr/local/share/locale");
+ 
+-  bindtextdomain(TEXT_DOMAIN, "/usr/share/locale");
++  bindtextdomain(TEXT_DOMAIN, "/usr/local/share/locale");
+   bind_textdomain_codeset(TEXT_DOMAIN, "UTF-8");
+   textdomain(TEXT_DOMAIN);
+ 
+--- a/src/dbus.c
++++ b/src/dbus.c
+@@ -101,7 +101,7 @@
+     {
+       ca_error = ca_context_play(c, 0,
+                                  CA_PROP_MEDIA_FILENAME,
+-                                 "/usr/share/sounds/ui-information_note.wav",
++                                 "/usr/local/share/sounds/ui-information_note.wav",
+                                  CA_PROP_MEDIA_NAME,
+                                  "Thermal Shutdown Notification",
+                                  NULL);

@@ -1,0 +1,31 @@
+FreeBSD: its icon and sound below /usr/local.
+
+--- a/osso-systemui-alarm.c
++++ b/osso-systemui-alarm.c
+@@ -573,7 +573,7 @@
+   if (sound_file && (notify_is_initted() ||
+                      notify_init("notify-calendar-alarm"))) {
+     n = notify_notification_new("alarm", 0,
+-                                "/usr/share/icons/hicolor/10x10/hildon/qgn_list_smiley_angry.png");
++                                "/usr/local/share/icons/hicolor/10x10/hildon/qgn_list_smiley_angry.png");
+     notify_notification_set_category(n, "alarm-event");
+     notify_notification_set_timeout(n, 0);
+     notify_notification_set_hint_string(n, "alarm-type", "calendar");
+@@ -602,7 +602,7 @@
+         return NULL;
+ 
+       n = notify_notification_new("alarm", 0,
+-                                  "/usr/share/icons/hicolor/10x10/hildon/qgn_list_smiley_angry.png");
++                                  "/usr/local/share/icons/hicolor/10x10/hildon/qgn_list_smiley_angry.png");
+       notify_notification_set_category(n, "alarm-event");
+       notify_notification_set_timeout(n, 0);
+       notify_notification_set_hint_string(n, "alarm-type", "clock");
+@@ -682,7 +682,7 @@
+ 
+       if (access(sound_file, 4)) {
+         g_free(sound_file);
+-        sound_file = g_strdup("/usr/share/sounds/ui-clock_alarm_default.aac");
++        sound_file = g_strdup("/usr/local/share/sounds/ui-clock_alarm_default.aac");
+       }
+ 
+       a->notification = alarm_notify_notification_clock(sound_file);

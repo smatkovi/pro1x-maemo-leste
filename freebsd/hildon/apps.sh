@@ -24,12 +24,25 @@ APPS=(
 	"hildon-games-wrapper|!"
 	"cityinfo|"
 	"clockd|"
+	# the alarm daemon and what it talks to: the connectivity library, the
+	# status area clock's, the system UI's and dsme's D-Bus names
+	"icd2-osso-ic-dev|"
+	"libconic|"
+	"statusbar-alarm-dbus-api|"
+	"libdsme|!"
+	"osso-systemui-dbus-dev|!"
 	"alarmd|!"
 	"clock|"
 	"hildon-time-zone-chooser|"
 	"calendar-backend|"
-	"icd2-osso-ic-dev|"
-	"libconic|"
+	# the alarm dialog: the system UI and its plugin, with the sound and
+	# vibra notifications (no sound on FreeBSD yet), and the status area
+	# clock, which shows the next alarm
+	"libplayback|!"
+	"hildon-plugins-notify-sv|"
+	"osso-systemui|"
+	"osso-systemui-alarm|!"
+	"statusbar-alarm|"
 	# preinstalled on Leste
 	"osso-xterm|"
 	"osso-pdf-viewer|"
@@ -107,6 +120,11 @@ REV+=(
 	[libimengines]=5541d57ab84f [hildon-im-vkbrenderer3]=b8b4dbe0993b
 	[wpeditor]=84a17efe3392 [osso-games-startup]=1740aa8daaf4
 	[cityinfo]=2228f3ae85ac [clockd]=9130890fe1ae [alarmd]=6a248a323bcc
+	[statusbar-alarm-dbus-api]=acf2954 [osso-systemui-dbus-dev]=dc5c9b5
+	[libdsme]=e4f8b85a6743
+	[libplayback]=ed18405 [hildon-plugins-notify-sv]=ddfe375457f7
+	[osso-systemui]=d1b65f09fe6d [osso-systemui-alarm]=f9350639d4ba
+	[statusbar-alarm]=55045c7780b2
 	[clock]=8abc98d2854f [hildon-time-zone-chooser]=123ee9c1606f
 	[calendar-backend]=ce6ae29ea5d4 [icd2-osso-ic-dev]=acf440d9d3f2
 	[libconic]=cd9db218dacd
@@ -224,19 +242,83 @@ usr_to_local() {
 	    {} + 2> /dev/null || true
 }
 
-# alarmd: only libalarm, the clients' library (the daemon wants dsme, mce,
-# the system UI's interfaces and Linux's RTC alarm)
+# alarmd: libalarm, the clients' library, and the daemon, which follows
+# clockd's time changes (libtime.h from the sysroot). FreeBSD has no RTC
+# wake-up alarm (patches/alarmd/0002): an alarm rings while the system
+# runs. dsme (power up for an alarm) it asks over D-Bus; FreeBSD has none.
+# Started at boot by rc.d/alarmd (extra/alarmd), as root like the session.
 custom_alarmd() {
 	local m=(CC="$CC" AR="$AR" PREFIX=/usr/local ROOT="$PR"
 	    PKGCFGDIR=/usr/local/libdata/pkgconfig
-	    PKG_NAMES="glib-2.0 dbus-glib-1 dbus-1" USE_LIBTIME=n)
+	    DBUS_DIR=/usr/local/etc/dbus-1/system.d
+	    LIBTIME_H="$SYSROOT/usr/local/include/clockd/libtime.h" USE_LIBTIME=n)
+	local pk="glib-2.0 dbus-glib-1 dbus-1"
 	# LDFLAGS on the command line replace the Makefile's, which name the
 	# soname: the users would need libalarm.so, the development link
-	make -j1 "${m[@]}" CFLAGS="$CPPFLAGS $CFLAGS -std=gnu99 -fPIC" \
+	make -j1 "${m[@]}" PKG_NAMES="$pk" CFLAGS="$CPPFLAGS $CFLAGS -std=gnu99 -fPIC" \
 	    LDFLAGS="$LDFLAGS -Wl,-soname,libalarm.so.2" libalarm.a libalarm.so.2 > make.out 2>&1 ||
 	    { grep -m20 -E "error:|Error [0-9]" make.out; exit 1; }
-	make "${m[@]}" install-libalarm install-libalarm-dev > install.out 2>&1 ||
-	    { tail -20 install.out; exit 1; }
+	make -j1 "${m[@]}" PKG_NAMES="$pk conic osso-systemui-dbus mce dsme_dbus_if statusbar-alarm" \
+	    CFLAGS="$CPPFLAGS $CFLAGS -std=gnu99" LDFLAGS="$LDFLAGS" alarmd >> make.out 2>&1 ||
+	    { grep -m20 -E "error:|Error [0-9]" make.out; tail -5 make.out; exit 1; }
+	make "${m[@]}" install-libalarm install-libalarm-dev install-alarmd-dbus-system \
+	    > install.out 2>&1 || { tail -20 install.out; exit 1; }
+	install -d "$PR/usr/local/sbin"
+	install -m 755 alarmd "$PR/usr/local/sbin/alarmd"
+}
+
+# dsme's D-Bus names only (libdsme_dbus_if), for alarmd: FreeBSD runs no
+# dsme, libdsme's socket protocol is of no use there
+custom_libdsme() {
+	$CC $CPPFLAGS $CFLAGS -fPIC -shared -o libdsme_dbus_if.so.0 \
+	    -Wl,-soname,libdsme_dbus_if.so.0 modules/dsme_dbus_if.c $LDFLAGS > make.out 2>&1 ||
+	    { grep -m20 "error" make.out; exit 1; }
+	install -d "$PR/usr/local/lib" "$PR/usr/local/include/dsme" \
+	    "$PR/usr/local/libdata/pkgconfig"
+	install -m 755 libdsme_dbus_if.so.0 "$PR/usr/local/lib/"
+	ln -s libdsme_dbus_if.so.0 "$PR/usr/local/lib/libdsme_dbus_if.so"
+	install -m 644 modules/dsme_dbus_if.h "$PR/usr/local/include/dsme/"
+	sed 's|^prefix=/usr$|prefix=/usr/local|' dsme_dbus_if.pc \
+	    > "$PR/usr/local/libdata/pkgconfig/dsme_dbus_if.pc"
+}
+
+# The system UI's D-Bus names: headers only (its install wants doxygen)
+custom_osso_systemui_dbus_dev() {
+	install -d "$PR/usr/local/include/systemui" "$PR/usr/local/libdata/pkgconfig"
+	install -m 644 include/systemui/*.h "$PR/usr/local/include/systemui/"
+	sed 's|^prefix=/usr$|prefix=/usr/local|' osso-systemui-dbus.pc \
+	    > "$PR/usr/local/libdata/pkgconfig/osso-systemui-dbus.pc"
+}
+
+# libplayback: its Makefile links with the host's libtool, for Linux
+custom_libplayback() {
+	local o=() f
+	for f in src/*.c; do
+		# shellcheck disable=SC2046
+		$CC $CPPFLAGS $CFLAGS -fPIC -I include $(pkg-config --cflags dbus-1) \
+		    -c "$f" -o "${f%.c}.o" >> make.out 2>&1 ||
+		    { grep -m20 "error:" make.out; exit 1; }
+		o+=("${f%.c}.o")
+	done
+	# shellcheck disable=SC2046
+	$CC -shared -o libplayback-1.so.0 -Wl,-soname,libplayback-1.so.0 "${o[@]}" \
+	    $LDFLAGS $(pkg-config --libs dbus-1) >> make.out 2>&1 ||
+	    { grep -m20 "error" make.out; exit 1; }
+	install -d "$PR/usr/local/lib" "$PR/usr/local/include/libplayback-1/libplayback" \
+	    "$PR/usr/local/libdata/pkgconfig"
+	install -m 755 libplayback-1.so.0 "$PR/usr/local/lib/"
+	ln -s libplayback-1.so.0 "$PR/usr/local/lib/libplayback-1.so"
+	install -m 644 include/libplayback/playback.h include/libplayback/playback-macros.h \
+	    include/libplayback/playback-types.h "$PR/usr/local/include/libplayback-1/libplayback/"
+	sed 's|^prefix=/usr$|prefix=/usr/local|' libplayback-1.pc \
+	    > "$PR/usr/local/libdata/pkgconfig/libplayback-1.pc"
+}
+
+# The alarm dialog, a system UI plugin: the notification plugin it links
+# is in hildon-desktop's library directory
+custom_osso_systemui_alarm() {
+	local LDFLAGS="$LDFLAGS -L$SYSROOT/usr/local/lib/hildon-desktop -Wl,-rpath,/usr/local/lib/hildon-desktop"
+	custom_make
 }
 
 # The keyboard layouts are compiled at build time by libimlayouts' gen_vkb:

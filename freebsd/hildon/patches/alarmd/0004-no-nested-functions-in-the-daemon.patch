@@ -1,0 +1,198 @@
+clang has no nested functions (a GCC extension), in the daemon too:
+unique_final()'s cmp(), the queue's savers xu/xq/xi/xs and the log's
+timeto() as static functions.
+
+--- a/src/queue.c
++++ b/src/queue.c
+@@ -779,6 +779,33 @@
+  * ========================================================================= */
+ 
+ /* ------------------------------------------------------------------------- *
++ * queue_save_u, _q, _i, _s  --  a value under a formatted key, if set
++ * ------------------------------------------------------------------------- */
++
++#define QUEUE_SAVE(name, type, cond, fmt)\
++static void name(inifile_t *ini, type v, const char *s, const char *f, ...)\
++  __attribute__ ((format (printf, 4, 5)));\
++static void name(inifile_t *ini, type v, const char *s, const char *f, ...)\
++{\
++  if( cond )\
++  {\
++    va_list va;\
++    char k[64];\
++    va_start(va, f);\
++    vsnprintf(k, sizeof k, f, va);\
++    va_end(va);\
++    inifile_setfmt(ini, s, k, fmt, v);\
++  }\
++}
++
++QUEUE_SAVE(queue_save_u, unsigned,           v != 0,   "%u")
++QUEUE_SAVE(queue_save_q, unsigned long long, v != 0,   "%llu")
++QUEUE_SAVE(queue_save_i, int,                v != 0,   "%d")
++QUEUE_SAVE(queue_save_s, const char *,       v && *v,  "%s")
++
++#undef QUEUE_SAVE
++
++/* ------------------------------------------------------------------------- *
+  * queue_save_to_memory
+  * ------------------------------------------------------------------------- */
+ 
+@@ -791,60 +818,10 @@
+ 
+   inifile_setfmt(ini, "config", "snooze", "%u", queue_snooze);
+ 
+-  auto void xu(unsigned           v, const char *s, const char *f, ...);
+-  auto void xq(unsigned long long v, const char *s, const char *f, ...);
+-  auto void xi(int                v, const char *s, const char *f, ...);
+-  auto void xs(const char        *v, const char *s, const char *f, ...);
+-
+-  auto void xu(unsigned v, const char *s, const char *f, ...)
+-  {
+-    if( v != 0 )
+-    {
+-      va_list va;
+-      char k[64];
+-      va_start(va, f);
+-      vsnprintf(k, sizeof k, f, va);
+-      va_end(va);
+-      inifile_setfmt(ini, s, k, "%u", v);
+-    }
+-  }
+-
+-  auto void xq(unsigned long long v, const char *s, const char *f, ...)
+-  {
+-    if( v != 0 )
+-    {
+-      va_list va;
+-      char k[64];
+-      va_start(va, f);
+-      vsnprintf(k, sizeof k, f, va);
+-      va_end(va);
+-      inifile_setfmt(ini, s, k, "%llu", v);
+-    }
+-  }
+-  auto void xi(int v, const char *s, const char *f, ...)
+-  {
+-    if( v != 0 )
+-    {
+-      va_list va;
+-      char k[64];
+-      va_start(va, f);
+-      vsnprintf(k, sizeof k, f, va);
+-      va_end(va);
+-      inifile_setfmt(ini, s, k, "%d", v);
+-    }
+-  }
+-  auto void xs(const char *v, const char *s, const char *f, ...)
+-  {
+-    if( v && *v )
+-    {
+-      va_list va;
+-      char k[64];
+-      va_start(va, f);
+-      vsnprintf(k, sizeof k, f, va);
+-      va_end(va);
+-      inifile_setfmt(ini, s, k, "%s", v);
+-    }
+-  }
++#define xu(...) queue_save_u(ini, __VA_ARGS__)
++#define xq(...) queue_save_q(ini, __VA_ARGS__)
++#define xi(...) queue_save_i(ini, __VA_ARGS__)
++#define xs(...) queue_save_s(ini, __VA_ARGS__)
+ 
+   for( size_t i = 0; i < queue_count; ++i )
+   {
+@@ -978,6 +955,11 @@
+   return err;
+ }
+ 
++#undef xu
++#undef xq
++#undef xi
++#undef xs
++
+ /* ------------------------------------------------------------------------- *
+  * queue_load_from_path
+  * ------------------------------------------------------------------------- */
+--- a/src/server.c
++++ b/src/server.c
+@@ -687,6 +687,20 @@
+ }
+ 
+ /* ------------------------------------------------------------------------- *
++ * server_timeto  --  time from t to d for the log
++ * ------------------------------------------------------------------------- */
++
++static const char *
++server_timeto(char *s, size_t n, time_t t, time_t d)
++{
++  if( d < INT_MAX )
++  {
++    return ticker_secs_format(s,n,t-d);
++  }
++  return "-Inf";
++}
++
++/* ------------------------------------------------------------------------- *
+  * server_queuestate_init
+  * ------------------------------------------------------------------------- */
+ 
+@@ -737,25 +751,15 @@
+   {
+     time_t t = ticker_get_time();
+ 
+-    auto const char *timeto(char *s, size_t n, time_t d);
+-    auto const char *timeto(char *s, size_t n, time_t d)
+-    {
+-      if( d < INT_MAX )
+-      {
+-        return ticker_secs_format(s,n,t-d);
+-      }
+-      return "-Inf";
+-    }
+-
+     char d[32];
+     char a[32];
+     char n[32];
+ 
+     log_info("QSTATE - active: %d, desktop: T%s, act dead: T%s, no boot: T%s\n",
+              server_queuestate_curr.qs_alarms,
+-             timeto(d, sizeof d, server_queuestate_curr.qs_desktop),
+-             timeto(a, sizeof a, server_queuestate_curr.qs_actdead),
+-             timeto(n, sizeof n, server_queuestate_curr.qs_no_boot));
++             server_timeto(d, sizeof d, t, server_queuestate_curr.qs_desktop),
++             server_timeto(a, sizeof a, t, server_queuestate_curr.qs_actdead),
++             server_timeto(n, sizeof n, t, server_queuestate_curr.qs_no_boot));
+ 
+ // QUARANTINE     auto int timeto(time_t d);
+ // QUARANTINE     auto int timeto(time_t d)
+--- a/src/unique.c
++++ b/src/unique.c
+@@ -106,19 +106,18 @@
+  * unique_final
+  * ------------------------------------------------------------------------- */
+ 
++static int
++unique_cmp(const void *a, const void *b)
++{
++  return strcmp(*(const char **)a, *(const char **)b);
++}
++
+ char **
+ unique_final(unique_t *self, size_t *pcount)
+ {
+-  auto int cmp(const void *a, const void *b);
+-
+-  auto int cmp(const void *a, const void *b)
+-  {
+-    return strcmp(*(const char **)a, *(const char **)b);
+-  }
+-
+   if( self->un_dirty != 0 )
+   {
+-    qsort(self->un_string, self->un_count, sizeof *self->un_string, cmp);
++    qsort(self->un_string, self->un_count, sizeof *self->un_string, unique_cmp);
+ 
+     size_t si = 0, di = 0;
+ 

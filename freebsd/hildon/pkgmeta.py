@@ -15,6 +15,7 @@ data parts). Dependencies come from the ELF files' DT_NEEDED: a library
 of another part, of a FreeBSD package (packagesite.yaml) or of the base
 system (no dependency).
 """
+import fnmatch
 import glob
 import json
 import os
@@ -128,6 +129,11 @@ RUNTIME = {
     'dorian': ['qt5-sqldrivers-sqlite3'],
     # the chess engine the game runs
     'osso-chess-ui': ['gnuchess'],
+    # alarmd asks clockd for the time; the alarm dialog is a system UI
+    # plugin, it rings through the notification plugin
+    'alarmd': ['clockd'],
+    'osso-systemui-alarm': ['osso-systemui', 'alarmd', 'osso-sounds-ui'],
+    'statusbar-alarm': ['alarmd'],
 }
 # Where debian/copyright says only "GPL" (any version) or nothing
 LICENSES = {
@@ -137,9 +143,16 @@ LICENSES = {
     'osso-chess-ui': ['GPLv2+'],
     'osso-lmarbles': ['GPLv2+'],
     'hildon-games-wrapper': ['LGPL21'],
+    'statusbar-alarm-dbus-api': ['BSD3CLAUSE'],
+    'osso-systemui-dbus-dev': ['LGPL21'],
+    'libplayback': ['LGPL21'],
+    'osso-systemui-alarm': ['LGPL21'],
 }
 # Where debian/control describes a part badly
 DESCRIBE = {
+    'libdsme': ("dsme's D-Bus names (libdsme_dbus_if)",
+                "libdsme_dbus_if, the names of dsme's D-Bus interface, which alarmd "
+                "uses; FreeBSD runs no dsme, so libdsme's socket protocol is left out."),
     'hildon-games-wrapper': ('Wrapper that starts and pauses full screen games',
                              "hildon-games-wrapper (libhgw and its wrapper) runs a "
                              "game such as Marbles from osso-games-startup and passes "
@@ -151,6 +164,9 @@ EXCLUDE = {
     # FreeBSD has gtk-update-icon-cache in a package of its own; the API
     # documentation stays out; FreeBSD's libraries (2.24.33) under Leste's
     # (2.24.25 with the Hildon changes), which the links now point to
+    # libhildon's English texts lack the 12-hour times and am/pm the
+    # clock and the alarm dialog show: Leste's (leste-l10n-en) instead
+    'libhildon': (['usr/local/share/locale/en_GB/LC_MESSAGES/hildon-libs.mo'], ['leste-l10n-en']),
     'gtk': (['usr/local/bin/gtk-update-icon-cache', 'usr/local/share/man/man1/gtk-update-icon-cache.1*',
              'usr/local/share/gtk-doc/*', 'usr/local/lib/libgtk-x11-2.0.so.0.2400.33',
              'usr/local/lib/libgdk-x11-2.0.so.0.2400.33'], ['gtk-update-icon-cache']),
@@ -213,6 +229,10 @@ REVISION = {
     # MeeGo-like pages (patches/meego, off by default); 2: the edge
     # gestures, no more crash when a thumbnail zooms in (isnanf, 0003)
     'hildon-desktop': 2,
+    # 2026-10-27: the daemon too (it was libalarm only)
+    'alarmd': 1,
+    # 2026-10-27: Leste's hildon-libs texts, not libhildon's (EXCLUDE)
+    'libhildon': 1, 'leste-l10n-en': 1,
 }
 
 
@@ -472,11 +492,13 @@ for part, m in meta.items():
     subprocess.run(['cp', '-a', '--remove-destination', m['root'] + '/.', r + '/'],
                    check=True)
     if part.startswith('leste-l10n-'):
-        # texts a part ships itself (libhildon's en_GB, ...) stay with it
+        # texts a part ships itself stay with it, unless EXCLUDE takes
+        # them from it
         for dp, _, fs in os.walk(r):
             for f in fs:
                 rel = os.path.relpath(os.path.join(dp, f), r)
-                if any(os.path.lexists(os.path.join(o['root'], rel))
+                if any(os.path.lexists(os.path.join(o['root'], rel)) and
+                       not any(fnmatch.fnmatch(rel, x) for x in EXCLUDE.get(q, ([], []))[0])
                        for q, o in meta.items() if q != part and not q.startswith('_')):
                     os.remove(os.path.join(dp, f))
     for x in EXCLUDE.get(part, ([], []))[0]:

@@ -1,0 +1,16 @@
+basename() is declared in libgen.h outside glibc: undeclared, its pointer
+would lose its upper half on arm64.
+
+--- a/src/alarmd.c
++++ b/src/alarmd.c
+@@ -56,6 +56,10 @@
+ #include <unistd.h>
+ #include <getopt.h>
+ #include <ctype.h>
++#ifndef __linux__
++/* basename(): glibc declares it in string.h */
++#include <libgen.h>
++#endif
+ 
+ #if ALARMD_CUD_ENABLE || ALARMD_RFS_ENABLE
+ #include <dbus/dbus.h>

@@ -51,11 +51,25 @@ respawn() {
 		sleep 2
 	done
 }
+# The alarm daemon and the system UI, which shows its alarm dialog (Leste:
+# Xsession.d/03alarmd and 03osso-systemui): alarmd needs this session's
+# bus, so alarms ring while Hildon runs. Its queue is in /var/cache/alarmd
+# (kept over a reboot only with the writable ZFS root).
+alarm=
+if [ -x /usr/local/sbin/alarmd ]; then
+	mkdir -p /var/cache/alarmd
+	respawn /usr/local/sbin/alarmd &
+	alarm=$!
+fi
+if [ -x /usr/local/bin/systemui ]; then
+	respawn /usr/local/bin/systemui &
+	alarm="$alarm $!"
+fi
 respawn /usr/local/bin/hildon-status-menu &
 menu=$!
 respawn /usr/local/bin/hildon-home &
 home=$!
 /usr/local/bin/hildon-desktop
-kill $menu $home $sapwood 2> /dev/null
+kill $menu $home $alarm $sapwood 2> /dev/null
 kill "$DBUS_SESSION_BUS_PID" 2> /dev/null
 xset r 36 r 70 r 72 r 9 r 104 2> /dev/null
