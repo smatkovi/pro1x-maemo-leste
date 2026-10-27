@@ -305,6 +305,9 @@ build_part() {
 	# HiDPI (tools/pro1x-hidpi), shared with Leste
 	p=$REPO/patches/hidpi/$name.patch
 	if [ -f "$p" ]; then patch -s -d "$b" -p1 < "$p" || return 1; fi
+	# MeeGo-like home (patches/meego), shared with Leste
+	p=$REPO/patches/meego/$name.patch
+	if [ -f "$p" ]; then patch -s -d "$b" -p1 < "$p" || return 1; fi
 	# FreeBSD keeps environ in the program (crt1), where glib and libc find
 	# it only if it is exported: programs that export just main for
 	# maemo-launcher (export.map) export it too

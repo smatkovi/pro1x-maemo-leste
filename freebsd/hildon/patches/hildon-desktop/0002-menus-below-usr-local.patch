@@ -1,0 +1,39 @@
+FreeBSD: the launcher's menu and its applications are below /usr/local
+(the user's menu merged /etc/xdg/menus/hildon.menu, which named
+/usr/share/applications; the launcher stayed empty).
+
+--- a/src/launcher/hd-launcher-tree.h
++++ b/src/launcher/hd-launcher-tree.h
+@@ -82,7 +82,7 @@
+   " \"http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd\">\n\n" \
+   "<Menu>\n" \
+   "\t<Name>Main</Name>\n" \
+-  "\t<MergeFile type=\"parent\">/etc/xdg/menus/hildon.menu</MergeFile>\n" \
++  "\t<MergeFile type=\"parent\">/usr/local/etc/xdg/menus/hildon.menu</MergeFile>\n" \
+   "\t<AppDir>%s/applications/hildon</AppDir>\n" \
+   "\t<DirectoryDir>%s/applications/hildon</DirectoryDir>\n\n"
+ #define HD_LAUNCHER_MENU_END \
+--- a/data/menu/hildon.menu
++++ b/data/menu/hildon.menu
+@@ -6,8 +6,8 @@
+   <Name>Main</Name>
+ 
+   <!-- Search only in the hildon directory. -->
+-  <AppDir>/usr/share/applications/hildon</AppDir>
+-  <DirectoryDir>/usr/share/applications/hildon</DirectoryDir>
++  <AppDir>/usr/local/share/applications/hildon</AppDir>
++  <DirectoryDir>/usr/local/share/applications/hildon</DirectoryDir>
+ 
+   <Include>
+     <All/>
+@@ -49,8 +49,8 @@
+     <Name>Debian</Name>
+     <Directory>debian.directory</Directory>
+ 
+-    <AppDir>/usr/share/applications/debian</AppDir>
+-    <DirectoryDir>/usr/share/applications/debian</DirectoryDir>
++    <AppDir>/usr/local/share/applications/debian</AppDir>
++    <DirectoryDir>/usr/local/share/applications/debian</DirectoryDir>
+ 
+     <Include>
+       <All/>

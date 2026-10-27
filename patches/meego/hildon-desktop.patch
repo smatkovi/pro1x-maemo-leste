@@ -1,0 +1,423 @@
+MeeGo-like home pages (pro1x-maemo-leste patches/meego): the home views,
+the launcher and the task navigator in a ring, changed by swiping, without
+the top left buttons; GConf /apps/osso/hildon-desktop/meego_pages.
+
+diff --git a/src/hildon-desktop-views.schemas b/src/hildon-desktop-views.schemas
+index 8da5ccc..a493524 100644
+--- a/src/hildon-desktop-views.schemas
++++ b/src/hildon-desktop-views.schemas
+@@ -1,6 +1,17 @@
+ <?xml version="1.0"?>
+ <gconfschemafile>
+   <schemalist>
++    <schema>
++      <key>/schemas/apps/osso/hildon-desktop/meego_pages</key>
++      <applyto>/apps/osso/hildon-desktop/meego_pages</applyto>
++      <owner>hildon-desktop</owner>
++      <type>bool</type>
++      <default>false</default>
++      <locale name="C">
++        <short>MeeGo-like pages</short>
++        <long>The Home views, the launcher and the task navigator as pages in a ring, changed by swiping, without the buttons in the top left corner</long>
++      </locale>
++    </schema>
+     <schema>
+       <key>/schemas/apps/osso/hildon-desktop/views/current</key>
+       <applyto>/apps/osso/hildon-desktop/views/current</applyto>
+diff --git a/src/home/hd-home-view-container.c b/src/home/hd-home-view-container.c
+index 825ddae..b3ca753 100644
+--- a/src/home/hd-home-view-container.c
++++ b/src/home/hd-home-view-container.c
+@@ -900,6 +900,25 @@ hd_home_view_container_get_view (HdHomeViewContainer *container,
+   return priv->views[view_id];
+ }
+ 
++/* The first or the last active view */
++guint
++hd_home_view_container_get_end_view (HdHomeViewContainer *container,
++                                     gboolean             last)
++{
++  guint i;
++
++  g_return_val_if_fail (HD_IS_HOME_VIEW_CONTAINER (container), 0);
++
++  for (i = 0; i < MAX_HOME_VIEWS; i++)
++    {
++      guint v = last ? MAX_HOME_VIEWS - 1 - i : i;
++
++      if (container->priv->active_views[v])
++        return v;
++    }
++  return 0;
++}
++
+ gboolean
+ hd_home_view_container_get_active (HdHomeViewContainer *container,
+                                    guint                view_id)
+diff --git a/src/home/hd-home-view-container.h b/src/home/hd-home-view-container.h
+index 9a78eb8..e22bd00 100644
+--- a/src/home/hd-home-view-container.h
++++ b/src/home/hd-home-view-container.h
+@@ -62,6 +62,8 @@ void             hd_home_view_container_set_current_view   (HdHomeViewContainer
+ 
+ ClutterActor    *hd_home_view_container_get_view           (HdHomeViewContainer *container,
+                                                             guint                view_id);
++guint            hd_home_view_container_get_end_view       (HdHomeViewContainer *container,
++                                                            gboolean             last);
+ gboolean         hd_home_view_container_get_active         (HdHomeViewContainer *container,
+                                                             guint                view_id);
+ 
+diff --git a/src/home/hd-home.c b/src/home/hd-home.c
+index 96d6cf5..a2bc43d 100644
+--- a/src/home/hd-home.c
++++ b/src/home/hd-home.c
+@@ -42,6 +42,7 @@
+ #include "hd-launcher-app.h"
+ #include "hd-dbus.h"
+ #include "hd-title-bar.h"
++#include "hd-meego.h"
+ 
+ #include <clutter/clutter.h>
+ #include <clutter/x11/clutter-x11.h>
+@@ -507,6 +508,22 @@ hd_home_desktop_motion (XButtonEvent *xev, void *userdata)
+   hd_home_desktop_do_motion (home, xev->x, xev->y);
+ }
+ 
++/* The ends of the home views among the MeeGo-like pages (hd-meego.c) */
++static guint
++meego_end_view (HdHome *home, gboolean last)
++{
++  return hd_home_view_container_get_end_view (
++      HD_HOME_VIEW_CONTAINER (home->priv->view_container), last);
++}
++
++void
++hd_home_meego_show_end_view (HdHome *home, gboolean last)
++{
++  hd_home_view_container_set_current_view (
++      HD_HOME_VIEW_CONTAINER (home->priv->view_container),
++      meego_end_view (home, last));
++}
++
+ static void
+ hd_home_desktop_do_release (HdHome *home)
+ {
+@@ -544,7 +561,18 @@ hd_home_desktop_do_release (HdHome *home)
+       velocity_value = priv->velocity_x;
+     }
+ 
+-  if (!priv->long_press && priv->moved_over_threshold)
++  if (!priv->long_press && priv->moved_over_threshold &&
++      hd_meego_pages_enabled () &&
++      ABS (cumulative_value) >= PAN_NEXT_PREVIOUS_PERCENTAGE * HD_COMP_MGR_LANDSCAPE_WIDTH &&
++      hd_home_view_container_get_current_view (HD_HOME_VIEW_CONTAINER (priv->view_container)) ==
++      meego_end_view (home, cumulative_value < 0))
++    {
++      /* MeeGo-like pages (hd-meego.c): past the last home view comes the
++       * launcher, before the first the task navigator */
++      hd_home_view_container_scroll_back (HD_HOME_VIEW_CONTAINER (priv->view_container), velocity_value);
++      hd_meego_leave_home (cumulative_value < 0 ? 1 : -1);
++    }
++  else if (!priv->long_press && priv->moved_over_threshold)
+     {
+       if (ABS (cumulative_value) >= PAN_NEXT_PREVIOUS_PERCENTAGE * HD_COMP_MGR_LANDSCAPE_WIDTH) /* */
+         {
+diff --git a/src/home/hd-home.h b/src/home/hd-home.h
+index f3cf6e3..b7e99b4 100644
+--- a/src/home/hd-home.h
++++ b/src/home/hd-home.h
+@@ -77,6 +77,8 @@ void hd_home_remove_status_menu (HdHome *home, ClutterActor *sa);
+ 
+ guint hd_home_get_current_view_id (HdHome *home);
+ ClutterActor *hd_home_get_current_view (HdHome *home);
++
++void hd_home_meego_show_end_view (HdHome *home, gboolean last);
+ GSList *hd_home_get_not_visible_views (HdHome *home);
+ 
+ ClutterActor *hd_home_get_edit_button (HdHome *home);
+diff --git a/src/home/hd-render-manager.c b/src/home/hd-render-manager.c
+index c039af9..9d82830 100644
+--- a/src/home/hd-render-manager.c
++++ b/src/home/hd-render-manager.c
+@@ -46,6 +46,7 @@
+ #include "hd-app.h"
+ #include "hd-dialog.h"
+ #include "hd-app-menu.h"
++#include "hd-meego.h"
+ 
+ #include <matchbox/core/mb-wm.h>
+ #include <matchbox/theme-engines/mb-wm-theme.h>
+@@ -926,7 +927,9 @@ void hd_render_manager_sync_clutter_before ()
+       case HDRM_STATE_HOME_PORTRAIT: /* Fallen truth */
+       case HDRM_STATE_HOME:
+         blur |=  HDRM_ZOOM_FOR_HOME;
+-        if (hd_task_navigator_is_empty())
++        if (hd_meego_pages_enabled ())
++          ; /* the pages change by swiping (hd-meego.c) */
++        else if (hd_task_navigator_is_empty())
+           btn_state |= HDTB_VIS_BTN_LAUNCHER;
+         else
+           btn_state |= HDTB_VIS_BTN_SWITCHER;
+@@ -962,7 +965,8 @@ void hd_render_manager_sync_clutter_before ()
+         break;
+       case HDRM_STATE_TASK_NAV:
+       case HDRM_STATE_TASK_NAV_PORTRAIT:
+-        btn_state |= HDTB_VIS_BTN_LAUNCHER;
++        if (!hd_meego_pages_enabled ())
++          btn_state |= HDTB_VIS_BTN_LAUNCHER;
+         clutter_actor_show(CLUTTER_ACTOR(priv->home));
+         blur |=  HDRM_BLUR_HOME |
+                  HDRM_ZOOM_FOR_TASK_NAV |
+diff --git a/src/main.c b/src/main.c
+index 35f9d99..a7601df 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -56,6 +56,7 @@
+ #include "hd-home.h"
+ #include "hd-shortcuts.h"
+ #include "hd-xinput.h"
++#include "hd-meego.h"
+ 
+ #ifndef DISABLE_A11Y
+ #include "hildon-desktop-a11y.h"
+@@ -457,6 +458,7 @@ main (int argc, char **argv)
+   hd_enumerate_input_devices (dpy);
+   hd_rotate_input_devices (dpy);
+ 
++  hd_meego_init ();
+   clutter_x11_add_filter (hd_clutter_x11_event_filter, wm);
+ 
+   app_mgr = hd_app_mgr_get ();
+diff --git a/src/util/Makefile.am b/src/util/Makefile.am
+index 84c1bb1..1ed349f 100644
+--- a/src/util/Makefile.am
++++ b/src/util/Makefile.am
+@@ -6,6 +6,7 @@ util_h = 	hd-util.h		\
+ 		hd-gtk-utils.h		\
+ 		hd-volume-profile.h		\
+ 		hd-transition.h \
++		hd-meego.h \
+ 		hd-xinput.h
+ 
+ util_c = 	hd-util.c		\
+@@ -15,6 +16,7 @@ util_c = 	hd-util.c		\
+ 		hd-volume-profile.c		\
+ 		hd-transition.c \
+ 		hd-shortcuts.c \
++		hd-meego.c \
+ 		hd-xinput.c
+ 
+ noinst_LTLIBRARIES = libutil.la
+diff --git a/src/util/hd-meego.c b/src/util/hd-meego.c
+new file mode 100644
+index 0000000..5789aa7
+--- /dev/null
++++ b/src/util/hd-meego.c
+@@ -0,0 +1,167 @@
++/*
++ * MeeGo-like home: the home views (Hildon's desktops, up to four), the
++ * launcher and the task navigator as pages side by side in a ring,
++ * changed by a horizontal swipe, like the Nokia N9's Events, Applications
++ * and Open applications; the buttons in the top left corner go. Past the
++ * last home view comes the launcher, then the task navigator (when
++ * applications are open), then the first home view again. On while the
++ * GConf key /apps/osso/hildon-desktop/meego_pages is true.
++ *
++ * The swipe is seen in the X events themselves (hd_clutter_x11_event_filter),
++ * before Clutter: the launcher's and the task navigator's scrollers grab
++ * the pointer, so their actors would not see a drag that started on them.
++ * The thresholds are those of Harmattan's home screen (meegotouchhome,
++ * PagedPanning): a page changes after a third of the screen, or after a
++ * quicker flick of a tenth.
++ */
++
++#include <gconf/gconf-client.h>
++#include <glib.h>
++
++#include "hd-meego.h"
++#include "hd-home.h"
++#include "hd-render-manager.h"
++#include "hd-task-navigator.h"
++#include "hd-util.h"
++
++#define GCONF_KEY_MEEGO_PAGES "/apps/osso/hildon-desktop/meego_pages"
++
++/* A swipe: horizontal (twice as far across as down) and either a third of
++ * the screen or a tenth within 300 ms */
++#define SWIPE_SLOW_FRACTION   3
++#define SWIPE_FAST_FRACTION   10
++#define SWIPE_FAST_MS         300
++#define SWIPE_MAX_MS          1500
++
++static gboolean enabled;
++static gboolean pressed;
++static int press_x, press_y;
++static Time press_time;
++
++static void
++meego_pages_changed (GConfClient *client, guint id, GConfEntry *entry,
++                     gpointer data)
++{
++  gboolean on = gconf_client_get_bool (client, GCONF_KEY_MEEGO_PAGES, NULL);
++
++  if (on != enabled)
++    {
++      enabled = on;
++      /* the top left buttons come and go with the pages */
++      hd_render_manager_set_state (hd_render_manager_get_state ());
++      hd_render_manager_restack ();
++    }
++}
++
++void
++hd_meego_init (void)
++{
++  GConfClient *client = gconf_client_get_default ();
++
++  enabled = gconf_client_get_bool (client, GCONF_KEY_MEEGO_PAGES, NULL);
++  gconf_client_add_dir (client, "/apps/osso/hildon-desktop",
++                        GCONF_CLIENT_PRELOAD_NONE, NULL);
++  gconf_client_notify_add (client, GCONF_KEY_MEEGO_PAGES,
++                           meego_pages_changed, NULL, NULL, NULL);
++}
++
++gboolean
++hd_meego_pages_enabled (void)
++{
++  return enabled;
++}
++
++/* The pages in their order; @dir +1 is the one to the right */
++static HDRMStateEnum
++next_page (HDRMStateEnum state, int dir)
++{
++  gboolean portrait = STATE_IS_PORTRAIT (state);
++  HDRMStateEnum pages[3];
++  int i, n;
++
++  pages[0] = portrait ? HDRM_STATE_HOME_PORTRAIT : HDRM_STATE_HOME;
++  pages[1] = portrait ? HDRM_STATE_LAUNCHER_PORTRAIT : HDRM_STATE_LAUNCHER;
++  pages[2] = portrait ? HDRM_STATE_TASK_NAV_PORTRAIT : HDRM_STATE_TASK_NAV;
++
++  for (i = 0; i < 3 && pages[i] != state; i++)
++    ;
++  if (i == 3)
++    return HDRM_STATE_UNDEFINED;
++
++  for (n = 0; n < 2; n++)
++    {
++      i = (i + dir + 3) % 3;
++      /* no open applications: nothing to show on that page */
++      if (STATE_IS_TASK_NAV (pages[i]) && hd_task_navigator_is_empty ())
++        continue;
++      return pages[i];
++    }
++  return HDRM_STATE_UNDEFINED;
++}
++
++static gboolean
++change_page (gpointer data)
++{
++  int dir = GPOINTER_TO_INT (data);
++  HDRMStateEnum to = next_page (hd_render_manager_get_state (), dir);
++
++  if (to == HDRM_STATE_UNDEFINED)
++    return FALSE;
++  /* coming back to the home views from the right: the last of them */
++  if (STATE_IS_HOME (to))
++    hd_home_meego_show_end_view (hd_render_manager_get_home (), dir < 0);
++  hd_render_manager_set_state (to);
++  return FALSE;
++}
++
++void
++hd_meego_leave_home (int dir)
++{
++  g_idle_add (change_page, GINT_TO_POINTER (dir));
++}
++
++void
++hd_meego_x_event (XEvent *xev)
++{
++  HDRMStateEnum state;
++  int width, dx, dy, dt;
++
++  if (!enabled || (xev->type != ButtonPress && xev->type != ButtonRelease))
++    return;
++
++  /* the home views see their swipes themselves (hd-home.c) */
++  state = hd_render_manager_get_state ();
++  if (!STATE_IS_LAUNCHER (state) && !STATE_IS_TASK_NAV (state))
++    {
++      pressed = FALSE;
++      return;
++    }
++
++  if (xev->type == ButtonPress)
++    {
++      pressed = TRUE;
++      press_x = xev->xbutton.x_root;
++      press_y = xev->xbutton.y_root;
++      press_time = xev->xbutton.time;
++      return;
++    }
++
++  if (!pressed)
++    return;
++  pressed = FALSE;
++
++  dx = xev->xbutton.x_root - press_x;
++  dy = xev->xbutton.y_root - press_y;
++  dt = (int) (xev->xbutton.time - press_time);
++  width = STATE_IS_PORTRAIT (state) ? hd_util_display_height ()
++                                    : hd_util_display_width ();
++  if (ABS (dx) < 2 * ABS (dy) || dt > SWIPE_MAX_MS)
++    return;
++  if (ABS (dx) < width / SWIPE_SLOW_FRACTION
++      && !(ABS (dx) >= width / SWIPE_FAST_FRACTION && dt <= SWIPE_FAST_MS))
++    return;
++
++  /* After this release has gone through Clutter: the finger moving left
++   * brings the page on the right */
++  g_idle_add (change_page, GINT_TO_POINTER (dx < 0 ? 1 : -1));
++}
+diff --git a/src/util/hd-meego.h b/src/util/hd-meego.h
+new file mode 100644
+index 0000000..5bfb74f
+--- /dev/null
++++ b/src/util/hd-meego.h
+@@ -0,0 +1,13 @@
++#ifndef __HD_MEEGO_H__
++#define __HD_MEEGO_H__
++
++#include <glib.h>
++#include <X11/Xlib.h>
++
++/* MeeGo-like home pages (hd-meego.c) */
++void hd_meego_init (void);
++gboolean hd_meego_pages_enabled (void);
++void hd_meego_x_event (XEvent *xev);
++void hd_meego_leave_home (int dir);
++
++#endif
+diff --git a/src/util/hd-xinput.c b/src/util/hd-xinput.c
+index 3c70c53..d82606a 100644
+--- a/src/util/hd-xinput.c
++++ b/src/util/hd-xinput.c
+@@ -9,6 +9,7 @@
+ #include <clutter/x11/clutter-x11.h>
+ #include <matchbox/core/mb-wm.h>
+ #include "home/hd-render-manager.h"
++#include "hd-meego.h"
+ 
+ #define RR_Reflect_All	(RR_Reflect_X|RR_Reflect_Y)
+ 
+@@ -342,6 +343,8 @@ ClutterX11FilterReturn hd_clutter_x11_event_filter(XEvent *xev, ClutterEvent *ce
+ {
+ 	MBWindowManager *wm = data;
+ 
++	hd_meego_x_event(xev);
++
+ 	if (xev->type == ButtonPress) {
+ 		hd_render_manager_press_effect();
+ 	} else if (xev->type == xi_motion_ev_type) {

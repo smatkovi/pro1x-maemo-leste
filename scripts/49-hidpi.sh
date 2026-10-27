@@ -98,12 +98,17 @@ for entry in "${PARTS[@]}"; do
   git -C "$d" clean -fdxq
   # Quilt packages take the patch at the end of their series, the others
   # directly
-  if [ -f "$d/debian/patches/series" ]; then
-    cp "$REPO/patches/hidpi/$name.patch" "$d/debian/patches/pro1x-hidpi.patch"
-    echo pro1x-hidpi.patch >> "$d/debian/patches/series"
-  else
-    patch -s -d "$d" -p1 < "$REPO/patches/hidpi/$name.patch"
-  fi
+  # and the MeeGo-like home (patches/meego), where a part has one
+  for kind in hidpi meego; do
+    p=$REPO/patches/$kind/$name.patch
+    [ -f "$p" ] || continue
+    if [ -f "$d/debian/patches/series" ]; then
+      cp "$p" "$d/debian/patches/pro1x-$kind.patch"
+      echo "pro1x-$kind.patch" >> "$d/debian/patches/series"
+    else
+      patch -s -d "$d" -p1 < "$p"
+    fi
+  done
   (cd "$d" && DEBEMAIL="pro1x-maemo-leste" dch -v "$(dpkg-parsechangelog -S Version)+pro1x1" \
     -D unstable "HiDPI: lengths times HILDON_SCALE (F(x)tec Pro1X).")
   (cd "$d" && mk-build-deps -i -r -t "apt-get -y -q --no-install-recommends" debian/control)
