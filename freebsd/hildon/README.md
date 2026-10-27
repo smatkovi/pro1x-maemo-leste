@@ -161,14 +161,14 @@ licence statement. The sources are the pinned revisions in the table and
 <!-- packages -->
 | Package | Version | Licence | Source | Revision | State |
 | --- | --- | --- | --- | --- | --- |
-| alarmd | 1.1.23 | LGPL21 | [alarmd](https://github.com/maemo-leste/alarmd) | `6a248a323bcc` | builds |
+| alarmd | 1.1.23_1 | LGPL21 | [alarmd](https://github.com/maemo-leste/alarmd) | `6a248a323bcc` | runs (VM: alarms ring while Hildon runs; no RTC wake-up on FreeBSD) |
 | applet-datetime | 0.6.2 | GPLv3 | [applet-datetime](https://github.com/maemo-leste/applet-datetime) | `39054c07ac94` | builds |
 | braek | 1.3.1 | BSD3CLAUSE | [braek](https://github.com/maemo-leste-extras/braek) | `77ceda0d3d92` | runs (VM) |
 | cal-home-widget | 1.7 | GPLv2+ | [cal-home-widget](https://github.com/maemo-leste-extras/cal-home-widget) | `52ef149cdca0` | builds |
 | calendar-backend | 0.9.1 | LGPL21 | [calendar-backend](https://github.com/maemo-leste/calendar-backend) | `ce6ae29ea5d4` | builds |
 | cityinfo | 0.5.19.1_1 | LGPL21 | [cityinfo](https://github.com/maemo-leste/cityinfo) | `2228f3ae85ac` | builds |
 | clock | 0.5.17 | GPLv3 | [clock](https://github.com/maemo-leste/clock) | `8abc98d2854f` | builds |
-| clock-ui | 0.8.3_1 | GPLv2+ | [clock-ui](https://github.com/maemo-leste/clock-ui) | `7c832feb877b` | runs (VM: world clock; alarms need alarmd, not ported) |
+| clock-ui | 0.8.3_1 | GPLv2+ | [clock-ui](https://github.com/maemo-leste/clock-ui) | `7c832feb877b` | runs (VM: world clock, the next alarm from alarmd) |
 | clockd | 0.0.48_1 | GPLv2 | [clockd](https://github.com/maemo-leste/clockd) | `9130890fe1ae` | builds |
 | clutter-0.8 | 0.8.2.79 | LGPL20+ | [clutter-0.8](https://github.com/maemo-leste/clutter-0.8) | `ead56341b457` | builds |
 | codelockui | 1.6.20 | LGPL20+ | [codelockui](https://github.com/maemo-leste/codelockui) | `07c6654ae546` | builds |
@@ -192,8 +192,9 @@ licence statement. The sources are the pinned revisions in the table and
 | hildon-input-method | 2.1.61.1 | LGPL21 | [hildon-input-method](https://github.com/maemo-leste/hildon-input-method) | `0977df548b0b` | builds |
 | hildon-input-method-framework | 2.1.71.1 | LGPL21 | [hildon-input-method-framework](https://github.com/maemo-leste/hildon-input-method-framework) | `99afab2e2e78` | builds |
 | hildon-input-method-plugins | 3.9.91 | GPLv2+ | [hildon-input-method-plugins](https://github.com/maemo-leste/hildon-input-method-plugins) | `04c1d47222d0` | builds |
-| hildon-meta | 1.0.121 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | builds |
-| hildon-session | 1.0.121 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | runs (VM) |
+| hildon-meta | 1.0.127 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `e05e88c726c3` | builds |
+| hildon-plugins-notify-sv | 0.65 | GPLv3 | [hildon-plugins-notify-sv](https://github.com/maemo-leste/hildon-plugins-notify-sv) | `ddfe375457f7` | builds |
+| hildon-session | 1.0.127 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `e05e88c726c3` | runs (VM) |
 | hildon-status-menu | 0.3.43.1 | LGPL21 | [hildon-status-menu](https://github.com/maemo-leste/hildon-status-menu) | `796dbd7ca973` | runs (VM) |
 | hildon-theme-alpha | 9.7 | GPLv3 | [maemo-leste](https://github.com/maemo-leste) |  | builds |
 | hildon-thumbnail | 3.1.4 | LGPL21 | [hildon-thumbnail](https://github.com/maemo-leste/hildon-thumbnail) | `86bd10f3f620` | builds |
@@ -203,12 +204,13 @@ licence statement. The sources are the pinned revisions in the table and
 | jib | 0.6.7 | UNKNOWN | [jib](https://github.com/maemo-leste-extras/jib) | `5dd4a340d20d` | runs (VM: renders https pages) |
 | leafpad-maemo | 0.8.17le.leste1 | GPLv2 | [leafpad](https://github.com/maemo-leste-extras/leafpad) | `9ae1e0314158` | builds |
 | leste-l10n-de | 2026.07.05 | UNKNOWN | [leste](https://maedevu.maemo.org/leste) |  | builds |
-| leste-l10n-en | 2026.07.05 | UNKNOWN | [leste](https://maedevu.maemo.org/leste) |  | builds |
+| leste-l10n-en | 2026.07.05_1 | UNKNOWN | [leste](https://maedevu.maemo.org/leste) |  | builds |
 | libcomapp | 1.8.07 | LGPL21 | [libcomapp](https://github.com/maemo-leste/libcomapp) | `84317d5c6614` | builds |
 | libconbtui | 1.4.4 | LGPL21+ | [libconbtui](https://github.com/maemo-leste/libconbtui) | `91e6bd445be8` | builds |
 | libconic | 0.24.2 | LGPL21 | [libconic](https://github.com/maemo-leste/libconic) | `cd9db218dacd` | builds |
+| libdsme | 0.60.33 | LGPL21 | [libdsme](https://github.com/maemo-leste/libdsme) | `e4f8b85a6743` | builds |
 | libgq-gconf | 0.3 | LGPL21 | [libgq-gconf](https://github.com/maemo-leste/libgq-gconf) | `8617c495b6ac` | builds |
-| libhildon | 2.2.30 | LGPL21 | [libhildon](https://github.com/maemo-leste/libhildon) | `78c268e51200` | builds |
+| libhildon | 2.2.30_1 | LGPL21 | [libhildon](https://github.com/maemo-leste/libhildon) | `78c268e51200` | builds |
 | libhildondesktop | 2.2.3 | LGPL21 | [libhildondesktop](https://github.com/maemo-leste/libhildondesktop) | `d05587180c24` | builds |
 | libhildonfm | 2.28.27 | LGPL21 | [libhildonfm](https://github.com/maemo-leste/libhildonfm) | `6df73d0c97f2` | builds |
 | libhildonmime | 4.2.0 | LGPL20 | [libhildonmime](https://github.com/maemo-leste/libhildonmime) | `bfedaf83ff01` | builds |
@@ -216,6 +218,7 @@ licence statement. The sources are the pinned revisions in the table and
 | libimlayouts | 1.6.5 | LGPL20+ | [libimlayouts](https://github.com/maemo-leste/libimlayouts) | `d7a4960189b2` | builds |
 | libmatchbox2 | 0.2.107 | LGPL21+ | [libmatchbox2](https://github.com/maemo-leste/libmatchbox2) | `208c59d7a3ba` | builds |
 | libosso | 2.35.1 | LGPL21 | [libosso](https://github.com/maemo-leste/libosso) | `ebd2f1804c29` | builds |
+| libplayback | 0.5.25 | LGPL21 | [libplayback](https://github.com/maemo-leste/libplayback) | `ed18405bf5dd` | builds |
 | libqmi | 1.34.0 | LGPL21+, GPLv2+ | [libqmi](https://gitlab.freedesktop.org/mobile-broadband/libqmi) | `3f07d6e5b467` | builds |
 | libqrtr-glib | 1.4.0 | LGPL21+ | [libqrtr-glib](https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib) | `69791f8f2a09` | builds |
 | libssc | 0.4.4 | GPLv3+ | [libssc](https://codeberg.org/DylanVanAssche/libssc) | `0cf77b93b557` | builds |
@@ -240,14 +243,17 @@ licence statement. The sources are the pinned revisions in the table and
 | osso-mahjong | 1.9.1_1 | GPLv2+ | [osso-mahjong](https://github.com/maemo-leste-extras/osso-mahjong) | `fbe179709a15` | runs (VM) |
 | osso-pdf-viewer | 1.10.3 | GPLv2 | [osso-pdf-viewer](https://github.com/maemo-leste/osso-pdf-viewer) | `a5c944ebff05` | runs (VM) |
 | osso-sounds-ui | 5.6.0m5 | UNKNOWN | [leste](https://maedevu.maemo.org/leste) |  | builds |
+| osso-systemui | 0.2.1 | LGPL21 | [osso-systemui](https://github.com/maemo-leste/osso-systemui) | `d1b65f09fe6d` | runs (VM: shows the alarm dialog) |
+| osso-systemui-alarm | 0.3.3.0cssu1 | LGPL21 | [osso-systemui-alarm](https://github.com/maemo-leste/osso-systemui-alarm) | `f9350639d4ba` | runs (VM: the alarm dialog, Snooze and Stop answered; no sound on FreeBSD yet) |
+| osso-systemui-dbus-dev | 0.1.5 | LGPL21 | [osso-systemui-dbus-dev](https://github.com/maemo-leste/osso-systemui-dbus-dev) | `dc5c9b542cf6` | builds |
 | osso-xterm | 0.17 | GPLv2 | [osso-xterm](https://github.com/maemo-leste/osso-xterm) | `6c912f73983e` | runs (VM) |
 | pd-mapper | 1.1 | BSD3CLAUSE | [pd-mapper](https://github.com/linux-msm/pd-mapper) | `5ecd2fe926ac` | builds |
 | pedometerhomewidget | 0.4.0 | GPLv3+ | [pedometerhomewidget](https://github.com/smatkovi/pedometerhomewidget) | `06d5246191fa` | builds |
-| pro1x-gnss | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | builds; needs the Pro1X's modem (untested on the phone) |
-| pro1x-hidpi | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | builds |
-| pro1x-proximity | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | builds; needs the Pro1X's ADSP (untested on the phone) |
-| pro1x-standby | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | runs (VM: time-out, dimming, double tap, power key, proximity signals; no system calls while in use) |
-| pro1x-steps | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `639ce08ec615` | builds; needs the Pro1X's ADSP (untested on the phone) |
+| pro1x-gnss | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `e05e88c726c3` | builds; needs the Pro1X's modem (untested on the phone) |
+| pro1x-hidpi | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `e05e88c726c3` | builds |
+| pro1x-proximity | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `e05e88c726c3` | builds; needs the Pro1X's ADSP (untested on the phone) |
+| pro1x-standby | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `e05e88c726c3` | runs (VM: time-out, dimming, double tap, power key, proximity signals; no system calls while in use) |
+| pro1x-steps | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `e05e88c726c3` | builds; needs the Pro1X's ADSP (untested on the phone) |
 | profiled | 1.0.8 | BSD3CLAUSE | [profiled](https://github.com/maemo-leste/profiled) | `8e16f3dc9d42` | builds |
 | profilesx | 1.9_1 | GPLv2+ | [profilesx](https://github.com/maemo-leste/profilesx) | `4c89c9701fdc` | builds |
 | qalendar | 1.0.3.1 | GPLv3 | [qalendar](https://github.com/maemo-leste/qalendar) | `04ccfca3ca17` | runs (VM) |
@@ -260,6 +266,8 @@ licence statement. The sources are the pinned revisions in the table and
 | sapwood | 3.1.3.1 | LGPL21 | [sapwood](https://github.com/maemo-leste/sapwood) | `6849cd690ae2` | runs (VM) |
 | status-area-applet-battery | 1.5.9.1 | GPLv2 | [status-area-applet-battery](https://github.com/maemo-leste/status-area-applet-battery) | `0e4fcf07b39b` | builds |
 | status-menu-applet-profiles | 0.14.2 | GPLv2 | [status-menu-applet-profiles](https://github.com/maemo-leste/status-menu-applet-profiles) | `f655a3c400fd` | builds |
+| statusbar-alarm | 0.6.3 | GPLv3 | [statusbar-alarm](https://github.com/maemo-leste/statusbar-alarm) | `55045c7780b2` | runs (VM: the status area clock with the alarm icon) |
+| statusbar-alarm-dbus-api | 0.5.10.2 | BSD3CLAUSE | [statusbar-alarm-dbus-api](https://github.com/maemo-leste/statusbar-alarm-dbus-api) | `acf2954ea574` | builds |
 | tqftpserv | 1.3.2 | BSD3CLAUSE | [tqftpserv](https://github.com/linux-msm/tqftpserv) | `0bf5b98c2422` | builds |
 | wifi-assistant | 1.0.0 | BSD3CLAUSE | [wifi-assistant](https://github.com/smatkovi/wifi-assistant) | `604bbe98d8b5` | builds |
 | wpeditor | 3.53.1 | LGPL21+ | [wpeditor](https://github.com/maemo-leste/wpeditor) | `84a17efe3392` | builds |
