@@ -32,7 +32,7 @@ PARTS=(
   "hildon-status-menu|33ba47660e7c|1"
   "hildon-home|0d34886acdc2|1"
   "hildon-desktop|1273f9eee252|2"
-  "mce|422d5f2bd618|1"
+  "mce|422d5f2bd618|2"
 )
 if [ -n "$ONLY" ]; then
   sel=()
@@ -69,8 +69,17 @@ install_ours() {
     fi
   done
   log "install ${debs[*]##*/}"
-  # ours from an earlier run are held
-  apt-get install -y -q --allow-change-held-packages "${debs[@]}"
+  # ours from an earlier run are held. No services restarted: a restarted
+  # mce leaves the display off, the new one runs after a reboot.
+  local guard=
+  if [ ! -e /usr/sbin/policy-rc.d ]; then
+    printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+    chmod 755 /usr/sbin/policy-rc.d
+    guard=1
+  fi
+  apt-get install -y -q --allow-change-held-packages "${debs[@]}" ||
+    { [ -z "$guard" ] || rm -f /usr/sbin/policy-rc.d; return 1; }
+  [ -z "$guard" ] || rm -f /usr/sbin/policy-rc.d
   if [ -n "$OUT" ]; then
     mkdir -p "$OUT"
     cp "${debs[@]}" "$OUT/"
@@ -113,8 +122,28 @@ for entry in "${PARTS[@]}"; do
       patch -s -d "$d" -p1 < "$p"
     fi
   done
+  # mce also as the MeeGo boot needs it (meego/39-leste-mce.sh): it closes
+  # a Harmattan system UI's lock screen, and the radiostates module maps
+  # Harmattan's radio states on the device mode (loaded where
+  # mce.ini.d/60-pro1x.ini names it)
+  if [ "$name" = mce ]; then
+    patch -s -d "$d" -p1 < "$REPO/meego/patches/mce-tklock-close-harmattan.patch"
+    cp "$REPO/meego/mce/radiostates.c" "$d/src/modules/"
+    cat >> "$d/src/modules/CMakeLists.txt" <<'CMAKE'
+
+add_library(radiostates SHARED radiostates.c)
+target_link_libraries(radiostates ${COMMON_LIBRARIES})
+target_include_directories(radiostates PRIVATE ${COMMON_INCLUDE_DIRS} ${MODULE_INCLUDE_DIRS})
+install(TARGETS radiostates DESTINATION ${MCE_MODULE_DIR})
+CMAKE
+  fi
   (cd "$d" && DEBEMAIL="pro1x-maemo-leste" dch -v "$(dpkg-parsechangelog -S Version)+pro1x$n" \
     -D unstable "F(x)tec Pro1X: HiDPI, MeeGo-like home, low power mode (pro1x-maemo-leste patches/).")
+  # mce builds against libcal: next to 47-libcal.sh's patched libcal1 only
+  # the libcal-dev of that build fits
+  if [ "$name" = mce ] && ls "$SRC"/libcal-dev_*+pro1x1_*.deb > /dev/null 2>&1; then
+    apt-get install -y -q "$SRC"/libcal-dev_*+pro1x1_*.deb
+  fi
   (cd "$d" && mk-build-deps -i -r -t "apt-get -y -q --no-install-recommends" debian/control)
 done
 
