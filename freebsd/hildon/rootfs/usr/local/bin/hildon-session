@@ -65,14 +65,24 @@ if [ -x /usr/local/bin/systemui ]; then
 	respawn /usr/local/bin/systemui &
 	alarm="$alarm $!"
 fi
-# The key and touch screen clicks of Maemo 5 at the profile's key sound
-# level (Leste: Xsession.post/01maemo-xinput-sounds-start), through
-# PulseAudio, which starts for the session when there is a sound device
+# Sounds play through PulseAudio, which starts for the session when there
+# is a sound device. The notification and alarm sound daemon from the
+# start, not at the first sound: it decodes the profile's and the alarms'
+# tones into WAV files 90 s after its start, and an alarm that comes
+# before finds none. Then the key and touch screen clicks of Maemo 5 at
+# the profile's key sound level (Leste:
+# Xsession.post/01maemo-xinput-sounds-start).
 sounds=
-if [ -x /usr/local/bin/maemo-xinput-sounds ]; then
+if command -v pulseaudio > /dev/null; then
 	pulseaudio --start --exit-idle-time=-1 2> /dev/null || true
-	respawn /usr/local/bin/maemo-xinput-sounds &
+fi
+if [ -x /usr/local/bin/hildon-sv-notification-daemon ]; then
+	respawn /usr/local/bin/hildon-sv-notification-daemon &
 	sounds=$!
+fi
+if [ -x /usr/local/bin/maemo-xinput-sounds ]; then
+	respawn /usr/local/bin/maemo-xinput-sounds &
+	sounds="$sounds $!"
 fi
 respawn /usr/local/bin/hildon-status-menu &
 menu=$!
