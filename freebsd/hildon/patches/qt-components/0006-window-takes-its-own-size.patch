@@ -1,0 +1,26 @@
+In landscape the window takes its own size, not the screen's: the same
+full screen, as on the N9, and below the title bar in a window
+manager's window (Hildon's).
+
+--- a/src/meego/Window.qml
++++ b/src/meego/Window.qml
+@@ -194,7 +194,9 @@
+             State {
+                 name: "Landscape"
+                 PropertyChanges { target: window; rotation: screen.rotation; portrait: screen.isPortrait; explicit: true; }
+-                PropertyChanges { target: window; height: screen.platformHeight; width: screen.platformWidth; explicit: true; }
++                // the window's own size (the whole screen when it is full
++                // screen, as on the N9; less in a window manager's window)
++                PropertyChanges { target: window; height: root.height; width: root.width }
+                 PropertyChanges { target: windowRotation;
+                                   origin.x: root.height / 2;
+                                   origin.y: root.height / 2; }
+@@ -212,7 +214,7 @@
+             State {
+                 name: "LandscapeInverted"
+                 PropertyChanges { target: window; rotation: screen.rotation; portrait: screen.isPortrait; explicit: true; }
+-                PropertyChanges { target: window; height: screen.platformHeight; width: screen.platformWidth; explicit: true; }
++                PropertyChanges { target: window; height: root.height; width: root.width }
+                 PropertyChanges { target: windowRotation;
+                                   origin.x: root.height / 2;
+                                   origin.y: root.height / 2; }

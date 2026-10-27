@@ -1,0 +1,26 @@
+Qt 5.15: QScreen's signal is orientationChanged(), and the status bar
+has no orientation property to set.
+
+--- a/src/meego/mdeclarativescreen.cpp
++++ b/src/meego/mdeclarativescreen.cpp
+@@ -465,7 +465,7 @@
+         QWindow* w = qobject_cast<QWindow*>(o);
+         if (!d->window) {
+             d->window = w;
+-            connect(w->screen(), SIGNAL(currentOrientationChanged(Qt::ScreenOrientation)),
++            connect(w->screen(), SIGNAL(orientationChanged(Qt::ScreenOrientation)),
+                     this, SLOT(_q_updateOrientationAngle()));
+         }
+         if (d->window)
+--- a/src/meego/PageStackWindow.qml
++++ b/src/meego/PageStackWindow.qml
+@@ -66,9 +66,6 @@
+         showStatusBar: window.showStatusBar
+     }
+ 
+-    onOrientationChangeStarted: {
+-        statusBar.orientation = screen.currentOrientation
+-    }
+ 
+     Rectangle {
+         id: background

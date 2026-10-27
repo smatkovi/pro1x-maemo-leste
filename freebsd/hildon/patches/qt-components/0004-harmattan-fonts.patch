@@ -1,0 +1,17 @@
+Harmattan's fonts, Nokia Pure Text and Nokia Pure Text Light, as the N9's
+components had them (Nemo's port asks for Open Sans; without them
+fontconfig falls back as usual).
+
+--- a/src/meego/plugin.cpp
++++ b/src/meego/plugin.cpp
+@@ -143,8 +143,8 @@
+ 
+     QDeclarativePropertyMap *uiConstants(MLocaleWrapper *locale = 0) {
+ 
+-        QString defaultFontFamily      = QLatin1String("Open Sans");
+-        QString defaultFontFamilyLight = QLatin1String("Open Sans");
++        QString defaultFontFamily      = QLatin1String("Nokia Pure Text");
++        QString defaultFontFamilyLight = QLatin1String("Nokia Pure Text Light");
+ 
+         // use arial when language is set to farsi
+         if (locale && locale->language() == QLatin1String("fa")) {

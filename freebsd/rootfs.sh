@@ -124,6 +124,16 @@ for s in m.get("scripts", {}).values():
 			cp "$HARMATTAN"/fonts/*.ttf "$R/usr/local/share/fonts/nokia/"
 			log "Nokia's stand-by icons and font from $HARMATTAN"
 		fi
+		# The N9's meegotouch theme (blanco) and the Nokia Pure fonts,
+		# which com.nokia.meego (qt-components) and meego-clock draw with
+		# (themes/, fonts/nokia-pure/: tools/extract-blanco.sh there)
+		if [ -d "$HARMATTAN/themes/blanco" ]; then
+			mkdir -p "$R/usr/local/share/themes" "$R/usr/local/share/fonts/nokia"
+			cp -R "$HARMATTAN"/themes/base "$HARMATTAN"/themes/blanco \
+			    "$R/usr/local/share/themes/"
+			cp "$HARMATTAN"/fonts/nokia-pure/*.ttf "$R/usr/local/share/fonts/nokia/"
+			log "the N9's blanco theme and Nokia Pure from $HARMATTAN"
+		fi
 		# HiDPI (tools/pro1x-hidpi): the theme for the default factor
 		# made here, other factors at boot into /var
 		s=$(sed -n 's/^DEFAULT=//p' "$REPO/tools/pro1x-hidpi/pro1x-hidpi")

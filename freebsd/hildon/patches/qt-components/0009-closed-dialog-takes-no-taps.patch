@@ -1,0 +1,16 @@
+A closed dialog is not visible: Qt Quick 2 delivers taps to transparent
+items too (Qt Quick 1 did not), so a closed dialog, which lies over its
+page, took the taps meant for the page.
+
+--- a/src/meego/Dialog.qml
++++ b/src/meego/Dialog.qml
+@@ -44,6 +44,9 @@
+ Popup {
+     id: root
+     objectName: "baseDialog"
++    // closed, it takes no taps: Qt Quick 2 delivers them to transparent
++    // items too (Qt Quick 1 did not), and a closed dialog lies over its page
++    visible: status != DialogStatus.Closed
+ 
+     // API
+     property alias title: titleBar.children

@@ -1,0 +1,15 @@
+A hidden info banner (scaled to 0) takes no taps: Qt Quick 2 hits an
+item scaled to nothing where it would be, so the banner caught every tap
+in its strip at the top of the window.
+
+--- a/src/meego/InfoBanner.qml
++++ b/src/meego/InfoBanner.qml
+@@ -109,6 +109,8 @@
+     implicitWidth: internal.getBannerWidth()
+     x:8; y:8
+     scale: 0
++    // Qt Quick 2 still hits an item scaled to nothing where it would be
++    visible: scale > 0
+ 
+     BorderImage {
+         source: "image://theme/meegotouch-notification-system-background"

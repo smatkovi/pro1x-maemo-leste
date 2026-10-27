@@ -1,0 +1,15 @@
+The theme's images/ directory too: Harmattan's own themes (blanco) keep
+the components' graphics there, Nemo's in icons/.
+
+--- a/src/meego/themedaemon/mlocalthemedaemonclient.cpp
++++ b/src/meego/themedaemon/mlocalthemedaemonclient.cpp
+@@ -133,6 +133,9 @@
+             themeRoots[i].truncate(themeRoots.at(i).length() - 1);
+ 
+         buildHash(themeRoots.at(i) + QDir::separator() + "icons", QStringList() << "*.svg" << "*.png" << "*.jpg");
++        // Harmattan's own themes (blanco) keep the components' graphics
++        // in images/ (theme/basement, theme/colorN, per application)
++        buildHash(themeRoots.at(i) + QDir::separator() + "images", QStringList() << "*.svg" << "*.png" << "*.jpg");
+     }
+ 
+     qDebug() << "LocalThemeDaemonClient: Looking for assets in" << themeRoots;

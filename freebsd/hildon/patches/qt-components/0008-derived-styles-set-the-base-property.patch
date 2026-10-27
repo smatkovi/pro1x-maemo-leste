@@ -1,0 +1,82 @@
+Qt Quick 2 resolves a base component's own references to its own
+property: a subtype that declares platformStyle again shadows it unseen
+(SheetButton's accent Save drew as a plain button). The subtypes set the
+base component's platformStyle instead.
+
+--- a/src/meego/CommonDialog.qml
++++ b/src/meego/CommonDialog.qml
+@@ -46,7 +46,7 @@
+ 
+     property string titleText: ""
+ 
+-    property Style platformStyle: SelectionDialogStyle {}
++    platformStyle: SelectionDialogStyle {}
+ 
+     //Deprecated, TODO Remove this on w13
+     property alias style: genericDialog.platformStyle
+--- a/src/meego/ContextMenu.qml
++++ b/src/meego/ContextMenu.qml
+@@ -51,7 +51,7 @@
+     property url icon
+ 
+     // platformStyle API
+-    property Style platformStyle: ContextMenuStyle{}
++    platformStyle: ContextMenuStyle{}
+     property Style style:         ContextMenuStyle{}
+ 
+     onPlatformTitleTextChanged: logDeprecatedMsg("platformTitleText")
+--- a/src/meego/MultiSelectionDialog.qml
++++ b/src/meego/MultiSelectionDialog.qml
+@@ -117,7 +117,7 @@
+         }
+ 
+     // Style API
+-    property Style platformStyle: SelectionDialogStyle {}
++    platformStyle: SelectionDialogStyle {}
+ 
+     //Deprecated, TODO Remove this on w13
+     property alias style: root.platformStyle
+--- a/src/meego/QueryDialog.qml
++++ b/src/meego/QueryDialog.qml
+@@ -67,7 +67,7 @@
+     //ToDo
+     property alias icon: iconImage.source
+ 
+-    property Style platformStyle: QueryDialogStyle {}
++    platformStyle: QueryDialogStyle {}
+ 
+     //__centerContentField: true
+ 
+--- a/src/meego/RadioButton.qml
++++ b/src/meego/RadioButton.qml
+@@ -43,7 +43,7 @@
+ CheckBox {
+     id: radioButton
+ 
+-    property Style platformStyle: RadioButtonStyle{}
++    platformStyle: RadioButtonStyle{}
+     property alias style: radioButton.platformStyle
+ 
+     __imageSource: !radioButton.enabled ? platformStyle.backgroundDisabled :
+--- a/src/meego/SelectionDialog.qml
++++ b/src/meego/SelectionDialog.qml
+@@ -128,7 +128,7 @@
+     }
+ 
+     // Style API
+-    property Style platformStyle: SelectionDialogStyle {}
++    platformStyle: SelectionDialogStyle {}
+ 
+     //Deprecated, TODO Remove this on w13
+     property alias style: root.platformStyle
+--- a/src/meego/SheetButton.qml
++++ b/src/meego/SheetButton.qml
+@@ -46,7 +46,7 @@
+ Button {
+     id: root
+ 
+-    property Style platformStyle: SheetButtonStyle {}
++    platformStyle: SheetButtonStyle {}
+ 
+     //Deprecated, TODO Remove this on w13
+     property alias style: root.platformStyle
