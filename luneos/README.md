@@ -47,8 +47,10 @@ the device tree's `fxtec,pro1x`):
 Booted (2026-10-25): the compositor and the lock screen come up in
 landscape, reachable over the USB link. Untested so far: touch, keyboard
 layout, sound (PulseAudio and audiod start; routing for the Pro1X's card
-not done), Wi-Fi, the modem. The clock starts at the RTC's raw time (no
-offset as on Leste yet).
+not done), Wi-Fi, the modem. The clock started at the RTC's raw time;
+`pro1x-rtc.service` now sets it from the RTC plus the offset the phone's
+systems share (`/host/pro1x-rtc-offset`, `pro1x-rtc-sync`), not yet tried
+here.
 
 Screenshots without a camera, from an SSH session with a terminal (`ssh -t`;
 without one luna-send prints nothing):

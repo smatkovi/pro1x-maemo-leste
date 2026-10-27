@@ -1,0 +1,19 @@
+# The real time across power off (tools/pro1x-rtc): the PMIC's RTC cannot be
+# set, so the clock comes from the RTC plus the offset saved at shutdown,
+# shared with the phone's other systems (pro1x-rtc-sync).
+[Unit]
+Description=Clock from the Pro1X RTC and its saved offset
+DefaultDependencies=no
+After=local-fs.target
+Before=time-set.target sysinit.target shutdown.target
+Wants=time-set.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/pro1x-rtc-sync restore
+ExecStop=/usr/local/sbin/pro1x-rtc-sync save
+
+[Install]
+WantedBy=sysinit.target

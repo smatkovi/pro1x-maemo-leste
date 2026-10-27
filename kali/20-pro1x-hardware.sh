@@ -80,6 +80,12 @@ install -D -m 644 /usr/share/polkit-1/actions/net.hadess.SensorProxy.policy \
 cp -a /usr/share/pro1x/hexagonfs "$MNT/usr/share/pro1x/"
 install -m 755 /usr/bin/pro1x-audio-init /usr/bin/pro1x-voice-call "$MNT/usr/bin/"
 install -m 755 "$REPO/tools/pro1x-boot/pro1x-boot" "$MNT/usr/local/sbin/pro1x-boot"
+# the clock across power off, its offset shared with the other systems
+install -m 755 /usr/local/sbin/pro1x-rtc "$REPO/rootfs-overlay/usr/local/sbin/pro1x-rtc-sync" \
+	"$MNT/usr/local/sbin/"
+# Kali's sudo looks no further than /usr/sbin (secure_path): the tools
+# people run with sudo there too
+for t in pro1x-boot pro1x-rtc; do ln -sfn "../local/sbin/$t" "$MNT/usr/sbin/$t"; done
 # UCM profile (scripts/45): driver sm4250 looks for ucm2/sm4250/sm4250.conf
 U=$MNT/usr/share/alsa/ucm2
 mkdir -p "$U/sm4250"
@@ -120,7 +126,7 @@ echo kali:kali | chpasswd
 grep -q '^/dev/loop0' /etc/fstab || echo '/dev/loop0 / ext4 defaults,noatime 0 0' >> /etc/fstab
 mkdir -p /host
 
-systemctl enable pro1x-hexagonrpcd.service pro1x-sensors.service pro1x-gnss.service pro1x-steps.service \
+systemctl enable pro1x-rtc.service pro1x-hexagonrpcd.service pro1x-sensors.service pro1x-gnss.service pro1x-steps.service \
 	pro1x-audio-init.service pro1x-usb0.service rmtfs.service tqftpserv.service gpsd.service \
 	NetworkManager.service ModemManager.service bluetooth.service ssh.service
 # replaced by pro1x-sensors.service (libssc)

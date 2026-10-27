@@ -107,6 +107,7 @@ gcc -O2 -Wall -o /usr/local/sbin/pro1x-rtc "$REPO/tools/pro1x-rtc/pro1x-rtc.c"
 gcc -O2 -Wall -fPIC -shared -fvisibility=hidden -o /usr/local/lib/aarch64-linux-gnu/librtc-realtime.so \
   "$REPO/tools/pro1x-rtc/rtc-realtime.c"
 install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-rtc" /etc/init.d/
+install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/pro1x-rtc-sync" /usr/local/sbin/
 install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/alarmd-pro1x" /usr/local/sbin/
 install -m 644 "$REPO/rootfs-overlay/etc/udev/rules.d/84-pro1x-rtc.rules" /etc/udev/rules.d/
 

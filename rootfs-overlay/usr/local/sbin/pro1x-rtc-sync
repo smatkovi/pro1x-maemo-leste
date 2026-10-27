@@ -1,0 +1,25 @@
+#!/bin/sh
+# pro1x-rtc-sync restore|save: pro1x-rtc (tools/pro1x-rtc) with the offset
+# all systems on the phone share, /host/pro1x-rtc-offset next to their
+# images: restore takes the newer of it and the system's own, save writes
+# both. So a system that was not started for a while (Kali, LuneOS) still
+# gets the right time without network.
+L=/var/lib/pro1x-rtc/offset
+H=/host/pro1x-rtc-offset
+case $1 in
+restore)
+	if [ -f "$H" ] && { [ ! -f "$L" ] || [ "$H" -nt "$L" ]; }; then
+		mkdir -p /var/lib/pro1x-rtc && cp -p "$H" "$L"
+	fi
+	exec /usr/local/sbin/pro1x-rtc restore
+	;;
+save)
+	/usr/local/sbin/pro1x-rtc save || exit 1
+	[ -d /host ] && cp -p "$L" "$H" 2> /dev/null
+	exit 0
+	;;
+*)
+	echo "usage: pro1x-rtc-sync restore|save" >&2
+	exit 2
+	;;
+esac

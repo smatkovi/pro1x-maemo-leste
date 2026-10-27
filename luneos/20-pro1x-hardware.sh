@@ -58,6 +58,12 @@ install -m 644 "$REPO/rootfs-overlay/etc/udev/rules.d/82-pro1x-wlan-mac.rules" "
 install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/pro1x-wlan-mac" "$MNT/usr/local/sbin/"
 install -m 644 "$REPO/rootfs-overlay/etc/modprobe.d/pro1x-dt2w.conf" "$MNT/etc/modprobe.d/"
 install -m 755 "$REPO/tools/pro1x-boot/pro1x-boot" "$MNT/usr/local/sbin/pro1x-boot"
+# the clock across power off (LuneOS started at 1970 without it), its
+# offset shared with the other systems
+install -m 755 /usr/local/sbin/pro1x-rtc "$REPO/rootfs-overlay/usr/local/sbin/pro1x-rtc-sync" \
+	"$MNT/usr/local/sbin/"
+install -m 644 "$REPO/kali/rootfs-overlay/etc/systemd/system/pro1x-rtc.service" \
+	"$MNT/etc/systemd/system/"
 cp -a "$REPO/luneos/rootfs-overlay/." "$MNT/"
 
 # --- configuration -------------------------------------------------------------
@@ -79,7 +85,7 @@ chroot "$MNT" /bin/sh -e <<'EOF'
 # serial-getty@ttyS0: the PinePhone's serial console; waits 90 s for it
 systemctl mask eg25-manager.service luneos-usb-gadget.service serial-getty@ttyS0.service
 systemctl enable pro1x-rmtfs.service pro1x-tqftpserv.service pro1x-audio-init.service \
-	pro1x-usb0.service
+	pro1x-usb0.service pro1x-rtc.service
 EOF
 # luneos-device-config writes its results into configd's layers; a stale cache
 # from the PinePhone build would outlive the new deviceinfo.
