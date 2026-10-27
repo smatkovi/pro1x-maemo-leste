@@ -1,0 +1,24 @@
+The installed QML files' version bump does not depend on a Qt Quick 1
+imports directory, which a Qt 5 without Qt Quick 1 (FreeBSD's) lacks; the
+plugin's second import path without the dummy file "stfu", which Qt 5.15's
+install step looks for.
+
+--- a/qml.pri
++++ b/qml.pri
+@@ -74,7 +74,6 @@
+         qmltarget = qmltarget_$$replace(targetpath, /, _)
+         eval($${qmltarget}.CONFIG += no_check_exist executable)
+         eval($${qmltarget}.files = $$DESTDIR/$(TARGET))
+-        eval($${qmltarget}.files += stfu)
+         eval($${qmltarget}.path = $$installpath)
+         INSTALLS += $${qmltarget}
+     }
+@@ -115,7 +114,7 @@
+ 
+ equals(QT_MAJOR_VERSION, 5):if(!debug_and_release|CONFIG(release, debug|release)) {
+     bump_qml_version_installed.CONFIG += no_path
+-    bump_qml_version_installed.commands = test -d $$[QT_INSTALL_IMPORTS]
++    bump_qml_version_installed.commands = true
+ 
+     for(install, INSTALLS) {
+         isEmpty($${install}.files): next()

@@ -1,0 +1,13 @@
+FreeBSD: the meegotouch themes below /usr/local/share/themes.
+
+--- a/qt-components.pri
++++ b/qt-components.pri
+@@ -24,7 +24,7 @@
+         load(meegotouch_defines)
+         THEME_DIR = $$M_THEME_DIR
+     } else {
+-        THEME_DIR = /usr/share/themes
++        THEME_DIR = /usr/local/share/themes
+     }
+ 
+     # Debian and derivatives pass --no-undefined to the linker, which

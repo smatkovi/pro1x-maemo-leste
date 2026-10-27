@@ -105,6 +105,12 @@ UPSTREAM = {
                   "tqftpserv serves the DSPs files over QRTR's TFTP: the modem "
                   "its configuration and the Wi-Fi's firmware (wlanmdsp.mbn).",
                   ['BSD3CLAUSE']),
+    'qt-components': ('1.4.9', "MeeGo Harmattan's Qt Quick components for Qt 5",
+                      "com.nokia.meego, the Qt Quick components of the Nokia N9's "
+                      "MeeGo Harmattan, in Nemo Mobile's port to Qt 5 (import "
+                      "com.nokia.meego 2.0), for MeeGo apps; their look comes from a "
+                      "meegotouch theme in /usr/local/share/themes, which is not "
+                      "included.", ['BSD3CLAUSE']),
     'pd-mapper': ('1.1', 'Qualcomm protection domain mapper',
                   "pd-mapper tells the DSPs which of them serves which protection "
                   "domain, from the firmware's .jsn files.", ['BSD3CLAUSE']),
