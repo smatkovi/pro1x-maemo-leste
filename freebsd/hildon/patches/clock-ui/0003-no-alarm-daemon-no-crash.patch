@@ -1,0 +1,32 @@
+No crash when alarmd does not answer (FreeBSD has only libalarm, not the
+daemon): alarmd_event_query() then returns NULL, read as no alarms.
+
+--- a/qalarmdialog.cpp
++++ b/qalarmdialog.cpp
+@@ -251,7 +251,7 @@
+     /* get them */
+     list = alarmd_event_query(0, 0, 0, 0, "worldclock_alarmd_id");
+ 
+-    for (iter = list; *iter != (cookie_t) 0; iter ++)
++    for (iter = list; iter && *iter != (cookie_t) 0; iter ++)
+         _addAlarm(*iter);
+ 
+     free(list);
+@@ -274,7 +274,7 @@
+ 
+     list = alarmd_event_query(0, 0, 0, 0, "worldclock_alarmd_id");
+ 
+-    if (*list)
++    if (list && *list)
+     {
+       label->hide();
+       view->show();
+@@ -285,7 +285,7 @@
+         label->show();
+     }
+ 
+-    for (iter = list; *iter != (cookie_t) 0; iter ++)
++    for (iter = list; iter && *iter != (cookie_t) 0; iter ++)
+     {
+         time_t t;
+ 

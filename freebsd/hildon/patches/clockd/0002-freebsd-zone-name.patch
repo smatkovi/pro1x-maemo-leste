@@ -1,0 +1,40 @@
+FreeBSD: the time zone's name from /var/db/zoneinfo (tzsetup copies the
+zone to /etc/localtime instead of linking it), UTC without /etc/localtime.
+Without a name clients get an empty time zone (clock-ui shows no local clock).
+
+--- a/clockd/server.c	2026-10-27 07:22:58.650103479 +0100
++++ b/clockd/server.c	2026-10-27 07:22:58.659473444 +0100
+@@ -1241,6 +1241,33 @@
+       else
+         snprintf(server_tz, sizeof(server_tz), ":%s", buf);
+     }
++#ifndef __linux__
++    else
++    {
++      /*
++       * FreeBSD: tzsetup copies the zone to /etc/localtime instead of
++       * linking it, and keeps its name in /var/db/zoneinfo. Without an
++       * /etc/localtime at all the system runs on UTC.
++       */
++      FILE *zf = fopen("/var/db/zoneinfo", "r");
++
++      if (zf)
++      {
++        if (fgets(buf, sizeof(buf), zf))
++        {
++          buf[strcspn(buf, "\n")] = 0;
++
++          if (buf[0])
++            snprintf(server_tz, sizeof(server_tz), ":%s", buf);
++        }
++
++        fclose(zf);
++      }
++
++      if (!server_tz[0] && access("/etc/localtime", F_OK))
++        snprintf(server_tz, sizeof(server_tz), ":UTC");
++    }
++#endif
+ 
+     internal_setenv_tz(":/etc/localtime");
+   }

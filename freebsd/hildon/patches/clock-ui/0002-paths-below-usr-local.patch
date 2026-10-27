@@ -1,0 +1,109 @@
+FreeBSD: translations, alarm sounds and control panel applets are below /usr/local.
+
+--- a/osso-intl.h
++++ b/osso-intl.h
+@@ -28,7 +28,7 @@
+ static inline void intl(const char * package) {
+ 
+ 	setlocale(LC_ALL, "");
+-	bindtextdomain(package, "/usr/share/locale");
++	bindtextdomain(package, "/usr/local/share/locale");
+ 	bind_textdomain_codeset(package, "UTF-8");
+ 	textdomain(package);
+ 
+--- a/alarmsndpick.cpp
++++ b/alarmsndpick.cpp
+@@ -35,7 +35,7 @@
+     GConfItem *item = new GConfItem("/apps/clock/alarm-custom");
+     QString text = item->value().toString();
+ 
+-    if (sndFile.toLower().contains(fileExt) && ! sndFile.toLower().contains("/usr/share/sounds/ui-clock_alarm_"))
++    if (sndFile.toLower().contains(fileExt) && ! sndFile.toLower().contains("/usr/local/share/sounds/ui-clock_alarm_"))
+     	text = sndFile;
+     Qt::CaseSensitivity cs = Qt::CaseInsensitive;
+     fileExt.setCaseSensitivity(cs);
+@@ -52,19 +52,19 @@
+     item1 = new QListWidgetItem();
+     item1->setTextAlignment(Qt::AlignCenter);
+     item1->setText(_("cloc_fi_set_alarm_tone1"));
+-    item1->setWhatsThis("/usr/share/sounds/ui-clock_alarm_default.aac");
++    item1->setWhatsThis("/usr/local/share/sounds/ui-clock_alarm_default.aac");
+     ui->listWidget->addItem(item1);
+ 
+     item1 = new QListWidgetItem();
+     item1->setTextAlignment(Qt::AlignCenter);
+     item1->setText(_("cloc_fi_set_alarm_tone2"));
+-    item1->setWhatsThis("/usr/share/sounds/ui-clock_alarm_2.aac");
++    item1->setWhatsThis("/usr/local/share/sounds/ui-clock_alarm_2.aac");
+     ui->listWidget->addItem(item1);
+ 
+     item1 = new QListWidgetItem();
+     item1->setTextAlignment(Qt::AlignCenter);
+     item1->setText(_("cloc_fi_set_alarm_tone3"));
+-    item1->setWhatsThis("/usr/share/sounds/ui-clock_alarm_3.aac");
++    item1->setWhatsThis("/usr/local/share/sounds/ui-clock_alarm_3.aac");
+     ui->listWidget->addItem(item1);
+ 
+     connect(QApplication::desktop(), SIGNAL(resized(int)), this, SLOT(orientationChanged()));
+--- a/tdialog.cpp
++++ b/tdialog.cpp
+@@ -38,7 +38,7 @@
+     GConfItem *item = new GConfItem("/apps/clock/alarm-custom");
+     QString text = item->value().toString();
+ 
+-    if (musicFile.toLower().contains(fileExt) && ! musicFile.toLower().contains("/usr/share/sounds/ui-clock_alarm_"))
++    if (musicFile.toLower().contains(fileExt) && ! musicFile.toLower().contains("/usr/local/share/sounds/ui-clock_alarm_"))
+     	text = musicFile;
+     Qt::CaseSensitivity cs = Qt::CaseInsensitive;
+     fileExt.setCaseSensitivity(cs);
+@@ -55,19 +55,19 @@
+     item1 = new QListWidgetItem();
+     item1->setTextAlignment(Qt::AlignCenter);
+     item1->setText(_("cloc_fi_set_alarm_tone1"));
+-    item1->setWhatsThis("/usr/share/sounds/ui-clock_alarm_default.aac");
++    item1->setWhatsThis("/usr/local/share/sounds/ui-clock_alarm_default.aac");
+     ui->listWidget->addItem(item1);
+ 
+     item1 = new QListWidgetItem();
+     item1->setTextAlignment(Qt::AlignCenter);
+     item1->setText(_("cloc_fi_set_alarm_tone2"));
+-    item1->setWhatsThis("/usr/share/sounds/ui-clock_alarm_2.aac");
++    item1->setWhatsThis("/usr/local/share/sounds/ui-clock_alarm_2.aac");
+     ui->listWidget->addItem(item1);
+ 
+     item1 = new QListWidgetItem();
+     item1->setTextAlignment(Qt::AlignCenter);
+     item1->setText(_("cloc_fi_set_alarm_tone3"));
+-    item1->setWhatsThis("/usr/share/sounds/ui-clock_alarm_3.aac");
++    item1->setWhatsThis("/usr/local/share/sounds/ui-clock_alarm_3.aac");
+     ui->listWidget->addItem(item1);
+ 
+     connect(QApplication::desktop(), SIGNAL(resized(int)), this, SLOT(orientationChanged()));
+--- a/qalarmsoundvaluebutton.cpp
++++ b/qalarmsoundvaluebutton.cpp
+@@ -17,11 +17,11 @@
+     standard = true;
+     soundFile = file;
+ 
+-    if (file == "/usr/share/sounds/ui-clock_alarm_default.aac")
++    if (file == "/usr/local/share/sounds/ui-clock_alarm_default.aac")
+         setValueText(_("cloc_fi_set_alarm_tone1"));
+-    else if (file == "/usr/share/sounds/ui-clock_alarm_2.aac")
++    else if (file == "/usr/local/share/sounds/ui-clock_alarm_2.aac")
+         setValueText(_("cloc_fi_set_alarm_tone2"));
+-    else if (file == "/usr/share/sounds/ui-clock_alarm_3.aac")
++    else if (file == "/usr/local/share/sounds/ui-clock_alarm_3.aac")
+         setValueText(_("cloc_fi_set_alarm_tone3"));
+     else
+     {
+--- a/mainwindow.cpp
++++ b/mainwindow.cpp
+@@ -310,7 +310,7 @@
+      */
+     int dummy = 0;
+ 
+-    handle = dlopen(QByteArray("/usr/lib/hildon-control-panel/") + plugin + ".so", RTLD_LAZY);
++    handle = dlopen(QByteArray("/usr/local/lib/hildon-control-panel/") + plugin + ".so", RTLD_LAZY);
+     if ( handle ) {
+         execute = (int(*)(void *, void *, int))dlsym(handle, "execute");
+         if ( execute ) {

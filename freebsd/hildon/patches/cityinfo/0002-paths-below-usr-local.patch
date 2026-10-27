@@ -1,0 +1,22 @@
+FreeBSD: the city database and the translations are below /usr/local.
+
+--- a/src/cityinfo.c
++++ b/src/cityinfo.c
+@@ -30,7 +30,7 @@
+ #include "cityinfo.h"
+ 
+ #define CITYINFO_MAX_STR_LEN 512
+-#define CITYINFO_DB "/usr/share/clock/wdb"
++#define CITYINFO_DB "/usr/local/share/clock/wdb"
+ 
+ static int records_count = -1;
+ static GConfClient *gc_client = NULL;
+@@ -165,7 +165,7 @@
+   if (!text_domain_binded)
+   {
+     text_domain_binded = TRUE;
+-    bindtextdomain("osso-clock", "/usr/share/locale");
++    bindtextdomain("osso-clock", "/usr/local/share/locale");
+   }
+ 
+   /* city name */

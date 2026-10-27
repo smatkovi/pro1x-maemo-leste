@@ -1,0 +1,16 @@
+No crash at start when there is no local clock: loadCurrent() adds it only
+when clockd reports a time zone and the home city is known.
+
+--- a/world.cpp	2026-10-27 07:22:58.663616042 +0100
++++ b/world.cpp	2026-10-27 07:22:58.672227421 +0100
+@@ -419,6 +419,10 @@
+ 
+ void World::updateClocks()
+ {
++    // No local clock when clockd knows no time zone (loadCurrent)
++    if ( ui->treeWidget->topLevelItemCount() == 0 )
++        return;
++
+     QDateTime tiempo = QDateTime::currentDateTime();
+     if (HH24true)
+           ui->treeWidget->topLevelItem(0)->setText(0, formatHildonDate(tiempo, hildon24frmt) );

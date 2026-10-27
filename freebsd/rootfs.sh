@@ -27,6 +27,8 @@ PKGS=${PKGS-xorg-minimal xf86-video-scfb xf86-input-libinput xinit xfce xfce4-te
 PRUNE=${PRUNE-llvm* spirv-llvm-translator* samba* qt6-* bsdisks python3* py3*-* perl5*}
 # Hildon (freebsd/hildon/build.sh), when built: HILDON= leaves it out
 HILDON=${HILDON-$WORK/hildon/stage}
+# Time zone, as tzsetup sets it (TIMEZONE= keeps UTC)
+TIMEZONE=${TIMEZONE-Europe/Vienna}
 # Private, Nokia's: the stand-by screen's icons and font (see below)
 HARMATTAN=${HARMATTAN-$WORK/private/harmattan}
 if [ -n "$HILDON" ] && [ -d "$HILDON" ]; then
@@ -163,6 +165,12 @@ log "Pro1X configuration (rootfs/)"
 mkdir -p "$R/usr/local/share/pro1x/root"
 cp -a "$R/root/." "$R/usr/local/share/pro1x/root/"
 cp -a "$REPO/freebsd/rootfs/." "$R/"
+# The zone copied, as tzsetup does; its name for clockd goes to
+# /var/db/zoneinfo at boot (rc.d/pro1x_setup: /var is in memory)
+if [ -n "$TIMEZONE" ]; then
+	cp "$R/usr/share/zoneinfo/$TIMEZONE" "$R/etc/localtime"
+	echo "$TIMEZONE" > "$R/usr/local/share/pro1x/zoneinfo"
+fi
 # The DSP stack (dsp/): its kernel modules and tools from build.sh, and the
 # DSPs' firmware, signed by the phone's maker, from the local Leste image
 # only (LESTE_IMG; not in this repository or its releases)

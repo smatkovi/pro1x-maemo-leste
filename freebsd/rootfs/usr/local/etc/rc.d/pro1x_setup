@@ -9,7 +9,8 @@
 # filled here from /usr/local/share/pro1x/root; and the caches packages
 # build when they are installed, built into /var at every boot:
 # gdk-pixbuf's list of image loaders (found through GDK_PIXBUF_MODULE_FILE,
-# ~/.xinitrc) and, in the background, fontconfig's font cache. Hildon's
+# ~/.xinitrc) and, in the background, fontconfig's font cache; the time
+# zone's name (/var/db/zoneinfo). Hildon's
 # GConf defaults and theme: rc.d/hildon_setup, after this.
 
 . /etc/rc.subr
@@ -22,6 +23,9 @@ stop_cmd=":"
 pro1x_setup_start()
 {
 	cp -Rp /usr/local/share/pro1x/root/. /root/
+	# the time zone's name, as tzsetup leaves it (clockd reads it)
+	[ -f /usr/local/share/pro1x/zoneinfo ] &&
+	    cp /usr/local/share/pro1x/zoneinfo /var/db/zoneinfo
 	if [ -x /usr/local/bin/gdk-pixbuf-query-loaders ]; then
 		/usr/local/bin/gdk-pixbuf-query-loaders \
 		    > /var/db/gdk-pixbuf-loaders.cache 2>/dev/null

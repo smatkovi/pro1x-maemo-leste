@@ -19,12 +19,15 @@ stop_cmd=":"
 
 hildon_setup_start()
 {
-	if [ -x /usr/local/bin/gconftool-2 ] &&
-	    [ -d /usr/local/share/gconf/schemas ]; then
+	# Packages put their schemas in either place (CMake and autotools
+	# builds use share/, the Debian-style ones etc/)
+	schemas=$(ls /usr/local/share/gconf/schemas/*.schemas \
+	    /usr/local/etc/gconf/schemas/*.schemas 2>/dev/null)
+	if [ -x /usr/local/bin/gconftool-2 ] && [ -n "$schemas" ]; then
 		mkdir -p /var/db/gconf
 		GCONF_CONFIG_SOURCE=xml:merged:/var/db/gconf/gconf.xml.defaults \
 		    /usr/local/bin/gconftool-2 --makefile-install-rule \
-		    /usr/local/share/gconf/schemas/*.schemas > /dev/null 2>&1
+		    $schemas > /dev/null 2>&1
 	fi
 	if [ -x /usr/local/bin/pro1x-hidpi ]; then
 		# the Pro1X image keeps the image loaders' list in /var
