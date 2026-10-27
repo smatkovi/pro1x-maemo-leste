@@ -1,0 +1,14 @@
+FreeBSD: the QML files are below /usr/local/share (build.sh moves
+usr/share there).
+
+--- a/main.cpp
++++ b/main.cpp
+@@ -7,7 +7,7 @@
+ 
+     QmlApplicationViewer viewer;
+     viewer.setOrientation(QmlApplicationViewer::ScreenOrientationLockLandscape);
+-    viewer.setMainQmlFile(QLatin1String("/usr/share/flappybird/FlappyBird/main.qml"));
++    viewer.setMainQmlFile(QLatin1String("/usr/local/share/flappybird/FlappyBird/main.qml"));
+     viewer.showExpanded();
+ 
+     return app->exec();

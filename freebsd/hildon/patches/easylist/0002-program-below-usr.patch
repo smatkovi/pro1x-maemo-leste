@@ -1,0 +1,25 @@
+The program in /usr/bin like the other apps' (build.sh moves it to
+/usr/local/bin and corrects the menu entry), not /opt/easylist/bin.
+
+--- a/src/src.pro
++++ b/src/src.pro
+@@ -43,7 +43,7 @@
+     QT += dbus
+     #VARIABLES
+     PREFIX = /usr
+-    BINDIR = /opt/easylist/bin
++    BINDIR = /usr/bin
+     DATADIR = $$PREFIX/share
+ 
+     DEFINES += DATADIR=\\\"$$DATADIR\\\" PKGDATADIR=\\\"$$PKGDATADIR\\\"
+--- a/src/easylist.desktop
++++ b/src/easylist.desktop
+@@ -3,7 +3,7 @@
+ Version=1.0
+ Type=Application
+ Name=EasyList
+-Exec=/opt/easylist/bin/easylist
++Exec=/usr/bin/easylist
+ Icon=easylist
+ StartupWMClass=easylist
+ X-Window-Icon=easylist

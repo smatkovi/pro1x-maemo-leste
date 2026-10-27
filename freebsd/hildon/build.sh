@@ -343,9 +343,11 @@ build_part() {
 
 finish_part() {
 	# Programs to /usr/local/bin, where FreeBSD's packages keep theirs
-	# (some Leste .pro files install to /usr/bin); fix_entries follows
+	# (some Leste .pro files install to /usr/bin), and data to
+	# /usr/local/share (/usr/share is the base system's); fix_entries
+	# follows, patches/<part> correct paths built into programs
 	local x
-	for x in bin sbin; do
+	for x in bin sbin share; do
 		if [ -d "$PR/usr/$x" ]; then
 			mkdir -p "$PR/usr/local/$x"
 			cp -a "$PR/usr/$x/." "$PR/usr/local/$x/"

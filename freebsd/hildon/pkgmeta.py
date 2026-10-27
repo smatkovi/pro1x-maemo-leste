@@ -188,6 +188,18 @@ def is_elf(path):
         return False
 
 
+# FreeBSD-side changes to a part at the same upstream version (patches,
+# build.sh), like a port's PORTREVISION: version_N, so that pkg upgrade
+# takes the new package. Raise a part's number with each such change.
+REVISION = {
+    # 2026-10-27: clock-ui ran no more than its start (time zone, paths,
+    # missing alarmd), apps' data moved from /usr/share to /usr/local/share
+    'cityinfo': 1, 'clockd': 1, 'clock-ui': 1,
+    'easylist': 1, 'flappybird': 1, 'hamsterfiler': 1, 'maepad': 1,
+    'mihphoto': 1, 'osso-mahjong': 1, 'profilesx': 1, 'qshot': 1,
+}
+
+
 def version_of(text):
     """Debian version -> FreeBSD's: no epoch (nothing to be newer than),
     no - + ~ : (package file names stay plain, for download links)"""
@@ -388,6 +400,8 @@ for part in parts:
         lic = licences(cr, [])
         www = 'https://maedevu.maemo.org/leste'
     lic = LICENSES.get(part, lic)
+    if part in REVISION:
+        version += '_%d' % REVISION[part]
     meta[part] = dict(name=name, version=version, comment=comment, desc=desc,
                       licenses=lic, www=www, url=url, rev=rev, root=root,
                       conflicts=conflicts)

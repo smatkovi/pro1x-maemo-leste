@@ -1,0 +1,14 @@
+FreeBSD: the status menu's icons are below /usr/local/share (build.sh
+moves usr/share there).
+
+--- a/status_panel_plugin/profilesx-status-panel-plugin.c
++++ b/status_panel_plugin/profilesx-status-panel-plugin.c
+@@ -435,7 +435,7 @@
+     }
+     if(pixbuf==NULL)
+     {
+-      gchar* full_file_icon_name = g_strdup_printf("/usr/share/icons/hicolor/18x18/hildon/%s.png", icon_name);
++      gchar* full_file_icon_name = g_strdup_printf("/usr/local/share/icons/hicolor/18x18/hildon/%s.png", icon_name);
+       pixbuf = gdk_pixbuf_new_from_file(full_file_icon_name,NULL);
+       g_free(full_file_icon_name);
+     }

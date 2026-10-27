@@ -1,0 +1,18 @@
+FreeBSD: translations and pixmaps are below /usr/local/share (build.sh
+moves usr/share there); the program has both paths built in.
+
+--- a/configure.in
++++ b/configure.in
+@@ -63,10 +63,10 @@
+ serviceentrydir=/usr/share/dbus-1/services
+ 
+ # Application locale install directory
+-localedir=/usr/share/locale
++localedir=/usr/local/share/locale
+ 
+ # Application pixmaps install directory
+-pixmapdir=/usr/share/pixmaps/$PACKAGE
++pixmapdir=/usr/local/share/pixmaps/$PACKAGE
+ 
+ # Application icon install directories
+ icon_26x26dir=$datadir/icons/hicolor/26x26/hildon

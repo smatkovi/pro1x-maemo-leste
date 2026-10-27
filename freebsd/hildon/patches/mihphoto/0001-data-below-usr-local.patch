@@ -1,0 +1,25 @@
+FreeBSD: the icons and images are below /usr/local/share (build.sh moves
+usr/share there).
+
+--- a/src/Config.cpp
++++ b/src/Config.cpp
+@@ -52,7 +52,7 @@
+ 	file_name_position = 0;
+ 	file_name_size = 1.0f;
+ 	show_folders = true;
+-	install_dir = "/usr/share/mihphoto";
++	install_dir = "/usr/local/share/mihphoto";
+ 	rotate_by_exif = true;
+ 	zoom_speed = 0.8;
+ 	always_show_scroll = false;
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -52,7 +52,7 @@
+ #if defined(Q_OS_SYMBIAN)
+ 	g_config.install_dir = ":";
+ #else
+-	g_config.install_dir = "/usr/share/mihphoto";
++	g_config.install_dir = "/usr/local/share/mihphoto";
+ #endif
+ 	QStringList args = app.arguments();
+ 	QString startfile = "";
