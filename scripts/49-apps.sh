@@ -23,7 +23,8 @@ make install
 
 # Ports of Maemo 5 apps, each in its own repository with release packages
 # (Pedometer Home Widget on tools/pro1x-steps, headphoned, gPodder 4,
-# WiFi Assistant, Petrovich, Yappari on whatsmeow).
+# WiFi Assistant, Petrovich, Yappari on whatsmeow, the N900's Chess and
+# Marbles with free pictures).
 GH=https://github.com/smatkovi
 for deb in \
 	pedometerhomewidget/releases/download/v0.4.0/pedometerhomewidget_0.4.0_arm64.deb \
@@ -31,11 +32,18 @@ for deb in \
 	gpodder-leste/releases/download/v4.17.2%2Bleste1/gpodder-leste_4.17.2+leste1_all.deb \
 	wifi-assistant/releases/download/v1.0.0/wifi-assistant_1.0.0_all.deb \
 	petrovich/releases/download/v0.3.0/petrovich_0.3.0_arm64.deb \
-	yappari-leste/releases/download/v3.0.0/yappari-leste_3.0.0_arm64.deb; do
+	yappari-leste/releases/download/v3.0.0/yappari-leste_3.0.0_arm64.deb \
+	osso-chess-ui/releases/download/v1.8.3-2%2Bleste1/osso-chess-ui_1.8.3-2+leste1_arm64.deb \
+	osso-lmarbles/releases/download/v1.6.38-2%2Bleste1/osso-lmarbles_1.6.38-2+leste1_arm64.deb; do
 	curl -sfL -o "/tmp/${deb##*/}" "$GH/$deb"
 	apt-get install -y -q "/tmp/${deb##*/}"
 	rm -f "/tmp/${deb##*/}"
 done
+
+# The N900's other games and its media player's successor from Leste's
+# extras; sdl12-compat in place of SDL 1.2, so that SDL 1.2 games (Marbles)
+# are scaled to the full screen
+apt-get install -y -q osso-mahjong openmediaplayer libsdl1.2-compat-shim
 
 # Printing: CUPS with the command line tools (lp, lpr). No recommends, so no
 # cups-browsed or avahi listening on the network; browsing stays off.
