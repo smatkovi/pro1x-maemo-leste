@@ -161,7 +161,9 @@ for s in m.get("scripts", {}).values():
 fi
 
 log "Pro1X configuration (rootfs/)"
-# root's home is a tmpfs filled at boot from here (rc.d/pro1x_setup)
+# pkg through pro1x-pkg: a boot environment before it changes packages
+printf '\n# a boot environment before pkg changes packages (pro1x-pkg)\nalias pkg=pro1x-pkg\n' >> "$R/root/.shrc"
+# root's home is filled at boot from here (rc.d/pro1x_setup)
 mkdir -p "$R/usr/local/share/pro1x/root"
 cp -a "$R/root/." "$R/usr/local/share/pro1x/root/"
 cp -a "$REPO/freebsd/rootfs/." "$R/"

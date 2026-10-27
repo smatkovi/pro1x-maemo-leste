@@ -1,0 +1,32 @@
+#!/bin/sh
+# pro1x-pkg: pkg(8), but before it changes packages (install, upgrade,
+# delete, remove, autoremove) on the Pro1X's writable ZFS pool a boot
+# environment of the running system: bectl create pkg-<date>. Should the
+# change leave FreeBSD unable to start, choose that environment at boot
+# (b + Enter within 5 s) or in the RAM root (pro1x.root=ram):
+# bectl activate pkg-<date>. pkg itself has no hooks for this; root's
+# shell has alias pkg=pro1x-pkg. The last KEEP (5) such environments
+# stay, older ones go.
+KEEP=${PRO1X_PKG_KEEP:-5}
+case "$1" in
+install|upgrade|delete|remove|autoremove)
+	if [ "$(kenv -q pro1x.rootrw)" = 1 ] && command -v bectl > /dev/null; then
+		be=pkg-$(date +%Y%m%d-%H%M%S)
+		if bectl create "$be"; then
+			echo "pro1x-pkg: boot environment $be: the system before pkg $1"
+		else
+			echo "pro1x-pkg: no boot environment could be made; stop" >&2
+			exit 1
+		fi
+		old=$(bectl list -H | cut -f1 | sed -n '/^pkg-[0-9]/p' | sort -r |
+		    sed "1,${KEEP}d")
+		for b in $old; do
+			bectl destroy -o "$b" > /dev/null 2>&1 &&
+			    echo "pro1x-pkg: older boot environment $b removed"
+		done
+	else
+		echo "pro1x-pkg: read-only root, no boot environment (pkg would fail)" >&2
+	fi
+	;;
+esac
+exec /usr/sbin/pkg "$@"

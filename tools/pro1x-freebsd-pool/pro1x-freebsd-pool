@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""pro1x-freebsd-pool: FreeBSD's writable ZFS pool on the Pro1X, made on Leste.
+
+FreeBSD reads userdata (ext4) only, through its ext2fs driver: it must
+never write that file system, which holds every system image. Its
+writable pool therefore lives in a file on userdata that is written out
+here in full (every block allocated and written, no holes, no unwritten
+extents) and made immutable (chattr +i: no write, rename, delete or
+defragmentation can move its blocks while it is so). Next to it goes the
+map of those blocks on the partition (FIEMAP; ext4 puts metadata every
+2 GiB, so a pool of some GB is always in several ranges), from which
+FreeBSD's RAM root makes GEOM nop providers over exactly these ranges,
+concatenated (freebsd/mfsroot/etc/pro1x-pool.sh, with the Pro1X kernel's
+shared nops, patches/0029): ZFS writes into the file's own blocks and
+nowhere else. The map names the file's inode and size; FreeBSD uses it
+only when both still match.
+
+    pro1x-freebsd-pool create [--size 8G] [--from root.zfs] [--host /host]
+        the pool file freebsd/pool.zfs from root.zfs (rootzfs.sh's pool
+        image), filled with zeros up to the size, its map freebsd/pool.map
+    pro1x-freebsd-pool map [--host /host]
+        the map again (checks that the file is still as it was made)
+    pro1x-freebsd-pool status [--host /host]
+    pro1x-freebsd-pool remove [--host /host]
+        immutable off, the file and its map gone (the pool with it)
+
+Runs as root on Leste (the pool file must not be in use: FreeBSD is not
+running then).
+"""
+import argparse
+import array
+import fcntl
+import os
+import struct
+import subprocess
+import sys
+
+FS_IOC_FIEMAP = 0xC020660B
+FIEMAP_FLAG_SYNC = 0x1
+FIEMAP_EXTENT_LAST = 0x1
+# not usable as raw blocks: unknown place, not on disk yet, encoded,
+# encrypted, not aligned, inline, tail-packed, unwritten
+FIEMAP_EXTENT_BAD = 0x2 | 0x4 | 0x8 | 0x80 | 0x100 | 0x200 | 0x400 | 0x800
+MAP_MAGIC = "pro1x-pool-map 1"
+BLOCK = 4 << 20
+LABELS = 512 << 10  # ZFS labels 2 and 3, at the end of a vdev
+MAX_RANGES = 64     # GEOM nop providers FreeBSD makes for it at boot
+
+
+def size_bytes(s):
+    units = {"K": 1 << 10, "M": 1 << 20, "G": 1 << 30, "T": 1 << 40}
+    s = s.strip().upper()
+    if s and s[-1] in units:
+        return int(float(s[:-1]) * units[s[-1]])
+    return int(s)
+
+
+def fiemap(path):
+    """The file's extents as (logical, physical, length, flags)."""
+    extents = []
+    start = 0
+    with open(path, "rb") as f:
+        while True:
+            count = 256
+            hdr = struct.pack("=QQLLLL", start, 0xFFFFFFFFFFFFFFFF,
+                              FIEMAP_FLAG_SYNC, 0, count, 0)
+            buf = array.array("B", hdr + bytes(56 * count))
+            fcntl.ioctl(f.fileno(), FS_IOC_FIEMAP, buf, True)
+            mapped = struct.unpack_from("=L", buf, 20)[0]
+            last = False
+            for i in range(mapped):
+                lo, ph, ln, _, _, fl = struct.unpack_from(
+                    "=QQQQQL", buf, 32 + 56 * i)
+                extents.append((lo, ph, ln, fl))
+                start = lo + ln
+                last = bool(fl & FIEMAP_EXTENT_LAST)
+            if mapped == 0 or last:
+                return extents
+
+
+def ranges(path):
+    """The file's blocks as (offset on the partition, length), adjacent
+    extents joined; refuses a file that is not fully written out."""
+    size = os.stat(path).st_size
+    out = []
+    pos = 0
+    for lo, ph, ln, fl in fiemap(path):
+        if fl & FIEMAP_EXTENT_BAD:
+            raise SystemExit("%s: extent at %d has flags 0x%x (not plain "
+                             "written blocks)" % (path, lo, fl))
+        if lo != pos:
+            raise SystemExit("%s: a hole at %d" % (path, pos))
+        if out and out[-1][0] + out[-1][1] == ph:
+            out[-1] = (out[-1][0], out[-1][1] + ln)
+        else:
+            out.append((ph, ln))
+        pos = lo + ln
+    if pos < size:
+        raise SystemExit("%s: a hole at the end (%d of %d)" % (path, pos, size))
+    if pos > size:
+        # the last block holds more than the file: only the file's bytes
+        extra = pos - size
+        ph, ln = out[-1]
+        out[-1] = (ph, ln - extra)
+    for ph, ln in out:
+        if ph % 512 or ln % 512:
+            raise SystemExit("%s: extent not in whole sectors" % path)
+    return out
+
+
+def immutable(path, on):
+    subprocess.run(["chattr", "+i" if on else "-i", path], check=True)
+
+
+def is_immutable(path):
+    r = subprocess.run(["lsattr", "-d", path], capture_output=True, text=True)
+    return r.returncode == 0 and "i" in r.stdout.split()[0]
+
+
+def write_map(pool, mapfile):
+    st = os.stat(pool)
+    rs = ranges(pool)
+    tmp = mapfile + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("%s %d %d\n" % (MAP_MAGIC, st.st_ino, st.st_size))
+        for ph, ln in rs:
+            f.write("%d %d\n" % (ph, ln))
+        f.flush()
+        os.fsync(f.fileno())
+    os.rename(tmp, mapfile)
+    return rs
+
+
+def cmd_create(a, d):
+    pool, mapfile = os.path.join(d, "pool.zfs"), os.path.join(d, "pool.map")
+    src = a.src or os.path.join(d, "root.zfs")
+    if os.path.exists(pool):
+        raise SystemExit("%s is there already (pro1x-freebsd-pool remove "
+                         "first: the pool in it goes with it)" % pool)
+    if not os.path.isfile(src):
+        raise SystemExit("no %s (rootzfs.sh's pool image)" % src)
+    want = size_bytes(a.size)
+    have = os.stat(src).st_size
+    if want < have:
+        raise SystemExit("--size %s is smaller than %s" % (a.size, src))
+    want -= want % BLOCK
+    fd = os.open(pool, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        # every byte written: copied, then zeros (holes or fallocate would
+        # leave extents Linux reads as zeros whatever FreeBSD writes)
+        with open(src, "rb") as s:
+            done = 0
+            while True:
+                b = s.read(BLOCK)
+                if not b:
+                    break
+                os.write(fd, b)
+                done += len(b)
+        zero = bytes(BLOCK)
+        while done < want:
+            n = min(BLOCK, want - done)
+            os.write(fd, zero[:n])
+            done += n
+        # ZFS keeps two of its four labels at the device's end: the image's
+        # (the same as its first two) go to the file's new end, so that
+        # FreeBSD finds all four there (and the pool grows into the rest:
+        # autoexpand)
+        if want > have:
+            with open(src, "rb") as s:
+                s.seek(have - LABELS)
+                tail = s.read(LABELS)
+            os.pwrite(fd, tail, want - LABELS)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        os.unlink(pool)
+        raise
+    os.close(fd)
+    if len(ranges(pool)) > MAX_RANGES:
+        # fewer pieces where userdata has the room
+        subprocess.run(["e4defrag", pool], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    if len(ranges(pool)) > MAX_RANGES:
+        os.unlink(pool)
+        raise SystemExit("%s: in more than %d pieces on the partition, even "
+                         "after e4defrag; removed" % (pool, MAX_RANGES))
+    rs = write_map(pool, mapfile)
+    immutable(pool, True)
+    print("%s: %d bytes in %d range(s) on the partition, immutable; map %s"
+          % (pool, want, len(rs), mapfile))
+
+
+def cmd_map(a, d):
+    pool, mapfile = os.path.join(d, "pool.zfs"), os.path.join(d, "pool.map")
+    if not is_immutable(pool):
+        raise SystemExit("%s is not immutable: its blocks may have moved; "
+                         "make it again (remove, create)" % pool)
+    rs = write_map(pool, mapfile)
+    print("%s: %d range(s)" % (mapfile, len(rs)))
+
+
+def cmd_status(a, d):
+    pool, mapfile = os.path.join(d, "pool.zfs"), os.path.join(d, "pool.map")
+    if not os.path.exists(pool):
+        print("no %s" % pool)
+        return
+    st = os.stat(pool)
+    print("%s: %d bytes, inode %d, %s" % (pool, st.st_size, st.st_ino,
+          "immutable" if is_immutable(pool) else "NOT immutable"))
+    try:
+        lines = open(mapfile).read().split("\n")
+    except OSError:
+        print("no %s" % mapfile)
+        return
+    head = lines[0].split()
+    ok = (" ".join(head[:2]) == MAP_MAGIC and int(head[2]) == st.st_ino
+          and int(head[3]) == st.st_size)
+    now = ["%d %d" % r for r in ranges(pool)]
+    same = [l for l in lines[1:] if l] == now
+    print("%s: %s, %s" % (mapfile, "for this file" if ok else "NOT for this file",
+          "blocks unchanged" if same else "BLOCKS MOVED"))
+
+
+def cmd_remove(a, d):
+    pool, mapfile = os.path.join(d, "pool.zfs"), os.path.join(d, "pool.map")
+    for p in (mapfile,):
+        if os.path.exists(p):
+            os.unlink(p)
+    if os.path.exists(pool):
+        immutable(pool, False)
+        os.unlink(pool)
+    print("removed")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("command", choices=("create", "map", "status", "remove"))
+    ap.add_argument("--host", default="/host", help="userdata's mount point")
+    ap.add_argument("--size", default="8G", help="create: the pool's size")
+    ap.add_argument("--from", dest="src", help="create: the pool image "
+                    "(default HOST/freebsd/root.zfs)")
+    a = ap.parse_args()
+    if os.geteuid() != 0:
+        raise SystemExit("as root")
+    d = os.path.join(a.host, "freebsd")
+    {"create": cmd_create, "map": cmd_map, "status": cmd_status,
+     "remove": cmd_remove}[a.command](a, d)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -121,6 +121,8 @@ log "boot menu"
 apt-get install -y -q --no-install-recommends gcc libc6-dev
 gcc -O2 -Wall -o /usr/local/sbin/pro1x-bootmenu "$REPO/tools/pro1x-bootmenu/pro1x-bootmenu.c"
 install -m 755 "$REPO/tools/pro1x-boot/pro1x-boot" /usr/local/sbin/
+# FreeBSD's writable ZFS pool in a file on userdata (freebsd/README.md)
+install -m 755 "$REPO/tools/pro1x-freebsd-pool/pro1x-freebsd-pool" /usr/local/sbin/
 
 # --- MeeGo Harmattan (meego/) -----------------------------------------------
 # The boot menu entry "MeeGo Harmattan" starts this image without Leste's

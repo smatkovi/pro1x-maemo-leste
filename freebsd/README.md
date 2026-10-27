@@ -61,6 +61,58 @@ kernel has ZFS); `pro1x.rootfs=ufs` in `freebsd/cmdline` keeps UFS. Tried
 in the VM (`vm/try-zfsroot.sh`): the pool from a memory disk, the reroot,
 the Pro1X's system up to its login (2026-10-26); on the phone not yet.
 
+### Writable ZFS, boot environments, a way back
+
+FreeBSD only reads userdata: it is ext4, holds every system on the phone,
+and FreeBSD's ext2fs must not write it. A writable pool lives in a file
+on it instead, `freebsd/pool.zfs`, which FreeBSD writes through the
+file's own blocks, never through ext4:
+
+1. **On Leste**, `tools/pro1x-freebsd-pool/pro1x-freebsd-pool create
+   [--size 8G]` makes `pool.zfs` from `root.zfs`: every byte written (no
+   holes or unwritten extents, which Linux would read as zeros whatever
+   FreeBSD wrote), ZFS's end labels moved to the new end, then
+   `chattr +i` (nothing on Linux can write, move or delete it). Next to it
+   `pool.map`: its inode, size and its blocks on the partition (FIEMAP).
+   ext4 keeps metadata every 2 GiB, so a pool of some GB is in several
+   ranges.
+2. **The RAM root** (`mfsroot/etc/pro1x-pool.sh`) reads the map with
+   userdata mounted read only, checks that it belongs to that very file
+   (inode, size), unmounts userdata (ext2fs holds it exclusively even
+   read only), makes a GEOM nop provider over each range and
+   concatenates them. The nops are shared (`patches/0029`,
+   `kern.geom.nop.shared`): GEOM allows one exclusive writer per
+   provider, so ordinary nops over several ranges of one partition could
+   not all be written. Only with all four ZFS labels of a pool `pro1x`
+   there is the pool imported read-write, else everything is undone and
+   the read-only `root.zfs` or `root.ufs` start as before. The pool grows
+   into the file (`autoexpand`).
+3. **Boot environments**: the root is `pro1x/ROOT/<name>`, the pool's
+   `bootfs` unless `pro1x.be=<name>` is in `freebsd/cmdline`; at boot,
+   `b` + Enter within 5 s lists them to choose one. root's home is
+   `pro1x/root`, outside them, so going back keeps it. With the writable
+   root `/var` is on it too (pkg's database, logs; `rootfs/etc/rc.conf`
+   by kenv `pro1x.rootrw`).
+4. **Before package changes** a boot environment of the running system:
+   `pro1x-pkg` (root's shell: `alias pkg=pro1x-pkg`) runs
+   `bectl create pkg-<date>` before `pkg install/upgrade/delete/
+   autoremove` and keeps the last five. pkg itself has no hooks for this:
+   calling `/usr/sbin/pkg` directly skips it. Should an upgrade leave
+   FreeBSD unable to start: `b` at boot and the `pkg-...` environment, or
+   in the RAM root (`pro1x.root=ram`, Enter within 10 s for a shell)
+   `bectl activate pkg-...`, or `zfs rollback`.
+
+Tried in the VM (2026-10-27): an ext4 userdata like the phone's (same
+features, fragmented on purpose), the pool file in three ranges; wrong
+maps (inode, ranges shifted by 4 KiB) refused; the pool imported
+read-write through the shared nops, grown to the file, 300 MiB written,
+scrubbed without errors, read back after a new import; boot
+environments created, activated, removed; afterwards `e2fsck -fn` clean
+and every other file on it unchanged. Not tried: the reroot into it
+(the VM's test pool has no system) and anything on the phone. Making
+`pool.zfs` on the phone writes 8 GB to userdata: only with the user's
+go.
+
 The desktop: `rootfs.sh` also puts packages from pkg.freebsd.org into
 the image (`PKGS`, default Xorg with `scfb` on the framebuffer turned to
 landscape, libinput, Xfce; `PKGS=` for the base system only). The index
@@ -181,6 +233,8 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `patches/0021-*` | LinuxKPI DMA for platform devices (the DSP stack's Wi-Fi, in progress) |
 | `patches/0022-*` | `qcom_dpu`: brightness, panel off/on, sleep, low power and partial mode by DCS commands |
 | `patches/0023-*` … `0028-*` | power, checked against the Nokia N9: watchdog fed every 15 s, held keys scanned every 30 ms, UFS Auto-Hibernate, the battery read by time with events for devd, the random harvester at 1 Hz once seeded, the touchscreen's sleep (`docs/power-management.md`) |
+| `patches/0029-*` | shared GEOM nops (`kern.geom.nop.shared`): the writable pool's ranges inside userdata |
+| `mfsroot/etc/pro1x-pool.sh` | the writable pool through the file's blocks, boot environment menu |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `rootzfs.sh` | the root image as a ZFS pool |
 | `vm/` | a FreeBSD/arm64 VM on the PC (qemu): packages, ZFS image, tries |

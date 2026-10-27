@@ -1,5 +1,5 @@
 # Device	Mountpoint	FStype	Options		Dump	Pass#
 # The image the RAM root mounted from userdata (/dev/pro1x-host, read only)
 /dev/md1	/		ufs	ro		0	0
-# root's home in memory, filled at boot (rc.d/pro1x_setup)
-tmpfs		/root		tmpfs	rw,mode=700	0	0
+# root's home: the dataset pro1x/root on the writable pool, else in
+# memory (rc.d/pro1x_setup mounts it and fills it)

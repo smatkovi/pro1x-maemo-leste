@@ -1,0 +1,77 @@
+From 581190c179e1d76437f6f40b5a61f9b51c7d894c Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Tue, 27 Oct 2026 15:46:01 +0100
+Subject: [PATCH] g_nop: shared mode (kern.geom.nop.shared)
+
+A nop created while kern.geom.nop.shared is set does not pass the
+exclusive bit of its users on to the provider below, so that several
+nops over disjoint ranges of one provider can all be opened for writing
+(GEOM allows one exclusive writer per provider). Each nop's own provider
+stays exclusive; the ranges must not overlap, which nothing checks.
+
+For the F(x)tec Pro1X: its writable ZFS pool lives in the blocks of a
+file on userdata (ext4, which FreeBSD only reads), several ranges as ext4
+places them, concatenated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/geom/nop/g_nop.c | 16 ++++++++++++++++
+ sys/geom/nop/g_nop.h |  1 +
+ 2 files changed, 17 insertions(+)
+
+diff --git a/sys/geom/nop/g_nop.c b/sys/geom/nop/g_nop.c
+index a32111e3a..ff0a8df61 100644
+--- a/sys/geom/nop/g_nop.c
++++ b/sys/geom/nop/g_nop.c
+@@ -45,6 +45,19 @@
+ SYSCTL_DECL(_kern_geom);
+ static SYSCTL_NODE(_kern_geom, OID_AUTO, nop, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+     "GEOM_NOP stuff");
++/*
++ * Shared: a nop created while this is set does not pass the exclusive bit
++ * of its users on to the provider below. Several nops over disjoint
++ * ranges of one provider (the F(x)tec Pro1X's ZFS pool in the blocks of a
++ * file on a partition, concatenated) can then all be opened for writing;
++ * GEOM allows only one exclusive writer per provider. Each nop's own
++ * provider stays exclusive. The ranges must not overlap: nothing below
++ * checks it any more.
++ */
++static u_int g_nop_shared = 0;
++SYSCTL_UINT(_kern_geom_nop, OID_AUTO, shared, CTLFLAG_RW, &g_nop_shared, 0,
++    "Nops created now do not pass exclusive access to their provider");
++
+ static u_int g_nop_debug = 0;
+ SYSCTL_UINT(_kern_geom_nop, OID_AUTO, debug, CTLFLAG_RW, &g_nop_debug, 0,
+     "Debug level");
+@@ -325,6 +338,8 @@ g_nop_access(struct g_provider *pp, int dr, int dw, int de)
+ 
+ 	gp = pp->geom;
+ 	cp = LIST_FIRST(&gp->consumer);
++	if (((struct g_nop_softc *)gp->softc)->sc_shared)
++		de = 0;
+ 	error = g_access(cp, dr, dw, de);
+ 
+ 	return (error);
+@@ -427,6 +442,7 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
+ 	} else
+ 		sc->sc_physpath = NULL;
+ 	sc->sc_error = ioerror;
++	sc->sc_shared = g_nop_shared;
+ 	sc->sc_count_until_fail = count_until_fail;
+ 	sc->sc_rfailprob = rfailprob;
+ 	sc->sc_wfailprob = wfailprob;
+diff --git a/sys/geom/nop/g_nop.h b/sys/geom/nop/g_nop.h
+index 90718a976..7c23b1d52 100644
+--- a/sys/geom/nop/g_nop.h
++++ b/sys/geom/nop/g_nop.h
+@@ -51,6 +51,7 @@ TAILQ_HEAD(g_nop_delay_head, g_nop_delay);
+ 
+ struct g_nop_softc {
+ 	int			 sc_error;
++	int			 sc_shared;
+ 	off_t			 sc_offset;
+ 	off_t			 sc_explicitsize;
+ 	off_t			 sc_stripesize;
+-- 
+2.56.0
+

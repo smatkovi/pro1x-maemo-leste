@@ -66,6 +66,10 @@ device		pass
 options 	GEOM_PART_GPT
 options 	EXT2FS
 options 	ZFS
+# the writable pool's blocks inside userdata (mfsroot/etc/pro1x-pool.sh;
+# shared nops: patches/0029)
+options 	GEOM_NOP
+options 	GEOM_CONCAT
 
 # Frameworks for the SoC drivers to come
 device		clk

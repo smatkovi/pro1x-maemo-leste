@@ -42,10 +42,12 @@ truncate -s "$SIZE" root.zfs
 z=$(mdconfig -a -t vnode -f root.zfs)
 mkdir -p ufs zfs
 mount -t ufs -o ro /dev/$u ufs
-zpool create -f -o ashift=12 -o cachefile=none -O compression=lz4 \
+zpool create -f -o ashift=12 -o cachefile=none -o autoexpand=on -O compression=lz4 \
     -O atime=off -O mountpoint=none -R /root/rootzfs/zfs pro1x /dev/$z
 zfs create -o mountpoint=none pro1x/ROOT
 zfs create -o mountpoint=/ pro1x/ROOT/default
+# root's home outside the boot environments: a rollback keeps it
+zfs create -o mountpoint=/root pro1x/root
 zpool set bootfs=pro1x/ROOT/default pro1x
 tar -cf - -C ufs . | tar -xpf - -C zfs
 zfs list -o name,used,refer,compressratio pro1x/ROOT/default
