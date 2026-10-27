@@ -31,6 +31,7 @@ PARTS=(
   "hildon-status-menu|33ba47660e7c"
   "hildon-home|0d34886acdc2"
   "hildon-desktop|1273f9eee252"
+  "mce|422d5f2bd618"
 )
 if [ -n "$ONLY" ]; then
   sel=()
@@ -98,8 +99,9 @@ for entry in "${PARTS[@]}"; do
   git -C "$d" clean -fdxq
   # Quilt packages take the patch at the end of their series, the others
   # directly
-  # and the MeeGo-like home (patches/meego), where a part has one
-  for kind in hidpi meego; do
+  # the MeeGo-like home (patches/meego) and the display's low power mode
+  # (patches/lpm), where a part has one
+  for kind in hidpi meego lpm; do
     p=$REPO/patches/$kind/$name.patch
     [ -f "$p" ] || continue
     if [ -f "$d/debian/patches/series" ]; then
@@ -110,7 +112,7 @@ for entry in "${PARTS[@]}"; do
     fi
   done
   (cd "$d" && DEBEMAIL="pro1x-maemo-leste" dch -v "$(dpkg-parsechangelog -S Version)+pro1x1" \
-    -D unstable "HiDPI: lengths times HILDON_SCALE (F(x)tec Pro1X).")
+    -D unstable "F(x)tec Pro1X: HiDPI, MeeGo-like home, low power mode (pro1x-maemo-leste patches/).")
   (cd "$d" && mk-build-deps -i -r -t "apt-get -y -q --no-install-recommends" debian/control)
 done
 

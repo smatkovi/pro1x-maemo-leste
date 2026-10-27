@@ -1,0 +1,873 @@
+Low power mode for the display, ported from Harmattan's mce 1.11.20 (pro1x-maemo-leste
+patches/lpm): MCE_DISPLAY_LPM_ON/LPM_OFF, the panel's sysfs "lpm", proximity,
+display_status_ind "lpm" for a stand-by screen client. Off by default.
+
+diff --git a/config/mce.ini b/config/mce.ini
+index 7fbad5a..7976bc9 100644
+--- a/config/mce.ini
++++ b/config/mce.ini
+@@ -338,6 +338,17 @@ DimToBlankTimeout=5
+ # If this is set the display is blanked during shutdown and reboot
+ BlankDuringShutdown=1
+ 
++# Low power mode: instead of blanking, the panel keeps showing a stand-by
++# screen in its own low power mode (sysfs file "lpm" next to the
++# backlight's, as on the Nokia N9), at LowPowerModeBrightness percent;
++# display_status_ind says "lpm" for a client to draw the screen. Covered
++# (proximity) for 5 seconds, or after LowPowerModeBlankTimeout seconds
++# (0: never), it blanks. Can be switched at run time with
++# /system/osso/dsm/display/use_low_power_mode.
++UseLowPowerMode=0
++LowPowerModeBlankTimeout=0
++LowPowerModeBrightness=10
++
+ [DisplayBrightness]
+ 
+ # Brightness in percent used uring the dim phase before display blank
+diff --git a/src/include/mce/mode-names.h b/src/include/mce/mode-names.h
+index d07ae0f..8387528 100644
+--- a/src/include/mce/mode-names.h
++++ b/src/include/mce/mode-names.h
+@@ -81,6 +81,9 @@
+ #define MCE_DISPLAY_DIM_STRING			"dimmed"
+ /** Display state name for display off */
+ #define MCE_DISPLAY_OFF_STRING			"off"
++/** Display state name for the display on in low power mode (stand-by
++ * screen); off in low power mode is reported as off */
++#define MCE_DISPLAY_LPM_STRING			"lpm"
+ 
+ /** Keyboard state name for keyboard light on */
+ #define MCE_KEYBOARD_ON_STRING			"on"
+diff --git a/src/mce.h b/src/mce.h
+index 891f1bc..711df3c 100644
+--- a/src/mce.h
++++ b/src/mce.h
+@@ -199,9 +199,19 @@ typedef enum {
+ 	MCE_DISPLAY_UNDEF = -1,		/**< Display state not set */
+ 	MCE_DISPLAY_OFF	= 0,		/**< Display is off */
+ 	MCE_DISPLAY_DIM = 1,		/**< Display is dimmed */
+-	MCE_DISPLAY_ON = 2		/**< Display is on */
++	MCE_DISPLAY_ON = 2,		/**< Display is on */
++	MCE_DISPLAY_LPM_OFF = 3,	/**< Display is off in low power mode */
++	MCE_DISPLAY_LPM_ON = 4		/**< Display is on in low power mode */
+ } display_state_t;
+ 
++/**
++ * Off for the user: off, or in low power mode, where only a stand-by
++ * screen shows (the panel's own low power mode, from Harmattan's mce)
++ */
++#define DISPLAY_IS_OFF(state)	(((state) == MCE_DISPLAY_OFF) || \
++				 ((state) == MCE_DISPLAY_LPM_OFF) || \
++				 ((state) == MCE_DISPLAY_LPM_ON))
++
+ /** Cover state */
+ typedef enum {
+ 	COVER_UNDEF = -1,		/**< Cover state not set */
+diff --git a/src/modules/display.c b/src/modules/display.c
+index 019764e..2f691d7 100644
+--- a/src/modules/display.c
++++ b/src/modules/display.c
+@@ -101,8 +101,54 @@ static bool is_tvout_state_changed = false;
+ 
+ static bool blank_during_shutdown = true;
+ 
++/*
++ * Low power mode (after Harmattan's mce): instead of blanking, the display
++ * goes to MCE_DISPLAY_LPM_ON, the panel in its own low power mode (sysfs
++ * "lpm" of the backlight's device) at low brightness, showing a stand-by
++ * screen that a client draws when display_status_ind says "lpm". After
++ * LowPowerModeBlankTimeout (0: never), or 5 s with the proximity sensor
++ * covered, it goes to MCE_DISPLAY_LPM_OFF, blank; uncovered, back to
++ * MCE_DISPLAY_LPM_ON. Requests to switch the display off become low power
++ * mode while the system is in user state.
++ */
++/** Low power mode wanted (mce.ini UseLowPowerMode, rtconf use_low_power_mode) */
++static gboolean use_low_power_mode = FALSE;
++/** rtconf callback ID for use_low_power_mode */
++static guint use_low_power_mode_cb_id = 0;
++/** The panel's low power mode switch; NULL: no low power mode */
++static gchar *low_power_mode_file = NULL;
++/** Seconds in low power mode before blanking; 0: never */
++static gint disp_lpm_blank_timeout = DEFAULT_LPM_BLANK_TIMEOUT;
++/** Brightness in low power mode, percent */
++static gint lpm_brightness = DEFAULT_LPM_BRIGHTNESS;
++/** Low power mode blank timeout callback ID */
++static guint lpm_blank_timeout_cb_id = 0;
++/** Proximity blank timeout callback ID */
++static guint lpm_proximity_blank_timeout_cb_id = 0;
++
+ static gboolean display_brightness_dbus_signal(void);
+ 
++/**
++ * Low power mode in use: wanted and the panel has it
++ */
++static bool lpm_usable(void)
++{
++	return (use_low_power_mode == TRUE) && (low_power_mode_file != NULL);
++}
++
++/**
++ * The panel's low power mode on or off
++ */
++static void set_panel_lpm(bool on)
++{
++	static gint written = -1;
++
++	if ((low_power_mode_file == NULL) || (written == (gint)on))
++		return;
++	if (mce_write_number_string_to_file(low_power_mode_file, on ? 1 : 0))
++		written = on;
++}
++
+ /**
+  * Timeout callback for the brightness fade
+  *
+@@ -210,6 +256,23 @@ static void display_blank(void)
+ 	cached_brightness = 0;
+ 	target_brightness = 0;
+ 	mce_write_number_string_to_file(brightness_file, 0);
++	set_panel_lpm(false);
++}
++
++/**
++ * Low power mode: the panel in its low power mode, at low brightness
++ */
++static void display_lpm(void)
++{
++	gint brightness = (maximum_display_brightness * lpm_brightness) / 100;
++
++	if (brightness < 1)
++		brightness = 1;
++	cancel_brightness_fade_timeout();
++	set_panel_lpm(true);
++	cached_brightness = brightness;
++	target_brightness = brightness;
++	mce_write_number_string_to_file(brightness_file, brightness);
+ }
+ 
+ /**
+@@ -217,6 +280,7 @@ static void display_blank(void)
+  */
+ static void display_dim(void)
+ {
++	set_panel_lpm(false);
+ 	update_brightness_fade((maximum_display_brightness * dim_brightness) / 100);
+ }
+ 
+@@ -225,6 +289,7 @@ static void display_dim(void)
+  */
+ static void display_unblank(void)
+ {
++	set_panel_lpm(false);
+ 	/* If we unblank, switch on display immediately */
+ 	if (cached_brightness == 0) {
+ 		cached_brightness = set_brightness;
+@@ -261,7 +326,7 @@ static void display_brightness_trigger(gconstpointer data)
+ 	/* The value we have here is for non-dimmed screen only */
+ 	set_brightness = new_brightness;
+ 
+-	if ((display_state == MCE_DISPLAY_OFF) ||
++	if (DISPLAY_IS_OFF(display_state) ||
+ 	    (display_state == MCE_DISPLAY_DIM))
+ 		goto EXIT;
+ 
+@@ -283,6 +348,7 @@ static gboolean blank_timeout_cb(gpointer data)
+ 
+ 	blank_timeout_cb_id = 0;
+ 
++	/* the display state filter makes this low power mode when in use */
+ 	(void)execute_datapipe(&display_state_pipe,
+ 			       GINT_TO_POINTER(MCE_DISPLAY_OFF),
+ 			       USE_INDATA, CACHE_INDATA);
+@@ -290,6 +356,60 @@ static gboolean blank_timeout_cb(gpointer data)
+ 	return false;
+ }
+ 
++/**
++ * Timeout callback for blanking from low power mode
++ *
++ * @param data Unused
++ * @return Always returns false, to disable the timeout
++ */
++static gboolean lpm_blank_timeout_cb(gpointer data)
++{
++	(void)data;
++
++	lpm_blank_timeout_cb_id = 0;
++	(void)execute_datapipe(&display_state_pipe,
++			       GINT_TO_POINTER(MCE_DISPLAY_LPM_OFF),
++			       USE_INDATA, CACHE_INDATA);
++
++	return false;
++}
++
++static void cancel_lpm_blank_timeout(void)
++{
++	if (lpm_blank_timeout_cb_id != 0) {
++		g_source_remove(lpm_blank_timeout_cb_id);
++		lpm_blank_timeout_cb_id = 0;
++	}
++}
++
++static void setup_lpm_blank_timeout(void)
++{
++	cancel_lpm_blank_timeout();
++	if (disp_lpm_blank_timeout > 0)
++		lpm_blank_timeout_cb_id =
++			g_timeout_add_seconds(disp_lpm_blank_timeout,
++					      lpm_blank_timeout_cb, NULL);
++}
++
++static void cancel_lpm_proximity_blank_timeout(void)
++{
++	if (lpm_proximity_blank_timeout_cb_id != 0) {
++		g_source_remove(lpm_proximity_blank_timeout_cb_id);
++		lpm_proximity_blank_timeout_cb_id = 0;
++	}
++}
++
++/**
++ * Covered in low power mode (a pocket, a table): blank after a while
++ */
++static void setup_lpm_proximity_blank_timeout(void)
++{
++	cancel_lpm_proximity_blank_timeout();
++	lpm_proximity_blank_timeout_cb_id =
++		g_timeout_add_seconds(DEFAULT_LPM_PROXIMITY_BLANK_TIMEOUT,
++				      lpm_blank_timeout_cb, NULL);
++}
++
+ /**
+  * Cancel the display blanking timeout
+  */
+@@ -357,9 +477,15 @@ static gboolean send_display_status(DBusMessage *const method_call)
+ 
+ 	switch (display_state) {
+ 	case MCE_DISPLAY_OFF:
++	case MCE_DISPLAY_LPM_OFF:
+ 		state = MCE_DISPLAY_OFF_STRING;
+ 		break;
+ 
++	/* not "off": the compositor keeps drawing the stand-by screen */
++	case MCE_DISPLAY_LPM_ON:
++		state = MCE_DISPLAY_LPM_STRING;
++		break;
++
+ 	case MCE_DISPLAY_DIM:
+ 		state = MCE_DISPLAY_DIM_STRING;
+ 		break;
+@@ -369,7 +495,7 @@ static gboolean send_display_status(DBusMessage *const method_call)
+ 		state = MCE_DISPLAY_ON_STRING;
+ 		break;
+ 	}
+-	if ((is_tvout_state_changed == true) && (display_state == MCE_DISPLAY_OFF)) {
++	if ((is_tvout_state_changed == true) && DISPLAY_IS_OFF(display_state)) {
+ 		state = is_tvout_on ? MCE_DISPLAY_ON_STRING : MCE_DISPLAY_OFF_STRING;
+ 	}
+ 	mce_log(LL_DEBUG,
+@@ -380,7 +506,7 @@ static gboolean send_display_status(DBusMessage *const method_call)
+ 	 * otherwise, send a signal
+ 	 */
+ 
+-	if ((is_tvout_on) && (display_state == MCE_DISPLAY_OFF) && (!is_tvout_state_changed)){
++	if ((is_tvout_on) && DISPLAY_IS_OFF(display_state) && (!is_tvout_state_changed)){
+ 		goto EXIT;
+ 	}
+ 	else
+@@ -453,7 +579,11 @@ static gboolean display_on_req_dbus_cb(DBusMessage *const msg)
+ 	mce_log(LL_DEBUG,
+ 		"Received display on request");
+ 
+-	if ((submode & MCE_TKLOCK_SUBMODE) == 0) {
++	/* Out of low power mode also while locked, as on Harmattan (a
++	 * double tap on the stand-by screen): the lock screen shows then */
++	if (((submode & MCE_TKLOCK_SUBMODE) == 0) ||
++	    (datapipe_get_gint(display_state_pipe) == MCE_DISPLAY_LPM_ON) ||
++	    (datapipe_get_gint(display_state_pipe) == MCE_DISPLAY_LPM_OFF)) {
+ 		mce_log(LL_DEBUG, "MCE_DISPLAY_ON in %s %s %d",__FILE__, __func__, __LINE__);
+ 		(void)execute_datapipe(&display_state_pipe,
+ 				       GINT_TO_POINTER(MCE_DISPLAY_ON),
+@@ -639,18 +769,29 @@ static void display_state_trigger(gconstpointer data)
+ 	static display_state_t cached_display_state = MCE_DISPLAY_UNDEF;
+ 	display_state_t display_state = GPOINTER_TO_INT(data);
+ 
++	cancel_lpm_proximity_blank_timeout();
++
+ 	switch (display_state) {
+ 	case MCE_DISPLAY_OFF:
++	case MCE_DISPLAY_LPM_OFF:
++		cancel_blank_timeout();
++		cancel_lpm_blank_timeout();
++		break;
++
++	case MCE_DISPLAY_LPM_ON:
+ 		cancel_blank_timeout();
++		setup_lpm_blank_timeout();
+ 		break;
+ 
+ 	case MCE_DISPLAY_DIM:
++		cancel_lpm_blank_timeout();
+ 		setup_blank_timeout();
+ 		break;
+ 
+ 	case MCE_DISPLAY_ON:
+ 	default:
+ 		cancel_blank_timeout();
++		cancel_lpm_blank_timeout();
+ 		break;
+ 	}
+ 
+@@ -662,9 +803,14 @@ static void display_state_trigger(gconstpointer data)
+ 
+ 	switch (display_state) {
+ 	case MCE_DISPLAY_OFF:
++	case MCE_DISPLAY_LPM_OFF:
+ 		display_blank();
+ 		break;
+ 
++	case MCE_DISPLAY_LPM_ON:
++		display_lpm();
++		break;
++
+ 	case MCE_DISPLAY_DIM:
+ 		display_dim();
+ 		break;
+@@ -687,6 +833,106 @@ EXIT:
+ 	return;
+ }
+ 
++/**
++ * Display state filter: low power mode instead of off while in use and
++ * the system is in user state; no low power mode when not in use
++ *
++ * @param data The display state stored in a pointer
++ * @return The filtered display state stored in a pointer
++ */
++static gpointer display_state_filter(gpointer data)
++{
++	system_state_t system_state = datapipe_get_gint(system_state_pipe);
++	display_state_t display_state = GPOINTER_TO_INT(data);
++
++	if (lpm_usable() == false) {
++		if ((display_state == MCE_DISPLAY_LPM_OFF) ||
++		    (display_state == MCE_DISPLAY_LPM_ON))
++			display_state = MCE_DISPLAY_OFF;
++	} else if ((display_state == MCE_DISPLAY_OFF) &&
++		   (system_state == MCE_STATE_USER)) {
++		display_state = MCE_DISPLAY_LPM_ON;
++	}
++
++	return GINT_TO_POINTER(display_state);
++}
++
++/**
++ * Proximity in low power mode: covered for a while, blank; uncovered,
++ * the stand-by screen again
++ *
++ * @param data The proximity sensor state stored in a pointer
++ */
++static void proximity_sensor_trigger(gconstpointer data)
++{
++	display_state_t display_state = datapipe_get_gint(display_state_pipe);
++	cover_state_t proximity_sensor_state = GPOINTER_TO_INT(data);
++
++	if ((display_state == MCE_DISPLAY_LPM_ON) &&
++	    (proximity_sensor_state == COVER_CLOSED)) {
++		if (lpm_proximity_blank_timeout_cb_id == 0)
++			setup_lpm_proximity_blank_timeout();
++	} else {
++		cancel_lpm_proximity_blank_timeout();
++		if ((display_state == MCE_DISPLAY_LPM_OFF) &&
++		    (proximity_sensor_state == COVER_OPEN))
++			(void)execute_datapipe(&display_state_pipe,
++					       GINT_TO_POINTER(MCE_DISPLAY_LPM_ON),
++					       USE_INDATA, CACHE_INDATA);
++	}
++}
++
++/**
++ * rtconf callback for use_low_power_mode
++ */
++static void use_low_power_mode_cb(const gchar *key, guint cb_id, void *user_data)
++{
++	display_state_t display_state = datapipe_get_gint(display_state_pipe);
++	gboolean use = use_low_power_mode;
++
++	(void)key;
++	(void)cb_id;
++	(void)user_data;
++
++	if (mce_rtconf_get_bool(MCE_USE_LPM_KEY, &use) == FALSE)
++		return;
++	use_low_power_mode = use;
++	mce_log(LL_DEBUG, "%s: low power mode %s", MODULE_NAME,
++		use ? "on" : "off");
++
++	/* switched off while in low power mode, or on while off */
++	if (((display_state == MCE_DISPLAY_LPM_OFF) ||
++	     (display_state == MCE_DISPLAY_LPM_ON)) && (lpm_usable() == false))
++		(void)execute_datapipe(&display_state_pipe,
++				       GINT_TO_POINTER(MCE_DISPLAY_OFF),
++				       USE_INDATA, CACHE_INDATA);
++	else if ((display_state == MCE_DISPLAY_OFF) && (lpm_usable() == true))
++		(void)execute_datapipe(&display_state_pipe,
++				       GINT_TO_POINTER(MCE_DISPLAY_LPM_ON),
++				       USE_INDATA, CACHE_INDATA);
++}
++
++/**
++ * The panel's low power mode switch, next to the backlight's brightness
++ */
++static void find_low_power_mode_file(void)
++{
++	gchar *dir, *file;
++
++	if (brightness_file == NULL)
++		return;
++	dir = g_path_get_dirname(brightness_file);
++	file = g_strconcat(dir, DISPLAY_GENERIC_LPM_FILE, NULL);
++	g_free(dir);
++	if (g_access(file, W_OK) == 0) {
++		low_power_mode_file = file;
++		mce_log(LL_DEBUG, "%s: low power mode through %s", MODULE_NAME,
++			file);
++	} else {
++		g_free(file);
++	}
++}
++
+ /**
+  * Datapipe trigger for device inactivity
+  *
+@@ -704,6 +950,13 @@ static void device_inactive_trigger(gconstpointer data)
+ 	/* Unblank screen on device activity,
+ 	 * unless the device is in acting dead and no alarm is visible
+ 	 */
++	/* In low power mode the touchscreen stays on for the stand-by screen's
++	 * double tap; a touch alone does not end it (Harmattan: only a double
++	 * tap, the power key) */
++	if ((display_state == MCE_DISPLAY_LPM_ON) ||
++	    (display_state == MCE_DISPLAY_LPM_OFF))
++		return;
++
+ 	if (((system_state == MCE_STATE_USER) ||
+ 		((system_state == MCE_STATE_ACTDEAD) &&
+ 		((alarm_ui_state == MCE_ALARM_UI_VISIBLE_INT32) ||
+@@ -727,7 +980,7 @@ static void tvout_trigger(gconstpointer data)
+ 	
+ 	mce_log(LL_DEBUG, "Recieved tvout state changing: is_tvout_on = %d", is_tvout_on);	
+ 	
+-	if (display_state == MCE_DISPLAY_OFF) {
++	if (DISPLAY_IS_OFF(display_state)) {
+ 		is_tvout_state_changed = true;
+ 		send_display_status(NULL);
+ 		is_tvout_state_changed = false;
+@@ -803,11 +1056,30 @@ const gchar *g_module_check_init(GModule *module)
+ 	dim_brightness = mce_conf_get_int("DisplayBrightness", "Dim", DEFAULT_DIM_BRIGHTNESS, NULL);
+ 	blank_during_shutdown = mce_conf_get_bool("Display", "BlankDuringShutdown", true, NULL);
+ 
++	/* Low power mode */
++	use_low_power_mode = mce_conf_get_bool(MCE_CONF_DISPLAY_GROUP,
++					       MCE_CONF_DISPLAY_LPM_KEY,
++					       FALSE, NULL);
++	(void)mce_rtconf_get_bool(MCE_USE_LPM_KEY, &use_low_power_mode);
++	disp_lpm_blank_timeout = mce_conf_get_int(MCE_CONF_DISPLAY_GROUP,
++						  MCE_CONF_DISPLAY_LPM_BLANK_KEY,
++						  DEFAULT_LPM_BLANK_TIMEOUT, NULL);
++	lpm_brightness = mce_conf_get_int(MCE_CONF_DISPLAY_GROUP,
++					  MCE_CONF_DISPLAY_LPM_BRIGHTNESS_KEY,
++					  DEFAULT_LPM_BRIGHTNESS, NULL);
++	find_low_power_mode_file();
++	(void)mce_rtconf_notifier_add(MCE_USE_LPM_KEY, use_low_power_mode_cb,
++				      NULL, &use_low_power_mode_cb_id);
++
+ 	/* Append triggers/filters to datapipes */
+ 	append_output_trigger_to_datapipe(&display_brightness_pipe,
+ 					  display_brightness_trigger);
++	append_filter_to_datapipe(&display_state_pipe,
++				  display_state_filter);
+ 	append_output_trigger_to_datapipe(&display_state_pipe,
+ 					  display_state_trigger);
++	append_output_trigger_to_datapipe(&proximity_sensor_pipe,
++					  proximity_sensor_trigger);
+ 	append_output_trigger_to_datapipe(&device_inactive_pipe,
+ 					  device_inactive_trigger);
+ 	append_output_trigger_to_datapipe(&tvout_pipe,
+@@ -927,6 +1199,10 @@ void g_module_unload(GModule *module)
+ 					    device_inactive_trigger);
+ 	remove_output_trigger_from_datapipe(&display_state_pipe,
+ 					    display_state_trigger);
++	remove_filter_from_datapipe(&display_state_pipe,
++				    display_state_filter);
++	remove_output_trigger_from_datapipe(&proximity_sensor_pipe,
++					    proximity_sensor_trigger);
+ 	remove_output_trigger_from_datapipe(&display_brightness_pipe,
+ 					    display_brightness_trigger);
+ 	remove_output_trigger_from_datapipe(&system_state_pipe,
+@@ -935,10 +1211,13 @@ void g_module_unload(GModule *module)
+ 	/* Free strings */
+ 	g_free(brightness_file);
+ 	g_free(max_brightness_file);
++	g_free(low_power_mode_file);
+ 
+ 	/* Remove all timer sources */
+ 	cancel_brightness_fade_timeout();
+ 	cancel_blank_timeout();
++	cancel_lpm_blank_timeout();
++	cancel_lpm_proximity_blank_timeout();
+ 
+ 	return;
+ }
+diff --git a/src/modules/display.h b/src/modules/display.h
+index 8a30b15..07575e3 100644
+--- a/src/modules/display.h
++++ b/src/modules/display.h
+@@ -31,6 +31,20 @@
+ 
+ #define MCE_CONF_DISPLAY_GROUP "Display"
+ #define MCE_CONF_DISPLAY_BLANK_KEY "DimToBlankTimeout"
++/** Low power mode: the panel keeps showing a stand-by screen instead of
++ * blanking (sysfs file "lpm" of the backlight's device, 1 to enter) */
++#define MCE_CONF_DISPLAY_LPM_KEY "UseLowPowerMode"
++/** Seconds in low power mode before the display blanks; 0: stays */
++#define MCE_CONF_DISPLAY_LPM_BLANK_KEY "LowPowerModeBlankTimeout"
++/** Brightness in low power mode, in percent of the maximum */
++#define MCE_CONF_DISPLAY_LPM_BRIGHTNESS_KEY "LowPowerModeBrightness"
++/** rtconf key to switch low power mode at run time */
++#define MCE_USE_LPM_KEY "use_low_power_mode"
++#define DISPLAY_GENERIC_LPM_FILE		"/device/lpm"
++#define DEFAULT_LPM_BLANK_TIMEOUT		0	/* stays */
++#define DEFAULT_LPM_BRIGHTNESS			10	/* percent */
++/** Seconds with the proximity sensor covered before low power mode blanks */
++#define DEFAULT_LPM_PROXIMITY_BLANK_TIMEOUT	5
+ 
+ #define MCE_BRIGHTNESS_KEY	"display_brightness"
+ 
+diff --git a/src/modules/evdevvibrator.c b/src/modules/evdevvibrator.c
+index 31e2f68..5ea5503 100644
+--- a/src/modules/evdevvibrator.c
++++ b/src/modules/evdevvibrator.c
+@@ -275,17 +275,17 @@ static gboolean should_run_pattern(const pattern_t pattern)
+ 		return true;
+ 	else if (pattern.policy == VIBRATE_POLICY_PLAY_DISPLAY_OFF_OR_ACTDEAD &&
+ 		 (system_state == MCE_STATE_ACTDEAD
+-		  || display_state == MCE_DISPLAY_OFF))
++		  || DISPLAY_IS_OFF(display_state)))
+ 		return true;
+ 	else if (pattern.policy == VIBRATE_POLICY_PLAY_DISPLAY_OFF_ACTDEAD &&
+ 		 (system_state == MCE_STATE_ACTDEAD
+-		  && display_state == MCE_DISPLAY_OFF))
++		  && DISPLAY_IS_OFF(display_state)))
+ 		return true;
+ 	else if (pattern.policy == VIBRATE_POLICY_PLAY_DISPLAY_ON_OR_OFF && system_state != MCE_STATE_ACTDEAD)
+ 		return true;
+ 	else if (pattern.policy == VIBRATE_POLICY_PLAY_DISPLAY_OFF &&
+ 		 (system_state != MCE_STATE_ACTDEAD
+-		  && display_state == MCE_DISPLAY_OFF))
++		  && DISPLAY_IS_OFF(display_state)))
+ 		return true;
+ 	return false;
+ }
+diff --git a/src/modules/filter-brightness-als-iio.c b/src/modules/filter-brightness-als-iio.c
+index ea58723..e288033 100644
+--- a/src/modules/filter-brightness-als-iio.c
++++ b/src/modules/filter-brightness-als-iio.c
+@@ -147,7 +147,7 @@ static gpointer display_brightness_filter(gpointer data)
+ 	}
+ 
+ 	/* If the display is off, don't update its brightness */
+-	if (display_state == MCE_DISPLAY_OFF)
++	if (DISPLAY_IS_OFF(display_state))
+ 		return GINT_TO_POINTER(0);
+ 
+ 	/* Safety net */
+diff --git a/src/modules/filter-brightness-simple.c b/src/modules/filter-brightness-simple.c
+index 27de2b4..26b6419 100644
+--- a/src/modules/filter-brightness-simple.c
++++ b/src/modules/filter-brightness-simple.c
+@@ -70,7 +70,7 @@ static gpointer display_brightness_filter(gpointer data)
+ 	gpointer retval;
+ 
+ 	/* If the display is off, don't update its brightness */
+-	if (display_state == MCE_DISPLAY_OFF) {
++	if (DISPLAY_IS_OFF(display_state)) {
+ 		raw = 0;
+ 		goto EXIT;
+ 	}
+diff --git a/src/modules/iio-accelerometer.c b/src/modules/iio-accelerometer.c
+index 3dd5d7f..779dd6e 100644
+--- a/src/modules/iio-accelerometer.c
++++ b/src/modules/iio-accelerometer.c
+@@ -50,7 +50,7 @@ static orientation_t horizontal = ORIENTATION_FACE_UP;
+ static bool iio_accel_claim_policy(void)
+ {
+ 	return g_slist_length(accelerometer_listeners) > 0 && 
+-	       (display_state != MCE_DISPLAY_OFF || 
++	       (!DISPLAY_IS_OFF(display_state) || 
+ 	       alarm_state == MCE_ALARM_UI_RINGING_INT32 || 
+ 	       call_state == CALL_STATE_RINGING);
+ }
+diff --git a/src/modules/iio-proximity.c b/src/modules/iio-proximity.c
+index 859892d..a115d09 100644
+--- a/src/modules/iio-proximity.c
++++ b/src/modules/iio-proximity.c
+@@ -29,12 +29,15 @@ static GDBusProxy *iio_proxy;
+ 
+ static call_state_t call_state;
+ static alarm_ui_state_t alarm_ui_state;
++static display_state_t display_state = MCE_DISPLAY_UNDEF;
+ 
+ static bool iio_prox_claim_policy(void)
+ {
+ 	return (call_state == CALL_STATE_RINGING) ||
+ 	    (call_state == CALL_STATE_ACTIVE) ||
+-	    (alarm_ui_state == MCE_ALARM_UI_VISIBLE_INT32) || (alarm_ui_state == MCE_ALARM_UI_RINGING_INT32);
++	    (alarm_ui_state == MCE_ALARM_UI_VISIBLE_INT32) || (alarm_ui_state == MCE_ALARM_UI_RINGING_INT32) ||
++	    /* low power mode blanks while covered (display.c) */
++	    (display_state == MCE_DISPLAY_LPM_ON) || (display_state == MCE_DISPLAY_LPM_OFF);
+ }
+ 
+ static bool iio_prox_get_value(GDBusProxy * proxy)
+@@ -162,6 +165,12 @@ static void alarm_ui_state_trigger(gconstpointer data)
+ 	iio_prox_claim_sensor(iio_prox_claim_policy());
+ }
+ 
++static void display_state_trigger(gconstpointer data)
++{
++	display_state = GPOINTER_TO_INT(data);
++	iio_prox_claim_sensor(iio_prox_claim_policy());
++}
++
+ G_MODULE_EXPORT const char *g_module_check_init(GModule * module);
+ const char *g_module_check_init(GModule * module)
+ {
+@@ -171,6 +180,7 @@ const char *g_module_check_init(GModule * module)
+ 
+ 	append_output_trigger_to_datapipe(&call_state_pipe, call_state_trigger);
+ 	append_output_trigger_to_datapipe(&alarm_ui_state_pipe, alarm_ui_state_trigger);
++	append_output_trigger_to_datapipe(&display_state_pipe, display_state_trigger);
+ 
+ 	call_state = datapipe_get_gint(call_state_pipe);
+ 	alarm_ui_state = datapipe_get_gint(alarm_ui_state_pipe);
+@@ -188,6 +198,7 @@ void g_module_unload(GModule * module)
+ 	(void)module;
+ 
+ 	remove_output_trigger_from_datapipe(&alarm_ui_state_pipe, alarm_ui_state_trigger);
++	remove_output_trigger_from_datapipe(&display_state_pipe, display_state_trigger);
+ 	remove_output_trigger_from_datapipe(&call_state_pipe, call_state_trigger);
+ 
+ 	g_bus_unwatch_name(watch_id);
+diff --git a/src/modules/inactivity-inhibit.c b/src/modules/inactivity-inhibit.c
+index 9679513..e0648e8 100644
+--- a/src/modules/inactivity-inhibit.c
++++ b/src/modules/inactivity-inhibit.c
+@@ -166,7 +166,7 @@ static gpointer device_inactive_filter(gpointer data)
+ 	gboolean device_inactive = GPOINTER_TO_INT(data);
+ 	display_state_t display_state = datapipe_get_gint(display_state_pipe);
+ 	
+-	if (device_inactive && timed_inhibit && display_state != MCE_DISPLAY_OFF) {
++	if (device_inactive && timed_inhibit && !DISPLAY_IS_OFF(display_state)) {
+ 		mce_log(LL_DEBUG,
+ 		"%s: Device inactive state preventedby %s", MODULE_NAME, MODULE_NAME);
+ 		return GINT_TO_POINTER(FALSE);
+diff --git a/src/modules/inactivity.c b/src/modules/inactivity.c
+index f29bde2..1834767 100644
+--- a/src/modules/inactivity.c
++++ b/src/modules/inactivity.c
+@@ -266,7 +266,7 @@ static gpointer device_inactive_filter(gpointer data)
+ 	    (((alarm_ui_state != MCE_ALARM_UI_VISIBLE_INT32) &&
+ 	      (alarm_ui_state != MCE_ALARM_UI_RINGING_INT32)) ||
+ 	     (((submode & MCE_AUTORELOCK_SUBMODE) != 0) &&
+-	      (display_state == MCE_DISPLAY_OFF)))) {
++	      DISPLAY_IS_OFF(display_state)))) {
+ 		data = GINT_TO_POINTER(TRUE);
+ 		device_inactive = GPOINTER_TO_INT(data);
+ 	}
+@@ -303,6 +303,8 @@ static gpointer display_state_filter(gpointer data)
+ 
+ 	switch (display_state) {
+ 	case MCE_DISPLAY_OFF:
++	case MCE_DISPLAY_LPM_OFF:
++	case MCE_DISPLAY_LPM_ON:
+ 		cancel_inactivity_timeout();
+ 		execute_datapipe(&device_inactive_pipe, GINT_TO_POINTER(TRUE), USE_INDATA, CACHE_INDATA);
+ 		break;
+diff --git a/src/modules/led-lysti.c b/src/modules/led-lysti.c
+index dffcc03..1e3014a 100644
+--- a/src/modules/led-lysti.c
++++ b/src/modules/led-lysti.c
+@@ -427,7 +427,7 @@ static void led_update_active_pattern(void)
+ 			/* If we're in acting dead
+ 			 * and the display is off, show pattern
+ 			 */
+-			if ((display_state == MCE_DISPLAY_OFF) &&
++			if (DISPLAY_IS_OFF(display_state) &&
+ 			    (new_active_pattern->policy == 2))
+ 				break;
+ 
+@@ -438,7 +438,7 @@ static void led_update_active_pattern(void)
+ 		}
+ 
+ 		/* If the display is off, we can use any active pattern */
+-		if (display_state == MCE_DISPLAY_OFF)
++		if (DISPLAY_IS_OFF(display_state))
+ 			break;
+ 
+ 		/* If the pattern should be shown with screen on, use it */
+diff --git a/src/modules/led-sw.c b/src/modules/led-sw.c
+index 7c51335..f1d2566 100644
+--- a/src/modules/led-sw.c
++++ b/src/modules/led-sw.c
+@@ -188,18 +188,18 @@ static bool should_run_pattern(const struct led_pattern * const pattern)
+ 		return true;
+ 	else if (pattern->policy == POLICY_PLAY_DISPLAY_OFF_OR_ACTDEAD &&
+ 		 (system_state == MCE_STATE_ACTDEAD
+-		  || display_state == MCE_DISPLAY_OFF))
++		  || DISPLAY_IS_OFF(display_state)))
+ 		return true;
+ 	else if (pattern->policy == POLICY_PLAY_DISPLAY_OFF_ACTDEAD &&
+ 		 (system_state == MCE_STATE_ACTDEAD
+-		  && display_state == MCE_DISPLAY_OFF))
++		  && DISPLAY_IS_OFF(display_state)))
+ 		return true;
+ 	else if (pattern->policy == POLICY_PLAY_DISPLAY_ON_OR_OFF &&
+ 		 (system_state != MCE_STATE_ACTDEAD))
+ 		return true;
+ 	else if (pattern->policy == POLICY_PLAY_DISPLAY_OFF &&
+ 		 (system_state != MCE_STATE_ACTDEAD
+-		  && display_state == MCE_DISPLAY_OFF))
++		  && DISPLAY_IS_OFF(display_state)))
+ 		return true;
+ 	return false;
+ }
+diff --git a/src/modules/lock-generic.c b/src/modules/lock-generic.c
+index b05d5b1..f54241c 100644
+--- a/src/modules/lock-generic.c
++++ b/src/modules/lock-generic.c
+@@ -86,10 +86,10 @@ static void display_state_trigger(gconstpointer const data)
+ 	display_state_t state = GPOINTER_TO_INT(data);
+ 	submode_t submode = datapipe_get_gint(submode_pipe);
+ 	
+-	if (state == MCE_DISPLAY_OFF && autolock && (submode & MCE_TKLOCK_SUBMODE) == 0) {
++	if (DISPLAY_IS_OFF(state) && autolock && (submode & MCE_TKLOCK_SUBMODE) == 0) {
+ 		autolock_cb_id = g_timeout_add(autolock_timeout, autolock_timeout_cb, NULL);
+ 	}
+-	else if (state != MCE_DISPLAY_OFF && (submode & MCE_TKLOCK_SUBMODE) != 0) {
++	else if (!DISPLAY_IS_OFF(state) && (submode & MCE_TKLOCK_SUBMODE) != 0) {
+ 		if (autolock_cb_id) {
+ 			g_source_remove(autolock_cb_id);
+ 			autolock_cb_id = 0;
+@@ -130,7 +130,7 @@ static void keyboard_slide_trigger(gconstpointer data)
+ 	cover_state_t kbd_slide_state = GPOINTER_TO_INT(data);
+ 	display_state_t display_state = datapipe_get_gint(display_state_pipe);
+ 	
+-	if (kbd_slide_state == COVER_OPEN && display_state == MCE_DISPLAY_OFF) {
++	if (kbd_slide_state == COVER_OPEN && DISPLAY_IS_OFF(display_state)) {
+ 		execute_datapipe(&display_state_pipe, GINT_TO_POINTER(MCE_DISPLAY_ON),USE_INDATA, CACHE_INDATA);
+ 		if (unlock_on_slide) 
+ 			set_visual_lock(false);
+@@ -154,7 +154,7 @@ static void powerkey_trigger(gconstpointer const data)
+ 	ev = *evp;
+ 
+ 	if (ev != NULL && ev->code == power_keycode) {
+-		if ( ev->value == 0 && display_state == MCE_DISPLAY_OFF && display_state_prev == MCE_DISPLAY_OFF) {
++		if ( ev->value == 0 && DISPLAY_IS_OFF(display_state) && DISPLAY_IS_OFF(display_state_prev)) {
+ 			display_state_prev = MCE_DISPLAY_UNDEF;
+ 			execute_datapipe(&display_state_pipe, GINT_TO_POINTER(MCE_DISPLAY_ON),USE_INDATA, CACHE_INDATA);
+ 		}
+@@ -169,7 +169,7 @@ static void call_alarm_state_trigger(gconstpointer const data)
+ {
+ 	(void)data;
+ 	display_state_t display_state = datapipe_get_gint(display_state_pipe);
+-	if (display_state == MCE_DISPLAY_OFF)
++	if (DISPLAY_IS_OFF(display_state))
+ 		execute_datapipe(&display_state_pipe, GINT_TO_POINTER(MCE_DISPLAY_ON),USE_INDATA, CACHE_INDATA);
+ 	return;
+ }
+diff --git a/src/modules/lock-tklock.c b/src/modules/lock-tklock.c
+index 467dd0e..b092c64 100644
+--- a/src/modules/lock-tklock.c
++++ b/src/modules/lock-tklock.c
+@@ -400,7 +400,12 @@ static gboolean ts_disable_policy(void)
+ 	{
+ 		if (ts_event_control(FALSE) == FALSE)
+ 					goto EXIT;
+-	} else if((display_state == MCE_DISPLAY_OFF) && (is_tklock_enabled() == TRUE)) {
++	} else if (display_state == MCE_DISPLAY_LPM_ON) {
++		/* The stand-by screen of the low power mode takes a double
++		 * tap to wake the display: the touchscreen stays on */
++	} else if(((display_state == MCE_DISPLAY_OFF) ||
++		   (display_state == MCE_DISPLAY_LPM_OFF)) &&
++		  (is_tklock_enabled() == TRUE)) {
+ 		if (ts_event_control(FALSE) == FALSE)
+ 					goto EXIT;
+ 	} else if (is_tklock_enabled() == TRUE && disable_ts_immediately == TRUE) {
+@@ -802,7 +807,7 @@ static void setup_dim_blank_timeout_policy(gboolean force_blank)
+ 	display_state_t display_state = datapipe_get_gint(display_state_pipe);
+ 
+ 	/* If the display is already blank, don't bother */
+-	if (display_state == MCE_DISPLAY_OFF)
++	if (DISPLAY_IS_OFF(display_state))
+ 		goto EXIT;
+ 
+ 	if ((display_state == MCE_DISPLAY_DIM) ||
+@@ -1156,7 +1161,7 @@ static void trigger_visual_tklock(void)
+ {
+ 	display_state_t display_state = datapipe_get_gint(display_state_pipe);
+ 
+-	mce_log(LL_DEBUG, "tklock.c: %s: %i, %i, %i", __func__, display_state == MCE_DISPLAY_OFF, is_tklock_enabled(), is_autorelock_enabled());
++	mce_log(LL_DEBUG, "tklock.c: %s: %i, %i, %i", __func__, DISPLAY_IS_OFF(display_state), is_tklock_enabled(), is_autorelock_enabled());
+ 
+ 	if ((is_tklock_enabled() == FALSE) ||
+ 	    (is_autorelock_enabled() == FALSE))
+@@ -1463,7 +1468,7 @@ static void keyboard_slide_trigger(gconstpointer const data)
+ 
+ 	case COVER_CLOSED:
+ 		if (((tk_autolock_enabled == TRUE) &&
+-		     (display_state == MCE_DISPLAY_OFF)) ||
++		     DISPLAY_IS_OFF(display_state)) ||
+ 		    ((is_autorelock_enabled() == TRUE) &&
+ 		     ((autorelock_triggers & AUTORELOCK_KBD_SLIDE) != 0)))
+ 			/* This will also reset the autorelock policy */
+@@ -1584,6 +1589,8 @@ static void display_state_trigger(gconstpointer data)
+ 
+ 	switch (display_state) {
+ 	case MCE_DISPLAY_OFF:
++	case MCE_DISPLAY_LPM_OFF:
++	case MCE_DISPLAY_LPM_ON:
+ 		if (tklock_ui_state == MCE_TKLOCK_UI_NORMAL)
+ 			break;
+ 		if (((alarm_ui_state != MCE_ALARM_UI_RINGING_INT32) &&
+@@ -1608,7 +1615,7 @@ static void display_state_trigger(gconstpointer data)
+ 		 * to DIM or ON, do policy based enable
+ 		 */
+ 		if ((old_display_state == MCE_DISPLAY_UNDEF) ||
+-		    (old_display_state == MCE_DISPLAY_OFF)) {
++		    DISPLAY_IS_OFF(old_display_state)) {
+ 			(void)ts_enable_policy();
+ 		}
+ 
+@@ -1620,7 +1627,7 @@ static void display_state_trigger(gconstpointer data)
+ 		 * to DIM or ON, do policy based enable
+ 		 */
+ 		if ((old_display_state == MCE_DISPLAY_UNDEF) ||
+-		    (old_display_state == MCE_DISPLAY_OFF)) {
++		    DISPLAY_IS_OFF(old_display_state)) {
+ 			(void)ts_enable_policy();
+ 		}
+ 		(void)disable_eveater(FALSE);
+diff --git a/src/modules/x11-ctrl.c b/src/modules/x11-ctrl.c
+index f5b6d5f..59a3a25 100644
+--- a/src/modules/x11-ctrl.c
++++ b/src/modules/x11-ctrl.c
+@@ -253,7 +253,9 @@ static void display_state_trigger(gconstpointer data)
+ 	display_state_t new_state = (display_state_t)data;
+ 	
+ 	if (new_state != old_state) {
+-		if (new_state == MCE_DISPLAY_OFF)
++		/* on in low power mode: the stand-by screen draws there */
++		if ((new_state == MCE_DISPLAY_OFF) ||
++		    (new_state == MCE_DISPLAY_LPM_OFF))
+ 			x11_force_dpms_display_level(false);
+ 		else
+ 			x11_force_dpms_display_level(true);

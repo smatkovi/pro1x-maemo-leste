@@ -48,6 +48,12 @@
  *                 [-R none|cw|ccw|inverted] [-P pidfile] [-t themedir]
  *                 [-d dpi] [-f font] [-2]
  *       runs in the X session (with X's own screen saver off, xset s off)
+ *   pro1x-standby -M [-R ...] [-t themedir] [-d dpi] [-f font] [-2]
+ *       on Leste, with mce's low power mode (patches/lpm): mce decides
+ *       (time-outs, proximity, the power key, the panel's lpm and
+ *       brightness, the keyboard light); the screen shows while mce's
+ *       display_status_ind says "lpm", and a double tap asks mce for the
+ *       display (req_display_state_on), which shows the lock screen
  *   pro1x-standby -p out.png WIDTHxHEIGHT [options]
  *       draws one frame into a PNG and exits (for tests)
  */
@@ -112,6 +118,8 @@ static int standby_bl = STANDBY_BL;
 static int kbd_timeout = KBD_TIMEOUT_S;
 /* how X's screen lies on the panel's rows, for partial mode; NULL: off */
 static const char *rotation;
+/* -M: follow mce's low power mode instead of timing it here */
+static int follow_mce;
 static const char *pidfile = DEFAULT_PIDFILE;
 
 enum charge { CHARGE_NONE, CHARGE_CHARGING, CHARGE_FULL, CHARGE_FAILED };
@@ -803,10 +811,15 @@ static XSyncAlarm new_alarm(struct standby *sb)
  */
 static void go_active(struct standby *sb)
 {
-	long long base = idle_now(sb);
+	long long base;
 
 	sb->mode = ACTIVE;
 	debug("active");
+	if (follow_mce) {
+		arm(sb, 0, 0);
+		return;
+	}
+	base = idle_now(sb);
 	arm(sb, base + dim_timeout * 1000LL, base > 500 ? base : 0);
 }
 
@@ -969,6 +982,8 @@ static void sb_show(struct standby *sb)
 	sb->tap_time = 0;
 	place(sb->w, sb->h, 0, &sb->right, &sb->top);
 	sb_draw(sb, 1);
+	if (follow_mce)
+		return;
 	panel_set("lpm", 1);
 	bl_set(standby_bl);
 	proximity_watch(sb, 1);
@@ -979,7 +994,8 @@ static void sb_hide(struct standby *sb)
 {
 	if (sb->mode != STANDBY)
 		return;
-	proximity_watch(sb, 0);
+	if (!follow_mce)
+		proximity_watch(sb, 0);
 	if (sb->near) {
 		touch_sleep(0);
 		panel_set("display", 1);
@@ -989,13 +1005,32 @@ static void sb_hide(struct standby *sb)
 		panel_partial(0, 0);
 		sb->part_first = sb->part_last = 0;
 	}
-	panel_set("lpm", 0);
+	if (!follow_mce)
+		panel_set("lpm", 0);
 	XUngrabPointer(sb->dpy, CurrentTime);
 	XUngrabKeyboard(sb->dpy, CurrentTime);
 	XUnmapWindow(sb->dpy, sb->win);
 	XFlush(sb->dpy);
 	undim(sb);
 	go_active(sb);
+}
+
+/* mce: the display on, out of low power mode */
+static void mce_display_on(struct standby *sb)
+{
+	DBusMessage *m;
+
+	if (!sb->sys)
+		return;
+	m = dbus_message_new_method_call("com.nokia.mce", "/com/nokia/mce/request",
+	    "com.nokia.mce.request", "req_display_state_on");
+	if (!m)
+		return;
+	dbus_message_set_no_reply(m, TRUE);
+	dbus_connection_send(sb->sys, m, NULL);
+	dbus_message_unref(m);
+	dbus_connection_flush(sb->sys);
+	debug("asked mce for the display");
 }
 
 /* A touch while shown: the second of two close ones wakes it up */
@@ -1006,7 +1041,10 @@ static void sb_tap(struct standby *sb, XButtonEvent *b)
 
 	if (sb->tap_time && b->time - sb->tap_time <= DOUBLE_TAP_MS &&
 	    dx * dx + dy * dy <= r * r) {
-		sb_hide(sb);
+		if (follow_mce)
+			mce_display_on(sb);	/* "on" from mce hides it */
+		else
+			sb_hide(sb);
 		return;
 	}
 	sb->tap_time = b->time;
@@ -1041,8 +1079,19 @@ static void sys_bus_input(struct standby *sb)
 	dbus_connection_read_write(sb->sys, 0);
 	while ((m = dbus_connection_pop_message(sb->sys))) {
 		dbus_bool_t near;
+		const char *state;
 
-		if (dbus_message_is_signal(m, "org.pro1x.Proximity", "Changed") &&
+		if (follow_mce &&
+		    dbus_message_is_signal(m, "com.nokia.mce.signal",
+					   "display_status_ind") &&
+		    dbus_message_get_args(m, NULL, DBUS_TYPE_STRING, &state,
+					  DBUS_TYPE_INVALID)) {
+			debug(state);
+			if (!strcmp(state, "lpm"))
+				sb_show(sb);
+			else
+				sb_hide(sb);
+		} else if (dbus_message_is_signal(m, "org.pro1x.Proximity", "Changed") &&
 		    dbus_message_get_args(m, NULL, DBUS_TYPE_BOOLEAN, &near,
 					  DBUS_TYPE_INVALID))
 			proximity(sb, near != 0);
@@ -1133,7 +1182,10 @@ static int run_x(void)
 		fprintf(stderr, "pro1x-standby: no SYNC extension with IDLETIME\n");
 		return 1;
 	}
-	setup_keys(&sb);
+	if (!follow_mce)
+		setup_keys(&sb);
+	else
+		sb.xi_opcode = -1;
 	a.background_pixel = BlackPixel(sb.dpy, sb.scr);
 	a.override_redirect = True;
 	a.event_mask = ExposureMask | ButtonPressMask | KeyPressMask |
@@ -1147,9 +1199,14 @@ static int run_x(void)
 	/* only an existing session bus: libdbus would start one otherwise */
 	if (getenv("DBUS_SESSION_BUS_ADDRESS"))
 		sb.bus = dbus_bus_get(DBUS_BUS_SESSION, NULL);
-	if ((sb.sys = dbus_bus_get(DBUS_BUS_SYSTEM, NULL)))
+	if ((sb.sys = dbus_bus_get(DBUS_BUS_SYSTEM, NULL))) {
 		dbus_bus_add_match(sb.sys, "type='signal',"
 		    "interface='org.pro1x.Proximity',member='Changed'", NULL);
+		if (follow_mce)
+			dbus_bus_add_match(sb.sys, "type='signal',"
+			    "interface='com.nokia.mce.signal',"
+			    "member='display_status_ind'", NULL);
+	}
 	srandom(time(NULL));
 	go_active(&sb);
 
@@ -1244,6 +1301,8 @@ static int run_x(void)
 			}
 		}
 		while (read(sigpipe[0], &c, 1) == 1) {
+			if (follow_mce)
+				continue;	/* mce has the power key */
 			if (sb.mode == STANDBY)
 				sb_hide(&sb);
 			else
@@ -1349,6 +1408,7 @@ static void usage(void)
 	    "usage: pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout]\n"
 	    "                     [-R none|cw|ccw|inverted] [-P pidfile]\n"
 	    "                     [-t themedir] [-d dpi] [-f font] [-2]\n"
+	    "       pro1x-standby -M [-R ...] [-t themedir] [-d dpi] [-f font] [-2]\n"
 	    "       pro1x-standby -p out.png WIDTHxHEIGHT [options]\n");
 	exit(2);
 }
@@ -1358,7 +1418,7 @@ int main(int argc, char **argv)
 	const char *preview = NULL;
 	int c;
 
-	while ((c = getopt(argc, argv, "s:b:k:R:P:t:d:f:p:2h")) != -1) {
+	while ((c = getopt(argc, argv, "s:b:k:R:P:t:d:f:p:2Mh")) != -1) {
 		switch (c) {
 		case 'R':
 			if (strcmp(optarg, "none") && strcmp(optarg, "cw") &&
@@ -1375,6 +1435,7 @@ int main(int argc, char **argv)
 		case 'f': font = optarg; break;
 		case 'p': preview = optarg; break;
 		case '2': twelve_hour = 1; break;
+		case 'M': follow_mce = 1; break;
 		default: usage();
 		}
 	}

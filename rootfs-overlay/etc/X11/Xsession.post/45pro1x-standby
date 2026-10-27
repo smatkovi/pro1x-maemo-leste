@@ -1,0 +1,7 @@
+# F(x)tec Pro1X (sourced by Xsession-post): the stand-by screen of mce's low
+# power mode (patches/lpm): pro1x-standby -M draws it while mce says "lpm"
+# and asks mce for the display on a double tap. No partial mode (-R) until
+# the panel's row order under Leste's rotation is checked on the phone.
+if [ -x /usr/local/bin/pro1x-standby ]; then
+	/usr/local/bin/pro1x-standby -M > /dev/null 2>&1 &
+fi
