@@ -1,0 +1,17 @@
+FreeBSD: no performance time stamps (sp_timestamp.h), which read the
+program's name from Linux's /proc/<pid>/cmdline and assert that it
+opens: without a /proc the sound daemon aborted on the first sound
+(hildon-sv-notification-daemon, "Assertion failed: (fd >= 0)").
+
+--- a/lib/Makefile.am
++++ b/lib/Makefile.am
+@@ -3,8 +3,7 @@
+ libhildon_plugins_notify_sv_ladir = $(hildondesktoplibdir)
+ 
+ INCLUDES = $(HILDON_PLUGINS_NOTIFY_SV_CFLAGS)	\
+-			-I$(srcdir)/../include	\
+-			-DSP_TIMESTAMP_CREATE=1
++			-I$(srcdir)/../include
+ 
+ BUILT_SOURCES =					\
+ 		nsv-profile-marshal.c		\

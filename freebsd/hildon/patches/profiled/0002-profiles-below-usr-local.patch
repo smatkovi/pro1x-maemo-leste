@@ -1,0 +1,15 @@
+FreeBSD: the profiles are in /usr/local/etc/profiled, where the
+Makefile installs them (ETCDIR); with /etc/profiled profiled found none
+and answered every value with an empty string.
+
+--- a/database.h
++++ b/database.h
+@@ -44,7 +44,7 @@
+ #  define FS "fsroot"
+ # endif
+ 
+-# define CONFIG_DIR  FS"/etc/profiled"
++# define CONFIG_DIR  FS"/usr/local/etc/profiled"
+ 
+ # ifdef __cplusplus
+ extern "C" {

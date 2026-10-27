@@ -66,6 +66,12 @@ TARBALL = {
                      "8.1 (LGPL parts only), which the qt5-webengine package of FreeBSD "
                      "15.1 (release_1) links; beside FFmpeg 9 of FreeBSD's quarterly "
                      "packages, without headers.", ['LGPL21+'], 'https://ffmpeg.org/'),
+    'libcanberra-pulse': ('0.30', "libcanberra's PulseAudio driver",
+                          "The PulseAudio output module of libcanberra 0.30, the "
+                          "version of FreeBSD's libcanberra package, which has only "
+                          "its OSS driver: for maemo-input-sounds and the other "
+                          "Maemo programs that play their sounds through PulseAudio.",
+                          ['LGPL21+'], 'https://0pointer.de/lennart/projects/libcanberra/'),
     'qt5-webkit': ('5.212.0.a4', 'QtWebKit with a more modern WebKit code base',
                    "QtWebKit 5.212.0-alpha4, the last release of the Qt port of WebKit, "
                    "with the patches of FreeBSD's port and Arch's: WebKit 1 (QWebView, "
@@ -141,10 +147,20 @@ RUNTIME = {
     'dorian': ['qt5-sqldrivers-sqlite3'],
     # the chess engine the game runs
     'osso-chess-ui': ['gnuchess'],
+    # the click sounds, through libcanberra's PulseAudio driver (the sound
+    # files are osso-sounds-ui's, see build.sh LESTE_DATA)
+    'maemo-input-sounds': ['libcanberra', 'libcanberra-pulse', 'pulseaudio'],
+    'libcanberra-pulse': ['libcanberra'],
     # alarmd asks clockd for the time; the alarm dialog is a system UI
     # plugin, it rings through the notification plugin
     'alarmd': ['clockd'],
     'osso-systemui-alarm': ['osso-systemui', 'alarmd', 'osso-sounds-ui'],
+    # the decoder service makes WAV files of the AAC and MP3 tones (alarms,
+    # ringtones) with GStreamer: decodebin, qtdemux and wavenc (good), faad,
+    # Ogg Vorbis, mpg123
+    'hildon-plugins-notify-sv': ['gstreamer1-plugins-good', 'gstreamer1-plugins-faad',
+                                 'gstreamer1-plugins-ogg', 'gstreamer1-plugins-vorbis',
+                                 'gstreamer1-plugins-mpg123'],
     'statusbar-alarm': ['alarmd'],
     # QML on the MeeGo components; its alarms are alarmd's
     'meego-clock': ['qt-components', 'alarmd', 'clockd'],
@@ -238,7 +254,7 @@ REVISION = {
     # missing alarmd), apps' data moved from /usr/share to /usr/local/share
     'cityinfo': 1, 'clockd': 1, 'clock-ui': 1,
     'easylist': 1, 'flappybird': 1, 'hamsterfiler': 1, 'maepad': 1,
-    'mihphoto': 1, 'osso-mahjong': 1, 'profilesx': 1, 'qshot': 1,
+    'mihphoto': 1, 'osso-mahjong': 1, 'qshot': 1,
     # 2026-10-27: the launcher's menu below /usr/local (it was empty), the
     # MeeGo-like pages (patches/meego, off by default); 2: the edge
     # gestures, no more crash when a thumbnail zooms in (isnanf, 0003)
@@ -250,6 +266,13 @@ REVISION = {
     # 2026-10-27: Qt 5.15 fixes (fonts, theme images, window size, styles,
     # dialogs and banners that took taps)
     'qt-components': 1,
+    # 2026-10-27: the profiles from /usr/local/etc/profiled (profiled found
+    # none and answered every value empty), profilesx's custom profiles and
+    # helper there too (2)
+    'profiled': 1, 'profilesx': 2,
+    # 2026-10-27: sounds: no Linux-only time stamps (it aborted), the decoded
+    # tones in the user's directory, the decoder's caps as GTypes (it crashed)
+    'hildon-plugins-notify-sv': 1,
 }
 
 
@@ -615,10 +638,10 @@ apps = sorted(x['name'] for x in meta.values()
               if any(os.path.isdir(os.path.join(x['root'], d, 'share/applications'))
                      for d in ('usr/local', 'usr')))
 # and what works without an entry: the on-screen keyboard, daemons, the
-# alarm dialog (with alarmd and the system UI)
+# alarm dialog (with alarmd and the system UI), the click sounds
 apps = sorted(set(apps) | {x['name'] for x in meta.values() if x['name'] in (
     'hildon-input-method-plugins', 'headphoned', 'wifi-assistant', 'hildon-status-menu',
-    'osso-systemui-alarm')})
+    'osso-systemui-alarm', 'maemo-input-sounds')})
 for name, comment, desc, root, deps in (
         ('hildon-session', "Maemo Leste's Hildon session for FreeBSD",
          'hildon-session (startx hildon-session, or "startx hildon" on the Pro1X) '

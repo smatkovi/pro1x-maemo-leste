@@ -1,0 +1,30 @@
+FreeBSD: the decoded tones (WAV files the decoder service makes of the
+AAC and MP3 tones) in the user's data directory, not in
+/home/user/.local/share/sounds, which is Leste's user's only.
+
+--- a/lib/nsv.c
++++ b/lib/nsv.c
+@@ -310,7 +310,7 @@
+ gboolean
+ nsv_initialize()
+ {
+-  const char *target_path = "/home/user/.local/share/sounds";
++  gchar *target_path;
+ 
+   if (nsv)
+     return TRUE;
+@@ -337,10 +337,14 @@
+   register_message_events();
+   register_system_events();
+ 
++  /* the decoded tones in the user's data directory (Leste's user is
++   * "user", so this was /home/user/.local/share/sounds) */
++  target_path = g_build_filename(g_get_user_data_dir(), "sounds", NULL);
+   g_mkdir_with_parents(target_path, 0700);
+ 
+   nsv->decoder = nsv_decoder_new();
+   g_object_set(G_OBJECT(nsv->decoder), "target-path", target_path, NULL);
++  g_free(target_path);
+ 
+   nsv->system_proxy = nsv_system_proxy_get_instance();
+ 

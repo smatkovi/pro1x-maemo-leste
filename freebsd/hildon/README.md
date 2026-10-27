@@ -95,6 +95,19 @@ needs its bus. `../vm/try-alarm.sh` sets an alarm as clock-ui does and
 takes a screenshot of the dialog (`RESPOND=snooze` or `stop` taps a
 button).
 
+Sounds play through PulseAudio, which the session starts: the Maemo 5
+key and touch screen clicks (`maemo-input-sounds`, at the profile's
+levels, with libcanberra's PulseAudio driver `libcanberra-pulse`, which
+FreeBSD's libcanberra package leaves out) and the notifications and
+alarms (`hildon-plugins-notify-sv`: hildon-home's sound daemon decodes
+AAC, Ogg and MP3 tones into WAV files in `~/.local/share/sounds` with
+GStreamer, then plays them). The sound files themselves are Maemo 5's,
+from Leste's archive (`osso-sounds-*`, `maemo-ringtones-mr0`); the
+`osso-sounds-*` ones are Nokia's under an all-rights-reserved licence, so
+they belong in one's own image, not in a public release (`build.sh`,
+LESTE_DATA). `../vm/vm.sh` with `AUDIO=wav` records the VM's sound card
+into a WAV file, which is how the sounds were checked.
+
 MeeGo apps: `qt-components` is com.nokia.meego, the Nokia N9's Qt Quick
 components, in Nemo Mobile's port to Qt 5 (`import com.nokia.meego 2.0`),
 with what Qt 5.15 needs (`patches/qt-components`): Harmattan's fonts

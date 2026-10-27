@@ -65,11 +65,20 @@ if [ -x /usr/local/bin/systemui ]; then
 	respawn /usr/local/bin/systemui &
 	alarm="$alarm $!"
 fi
+# The key and touch screen clicks of Maemo 5 at the profile's key sound
+# level (Leste: Xsession.post/01maemo-xinput-sounds-start), through
+# PulseAudio, which starts for the session when there is a sound device
+sounds=
+if [ -x /usr/local/bin/maemo-xinput-sounds ]; then
+	pulseaudio --start --exit-idle-time=-1 2> /dev/null || true
+	respawn /usr/local/bin/maemo-xinput-sounds &
+	sounds=$!
+fi
 respawn /usr/local/bin/hildon-status-menu &
 menu=$!
 respawn /usr/local/bin/hildon-home &
 home=$!
 /usr/local/bin/hildon-desktop
-kill $menu $home $alarm $sapwood 2> /dev/null
+kill $menu $home $alarm $sounds $sapwood 2> /dev/null
 kill "$DBUS_SESSION_BUS_PID" 2> /dev/null
 xset r 36 r 70 r 72 r 9 r 104 2> /dev/null

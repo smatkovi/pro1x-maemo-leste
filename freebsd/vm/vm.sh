@@ -5,7 +5,12 @@
 # phone or into a release.
 #
 #   VMDIR=~/freebsd-vm bash freebsd/vm/vm.sh setup   once: image, key, seed
-#   VMDIR=~/freebsd-vm bash freebsd/vm/vm.sh run     start it (serial console)
+#   VMDIR=~/freebsd-vm bash freebsd/vm/vm.sh run     start it (serial console;
+#                                                    AUDIO=wav: a sound card
+#                                                    whose output goes to
+#                                                    $VMDIR/vm-audio.wav, which
+#                                                    grows while the VM runs;
+#                                                    in the VM: kldload snd_hda)
 #   VMDIR=~/freebsd-vm bash freebsd/vm/vm.sh ssh [command]
 #
 # Needs qemu-system-aarch64 and edk2-aarch64 (Arch: pacman), genisoimage.
@@ -51,7 +56,10 @@ setup)
 	;;
 run)
 	cd "$VMDIR"
-	exec qemu-system-aarch64 -M virt -cpu max -smp 4 -m 6144 \
+	audio=()
+	[ "${AUDIO:-}" != wav ] || audio=(-audiodev wav,id=snd0,path=vm-audio.wav
+	    -device intel-hda -device hda-output,audiodev=snd0)
+	exec qemu-system-aarch64 "${audio[@]}" -M virt -cpu max -smp 4 -m 6144 \
 	    -accel tcg,thread=multi \
 	    -drive if=pflash,format=raw,readonly=on,file="$FW/QEMU_EFI.fd" \
 	    -drive if=pflash,format=raw,file=vars.fd \

@@ -502,7 +502,13 @@ unsysroot() {
 # /usr/local/share.
 LESTE=https://maedevu.maemo.org/leste
 LESTE_DIST=daedalus
-LESTE_DATA="hildon-theme-alpha osso-icons-default osso-sounds-ui"
+# the Maemo 5 sounds as Leste has them: the user interface, calls and
+# chat, the ringtones, the chess game. The osso-sounds-* files are Nokia's
+# (debian/copyright: all rights reserved, copying needs Nokia's consent)
+# and maemo-ringtones-mr0 names no licence: for one's own image, not for a
+# public release. Of them only osso-sounds-ui is a dependency
+# (hildon-desktop, osso-systemui-alarm).
+LESTE_DATA="hildon-theme-alpha osso-icons-default osso-sounds-ui osso-sounds-rtc maemo-ringtones-mr0 osso-sounds-game-chess"
 
 leste_data() {
 	local d=$H/leste f sum

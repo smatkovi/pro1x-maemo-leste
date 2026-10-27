@@ -1,0 +1,30 @@
+FreeBSD: the custom profiles beside profiled's own, in
+/usr/local/etc/profiled (profiled's patch 0002), and their helper in
+/usr/local/bin, where build.sh moves the programs.
+
+--- a/control_panel_plugin/profilesx-control-panel-plugin.c
++++ b/control_panel_plugin/profilesx-control-panel-plugin.c
+@@ -35,9 +35,9 @@
+ #define PROFILED_PATH "/com/nokia/profiled"
+ #define PROFILED_SERVICE "com.nokia.profiled"
+ 
+-#define RM_PROFILE_CMD "sudo /usr/bin/profilesx_util -r \"%s\""
+-#define ADD_PROFILE_CMD "sudo /usr/bin/profilesx_util -a \"%s\""
+-#define CUSTOM_PROFILE_INI "/etc/profiled/80.profilesx.ini"
++#define RM_PROFILE_CMD "sudo /usr/local/bin/profilesx_util -r \"%s\""
++#define ADD_PROFILE_CMD "sudo /usr/local/bin/profilesx_util -a \"%s\""
++#define CUSTOM_PROFILE_INI "/usr/local/etc/profiled/80.profilesx.ini"
+ 
+ 
+ gboolean is_predefined_profile(const gchar* profile_name)
+--- a/control_panel_plugin/profilesx-util.c
++++ b/control_panel_plugin/profilesx-util.c
+@@ -1,7 +1,7 @@
+ #include <stdio.h>
+ #include <glib.h>
+ 
+-#define KEYFILE "/etc/profiled/80.profilesx.ini"
++#define KEYFILE "/usr/local/etc/profiled/80.profilesx.ini"
+ 
+ void handle_error(GError* error)
+ {

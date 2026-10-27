@@ -1,0 +1,46 @@
+The two stream-restore rules (key and touch screen click volume) as an
+array, which pa_ext_stream_restore_write() reads: from the first rule's
+address it read the second from beyond it, and PulseAudio dropped the
+connection over the garbage ("protocol error, kicking client"), every
+time the volumes were set, so that no click played.
+
+--- a/mis-pulse.c
++++ b/mis-pulse.c
+@@ -185,9 +185,9 @@
+ void volume_changed_cb(void *data) {
+ 	struct private_data *priv = (void *)data;
+ 	pa_operation *pa_op;
+-	pa_ext_stream_restore_info key_info;
+-	pa_ext_stream_restore_info ts_info;
+-	pa_ext_stream_restore_info *pa_restore_info[2];
++	/* the two rules side by side: pa_ext_stream_restore_write() takes an
++	 * array of them */
++	pa_ext_stream_restore_info pa_restore_info[2];
+ 	//pa_ext_stream_restore2_info key_info;
+ 	//pa_ext_stream_restore2_info ts_info;
+ 	//pa_ext_stream_restore2_info *pa_restore_info[2];
+@@ -199,21 +199,18 @@
+ 
+ 	LOG_VERBOSE("Volume changed, updating rules");
+ 
+-	pa_restore_info[0] = &key_info;
+-	pa_restore_info[1] = &ts_info;
+-
+ 	if ((mis_fill_info
+-	     (&key_info, "x-maemo-key-pressed", priv->volume_key_press) < 0)
++	     (&pa_restore_info[0], "x-maemo-key-pressed", priv->volume_key_press) < 0)
+ 	    ||
+ 	    (mis_fill_info
+-	     (&ts_info, "x-maemo-touchscreen-pressed",
++	     (&pa_restore_info[1], "x-maemo-touchscreen-pressed",
+ 	      priv->volume_pen_down) < 0)) {
+ 		LOG_VERBOSE("Cannot fill volume from stream-restore");
+ 		return;
+ 	}
+ 	//pa_op = pa_ext_stream_restore2_write
+ 	pa_op = pa_ext_stream_restore_write(priv->pa_ctx, PA_UPDATE_REPLACE,
+-					    *pa_restore_info, 2, 1, NULL, NULL);
++					    pa_restore_info, 2, 1, NULL, NULL);
+ 	if (pa_op)
+ 		pa_operation_unref(pa_op);
+ 	else
