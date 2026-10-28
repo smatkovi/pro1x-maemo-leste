@@ -8,6 +8,12 @@
 #   pro1x-boot slot a|b             make the bootloader start slot a or b
 #   pro1x-boot reboot <system>      next <system> + reboot
 #   pro1x-boot current              the system that is running now
+#   pro1x-boot trial <kernel> [n]   slot b on trial for kernel version <kernel>
+#                                   (after flashing it, 65-kernel-update.sh): n
+#                                   starts (2-7, default 3), then slot a
+#   pro1x-boot trial-ok             (in a system) this start of the kernel on
+#                                   trial went well; the next boot ends the trial
+#   pro1x-boot trial-stop           end a trial by hand (slot b as before)
 #
 # Systems: leste, meego, kali, luneos, arch, freebsd (started from slot b through
 # the boot menu in the initramfs) and sailfish (slot a, its own kernel). MeeGo is
@@ -90,8 +96,23 @@ valid_key() {
 	all_entries | cut -d'|' -f1 | grep -qx "$1" || die "unknown system '$1' ($(all_entries | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//; s/ /, /g'))"
 }
 
+# tries left and "successful" of boot_b, as the bootloader sees them
+slot_b_state() {
+	p=$(part_of boot_b) || return 1
+	set -- $p
+	a=$(attrs "$1" "$2")
+	echo "$(( (0x$a >> 51) & 7 )) tries left, $( [ $(( (0x$a >> 54) & 1 )) -eq 1 ] &&
+		echo successful || echo not successful)"
+}
+
 # "disk partition-number" for a partition label
 part_of() {
+	# (tests: the partitions of a GPT in an image file)
+	if [ -n "${PRO1X_BOOT_GPT:-}" ]; then
+		n=$(sgdisk -p "$PRO1X_BOOT_GPT" | awk -v l="$1" '$NF == l { print $1 }')
+		[ -n "$n" ] && echo "$PRO1X_BOOT_GPT $n"
+		return
+	fi
 	dev=$(readlink -f "/dev/disk/by-partlabel/$1" 2>/dev/null || true)
 	[ -b "$dev" ] || dev=$(blkid -t "PARTLABEL=$1" -o device 2>/dev/null | head -1)
 	[ -b "$dev" ] || return 1
@@ -114,7 +135,10 @@ active_slot() {
 # count, 54 successful, 55 unbootable. Like `fastboot set_active` the target
 # gets priority 3, active, 7 retries; unlike it, "successful" is kept set,
 # because Sailfish never marks its boot successful and would otherwise lose
-# its slot after seven starts.
+# its slot after seven starts. Slot b on trial ($CONF/trial, pro1x-boot
+# trial) gets the trial's tries and stays not successful: the bootloader
+# then takes one try for every start of it and starts slot a when none
+# are left (as it did on 2026-10-24, before slot b was marked successful).
 set_slot() {
 	target=$1
 	case $target in a) other=b ;; b) other=a ;; *) die "slot must be a or b" ;; esac
@@ -129,9 +153,17 @@ set_slot() {
 	sgdisk -v "$tdisk" | grep -q 'No problems found' || die "GPT of $tdisk not clean, not touching it"
 	mkdir -p "$CONF"
 	sgdisk -b "$CONF/gpt-${tdisk##*/}.bak" "$tdisk" >/dev/null
+	tries=7 succ=set
+	if [ "$target" = b ] && [ -f "$CONF/trial" ]; then
+		tries=$(cut -d' ' -f2 "$CONF/trial") succ=clear
+	fi
+	r1=clear r2=clear r4=clear
+	[ $((tries & 1)) -eq 0 ] || r1=set
+	[ $((tries & 2)) -eq 0 ] || r2=set
+	[ $((tries & 4)) -eq 0 ] || r4=set
 	sgdisk -A "$tnum:set:48" -A "$tnum:set:49" -A "$tnum:set:50" \
-	       -A "$tnum:set:51" -A "$tnum:set:52" -A "$tnum:set:53" \
-	       -A "$tnum:set:54" -A "$tnum:clear:55" \
+	       -A "$tnum:$r1:51" -A "$tnum:$r2:52" -A "$tnum:$r4:53" \
+	       -A "$tnum:$succ:54" -A "$tnum:clear:55" \
 	       -A "$onum:clear:48" -A "$onum:set:49" -A "$onum:clear:50" \
 	       "$tdisk" >/dev/null
 	sync
@@ -157,6 +189,51 @@ list)
 	echo "next:    $(cat "$CONF/next" 2>/dev/null || echo -)"
 	echo "timeout: $(cat "$CONF/timeout" 2>/dev/null || echo 5) s"
 	echo "active slot: $(active_slot 2>/dev/null || echo ?)"
+	if [ -f "$CONF/trial" ]; then
+		echo "trial:   kernel $(cut -d' ' -f1 "$CONF/trial") on slot b, boot_b $(slot_b_state || echo ?)$( [ ! -f "$CONF/trial-ok" ] || echo ', start confirmed')"
+	fi
+	;;
+trial)
+	[ $# -ge 2 ] && [ $# -le 3 ] || die "usage: pro1x-boot trial <kernel version> [tries]"
+	n=${3:-3}
+	case $n in [2-7]) ;; *) die "tries: 2 to 7 (one is taken by the start that confirms)" ;; esac
+	mkdir -p "$CONF"
+	echo "$2 $n" > "$CONF/trial"
+	rm -f "$CONF/trial-ok"
+	set_slot b
+	sync
+	echo "kernel $2 on trial: $n starts of slot b, then slot a, unless a start is confirmed (pro1x-boot-trial)"
+	;;
+trial-ok)
+	[ -f "$CONF/trial" ] || { echo "no trial"; exit 0; }
+	[ "$(cut -d' ' -f1 "$CONF/trial")" = "$(uname -r)" ] ||
+		{ echo "the trial is not for the running kernel"; exit 0; }
+	touch "$CONF/trial-ok"
+	sync
+	echo "start of $(uname -r) confirmed; the next boot ends the trial"
+	;;
+trial-check)
+	# For the initramfs: none, stale (the trial's kernel is not the one
+	# running: its image was replaced), passed (a start was confirmed:
+	# trial over, slot b successful again) or running.
+	if [ ! -f "$CONF/trial" ]; then
+		echo none
+	elif [ "$(cut -d' ' -f1 "$CONF/trial")" != "$(uname -r)" ]; then
+		rm -f "$CONF/trial" "$CONF/trial-ok"
+		set_slot b > /dev/null
+		echo stale
+	elif [ -f "$CONF/trial-ok" ]; then
+		rm -f "$CONF/trial" "$CONF/trial-ok"
+		set_slot b > /dev/null
+		echo passed
+	else
+		echo running
+	fi
+	;;
+trial-stop)
+	rm -f "$CONF/trial" "$CONF/trial-ok"
+	set_slot b
+	sync
 	;;
 next|default)
 	[ $# -eq 2 ] || die "usage: pro1x-boot $1 <system>"
@@ -204,7 +281,7 @@ set-current)
 	;;
 get-timeout) cat "$CONF/timeout" 2>/dev/null || echo 5 ;;
 *)
-	sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
 	exit 1
 	;;
 esac
