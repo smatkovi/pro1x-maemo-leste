@@ -1,0 +1,13 @@
+diff --git a/server/server.pro b/server/server.pro
+index c0c0e2a..851fb25 100644
+--- a/server/server.pro
++++ b/server/server.pro
+@@ -174,7 +174,7 @@ use_systemd {
+     PKGCONFIG += libsystemd
+ }
+ 
+-LIBS += -L$${PREFIX}/lib -lmarisa -lkyotocabinet -lz -lsqlite3
++LIBS += -lmarisa -lkyotocabinet -lz -lsqlite3
+ 
+ # translations
+ TRANSLATIONS += \

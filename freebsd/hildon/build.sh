@@ -282,6 +282,11 @@ fetch_src() {
 	git -C "$SRC/$name" cat-file -e "$rev^{commit}" 2> /dev/null ||
 	    git -C "$SRC/$name" fetch -q origin '+refs/pull/*/head:refs/remotes/origin/pr/*'
 	git -C "$SRC/$name" checkout -q -f "$rev"
+	# submodules at their pinned commits only (maplibre-native-qt's
+	# maplibre-native has more than 6 GB of history)
+	if [ -f "$SRC/$name/.gitmodules" ]; then
+		git -C "$SRC/$name" submodule update -q --init --recursive --depth 1 --jobs 8
+	fi
 }
 
 # Into the part's own root, then the stage and the sysroot

@@ -120,6 +120,28 @@ UPSTREAM = {
     'pd-mapper': ('1.1', 'Qualcomm protection domain mapper',
                   "pd-mapper tells the DSPs which of them serves which protection "
                   "domain, from the firmware's .jsn files.", ['BSD3CLAUSE']),
+    'maplibre-native-qt': ('3.0.0', 'MapLibre Native for Qt, the map renderer of Pure Maps',
+                           "MapLibre Native Qt draws vector tile maps with OpenGL (ES) "
+                           "for Qt programs: Pure Maps' renderer, without its widgets "
+                           "and QtLocation plugin.", ['BSD2CLAUSE']),
+    'nemo-qml-plugin-dbus': ('2.1.27', 'Nemo.DBus: D-Bus for QML',
+                             "Nemo.DBus, Sailfish OS's D-Bus interfaces and adaptors for "
+                             "QML (and its libnemodbus), which Pure Maps' pages use.",
+                             ['LGPL21']),
+    'mapbox-gl-qml': ('3.0.0.79', "Pure Maps' QML map item on MapLibre",
+                      "mapbox-gl-qml, the MapboxMap QML item on MapLibre Native Qt, "
+                      "with its gestures.", ['LGPL3']),
+    'pure-maps': ('3.5.1', 'Maps and navigation on OpenStreetMap data',
+                  "Pure Maps, the Kirigami version: vector maps, search, routing and "
+                  "turn-by-turn navigation with voice, online or with OSM Scout "
+                  "Server; menu entries for MeeGo's home and Hildon, with Kirigami's "
+                  "touch layout (pure-maps-mobile).", ['GPLv3+']),
+    'osmscout-server': ('3.1.7', 'Offline maps and search for Pure Maps',
+                        "OSM Scout Server, the Kirigami version: downloads OpenStreetMap "
+                        "data per country and serves Pure Maps vector tiles and search "
+                        "(geocoder-nlp on libpostal) on 127.0.0.1:8553, started through "
+                        "D-Bus; without Mapnik raster tiles and Valhalla routing.",
+                        ['GPLv3+']),
 }
 MAINTAINER = 'sebastian.matkovich@gmail.com'
 # What a part needs besides the libraries it links: interpreters, the
@@ -159,6 +181,16 @@ RUNTIME = {
     'meego-clock': ['qt-components', 'alarmd', 'clockd'],
     # QML on QtQuick Controls 2, its stations in SQLite
     'meecast': ['qt5-quickcontrols2', 'qt5-graphicaleffects', 'qt5-sqldrivers-sqlite3'],
+    # its tile cache is an SQLite database (QtSql)
+    'maplibre-native-qt': ['qt5-sqldrivers-sqlite3'],
+    # Python through PyOtherSide; the QML modules its pages import; the
+    # voice (eSpeak NG)
+    'pure-maps': ['python312', 'pyotherside-qt5', 'kf5-kirigami2', 'mapbox-gl-qml',
+                  'nemo-qml-plugin-dbus', 'qt5-quickcontrols2', 'qt5-quickcontrols',
+                  'qt5-graphicaleffects', 'qt5-location', 'qt5-multimedia', 'qt5-sensors',
+                  'espeak-ng'],
+    'osmscout-server': ['kf5-kirigami2', 'qt5-quickcontrols2', 'qt5-quickcontrols',
+                        'qt5-location', 'qt5-sqldrivers-sqlite3'],
 }
 # Where debian/copyright says only "GPL" (any version) or nothing
 LICENSES = {

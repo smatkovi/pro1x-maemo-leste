@@ -19,7 +19,8 @@ REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 MNT=${MNT:-/mnt/arch}
 JOBS=${JOBS:-$(nproc)}
 B=/usr/src/hildon
-SKIP=" ffmpeg8-libs qt5-webengine qt5-webkit jib dorian hexagonrpc libqrtr-glib libqmi libssc qrtr rmtfs tqftpserv pd-mapper "
+# (Pure Maps and OSM Scout Server: Arch has them as Flatpaks)
+SKIP=" ffmpeg8-libs qt5-webengine qt5-webkit jib dorian hexagonrpc libqrtr-glib libqmi libssc qrtr rmtfs tqftpserv pd-mapper maplibre-native-qt nemo-qml-plugin-dbus mapbox-gl-qml pure-maps osmscout-server "
 log() { echo ">> $*"; }
 
 mountpoint -q "$MNT" || { echo "$MNT is not mounted"; exit 1; }

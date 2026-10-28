@@ -1,0 +1,29 @@
+--- a/server/src/main.cpp	2026-10-28 14:28:07.635108044 +0100
++++ b/server/src/main.cpp	2026-10-28 14:28:07.644132988 +0100
+@@ -72,7 +72,11 @@
+ #include <poll.h>
+ #include <string.h>
+ #include <sys/ioctl.h>
++#ifdef __FreeBSD__
++#include <sys/procctl.h>
++#else
+ #include <sys/prctl.h>
++#endif
+ #include <sys/socket.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
+@@ -277,8 +281,14 @@
+ 
+       // set to die if the parent dies
+       // linux specific solution
++#ifdef __FreeBSD__
++      int deathsig = SIGTERM;
++      CHECK_FOR_ERROR(procctl(P_PID, 0, PROC_PDEATHSIG_CTL, &deathsig) == -1,
++                      "Error: procctl() in forked server", 10);
++#else
+       CHECK_FOR_ERROR(prctl(PR_SET_PDEATHSIG, SIGTERM) == -1,
+                       "Error: prctl() in forked server", 10);
++#endif
+ 
+       CHECK_FOR_ERROR(getppid() != main_pid,
+                       "Closing as parent died while starting the forked process", 0);

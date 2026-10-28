@@ -122,6 +122,14 @@ APPS=(
 	"pedometerhomewidget|!"
 	"wifi-assistant|!"
 	"gpodder-leste|!"
+	# Pure Maps and OSM Scout Server (github.com/smatkovi/pure-maps-ports
+	# has the same for Leste): the map renderer, its QML map item, Nemo.DBus
+	# for Pure Maps' pages, then the two apps
+	"maplibre-native-qt|!"
+	"nemo-qml-plugin-dbus|!"
+	"mapbox-gl-qml|!"
+	"pure-maps|!"
+	"osmscout-server|!"
 )
 
 REV+=(
@@ -174,6 +182,9 @@ REV+=(
 	[pd-mapper]=5ecd2fe926ac
 	[headphoned]=d476cb4a8bf9 [pedometerhomewidget]=06d5246191fa
 	[wifi-assistant]=604bbe98d8b5 [gpodder-leste]=2759445563b5
+	[maplibre-native-qt]=d929c7837371 [nemo-qml-plugin-dbus]=264aa47d6e94
+	[mapbox-gl-qml]=79e0cccea572 [pure-maps]=5807c1be2de7
+	[osmscout-server]=8db9b103142f
 )
 URL+=(
 	[maepad]=$GM_EXTRAS/maepad.git
@@ -207,6 +218,11 @@ URL+=(
 	[pedometerhomewidget]=https://github.com/smatkovi/pedometerhomewidget.git
 	[wifi-assistant]=https://github.com/smatkovi/wifi-assistant.git
 	[gpodder-leste]=https://github.com/smatkovi/gpodder-leste.git
+	[maplibre-native-qt]=https://github.com/maplibre/maplibre-native-qt.git
+	[nemo-qml-plugin-dbus]=https://github.com/sailfishos/nemo-qml-plugin-dbus.git
+	[mapbox-gl-qml]=https://github.com/rinigus/mapbox-gl-qml.git
+	[pure-maps]=https://github.com/rinigus/pure-maps.git
+	[osmscout-server]=https://github.com/rinigus/osmscout-server.git
 )
 
 # A plain Makefile: built with the cross compiler, installed below /usr,
@@ -801,4 +817,87 @@ custom_maemo_launcher() {
 	install -d "$PR/usr/local/libdata/pkgconfig"
 	printf 'Name: maemo-launcher-app\nDescription: maemo-launcher application startup accelerator (FreeBSD: plain programs)\nVersion: %s\nLibs:\nCflags:\n' \
 	    "$v" > "$PR/usr/local/libdata/pkgconfig/maemo-launcher-app.pc"
+}
+
+# Pure Maps' map renderer, as Pure Maps' own builds have it (Qt 5: no
+# widgets, no QtLocation plugin; ICU of its own)
+custom_maplibre_native_qt() {
+	local CXXFLAGS="$CXXFLAGS -include cstdint"
+	qt_cmake -DMLN_QT_WITH_WIDGETS=OFF -DMLN_QT_WITH_LOCATION=OFF \
+	    -DMLN_QT_WITH_INTERNAL_ICU=ON -DMLN_WITH_WERROR=OFF
+}
+
+# Nemo.DBus (Sailfish OS's D-Bus for QML), without its tests (/opt)
+custom_nemo_qml_plugin_dbus() {
+	qt_qmake dbus.pro VERSION=2.1.27 && rm -rf "${PR:?}/opt"
+}
+
+# Pure Maps' QML map item on MapLibre
+custom_mapbox_gl_qml() {
+	qt_cmake -DQT_VERSION_MAJOR=5 -DQT_INSTALL_QML=/usr/local/lib/qt5/qml
+}
+
+# map_entries NAME PROGRAM DESKTOP TITLE COMMENT ICON [PRELOAD]: a
+# program's start with Kirigami's touch layout and the Material style
+# (NAME-mobile, which preloads PRELOAD), from the XDG menu entry (MeeGo's
+# home reads those) and from Hildon's menu
+map_entries() {
+	local name=$1 prog=$2 desktop=$3 title=$4 comment=$5 icon=$6 pre=${7:-}
+	install -d "$PR/usr/local/bin" "$PR/usr/local/share/applications/hildon"
+	cat > "$PR/usr/local/bin/$name-mobile" <<-WRAP
+	#!/bin/sh
+	# $title on a touch screen: Kirigami's touch layout and a Qt Quick
+	# Controls style with touch sized controls (both can be overridden)
+	: "\${QT_QUICK_CONTROLS_MOBILE:=1}"
+	: "\${QT_QUICK_CONTROLS_STYLE:=Material}"
+	export QT_QUICK_CONTROLS_MOBILE QT_QUICK_CONTROLS_STYLE
+	WRAP
+	[ -z "$pre" ] || cat >> "$PR/usr/local/bin/$name-mobile" <<-WRAP
+	# FreeBSD's Python modules (lib-dynload) are not linked to libpython:
+	# they need it loaded globally, not only as PyOtherSide's library
+	LD_PRELOAD="$pre\${LD_PRELOAD:+ \$LD_PRELOAD}"
+	export LD_PRELOAD
+	WRAP
+	echo "exec /usr/local/bin/$prog \"\$@\"" >> "$PR/usr/local/bin/$name-mobile"
+	chmod 755 "$PR/usr/local/bin/$name-mobile"
+	sed -i "s|^Exec=[^ ]*|Exec=/usr/local/bin/$name-mobile|" \
+	    "$PR/usr/local/share/applications/$desktop"
+	cat > "$PR/usr/local/share/applications/hildon/$name.desktop" <<-ENTRY
+	[Desktop Entry]
+	Encoding=UTF-8
+	Version=1.0
+	Type=Application
+	Name=$title
+	Comment=$comment
+	Exec=/usr/local/bin/$name-mobile
+	Icon=$icon
+	Terminal=false
+	Categories=Utility;Maps;
+	X-Osso-Type=application/x-executable
+	ENTRY
+}
+
+# Pure Maps, the Kirigami version (maps and navigation)
+custom_pure_maps() {
+	# s2's CMake files name the base system's OpenSSL as /usr/lib/...: the
+	# sysroot's
+	sed -i -E "s#([\";])/usr/lib/#\1$SYSROOT/usr/lib/#g" \
+	    "$SYSROOT/usr/local/share/s2/s2Targets.cmake"
+	# (Qt's CMake files set QT_MOC_EXECUTABLE only when they make Qt5::moc,
+	# which hosttools.cmake does; Pure Maps finds lconvert next to it)
+	qt_cmake -DFLAVOR=kirigami -DQT_MOC_EXECUTABLE=/usr/bin/moc-qt5 &&
+	    map_entries pure-maps pure-maps io.github.rinigus.PureMaps.desktop \
+	        "Pure Maps" "Maps and navigation" io.github.rinigus.PureMaps \
+	        /usr/local/lib/libpython3.12.so.1.0
+}
+
+# OSM Scout Server, Pure Maps' offline maps and search: vector tiles for
+# MapLibre and geocoder-nlp on FreeBSD's libpostal; no Mapnik raster tiles,
+# no Valhalla routing yet, no systemd (it starts through D-Bus)
+custom_osmscout_server() {
+	qt_qmake osmscout-server.pro SCOUT_FLAVOR=kirigami \
+	    CONFIG+=disable_mapnik CONFIG+=disable_valhalla CONFIG+=disable_systemd \
+	    CONFIG+=use_dbusactivation DBUS_SERVICE_PATH=/usr/local/share/dbus-1/services &&
+	    map_entries osmscout-server osmscout-server-gui osmscout-server-gui.desktop \
+	        "OSM Scout Server" "Offline maps, search and routing for Pure Maps" osmscout-server
 }

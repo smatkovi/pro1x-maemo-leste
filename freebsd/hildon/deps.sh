@@ -19,7 +19,9 @@ APPS_PKGS="gtk3 vte poppler-glib upower gstreamer1 gstreamer1-plugins pulseaudio
 	qt5-xmlpatterns
 	libpci libvpx minizip nss nspr openh264 opus re2 snappy webp jsoncpp lcms2
 	double-conversion alsa-lib libxslt jpeg-turbo icu qt5-sqldrivers-sqlite3
-	json-c protobuf-c"
+	json-c protobuf-c
+	kf5-kirigami2 s2 abseil pyotherside-qt5 qt5-sensors
+	kyotocabinet marisa-trie libmicrohttpd libpostal"
 
 # What the N9's user interface (harmattan.sh) builds on beyond the apps'
 # libraries: tinycdb for contextkit's property cache
