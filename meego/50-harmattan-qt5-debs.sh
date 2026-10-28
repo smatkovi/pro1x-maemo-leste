@@ -93,7 +93,7 @@ apt-get -y -q --no-install-recommends install \
 	libicu-dev icu-devtools libdbus-glib-1-dev libxml2-dev libpolkit-gobject-1-dev intltool \
 	gtk-doc-tools gobject-introspection libgirepository1.0-dev libcdb-dev \
 	libxdamage-dev libxcomposite-dev libxrandr-dev libxtst-dev libxi-dev libx11-xcb-dev \
-	libxcb-shape0-dev libxcb-render0-dev libdsme0.2.0-dev \
+	libxcb-shape0-dev libxcb-render0-dev libdsme0.2.0-dev libxkbfile-dev \
 	libpulse-dev libsndfile1-dev libgconf2-dev gconf2 libprofile-dev \
 	check libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libcanberra-dev \
 	> /tmp/apt-install.log 2>&1 || { tail -20 /tmp/apt-install.log; exit 1; }
@@ -194,7 +194,8 @@ part() {
 		configure)
 			./configure "$@" > configure.log 2>&1 || { tail -20 configure.log; exit 1; } ;;
 		qmake)
-			qmake -r "$@" CONFIG+=NODOCS CONFIG+=NOTESTS INCLUDEPATH+=/usr/include/meegotouch \
+			# NOTESTS for most parts, notests for the reaction maps
+			qmake -r "$@" CONFIG+=NODOCS CONFIG+=NOTESTS CONFIG+=notests INCLUDEPATH+=/usr/include/meegotouch \
 			    INCLUDEPATH+=/usr/include/duicontrolpanel > qmake.log 2>&1 ||
 			    { tail -20 qmake.log; exit 1; } ;;
 		autotools)
@@ -296,7 +297,8 @@ missing=
 for f in mcompositor sysuid meegotouchhome meegofeedbackd ngfd meego-im-uiserver; do
 	command -v $f > /dev/null || missing="$missing $f"
 done
-ldconfig -p | grep -q libmeegotouchcore || missing="$missing libmeegotouchcore"
+# (grep reads it all: grep -q would end the pipe early, SIGPIPE under pipefail)
+ldconfig -p | grep libmeegotouchcore > /dev/null || missing="$missing libmeegotouchcore"
 echo "failed:${failed:- none}"
 echo "missing:${missing:- none}"
 [ -z "$failed$missing" ]
