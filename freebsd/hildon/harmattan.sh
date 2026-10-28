@@ -9,7 +9,7 @@
 # build files made /usr/local/ (FreeBSD's place for packages; the paths
 # the parts build in, themes, plugin and data directories, follow them).
 HQ5_URL=https://github.com/smatkovi/harmattan-qt5.git
-HQ5_REV=7e462e19ab833d16df3d5f35c220c377cae21a8c
+HQ5_REV=4491a3d1c533a88f5ad3bad1765dc62ad39f5a6e
 
 HARMATTAN=(
 	"libmlocale|!"

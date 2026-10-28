@@ -93,7 +93,7 @@ apt-get -y -q --no-install-recommends install \
 	libicu-dev icu-devtools libdbus-glib-1-dev libxml2-dev libpolkit-gobject-1-dev intltool \
 	gtk-doc-tools gobject-introspection libgirepository1.0-dev libcdb-dev \
 	libxdamage-dev libxcomposite-dev libxrandr-dev libxtst-dev libxi-dev libx11-xcb-dev \
-	libxcb-shape0-dev libxcb-render0-dev \
+	libxcb-shape0-dev libxcb-render0-dev libdsme0.2.0-dev \
 	libpulse-dev libsndfile1-dev libgconf2-dev gconf2 libprofile-dev \
 	check libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libcanberra-dev \
 	> /tmp/apt-install.log 2>&1 || { tail -20 /tmp/apt-install.log; exit 1; }
@@ -268,7 +268,8 @@ part libmeegotouch configure -prefix /usr -release -no-werror -nomake demos -nom
 part contextkit autotools --disable-doc --disable-coverage
 part libcontentaction autotools --disable-doc --disable-coverage
 part mcompositor qmake mcompositor.pro
-part libdsme make
+# libdsme: Leste's (libdsme0.2.0, which Leste's dsme uses; the same
+# sonames as Harmattan's), qmsystem2 is built against it
 # Harmattan's mce names are newer than Leste's mce-dev (1.10): in its place
 CONTROL="Provides: mce-dev
 Conflicts: mce-dev
