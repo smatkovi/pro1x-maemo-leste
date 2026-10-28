@@ -33,6 +33,22 @@ image: one line `key|Label|/image.img|` each in `/host/pro1x-boot/extra`.
 - Sensors (iio-sensor-proxy), GPS (gpsd from pro1x-gnss), step counter
   (`org.pro1x.Steps`), audio (Leste's UCM profile), Bluetooth.
 
+## Desktops
+
+Besides Phosh, three X11 sessions, each started for `alarm` on VT 7 by its
+unit; `pro1x-desktop phosh|hildon|meego|harmattan` (as root) picks one:
+
+| Session | Step | What it is |
+| --- | --- | --- |
+| `hildon` | `40-hildon.sh`, `41-hildon-apps.sh` | Maemo Leste's Hildon desktop with its apps, as on Leste and in the FreeBSD packages (Leste's sources at the revisions `freebsd/hildon` pins, Leste's theme, icons and sounds) |
+| `meego` | the same | Hildon with the Nokia N9's look as on FreeBSD: the home views, the launcher and the open applications as pages in a ring, the edge gestures (`patches/meego`), the MeeGo clock and the other MeeGo apps with the N9's theme |
+| `harmattan` | `30-meego.sh` | the N9's own user interface ported to Qt 5 (smatkovi/harmattan-qt5: mcompositor, the home screen, the system UI, the settings), its touch and event sounds |
+
+The N9's theme, fonts and sounds are Nokia's: step 30 takes them from the
+phone's own Harmattan image, nothing of them is in this repository. The
+apps leave out the web engines (QtWebEngine has no Arch Linux ARM package,
+QtWebKit would build for hours) and so Jib and Dorian.
+
 ## Btrfs and snapshots
 
 `15-btrfs.sh` (as root in Leste, the image not mounted) copies the ext4
