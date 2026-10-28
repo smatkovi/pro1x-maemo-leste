@@ -1,0 +1,43 @@
+#!/bin/sh
+# hildon-session: Maemo Leste's Hildon desktop as an X11 session on Arch
+# (arch/40-hildon.sh), started by hildon.service through xinit: what
+# Leste's Xsession.d and Xsession.post scripts do. The status menu and home
+# run beside hildon-desktop and come back when they crash; the session ends
+# with hildon-desktop.
+export GTK2_RC_FILES=/etc/hildon/theme/gtk-2.0/gtkrc
+case ${LANG:-C} in C|C.*|POSIX) LANG=en_GB.UTF-8 ;; esac
+export LANG
+export HILDON_DESKTOP_APPS_PRESTART=auto
+export CLUTTER_BACKEND=x11
+export XDG_CURRENT_DESKTOP=Hildon
+[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] ||
+	export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+
+mkdir -p /tmp/hildon-desktop /tmp/af-piddir
+# As Leste: no key repeat for Return and the hardware keys
+xset -r 36 -r 70 -r 72 -r 9 -r 104 2> /dev/null
+xset s off -dpms
+# At the N900's size on the full resolution (pro1x-hidpi)
+eval "$(/usr/local/bin/pro1x-hidpi env)"
+/usr/local/bin/pro1x-hidpi x11
+
+# The theme engine's image server before any GTK program
+GDK_DISABLE_XSHM=1 /usr/lib/sapwood/sapwood-server &
+sapwood=$!
+
+session=$$
+respawn() {
+	trap 'kill $pid 2> /dev/null; exit 0' TERM
+	while kill -0 "$session" 2> /dev/null; do
+		"$@" &
+		pid=$!
+		wait $pid
+		sleep 2
+	done
+}
+respawn /usr/bin/hildon-status-menu &
+menu=$!
+respawn /usr/bin/hildon-home &
+home=$!
+/usr/bin/hildon-desktop
+kill $menu $home $sapwood 2> /dev/null

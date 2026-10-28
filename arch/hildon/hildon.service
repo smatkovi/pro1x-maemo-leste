@@ -1,0 +1,33 @@
+# Maemo Leste's Hildon desktop (hildon-session) for the user alarm on VT 7
+# in place of Phosh (pro1x-desktop hildon): Xorg without root through logind, as
+# phosh.service starts phoc.
+[Unit]
+Description=Hildon session (Maemo Leste's desktop)
+After=systemd-user-sessions.service dbus.socket systemd-logind.service
+Wants=dbus.socket systemd-logind.service
+Conflicts=getty@tty7.service phosh.service meego.service
+After=getty@tty7.service
+ConditionPathExists=/dev/tty0
+
+[Service]
+Type=simple
+User=alarm
+WorkingDirectory=~
+PAMName=phosh
+Environment=XDG_SESSION_TYPE=x11 XDG_SESSION_CLASS=user
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty7
+UtmpMode=user
+ExecStartPre=+/usr/bin/chvt 7
+ExecStart=/usr/bin/xinit /usr/local/bin/hildon-session -- /usr/bin/Xorg :0 vt7 -keeptty -nolisten tcp
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=graphical.target
