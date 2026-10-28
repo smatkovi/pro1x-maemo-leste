@@ -115,6 +115,32 @@ ldconfig
 EOF
 fi
 
+# libical 3 (the calendar backend is written for it; Arch has libical 4,
+# whose API changed), as FreeBSD has it: below /opt/libical3, beside
+# Arch's, for the calendar backend and the apps on it only (the build loop)
+ICAL=libical-3.0.20
+ICAL_SHA256=e73de92f5a6ce84c1b00306446b290a2b08cdf0a80988eca0a2c9d5c3510b4c2
+if [ ! -f "$MNT/opt/libical3/lib/pkgconfig/libical.pc" ]; then
+	log "$ICAL (/opt/libical3)"
+	mkdir -p "$MNT$B/dl" "$MNT$B/build"
+	f=$MNT$B/dl/$ICAL.tar.gz
+	[ -f "$f" ] || curl -sSfL -o "$f" "https://github.com/libical/libical/releases/download/v${ICAL#libical-}/$ICAL.tar.gz"
+	echo "$ICAL_SHA256  $f" | sha256sum -c --quiet -
+	rm -rf "${MNT:?}$B/build/$ICAL"
+	tar -xzf "$f" -C "$MNT$B/build"
+	chroot "$MNT" /bin/bash -euo pipefail -s "$B/build/$ICAL" "$JOBS" <<'EOF'
+cd "$1"
+cmake -S . -B _build -DCMAKE_INSTALL_PREFIX=/opt/libical3 -DCMAKE_INSTALL_LIBDIR=lib \
+	-DCMAKE_BUILD_TYPE=Release -DICAL_GLIB=OFF -DICAL_BUILD_DOCS=OFF \
+	-DGOBJECT_INTROSPECTION=OFF -DICAL_GLIB_VAPI=OFF -DLIBICAL_BUILD_TESTING=OFF \
+	-DWITH_CXX_BINDINGS=OFF -DSHARED_ONLY=ON > cmake.log 2>&1 || { tail -20 cmake.log; exit 1; }
+cmake --build _build -j"$2" > make.log 2>&1 || { grep -m20 -E "error:|Error [0-9]" make.log; exit 1; }
+cmake --install _build > install.log 2>&1 || { tail -20 install.log; exit 1; }
+echo /opt/libical3/lib > /etc/ld.so.conf.d/libical3.conf
+ldconfig
+EOF
+fi
+
 log "sources"
 for p in "${APPS[@]}"; do
 	name=${p%%|*}
@@ -183,6 +209,12 @@ while IFS= read -r p; do
 	(
 		set -e
 		cd "$B/build/$name"
+		# the calendar on libical 3 (above)
+		case $name in
+		calendar-backend|qalendar|cal-home-widget)
+			export PKG_CONFIG_PATH=/opt/libical3/lib/pkgconfig CPATH=/opt/libical3/include
+			;;
+		esac
 		if [ -f debian/patches/series ]; then
 			grep -v '^#' debian/patches/series | while read -r q _; do
 				[ -n "$q" ] && patch -s -p1 < "debian/patches/$q"
