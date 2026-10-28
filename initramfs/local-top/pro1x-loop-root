@@ -130,33 +130,40 @@ SNAPS
     log_begin_msg "Switching to Sailfish OS (slot a)"
     pro1x-boot slot a && sync && umount /host && reboot -f
     log_failure_msg "slot switch failed, booting $IMAGE"
-  elif [ "$key" = freebsd ] && [ -x /sbin/kexec ]; then
-    # FreeBSD (freebsd/ in the repo) runs its own kernel: load it with
+  elif { [ "$key" = freebsd ] || [ "$key" = kolibri ]; } && [ -x /sbin/kexec ]; then
+    # FreeBSD (freebsd/ in the repo) and KolibriOS (github
+    # smatkovi/kolibrios-arm) run their own kernels: load it with
     # kexec_file, which hands over the device tree this kernel booted with,
-    # and jump. Linux ends here; FreeBSD reads only bootargs that start
-    # with "FreeBSD:", and freebsd/cmdline next to the kernel adds to them
-    # (kernel environment, e.g. hint.ufshci.0.disabled=1).
-    log_begin_msg "Starting FreeBSD"
-    pro1x-boot set-current freebsd
-    # FreeBSD has its own kernel: a Linux kernel on trial that came as far
-    # as this menu counts as started
+    # and jump. Linux ends here. FreeBSD reads only bootargs that start
+    # with "FreeBSD:"; cmdline next to the kernel adds to them (FreeBSD:
+    # kernel environment, e.g. hint.ufshci.0.disabled=1; KolibriOS:
+    # kolibri.lifetime=N, kolibri.noinput).
+    log_begin_msg "Starting $key"
+    pro1x-boot set-current "$key"
+    # its own kernel: a Linux kernel on trial that came as far as this
+    # menu counts as started
     [ "$trial" != running ] || pro1x-boot trial-ok > /dev/null
     args=$(cat "/host${image%/*}/cmdline" 2>/dev/null)
-    # The time: the RTC only counts, Leste keeps the offset (pro1x-rtc)
-    off=$(cat /host/pro1x-rtc-offset 2>/dev/null)
-    case "$off" in
-      ''|*[!0-9-]*) ;;
-      *) args="$args hint.qcom_rtc.0.offset=$off" ;;
-    esac
-    if kexec -s -l "/host$image" --command-line="FreeBSD:$args"; then
+    if [ "$key" = freebsd ]; then
+      # The time: the RTC only counts, Leste keeps the offset (pro1x-rtc)
+      off=$(cat /host/pro1x-rtc-offset 2>/dev/null)
+      case "$off" in
+        ''|*[!0-9-]*) ;;
+        *) args="$args hint.qcom_rtc.0.offset=$off" ;;
+      esac
+      args="FreeBSD:$args"
+    fi
+    if kexec -s -l "/host$image" --command-line="$args"; then
       sync
       umount /host
       # FreeBSD has no driver for the SMMU in front of UFS and gives the
       # controller physical addresses: rebind UFS with an identity
       # mapping. This also starts UFS over, and the kernel keeps it
-      # powered across kexec (device/kernel/patches/0004).
+      # powered across kexec (device/kernel/patches/0004). KolibriOS
+      # leaves UFS alone.
       ufs=/sys/bus/platform/devices/4804000.ufshc
-      grp=$(readlink "$ufs/iommu_group")
+      grp=
+      [ "$key" != freebsd ] || grp=$(readlink "$ufs/iommu_group")
       if [ -n "$grp" ]; then
         echo 4804000.ufshc > $ufs/driver/unbind
         echo identity > "/sys/kernel/iommu_groups/${grp##*/}/type" ||
@@ -165,18 +172,18 @@ SNAPS
         # back once its partitions are
         find_backing
       fi
-      # FreeBSD drives these on the setup Linux leaves (it has no clock
-      # drivers yet): runtime-active from here on, their clocks stay on.
+      # FreeBSD and KolibriOS drive these on the setup Linux leaves (no
+      # clock drivers): runtime-active from here on, their clocks stay on.
       # 4a84000.i2c: the keyboard's I2C bus.
       for d in 4a84000.i2c; do
         pm=/sys/bus/platform/devices/$d/power/control
         [ -e $pm ] && echo on > $pm
       done
       # The APSS watchdog (0x0f017000, kpss layout, 32 kHz) armed for its
-      # longest time, about 32 s: FreeBSD's qcom_wdt keeps feeding it, and a
-      # FreeBSD that hangs before or after that resets the phone into this
-      # menu again. Linux's qcom_wdt is not loaded here, so nothing stops
-      # it on the way out.
+      # longest time, about 32 s: FreeBSD's qcom_wdt (KolibriOS's timer)
+      # keeps feeding it, and a system that hangs before or after that
+      # resets the phone into this menu again. Linux's qcom_wdt is not
+      # loaded here, so nothing stops it on the way out.
       if command -v devmem > /dev/null; then
         devmem 0x0f017008 32 0
         devmem 0x0f017004 32 1

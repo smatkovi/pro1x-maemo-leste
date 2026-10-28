@@ -15,7 +15,7 @@
 #                                   trial went well; the next boot ends the trial
 #   pro1x-boot trial-stop           end a trial by hand (slot b as before)
 #
-# Systems: leste, meego, kali, luneos, arch, freebsd (started from slot b through
+# Systems: leste, meego, kali, luneos, arch, freebsd, kolibri (started from slot b through
 # the boot menu in the initramfs) and sailfish (slot a, its own kernel). MeeGo is
 # Harmattan (/harmattan.img) running on Maemo Leste's hardware layer: from its
 # own copy of it (/meego-leste.img, meego/45-meego-image.sh) or else from the
@@ -27,8 +27,9 @@
 # A system on Btrfs (Arch) lists its snapshots in $CONF/snapshots/<key>
 # (lines number|label, written by the system itself): the menu then has
 # "<label>: snapshots", and <key>@<number> boots that snapshot (read-only,
-# with its changes in RAM); FreeBSD (/freebsd/kernel.bin,
-# freebsd/) its own kernel, which the initramfs starts with kexec.
+# with its changes in RAM); FreeBSD (/freebsd/kernel.bin, freebsd/) and
+# KolibriOS (/kolibri/kernel.bin, github smatkovi/kolibrios-arm) their own
+# kernels, which the initramfs starts with kexec.
 # Works in the initramfs, in Maemo Leste/MeeGo (userdata on /host) and in
 # Sailfish OS (userdata on /userdata), so the choice never depends on keys:
 # pick the next system from the running one, then reboot.
@@ -54,6 +55,7 @@ all_entries() {
 	echo "luneos|LuneOS|/luneos.img|"
 	echo "arch|Arch Linux ARM|/arch.img|"
 	echo "freebsd|FreeBSD|/freebsd/kernel.bin|"
+	echo "kolibri|KolibriOS|/kolibri/kernel.bin|"
 	echo "sailfish|Sailfish OS||"
 	# more images booted with Leste's kernel, one key|label|image| a line
 	[ ! -f "$CONF/extra" ] || grep -E '^[a-z0-9-]+\|[^|]+\|/[^|]+\|$' "$CONF/extra" || true
