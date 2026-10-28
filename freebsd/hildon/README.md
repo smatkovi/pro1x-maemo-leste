@@ -220,9 +220,9 @@ licence statement. The sources are the pinned revisions in the table and
 | hildon-input-method | 2.1.61.1 | LGPL21 | [hildon-input-method](https://github.com/maemo-leste/hildon-input-method) | `0977df548b0b` | builds |
 | hildon-input-method-framework | 2.1.71.1 | LGPL21 | [hildon-input-method-framework](https://github.com/maemo-leste/hildon-input-method-framework) | `99afab2e2e78` | builds |
 | hildon-input-method-plugins | 3.9.91 | GPLv2+ | [hildon-input-method-plugins](https://github.com/maemo-leste/hildon-input-method-plugins) | `04c1d47222d0` | builds |
-| hildon-meta | 1.0.133 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `9201cbd4ef56` | builds |
-| hildon-plugins-notify-sv | 0.65 | GPLv3 | [hildon-plugins-notify-sv](https://github.com/maemo-leste/hildon-plugins-notify-sv) | `ddfe375457f7` | builds |
-| hildon-session | 1.0.133 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `9201cbd4ef56` | runs (VM) |
+| hildon-meta | 1.0.144 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d1c99b5996c6` | builds |
+| hildon-plugins-notify-sv | 0.65_1 | GPLv3 | [hildon-plugins-notify-sv](https://github.com/maemo-leste/hildon-plugins-notify-sv) | `ddfe375457f7` | runs (VM: an alarm rings through the whole chain, alarmd to the alarm dialog to the sound daemon, rising in volume as on Maemo, until Stop; the tones are decoded 90 s after the session starts, an alarm before that is silent; ringtones named without a path in the profile stay undecoded) |
+| hildon-session | 1.0.144 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d1c99b5996c6` | runs (VM) |
 | hildon-status-menu | 0.3.43.1 | LGPL21 | [hildon-status-menu](https://github.com/maemo-leste/hildon-status-menu) | `796dbd7ca973` | runs (VM) |
 | hildon-theme-alpha | 9.7 | GPLv3 | [maemo-leste](https://github.com/maemo-leste) |  | builds |
 | hildon-thumbnail | 3.1.4 | LGPL21 | [hildon-thumbnail](https://github.com/maemo-leste/hildon-thumbnail) | `86bd10f3f620` | builds |
@@ -252,7 +252,9 @@ licence statement. The sources are the pinned revisions in the table and
 | libssc | 0.4.4 | GPLv3+ | [libssc](https://codeberg.org/DylanVanAssche/libssc) | `0cf77b93b557` | builds |
 | live-wallpaper | 1.0.3.1.leste1 | GPLv2+ | [live-wallpaper](https://github.com/maemo-leste-extras/live-wallpaper) | `d950d1e44e66` | builds |
 | maefat | 2.1.1.1.leste2 | GPLv2 | [maefat](https://github.com/maemo-leste-extras/maefat) | `11bc84b6fccb` | runs (VM) |
+| maemo-input-sounds | 1.0.4 | UNKNOWN | [maemo-input-sounds](https://github.com/maemo-leste/maemo-input-sounds) | `9e2b7e460a8a` | runs (VM: touch screen clicks at the profile's level through PulseAudio, key clicks off as the profile has them) |
 | maemo-launcher | 0.39 | GPLv2 | [maemo-launcher](https://github.com/maemo-leste/maemo-launcher) | `2cb10ec66a22` | builds |
+| maemo-ringtones-mr0 | 1.4.4m7 | UNKNOWN | [leste](https://maedevu.maemo.org/leste) |  | builds |
 | maepad | 1.11_1 | LGPL21 | [maepad](https://git.maemo.org/leste-extras/maepad) | `b50c9caadd86` | runs (VM) |
 | mce-dev | 1.10.19 | LGPL21 | [mce](https://github.com/maemo-leste/mce) | `d3260521eaf1` | builds |
 | meego-clock | 0.1 | BSD3CLAUSE | [meego-clock](https://github.com/smatkovi/meego-clock) | `8c9e20543127` | runs (VM: clock, alarms list, new alarm with the two-circle time picker, options, repeat, saved, banner) |
@@ -271,24 +273,26 @@ licence statement. The sources are the pinned revisions in the table and
 | osso-lmarbles | 1.6.38.2.leste1 | GPLv2+ | [osso-lmarbles](https://github.com/smatkovi/osso-lmarbles) | `97dcd6572031` | runs (VM: start screen, first level; red and blue swapped in the VM's picture, to check on a device) |
 | osso-mahjong | 1.9.1_1 | GPLv2+ | [osso-mahjong](https://github.com/maemo-leste-extras/osso-mahjong) | `fbe179709a15` | runs (VM) |
 | osso-pdf-viewer | 1.10.3 | GPLv2 | [osso-pdf-viewer](https://github.com/maemo-leste/osso-pdf-viewer) | `a5c944ebff05` | runs (VM) |
+| osso-sounds-game-chess | 5.6.0m5 | UNKNOWN | [leste](https://maedevu.maemo.org/leste) |  | builds |
+| osso-sounds-rtc | 5.6.0m5 | UNKNOWN | [leste](https://maedevu.maemo.org/leste) |  | builds |
 | osso-sounds-ui | 5.6.0m5 | UNKNOWN | [leste](https://maedevu.maemo.org/leste) |  | builds |
 | osso-systemui | 0.2.1 | LGPL21 | [osso-systemui](https://github.com/maemo-leste/osso-systemui) | `d1b65f09fe6d` | runs (VM: shows the alarm dialog) |
-| osso-systemui-alarm | 0.3.3.0cssu1 | LGPL21 | [osso-systemui-alarm](https://github.com/maemo-leste/osso-systemui-alarm) | `f9350639d4ba` | runs (VM: the alarm dialog, Snooze and Stop answered; no sound on FreeBSD yet) |
+| osso-systemui-alarm | 0.3.3.0cssu1 | LGPL21 | [osso-systemui-alarm](https://github.com/maemo-leste/osso-systemui-alarm) | `f9350639d4ba` | runs (VM: the alarm dialog, Snooze and Stop answered) |
 | osso-systemui-dbus-dev | 0.1.5 | LGPL21 | [osso-systemui-dbus-dev](https://github.com/maemo-leste/osso-systemui-dbus-dev) | `dc5c9b542cf6` | builds |
 | osso-xterm | 0.17 | GPLv2 | [osso-xterm](https://github.com/maemo-leste/osso-xterm) | `6c912f73983e` | runs (VM) |
 | pd-mapper | 1.1 | BSD3CLAUSE | [pd-mapper](https://github.com/linux-msm/pd-mapper) | `5ecd2fe926ac` | builds |
 | pedometerhomewidget | 0.4.0 | GPLv3+ | [pedometerhomewidget](https://github.com/smatkovi/pedometerhomewidget) | `06d5246191fa` | builds |
-| pro1x-gnss | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `9201cbd4ef56` | builds; needs the Pro1X's modem (untested on the phone) |
-| pro1x-hidpi | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `9201cbd4ef56` | builds |
-| pro1x-proximity | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `9201cbd4ef56` | builds; needs the Pro1X's ADSP (untested on the phone) |
-| pro1x-standby | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `9201cbd4ef56` | runs (VM: time-out, dimming, double tap, power key, proximity signals; no system calls while in use) |
-| pro1x-steps | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `9201cbd4ef56` | builds; needs the Pro1X's ADSP (untested on the phone) |
-| profiled | 1.0.8 | BSD3CLAUSE | [profiled](https://github.com/maemo-leste/profiled) | `8e16f3dc9d42` | builds |
-| profilesx | 1.9_1 | GPLv2+ | [profilesx](https://github.com/maemo-leste/profilesx) | `4c89c9701fdc` | builds |
+| pro1x-gnss | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d1c99b5996c6` | builds; needs the Pro1X's modem (untested on the phone) |
+| pro1x-hidpi | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d1c99b5996c6` | builds |
+| pro1x-proximity | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d1c99b5996c6` | builds; needs the Pro1X's ADSP (untested on the phone) |
+| pro1x-standby | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d1c99b5996c6` | runs (VM: time-out, dimming, double tap, power key, proximity signals; no system calls while in use) |
+| pro1x-steps | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d1c99b5996c6` | builds; needs the Pro1X's ADSP (untested on the phone) |
+| profiled | 1.0.8_1 | BSD3CLAUSE | [profiled](https://github.com/maemo-leste/profiled) | `8e16f3dc9d42` | runs (VM: the profiles' values, through maemo-input-sounds) |
+| profilesx | 1.9_2 | GPLv2+ | [profilesx](https://github.com/maemo-leste/profilesx) | `4c89c9701fdc` | builds |
 | qalendar | 1.0.3.1 | GPLv3 | [qalendar](https://github.com/maemo-leste/qalendar) | `04ccfca3ca17` | runs (VM) |
 | qrtr | 1.2.18 | BSD3CLAUSE | [qrtr](https://github.com/linux-msm/qrtr) | `29e36ae16438` | builds |
 | qshot | 0.0.2_1 | BSD3CLAUSE | [qshot](https://github.com/maemo-leste-extras/qshot) | `f10335de9c66` | runs (VM) |
-| qt-components | 1.4.9 | BSD3CLAUSE | [qt-components](https://github.com/sailfishos/qt-components) | `c967fbd79e75` | runs (VM, through meego-clock, with the N9's blanco theme) |
+| qt-components | 1.4.9_1 | BSD3CLAUSE | [qt-components](https://github.com/sailfishos/qt-components) | `c967fbd79e75` | runs (VM, through meego-clock, with the N9's blanco theme) |
 | qt5-webengine | 5.15.19p0_6 | LGPL21 | [qt5-webengine-5.15.19p0_6~c5de7df005.pkg](https://pkg.freebsd.org/FreeBSD:15:aarch64/release_1/All/Hashed/qt5-webengine-5.15.19p0_6~c5de7df005.pkg) | `sha256 c5de7df00518` | runs (VM, through Jib) |
 | qt5-webkit | 5.212.0.a4 | LGPL21 | [qtwebkit-5.212.0-alpha4.tar.xz](https://github.com/qtwebkit/qtwebkit/releases/download/qtwebkit-5.212.0-alpha4/qtwebkit-5.212.0-alpha4.tar.xz) | `sha256 9ca126da9273` | runs (VM, through Dorian) |
 | qtstyleplugins | 5.1.14.1 | LGPL-2.1 with Qt-1.1 exception, GPLv3 | [qtstyleplugins](https://github.com/maemo-leste/qtstyleplugins) | `c371b3232025` | builds |
