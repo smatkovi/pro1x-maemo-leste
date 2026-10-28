@@ -93,6 +93,7 @@ apt-get -y -q --no-install-recommends install \
 	libicu-dev icu-devtools libdbus-glib-1-dev libxml2-dev libpolkit-gobject-1-dev intltool \
 	gtk-doc-tools gobject-introspection libgirepository1.0-dev libcdb-dev \
 	libxdamage-dev libxcomposite-dev libxrandr-dev libxtst-dev libxi-dev libx11-xcb-dev \
+	libxcb-shape0-dev libxcb-render0-dev \
 	libpulse-dev libsndfile1-dev libgconf2-dev gconf2 libprofile-dev \
 	check libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libcanberra-dev \
 	> /tmp/apt-install.log 2>&1 || { tail -20 /tmp/apt-install.log; exit 1; }
