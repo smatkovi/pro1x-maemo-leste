@@ -182,7 +182,10 @@ custom_harmattan_meegotouchtheme() { hq5_qmake_part theme.pro; }
 # libdsme: a Makefile of its own; mce-dev: mce's D-Bus names (headers)
 custom_harmattan_libdsme() {
 	hq5_usr_local
-	make -j"$JOBS" CC="$CC" > make.out 2>&1 || { grep -m20 -E "error:|Error [0-9]" make.out; exit 1; }
+	# (its -s is a linker flag on every compile, which clang with -Werror
+	# refuses)
+	make -j"$JOBS" CC="$CC" C_OPTFLAGS=-O2 > make.out 2>&1 ||
+	    { grep -m20 -E "error:|Error [0-9]" make.out; exit 1; }
 	make install DESTDIR="$PR" PREFIX=/usr/local > install.out 2>&1 || { tail -20 install.out; exit 1; }
 	usr_to_local "$PR"
 }
