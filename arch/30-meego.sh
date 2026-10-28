@@ -177,6 +177,7 @@ part meego-im-framework qmake maliit-framework.pro CONFIG+=enable-legacy \
 	CONFIG+=enable-contextkit CONFIG+=nodoc
 part libmeegoimengine qmake meegoimengine.pro
 part meego-keyboard qmake m-keyboard.pro CONFIG+=noreactionmap
+part meego-im-settings-applet qmake mim-settings-applet.pro
 # their GConf defaults (the N9's keyboard, British English)
 GCONF_CONFIG_SOURCE=xml:merged:/etc/gconf/gconf.xml.defaults gconftool-2 \
 	--makefile-install-rule /usr/share/gconf/schemas/meego-im-framework.schemas \
