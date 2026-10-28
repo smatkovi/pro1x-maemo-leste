@@ -1,0 +1,73 @@
+#!/bin/sh
+# The standby power of the system that runs, on the battery: a sample every
+# INTERVAL s for MINUTES, into /host/pro1x-power/NAME-<date>.log (userdata,
+# whichever Linux system runs; /var/log/pro1x-power without it):
+#
+#   pro1x-powerlog NAME MINUTES [INTERVAL]        (as root, in the background)
+#
+# Meant for unattended runs (scripts/68-power-standby.sh): start it, take
+# the USB power away, read the log afterwards. A line per sample:
+#
+#   s  mA  mV  %  status  usb  display  vlow  vmin  irq/s  ctxt/s  idle%
+#
+# mA is the battery's current_now, the status the battery's (Discharging on
+# the battery alone), usb the gadget's state, display the panel's DPMS
+# state, vlow and vmin the counts of the SoC's sleep states, irq/s and
+# ctxt/s since the sample before, idle% the CPUs' idle share in that time.
+# The last line: the mean current of the samples on the battery with the
+# display off, and how many there were.
+set -u
+name=${1:?name} minutes=${2:?minutes} iv=${3:-30}
+
+dir=/host/pro1x-power
+if [ -d /host/pro1x-boot ] || mountpoint -q /host 2> /dev/null; then
+	mkdir -p $dir
+else
+	dir=/var/log/pro1x-power
+	mkdir -p $dir
+fi
+log=$dir/$name-$(date +%Y%m%d-%H%M%S).log
+B=/sys/class/power_supply/battery
+mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug 2> /dev/null
+
+count() { awk '/^Count/ {print $2; exit}' /sys/kernel/debug/qcom_stats/$1 2> /dev/null || echo -; }
+irqs() { awk 'NR > 1 { for (i = 2; i <= NF; i++) if ($i ~ /^[0-9]+$/) s += $i; else break }
+	END { print s + 0 }' /proc/interrupts; }
+ctxt() { awk '/^ctxt/ {print $2}' /proc/stat; }
+cpu() { awk '/^cpu / {print $2 + $3 + $4 + $5 + $6 + $7 + $8, $5 + $6; exit}' /proc/stat; }
+gadget() { cat /sys/class/udc/*/state 2> /dev/null | head -1 | tr ' ' _ || echo -; }
+dpms() { cat /sys/class/drm/card*-DSI-*/dpms 2> /dev/null | head -1 || echo -; }
+
+{
+	echo "# $name: $(. /etc/os-release 2> /dev/null; echo "${PRETTY_NAME:-?}"), kernel $(uname -r)"
+	echo "# start $(date '+%F %T'), $minutes min, every $iv s"
+	echo "# wlan $(cat /sys/class/net/wlan0/operstate 2> /dev/null || echo -)," \
+	    "bluetooth $( [ -e /sys/class/bluetooth/hci0 ] && echo present || echo -)," \
+	    "mem_sleep $(cat /sys/power/mem_sleep 2> /dev/null)"
+	echo "# s mA mV % status usb display vlow vmin irq/s ctxt/s idle%"
+} > "$log"
+
+t0=$(date +%s)
+i0=$(irqs) c0=$(ctxt)
+set -- $(cpu)
+tot0=$1 idle0=$2
+end=$((t0 + minutes * 60))
+while [ "$(date +%s)" -lt "$end" ]; do
+	sleep "$iv"
+	t=$(($(date +%s) - t0))
+	i1=$(irqs) c1=$(ctxt)
+	set -- $(cpu)
+	tot1=$1 idle1=$2
+	dt=$iv
+	ua=$(cat $B/current_now 2> /dev/null || echo 0)
+	uv=$(cat $B/voltage_now 2> /dev/null || echo 0)
+	echo "$t $((ua / 1000)) $((uv / 1000)) $(cat $B/capacity 2> /dev/null) $(cat $B/status 2> /dev/null)" \
+	    "$(gadget) $(dpms) $(count vlow) $(count vmin)" \
+	    "$(( (i1 - i0) / dt )) $(( (c1 - c0) / dt ))" \
+	    "$(( tot1 > tot0 ? 100 * (idle1 - idle0) / (tot1 - tot0) : 0 ))" >> "$log"
+	i0=$i1 c0=$c1 tot0=$tot1 idle0=$idle1
+done
+awk '!/^#/ && $5 == "Discharging" && $7 == "Off" { s += $2; n++ }
+	END { if (n) printf "# mean %.0f mA over %d samples on the battery, display off\n", s / n, n;
+	      else print "# no samples on the battery with the display off" }' "$log" >> "$log"
+echo "$log"
