@@ -145,8 +145,8 @@ upstream() {
 	echo "$tag" > "$stamp"
 }
 
-part libmlocale configure -prefix /usr -release
-part libmeegotouch configure -prefix /usr -release -no-werror -nomake demos
+part libmlocale configure -prefix /usr -release -nomake demos -nomake tests -nomake benchmarks
+part libmeegotouch configure -prefix /usr -release -no-werror -nomake demos -nomake tests -nomake benchmarks
 part contextkit autotools --disable-doc --disable-coverage
 part libcontentaction autotools --disable-doc --disable-coverage
 part mcompositor qmake mcompositor.pro
