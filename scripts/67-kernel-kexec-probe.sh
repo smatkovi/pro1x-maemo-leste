@@ -35,7 +35,9 @@ ph() { $PHONE "$@" < /dev/null; }
 KVER=$(cat "$OUT/kernelrelease")
 running=$(ph uname -r)
 [ "$KVER" != "$running" ] || { echo "the phone runs $KVER already"; exit 1; }
-for f in "$OUT/Image.gz" "$OUT/sm6115-fxtec-pro1x-abl.dtb" "$OUT/initrd.img-$KVER" \
+# DTB: another device tree to try with the kernel (default: the boot image's)
+DTB=${DTB:-$OUT/sm6115-fxtec-pro1x-abl.dtb}
+for f in "$OUT/Image.gz" "$DTB" "$OUT/initrd.img-$KVER" \
     "$OUT/boot_b-$KVER.img"; do
 	[ -f "$f" ] || { echo "missing: $f (65-kernel-update.sh prepare first)"; exit 1; }
 done
@@ -47,7 +49,7 @@ trap 'rm -rf "$T"' EXIT
 log "device tree: $KVER's, with the bootloader's memory banks"
 ph "cat /sys/firmware/fdt" > "$T/live.dtb"
 dtc -q -I dtb -O dts "$T/live.dtb" -o "$T/live.dts"
-dtc -q -I dtb -O dts "$OUT/sm6115-fxtec-pro1x-abl.dtb" -o "$T/new.dts"
+dtc -q -I dtb -O dts "$DTB" -o "$T/new.dts"
 python3 - "$T/live.dts" "$T/new.dts" "$T/probe.dts" <<'EOF'
 import re, sys
 live, new, out = (open(sys.argv[1]).read(), open(sys.argv[2]).read(), sys.argv[3])
