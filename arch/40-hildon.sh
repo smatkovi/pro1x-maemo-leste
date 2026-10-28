@@ -47,7 +47,7 @@ pacman -Sy --noconfirm --needed base-devel git autoconf automake libtool \
 	libxdamage libxfixes libxtst libxss libsm dbus-glib libcanberra libpulse \
 	mesa libpng libjpeg-turbo libexif sqlite libxml2 gstreamer \
 	gst-plugins-base startup-notification xorg-server xorg-xinit \
-	xorg-xrdb xorg-xset xorg-xmodmap > /dev/null
+	xorg-xrdb xorg-xset xorg-xmodmap gnome-menus gdk-pixbuf-xlib > /dev/null
 gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
 EOF
 
@@ -108,7 +108,8 @@ while IFS= read -r p; do
 			install -m 644 src/include/mce/*.h /usr/include/mce/
 			printf 'prefix=/usr\nincludedir=${prefix}/include\n\nName: mce\nDescription: Mode Control Entity\nVersion: %s\nCflags: -I${includedir}\n' \
 				"$v" > /usr/lib/pkgconfig/mce.pc ;;
-		profiled) make -j"$jobs" > make.log 2>&1 && make install > install.log 2>&1 ;;
+		# its Makefile installs below ROOT, /tmp/test-profiled unless told
+		profiled) make -j"$jobs" > make.log 2>&1 && make install ROOT=/ > install.log 2>&1 ;;
 		osso-bookmark-engine) make -j"$jobs" > make.log 2>&1 && make install > install.log 2>&1 ;;
 		esac
 	else
