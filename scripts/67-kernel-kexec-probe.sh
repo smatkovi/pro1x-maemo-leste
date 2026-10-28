@@ -19,7 +19,8 @@
 # feeds it until dsme opens it, for at most 5 minutes.
 #
 # Reboots the phone (kexec); then waits for it and prints which kernel
-# runs. The measurements of a kernel belong to a cold start, not to this
+# runs. EXTRA adds to the command line (ignore_loglevel: the whole kernel
+# log goes to the RAM console, which the next boot shows in /sys/fs/pstore). The measurements of a kernel belong to a cold start, not to this
 # one: the first kernel's firmware state (remote processors, RPM votes)
 # carries over a kexec.
 set -euo pipefail
@@ -65,7 +66,9 @@ print((d[64:576].split(b'\0')[0] + d[608:1632].split(b'\0')[0]).decode())" "$1";
 ph "dd if=/dev/disk/by-partlabel/boot_b bs=4096 count=1 status=none" > "$T/flashed.hdr"
 add=$(comm -13 <(args "$T/flashed.hdr" | tr ' ' '\n' | sort -u) \
     <(args "$OUT/boot_b-$KVER.img" | tr ' ' '\n' | sort -u) | paste -sd' ' -)
-cmdline="$(ph cat /proc/cmdline) $add panic=10 watchdog.open_timeout=300"
+# EXTRA: more for the probe, e.g. ignore_loglevel: the whole kernel log in
+# the RAM console (/sys/fs/pstore/console-ramoops-0 after the next boot)
+cmdline="$(ph cat /proc/cmdline) $add panic=10 watchdog.open_timeout=300 ${EXTRA:-}"
 log "command line: $cmdline"
 
 log "kernel, initramfs, device tree to /host/kernel-update"
