@@ -31,6 +31,8 @@ compositor=$!
 sleep 2
 # the input method server with the N9's keyboard, before the applications:
 # Qt 5's input context connects to its socket once, when it starts
+# (a socket left by the session before would let the wait pass at once)
+rm -f /tmp/meego-im-uiserver/imserver_dbus
 QT_SCALE_FACTOR=$SCALE meego-im-uiserver &
 im=$!
 for i in 1 2 3 4 5 6 7 8 9 10; do
