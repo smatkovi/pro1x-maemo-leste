@@ -93,9 +93,10 @@ hq5_sysroot_features() {
 hq5_usr_local() {
 	grep -rlZE '/usr(/|[[:space:]]*$)' . --include='*.pro' \
 	    --include='*.pri' --include='*.prf' --include='*.prf.in' --include='*.pc.in' \
-	    --include='*.in' 2> /dev/null |
+	    --include='*.pc' --include='*.in' 2> /dev/null |
 	    xargs -0 -r sed -i -E -e 's#/usr/(include|lib|share|bin|sbin|libexec)#/usr/local/\1#g' \
-	        -e 's#^([[:space:]]*[A-Z_]+[[:space:]]*[+*]?=[[:space:]]*)/usr[[:space:]]*$#\1/usr/local#'
+	        -e 's#^([[:space:]]*[A-Z_]+[[:space:]]*[+*]?=[[:space:]]*)/usr[[:space:]]*$#\1/usr/local#' \
+	        -e 's#^(prefix=)/usr[[:space:]]*$#\1/usr/local#'
 }
 
 # The parts with a configure script of their own that runs qmake: configure
