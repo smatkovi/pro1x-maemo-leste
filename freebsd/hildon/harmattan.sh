@@ -56,7 +56,9 @@ hq5_qmake() {
 	    > "$q/mkspecs/freebsd-harmattan/qplatformdefs.h"
 	cat > "$q/hq5bin/qmake" <<-QMAKE
 	#!/bin/sh
-	# libmeegotouch's features (meegotouch.prf, ...) are below share/qt5
+	# libmeegotouch's features (meegotouch.prf, ...) are below share/qt5;
+	# narrowing in initializer lists (qreal to int), which gcc only warns
+	# about, is no error either
 	export QMAKEFEATURES="$SYSROOT/usr/local/share/qt5/mkspecs/features\${QMAKEFEATURES:+:\$QMAKEFEATURES}"
 	case "\$1" in
 	-query|-v|--version) exec /usr/bin/qmake-qt5 -qtconf "$q/qt.conf" "\$@" ;;
@@ -66,7 +68,7 @@ hq5_qmake() {
 	    QMAKE_LINK_C="$CC" QMAKE_LINK_C_SHLIB="$CC" QMAKE_AR="llvm-ar cqs" \\
 	    QMAKE_STRIP=llvm-strip QMAKE_OBJCOPY=llvm-objcopy \\
 	    QMAKE_CFLAGS+="$CPPFLAGS $CFLAGS -idirafter $REPO/freebsd/hildon/compat-harmattan/include" \\
-	    QMAKE_CXXFLAGS+="$CPPFLAGS $CXXFLAGS -idirafter $REPO/freebsd/hildon/compat-harmattan/include" \\
+	    QMAKE_CXXFLAGS+="$CPPFLAGS $CXXFLAGS -idirafter $REPO/freebsd/hildon/compat-harmattan/include -Wno-c++11-narrowing" \\
 	    QMAKE_LFLAGS+="$LDFLAGS" QMAKE_INCDIR= QMAKE_LIBDIR= QMAKE_INCDIR_X11= \\
 	    QMAKE_LIBDIR_X11= QMAKE_INCDIR_OPENGL= QMAKE_LIBDIR_OPENGL= \\
 	    QMAKE_INCDIR_EGL= QMAKE_LIBDIR_EGL= \\
