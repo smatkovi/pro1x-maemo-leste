@@ -80,7 +80,8 @@ hq5_qmake() {
 hq5_sysroot_features() {
 	local pr=$1 f
 	find "$pr" -name '*.prf' -printf '%P\n' | while read -r f; do
-		sed -i -E "s#(^|[^A-Za-z0-9_/.]|-[LI])/usr/local/#\\1$SYSROOT/usr/local/#g" "$SYSROOT/$f"
+		sed -i -E -e "s#(^|[^A-Za-z0-9_/.]|-[LI])/usr/local/#\\1$SYSROOT/usr/local/#g" \
+		    -e "s#\\\$\\\$M_PREFIX/include#$SYSROOT/usr/local/include#g" "$SYSROOT/$f"
 	done
 }
 
