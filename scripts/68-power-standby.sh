@@ -55,6 +55,23 @@ which_runs() {
 	done
 }
 
+# The display off, whichever way the system has: X's DPMS (Leste's mce
+# reports the display off without switching it off), mce, Phosh's
+# DisplayConfig, LuneOS's display service. The log's display column says
+# whether the panel really went off.
+DISPLAY_OFF='
+a=$(ps -eo args | sed -n "s/^[^ ]*X[a-z]* .*-auth \([^ ]*\).*/\1/p" | head -1)
+[ -z "$a" ] || DISPLAY=:0 XAUTHORITY=$a xset dpms force off 2> /dev/null
+dbus-send --system --type=method_call --dest=com.nokia.mce /com/nokia/mce/request \
+    com.nokia.mce.request.req_display_state_off 2> /dev/null
+u=$(ps -o user= -C phosh 2> /dev/null | head -1)
+[ -z "$u" ] || sudo -u "$u" DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u "$u")/bus \
+    gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig \
+    --method org.freedesktop.DBus.Properties.Set org.gnome.Mutter.DisplayConfig PowerSaveMode "<int32 3>" > /dev/null 2>&1
+! command -v luna-send > /dev/null ||
+    luna-send -n 1 luna://com.palm.display/control/setState "{\"state\":\"off\"}" > /dev/null 2>&1
+true'
+
 current=
 for i in $(seq 12); do
 	usbnet
@@ -77,12 +94,7 @@ for k in "$@"; do
 	    < "$REPO/tools/pro1x-powerlog/pro1x-powerlog"
 	on "$k" "setsid nohup /usr/local/bin/pro1x-powerlog $k $MINUTES 30 > /dev/null 2>&1 < /dev/null &"
 	sleep 20
-	case $k in
-	leste|meego)
-		on "$k" "dbus-send --system --type=method_call --dest=com.nokia.mce /com/nokia/mce/request com.nokia.mce.request.req_display_state_off" ;;
-	luneos)
-		on "$k" "luna-send -n 1 luna://com.palm.display/control/setState '{\"state\":\"off\"}'" ;;
-	esac
+	on "$k" "$DISPLAY_OFF"
 	sleep 30
 	log "$k: USB power off"
 	port 1

@@ -8,14 +8,20 @@
 # Meant for unattended runs (scripts/68-power-standby.sh): start it, take
 # the USB power away, read the log afterwards. A line per sample:
 #
-#   s  mA  mV  %  status  usb  display  vlow  vmin  irq/s  ctxt/s  idle%
+#   s  mA  mV  %  status  input  usb  display  vlow  vmin  irq/s  ctxt/s  idle%
 #
-# mA is the battery's current_now, the status the battery's (Discharging on
-# the battery alone), usb the gadget's state, display the panel's DPMS
+# mA is the battery's current_now (the fuel gauge's current, negative while
+# discharging), the status the battery's, input the charger's USB input
+# (on, or susp: suspended), usb the gadget's state, display the panel's DPMS
 # state, vlow and vmin the counts of the SoC's sleep states, irq/s and
 # ctxt/s since the sample before, idle% the CPUs' idle share in that time.
-# The last line: the mean current of the samples on the battery with the
-# display off, and how many there were.
+#
+# For the run the charger's input is suspended (pro1x-charger-icl's
+# input_suspend): the phone runs from its battery with the cable in, which
+# is how it is measured on a hub that cannot switch off its ports' power.
+# It is resumed at the end, also when the logger is killed. The last line:
+# the mean current of the samples with the input suspended and the display
+# off, and how many there were.
 set -u
 name=${1:?name} minutes=${2:?minutes} iv=${3:-30}
 
@@ -28,6 +34,13 @@ else
 fi
 log=$dir/$name-$(date +%Y%m%d-%H%M%S).log
 B=/sys/class/power_supply/battery
+SUSP=/sys/module/pro1x_charger_icl/parameters/input_suspend
+if [ -w $SUSP ]; then
+	echo 1 > $SUSP
+	trap 'echo 0 > $SUSP' EXIT
+	trap 'exit 1' INT TERM HUP
+fi
+input() { case $(cat $SUSP 2> /dev/null) in Y) echo susp ;; N) echo on ;; *) echo - ;; esac; }
 mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug 2> /dev/null
 
 count() { awk '/^Count/ {print $2; exit}' /sys/kernel/debug/qcom_stats/$1 2> /dev/null || echo -; }
@@ -44,7 +57,7 @@ dpms() { cat /sys/class/drm/card*-DSI-*/dpms 2> /dev/null | head -1 || echo -; }
 	echo "# wlan $(cat /sys/class/net/wlan0/operstate 2> /dev/null || echo -)," \
 	    "bluetooth $( [ -e /sys/class/bluetooth/hci0 ] && echo present || echo -)," \
 	    "mem_sleep $(cat /sys/power/mem_sleep 2> /dev/null)"
-	echo "# s mA mV % status usb display vlow vmin irq/s ctxt/s idle%"
+	echo "# s mA mV % status input usb display vlow vmin irq/s ctxt/s idle%"
 } > "$log"
 
 t0=$(date +%s)
@@ -62,12 +75,12 @@ while [ "$(date +%s)" -lt "$end" ]; do
 	ua=$(cat $B/current_now 2> /dev/null || echo 0)
 	uv=$(cat $B/voltage_now 2> /dev/null || echo 0)
 	echo "$t $((ua / 1000)) $((uv / 1000)) $(cat $B/capacity 2> /dev/null) $(cat $B/status 2> /dev/null)" \
-	    "$(gadget) $(dpms) $(count vlow) $(count vmin)" \
+	    "$(input) $(gadget) $(dpms) $(count vlow) $(count vmin)" \
 	    "$(( (i1 - i0) / dt )) $(( (c1 - c0) / dt ))" \
 	    "$(( tot1 > tot0 ? 100 * (idle1 - idle0) / (tot1 - tot0) : 0 ))" >> "$log"
 	i0=$i1 c0=$c1 tot0=$tot1 idle0=$idle1
 done
-awk '!/^#/ && $5 == "Discharging" && $7 == "Off" { s += $2; n++ }
+awk '!/^#/ && ($6 == "susp" || $5 == "Discharging") && $8 == "Off" { s += $2; n++ }
 	END { if (n) printf "# mean %.0f mA over %d samples on the battery, display off\n", s / n, n;
 	      else print "# no samples on the battery with the display off" }' "$log" >> "$log"
 echo "$log"
