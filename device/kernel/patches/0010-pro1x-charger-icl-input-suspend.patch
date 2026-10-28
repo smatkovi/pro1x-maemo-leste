@@ -1,0 +1,93 @@
+From e4621d9d20e452bd807391df7fe0f665b70a175a Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 28 Oct 2026 23:13:03 +0100
+Subject: [PATCH] pro1x-charger-icl: input_suspend, the phone on its battery
+ with a charger in
+
+For standby measurements on a hub that cannot switch its ports' power, and
+for a charge limit: USBIN_CMD_IL's suspend bit (smb5), set and cleared
+from the poll, cleared when the module goes; a suspended input is not
+taken for the charger watchdog having bitten.
+---
+ drivers/power/supply/pro1x-charger-icl.c | 30 ++++++++++++++++++++++--
+ 1 file changed, 28 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/power/supply/pro1x-charger-icl.c b/drivers/power/supply/pro1x-charger-icl.c
+index c8bdf21b95..d3daaa9610 100644
+--- a/drivers/power/supply/pro1x-charger-icl.c
++++ b/drivers/power/supply/pro1x-charger-icl.c
+@@ -38,6 +38,8 @@
+ #define  APSD_CDP		BIT(2)
+ #define  APSD_QC2		BIT(5)
+ #define  APSD_QC3		BIT(6)
++#define USBIN_CMD_IL		0x340
++#define  USBIN_SUSPEND		BIT(0)
+ #define CMD_ICL_OVERRIDE	0x342
+ #define  ICL_OVERRIDE		BIT(0)
+ #define USBIN_ICL_OPTIONS	0x366
+@@ -62,6 +64,15 @@ static unsigned int max_icl_ma = 1500;
+ module_param(max_icl_ma, uint, 0644);
+ MODULE_PARM_DESC(max_icl_ma, "Highest USB input current limit to set in mA (0 = do nothing)");
+ 
++/*
++ * The USB input suspended: the phone runs from its battery with the cable
++ * in (standby measurements on a hub that cannot switch its ports' power).
++ * Taken over at the next poll; cleared again when the module goes.
++ */
++static bool input_suspend;
++module_param(input_suspend, bool, 0644);
++MODULE_PARM_DESC(input_suspend, "Suspend the USB input: run from the battery with a charger in");
++
+ static unsigned int min_icl_ma;
+ module_param(min_icl_ma, uint, 0644);
+ MODULE_PARM_DESC(min_icl_ma, "Raise the input limit to at least this (mA) on any source, even one detected as plain USB (0 = off). The chip's AICL still backs off if the source sags. Never exceeds max_icl_ma.");
+@@ -73,6 +84,7 @@ MODULE_PARM_DESC(pet_wdog, "Pet the charger watchdog while USB is present, and r
+ struct pro1x_chg {
+ 	struct device *dev;
+ 	struct regmap *map;
++	bool suspended;
+ 	u32 base;
+ 	struct delayed_work work;
+ 	unsigned int applied_ma;	/* what this plug-in already got */
+@@ -135,6 +147,13 @@ static void pro1x_chg_work(struct work_struct *w)
+ 	struct pro1x_chg *c = container_of(to_delayed_work(w), struct pro1x_chg, work);
+ 	unsigned int pp = 0, apsd = 0, snk = 0, want, icl;
+ 
++	if (input_suspend != c->suspended) {
++		regmap_update_bits(c->map, c->base + USBIN_CMD_IL, USBIN_SUSPEND,
++				   input_suspend ? USBIN_SUSPEND : 0);
++		c->suspended = input_suspend;
++		dev_info(c->dev, "USB input %s\n", input_suspend ? "suspended: on the battery" : "back");
++	}
++
+ 	if (rd(c, POWER_PATH_STATUS, &pp))
+ 		goto out;
+ 
+@@ -173,7 +192,9 @@ static void pro1x_chg_work(struct work_struct *w)
+ 				dev_info(c->dev, "charger state %u\n", st);
+ 			c->last_state = st;
+ 			rd(c, CHGR_ENABLE_CMD, &en);
+-			if (st == CHGR_STATE_DISABLED && (en & CHGR_ENABLE) && !c->recovered) {
++			/* (disabled is what a suspended input looks like) */
++			if (st == CHGR_STATE_DISABLED && (en & CHGR_ENABLE) && !c->recovered &&
++			    !c->suspended) {
+ 				c->recovered = true;
+ 				regmap_update_bits(c->map, c->base + CHGR_ENABLE_CMD, CHGR_ENABLE, 0);
+ 				msleep(50);
+@@ -228,7 +249,12 @@ static int pro1x_chg_probe(struct platform_device *pdev)
+ 
+ static void pro1x_chg_remove(struct platform_device *pdev)
+ {
+-	cancel_delayed_work_sync(&((struct pro1x_chg *)platform_get_drvdata(pdev))->work);
++	struct pro1x_chg *c = platform_get_drvdata(pdev);
++
++	cancel_delayed_work_sync(&c->work);
++	/* never leave the phone unable to charge */
++	if (c->suspended)
++		regmap_update_bits(c->map, c->base + USBIN_CMD_IL, USBIN_SUSPEND, 0);
+ }
+ 
+ static const struct of_device_id pro1x_chg_of_match[] = {
+-- 
+2.56.0
+
