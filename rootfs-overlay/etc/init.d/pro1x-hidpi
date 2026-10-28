@@ -6,8 +6,8 @@
 description="Hildon theme for the screen's density"
 
 depend() {
-	need localmount
-	after hildon-control-panel-personalisation
+	# after, not need: Leste's OpenRC (on sysvinit) has no localmount
+	after localmount hildon-control-panel-personalisation
 	before xorg
 }
 
