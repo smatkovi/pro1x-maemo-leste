@@ -1,0 +1,23 @@
+#!/bin/sh
+# Kernel modules from one place for every system the boot menu starts
+# (scripts/65-kernel-update.sh puts them there): /host/pro1x-modules/<the
+# running kernel's version>, bound onto the root's /lib/modules/<version>.
+# So each system has the modules of the kernel that boots it, an older
+# Btrfs snapshot too, and the modules of earlier kernels stay for a boot
+# image flashed back. Without that directory a system keeps its own.
+PREREQ="pro1x-move-host"
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+  prereqs) prereqs; exit 0 ;;
+esac
+
+k=$(uname -r)
+src=${rootmnt}/host/pro1x-modules/$k
+[ -f "$src/modules.dep" ] || exit 0
+# /lib is a link into /usr where /usr is merged (Leste, Kali, Arch)
+dst=${rootmnt}/lib/modules
+[ -L "${rootmnt}/lib" ] && dst=${rootmnt}/usr/lib/modules
+mkdir -p "$dst/$k" 2>/dev/null
+mount --bind "$src" "$dst/$k" ||
+  echo "pro1x-shared-modules: could not bind $src, the system's own modules stay" >&2
+exit 0

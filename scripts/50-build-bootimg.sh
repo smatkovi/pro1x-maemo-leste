@@ -18,7 +18,7 @@ set -euo pipefail
 WORK=${WORK:?set WORK=<build-dir>}
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 KVER=${KVER:-7.1.0+}
-OUT=$WORK/out
+OUT=${OUT:-$WORK/out}
 # shellcheck disable=SC1090
 . "$REPO/device/boot_a-params.env"
 

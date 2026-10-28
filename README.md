@@ -263,6 +263,7 @@ would otherwise lose its slot after seven starts.
 | `scripts/55-deploy-rootfs.sh` | device, root | first deployment: shrink, stream, grow again (additive) |
 | `scripts/56-update-rootfs.sh` | device, root | updates as rsync delta (`--inplace`) |
 | `scripts/60-flash-slot-b.sh` | device, root | **writes**: boot image into the inactive slot |
+| `scripts/65-kernel-update.sh` | build host | a new kernel for all Linux systems on the phone: modules to `/host/pro1x-modules`, initramfs, boot image (`prepare`); **writes** boot_b only with `flash` ([docs/kernel-update.md](docs/kernel-update.md)) |
 | `scripts/70-switch-slot.sh` | PC | switch slots via fastboot |
 | `scripts/80-switch-and-connect.sh` | PC, detached | waits for fastboot, switches, boots, sets up the USB link, tests SSH |
 | `scripts/lib/reboot-bootloader.py` | both, root | reboot straight into the bootloader |

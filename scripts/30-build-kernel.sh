@@ -54,6 +54,9 @@ done
 cp "$NIXOS/device/kernel/config.aarch64" .config
 scripts/kconfig/merge_config.sh -m -O . .config "$REPO/device/kernel/leste.fragment" >/dev/null
 MAKE=(make ARCH=arm64 LLVM=1 -j"$JOBS")
+# KLOCAL=-pro1x.<n>: a version of the kernel's own (7.1.0-pro1x.<n>), so
+# that its modules stand beside the earlier kernels' (65-kernel-update.sh)
+[ -z "${KLOCAL:-}" ] || MAKE+=(LOCALVERSION="$KLOCAL")
 "${MAKE[@]}" olddefconfig
 # merge_config only warns when a value does not stick; fail instead.
 while IFS= read -r line; do
@@ -65,7 +68,10 @@ done < "$REPO/device/kernel/leste.fragment"
 mkdir -p "$OUT"
 "${MAKE[@]}" modules_install INSTALL_MOD_PATH="$OUT/modules" >/dev/null
 
+"${MAKE[@]}" -s kernelrelease > "$OUT/kernelrelease"
+cp .config "$OUT/config-$(cat "$OUT/kernelrelease")"
 cp arch/arm64/boot/Image.gz "$OUT/Image.gz"
 cp arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dtb "$OUT/sm6115-fxtec-pro1x.dtb"
 echo "done:"
 ls -la "$OUT/Image.gz" "$OUT/sm6115-fxtec-pro1x.dtb"
+echo "kernel $(cat "$OUT/kernelrelease")"
