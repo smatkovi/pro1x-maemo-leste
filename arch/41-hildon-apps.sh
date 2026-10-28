@@ -247,6 +247,8 @@ while IFS= read -r p; do
 		case $name in
 		calendar-backend|qalendar|cal-home-widget)
 			export PKG_CONFIG_PATH=/opt/libical3/lib/pkgconfig CPATH=/opt/libical3/include
+			# its calendar-tool reads into a char * (gone in C++20, GCC 16's)
+			[ "$name" != calendar-backend ] || export CXXFLAGS="$CXXFLAGS -std=gnu++17"
 			;;
 		# Arch has espeak-ng only: its espeak API under espeak's names
 		mstardict)
