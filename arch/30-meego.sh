@@ -3,7 +3,7 @@
 # parts of its user interface ported to Qt 5 (github.com/smatkovi/
 # harmattan-qt5: libmeegotouch, mcompositor, the home screen, the system
 # UI, the settings, meegofeedbackd), built natively in the image and
-# installed below /usr, plus an X11 session for them (meego-session).
+# installed below /usr, plus an X11 session for them (harmattan-session).
 #
 # Runs as root on the phone, in Maemo Leste, with the image from steps 10
 # and 20 mounted on $MNT (Leste has the network the builds need):
@@ -117,7 +117,7 @@ part() {
 	# rest; what must exist is checked at the end
 	[ $kind = make ] || set --
 	make -k -j"$jobs" "$@" > make.log 2>&1 ||
-	    { echo "   $name: not all of it builds:"; grep -m5 "error:" make.log | sed 's/^/     /'; }
+	    { echo "   $name: not all of it builds:"; grep -m5 -e "error:" -e "\*\*\*" make.log | sed 's/^/     /' || true; }
 	make -k install "$@" > install.log 2>&1 || true
 	echo "$want" > "$stamp"
 }
@@ -201,8 +201,8 @@ fi
 install -m 644 "$MNT/usr/src/harmattan-qt5/ngfd-meego/ngfd.ini" "$MNT/usr/share/ngfd/ngfd.ini"
 
 # --- the session ------------------------------------------------------------------
-log "meego-session"
-install -m 755 "$REPO/arch/meego/meego-session" "$MNT/usr/local/bin/meego-session"
-install -m 644 "$REPO/arch/meego/meego.service" "$MNT/etc/systemd/system/meego.service"
-install -m 755 "$REPO/arch/meego/pro1x-desktop" "$MNT/usr/local/bin/pro1x-desktop"
-log "done: pro1x-desktop meego (as root) makes it the session after Phosh"
+log "harmattan-session"
+install -m 755 "$REPO/arch/harmattan/harmattan-session" "$MNT/usr/local/bin/harmattan-session"
+install -m 644 "$REPO/arch/harmattan/harmattan.service" "$MNT/etc/systemd/system/harmattan.service"
+install -m 755 "$REPO/arch/pro1x-desktop" "$MNT/usr/local/bin/pro1x-desktop"
+log "done: pro1x-desktop harmattan (as root) makes it the session"

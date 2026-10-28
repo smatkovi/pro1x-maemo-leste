@@ -1,0 +1,12 @@
+#!/bin/sh
+# pro1x-desktop phosh|hildon|meego|harmattan: (hildon: Leste's desktop;
+# meego: it with the N9's pages and gestures; harmattan: the N9's own UI) the session the phone starts for alarm
+# (as root): enables that one's unit, disables the others and switches now.
+set -eu
+want=${1:?phosh, hildon, meego or harmattan}
+case $want in phosh|hildon|meego|harmattan) ;; *) echo "phosh, hildon, meego or harmattan" >&2; exit 2 ;; esac
+[ -f "/etc/systemd/system/$want.service" ] || { echo "$want is not installed" >&2; exit 1; }
+for s in phosh hildon meego harmattan; do
+	[ "$s" = "$want" ] || systemctl disable --now "$s.service" 2> /dev/null || true
+done
+systemctl enable --now "$want.service"

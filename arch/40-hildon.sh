@@ -62,8 +62,9 @@ for p in "${PARTS[@]}"; do
 	git -C "$d" cat-file -e "${REV[$name]}^{commit}" 2> /dev/null || git -C "$d" fetch -q origin
 	git -C "$d" checkout -q -f "${REV[$name]}"
 done
-mkdir -p "$MNT$B/patches"
-cp -a "$REPO/patches/hidpi/." "$MNT$B/patches/"
+mkdir -p "$MNT$B/patches/hidpi" "$MNT$B/patches/meego"
+cp -a "$REPO/patches/hidpi/." "$MNT$B/patches/hidpi/"
+cp -a "$REPO/patches/meego/." "$MNT$B/patches/meego/"
 
 # --- build ------------------------------------------------------------------------
 log "build"
@@ -94,7 +95,10 @@ while IFS= read -r p; do
 			[ -n "$q" ] && patch -s -p1 < "debian/patches/$q"
 		done
 	fi
-	[ ! -f "$B/patches/$name.patch" ] || patch -s -p1 < "$B/patches/$name.patch"
+	# HiDPI, then the MeeGo look (pages, edge gestures), as Leste and FreeBSD
+	for d in hidpi meego; do
+		[ ! -f "$B/patches/$d/$name.patch" ] || patch -s -p1 < "$B/patches/$d/$name.patch"
+	done
 	if [ "$args" = "!" ]; then
 		case $name in
 		mce-dev)
@@ -148,6 +152,13 @@ EOF
 # --- the session ------------------------------------------------------------------
 log "hildon-session"
 install -m 755 "$REPO/arch/hildon/hildon-session" "$MNT/usr/local/bin/hildon-session"
-install -m 644 "$REPO/arch/hildon/hildon.service" "$MNT/etc/systemd/system/hildon.service"
-install -m 755 "$REPO/arch/meego/pro1x-desktop" "$MNT/usr/local/bin/pro1x-desktop"
-log "done: pro1x-desktop hildon (as root) makes it the session"
+install -m 644 "$REPO/arch/hildon/hildon.service" "$REPO/arch/hildon/meego.service" \
+	"$MNT/etc/systemd/system/"
+install -m 755 "$REPO/arch/pro1x-desktop" "$MNT/usr/local/bin/pro1x-desktop"
+# the N9's own UI (step 30) is "harmattan", "meego" the MeeGo look on Hildon
+if [ -x "$MNT/usr/bin/meegotouchhome" ]; then
+	install -m 755 "$REPO/arch/harmattan/harmattan-session" "$MNT/usr/local/bin/"
+	install -m 644 "$REPO/arch/harmattan/harmattan.service" "$MNT/etc/systemd/system/"
+	rm -f "$MNT/usr/local/bin/meego-session"
+fi
+log "done: pro1x-desktop hildon or meego (as root) makes it the session"

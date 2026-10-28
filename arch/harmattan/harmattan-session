@@ -1,6 +1,6 @@
 #!/bin/sh
-# meego-session: the Nokia N9's user interface (harmattan-qt5) as an X11
-# session, started by meego.service through xinit: the compositing window
+# harmattan-session: the Nokia N9's own user interface (harmattan-qt5) as
+# an X11 session, started by harmattan.service through xinit: the compositing window
 # manager (mcompositor, with the swipe gestures), the system UI (status bar,
 # notifications), the feedback daemon and the home screen.
 #

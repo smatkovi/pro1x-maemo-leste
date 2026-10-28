@@ -1,6 +1,7 @@
 #!/bin/sh
 # hildon-session: Maemo Leste's Hildon desktop as an X11 session on Arch
-# (arch/40-hildon.sh), started by hildon.service through xinit: what
+# (arch/40-hildon.sh), started by hildon.service or, with the MeeGo look,
+# meego.service through xinit: what
 # Leste's Xsession.d and Xsession.post scripts do. The status menu and home
 # run beside hildon-desktop and come back when they crash; the session ends
 # with hildon-desktop.
@@ -14,6 +15,11 @@ export XDG_CURRENT_DESKTOP=Hildon
 	export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
 
 mkdir -p /tmp/hildon-desktop /tmp/af-piddir
+# The MeeGo look (meego.service): the home views, the launcher and the open
+# applications as pages in a ring, the edge gestures (patches/meego); plain
+# Hildon (hildon.service) without
+if [ "${PRO1X_LOOK:-}" = meego ]; then meego=true; else meego=false; fi
+gconftool-2 -s -t bool /apps/osso/hildon-desktop/meego_pages $meego 2> /dev/null
 # As Leste: no key repeat for Return and the hardware keys
 xset -r 36 -r 70 -r 72 -r 9 -r 104 2> /dev/null
 xset s off -dpms
