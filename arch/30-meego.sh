@@ -170,11 +170,24 @@ part meegotouchhome qmake projects.pro
 part duicontrolpanel qmake projects.pro
 part meegotouch-controlpanelapplets qmake meegotouch-controlpanelapplets.pro
 part meegofeedbackd qmake meegofeedbackd.pro
+# the input method: its server (with Qt 5's platform input context for the
+# applications), the N9's keyboard and its engine interface; legacy mode as
+# Harmattan built it; no reaction maps yet (the keyboard's tap sounds)
+part meego-im-framework qmake maliit-framework.pro CONFIG+=enable-legacy \
+	CONFIG+=enable-contextkit CONFIG+=nodoc
+part libmeegoimengine qmake meegoimengine.pro
+part meego-keyboard qmake m-keyboard.pro CONFIG+=noreactionmap
+# their GConf defaults (the N9's keyboard, British English)
+GCONF_CONFIG_SOURCE=xml:merged:/etc/gconf/gconf.xml.defaults gconftool-2 \
+	--makefile-install-rule /usr/share/gconf/schemas/meego-im-framework.schemas \
+	/usr/share/gconf/schemas/meego-keyboard.schemas > /dev/null || true
 ldconfig
 missing=
 for f in /usr/lib/libmeegotouchcore.so /usr/bin/mcompositor /usr/bin/sysuid \
 	/usr/bin/meegotouchhome /usr/bin/meegofeedbackd /usr/bin/ngfd \
-	/usr/lib/meegotouch/applicationextensions/libstatusindicatormenu-volume.so; do
+	/usr/lib/meegotouch/applicationextensions/libstatusindicatormenu-volume.so \
+	/usr/bin/meego-im-uiserver /usr/lib/meego-im-plugins/libmeego-keyboard.so \
+	/usr/lib/qt/plugins/platforminputcontexts/libmaliitplatforminputcontextplugin.so; do
 	[ -e $f ] || missing="$missing $f"
 done
 [ -z "$missing" ] || { echo "missing:$missing"; exit 1; }
