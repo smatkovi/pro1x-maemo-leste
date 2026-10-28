@@ -9,7 +9,7 @@
 # build files made /usr/local/ (FreeBSD's place for packages; the paths
 # the parts build in, themes, plugin and data directories, follow them).
 HQ5_URL=https://github.com/smatkovi/harmattan-qt5.git
-HQ5_REV=c1813b10984b34830b3de0046f43fdeb299e6a22
+HQ5_REV=5d831f67340991035a3f39228ba2801fc95e4ae8
 
 HARMATTAN=(
 	"libmlocale|!"
@@ -156,7 +156,9 @@ custom_harmattan_libmeegotouch() {
 
 custom_harmattan_mcompositor() { hq5_qmake_part mcompositor.pro; }
 # the key daemon's inotify is libinotify's here
+# without qmkeyd, the key daemon on Linux's evdev and SO_PEERCRED
 custom_harmattan_qmsystem2() {
+	sed -i 's/^SUBDIRS  = system keyd$/SUBDIRS  = system/' libqmsystem2.pro
 	hq5_qmake_part libqmsystem2.pro "LIBS+=-Wl,--as-needed -linotify -Wl,--no-as-needed"
 }
 custom_harmattan_duicontrolpanel() { hq5_qmake_part projects.pro; }
