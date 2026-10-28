@@ -56,6 +56,8 @@ hq5_qmake() {
 	    > "$q/mkspecs/freebsd-harmattan/qplatformdefs.h"
 	cat > "$q/hq5bin/qmake" <<-QMAKE
 	#!/bin/sh
+	# libmeegotouch's features (meegotouch.prf, ...) are below share/qt5
+	export QMAKEFEATURES="$SYSROOT/usr/local/share/qt5/mkspecs/features\${QMAKEFEATURES:+:\$QMAKEFEATURES}"
 	case "\$1" in
 	-query|-v|--version) exec /usr/bin/qmake-qt5 -qtconf "$q/qt.conf" "\$@" ;;
 	esac
