@@ -188,7 +188,8 @@ custom_harmattan_duicontrolpanel() {
 }
 custom_harmattan_system_ui() { hq5_qmake_part project.pro; }
 custom_harmattan_statusmenu_plugins() { hq5_qmake_part statusmenu-plugins.pro; }
-custom_harmattan_meegotouchhome() { hq5_qmake_part projects.pro; }
+# (it calls Xlib and XDamage itself)
+custom_harmattan_meegotouchhome() { hq5_qmake_part projects.pro "LIBS+=-lX11 -lXdamage"; }
 custom_harmattan_meegotouch_controlpanelapplets() { hq5_qmake_part meegotouch-controlpanelapplets.pro; }
 custom_harmattan_meegofeedbackd() { hq5_qmake_part meegofeedbackd.pro; }
 custom_harmattan_meegofeedback_reactionmaps() {
