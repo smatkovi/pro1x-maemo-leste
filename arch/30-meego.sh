@@ -162,12 +162,13 @@ pacman -S --noconfirm --needed check gstreamer gst-plugins-base gst-plugins-good
 upstream libngf 0.29
 CPPFLAGS='-DMCE_LED_PATTERN_DEACTIVATED_SIG=\"led_pattern_deactivated_ind\"' \
 	upstream ngfd 1.4.13 --disable-systemd
+# the settings first: system-ui's private mode applet is one of theirs
+part duicontrolpanel qmake projects.pro
 # system-ui plays its notifications' sounds through ngfd (libngf)
 part system-ui qmake project.pro DEFINES+=HAVE_LIBNGF
 # the status menu's rows (volume, internet connection, Bluetooth)
 part statusmenu-plugins qmake statusmenu-plugins.pro
 part meegotouchhome qmake projects.pro
-part duicontrolpanel qmake projects.pro
 part meegotouch-controlpanelapplets qmake meegotouch-controlpanelapplets.pro
 part meegofeedbackd qmake meegofeedbackd.pro
 # the input method: its server (with Qt 5's platform input context for the
