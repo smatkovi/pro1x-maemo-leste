@@ -210,7 +210,20 @@ while IFS= read -r p; do
 			;;
 		esac
 	) < /dev/null > "$B/build/$name.log" 2>&1 || { failed="$failed $name"; tail -5 "$B/build/$name.log" | sed 's/^/     /'; continue; }
-	cp -a "$PR/." /
+	# Arch's /bin, /sbin, /usr/sbin are links to /usr/bin, /lib to /usr/lib
+	for d in usr/sbin sbin bin; do
+		if [ -d "$PR/$d" ] && [ ! -L "$PR/$d" ]; then
+			mkdir -p "$PR/usr/bin"
+			cp -a "$PR/$d/." "$PR/usr/bin/"
+			rm -rf "${PR:?}/$d"
+		fi
+	done
+	if [ -d "$PR/lib" ] && [ ! -L "$PR/lib" ]; then
+		mkdir -p "$PR/usr/lib"
+		cp -a "$PR/lib/." "$PR/usr/lib/"
+		rm -rf "${PR:?}/lib"
+	fi
+	cp -a "$PR/." / || { failed="$failed $name(install)"; continue; }
 	ldconfig
 	echo "$rev" > "$B/$name.done"
 done < $B/apps-list
