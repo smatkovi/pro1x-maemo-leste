@@ -39,6 +39,41 @@ ls /dev/input /dev/kbd* 2>/dev/null
 sysctl dev.pro1x_battery hw.acpi dev.cpu.0.freq dev.cpu.0.freq_levels \
     2>/dev/null
 
+# pro1x.test=power: the standby power of FreeBSD itself, here in the RAM
+# root (no desktop): the panel off (DCS), both clusters at their lowest
+# frequency (what powerd's adaptive mode gives an idle system), the
+# charger's USB input suspended (on the battery with the cable in:
+# patches/0030), the battery every 30 s on the console for pro1x.power_min
+# minutes (30), then the input back and back to the boot menu. Linux
+# reads the console after the next boot (scripts/68-power-standby.sh's
+# logger has the same columns).
+if [ "$(kenv -q pro1x.test)" = power ]; then
+	min=$(kenv -q pro1x.power_min)
+	min=${min:-30}
+	echo "=== power: $min min, the panel off, on the battery"
+	sysctl dev.qcom_dpu.0.display=0
+	for c in 0 4; do
+		l=$(sysctl -n dev.cpu.$c.freq_levels 2>/dev/null) || continue
+		l=${l##* }
+		sysctl dev.cpu.$c.freq=${l%%/*}
+	done
+	sysctl dev.pro1x_battery.0.input_suspend=1
+	echo "power: s mA mV % status"
+	t=0
+	while [ $t -lt $((min * 60)) ]; do
+		sleep 30
+		t=$((t + 30))
+		i=$(sysctl -n dev.pro1x_battery.0.current)
+		v=$(sysctl -n dev.pro1x_battery.0.voltage)
+		echo "power: $t $((-i / 1000)) $((v / 1000)) $(sysctl -n dev.pro1x_battery.0.capacity)" \
+		    "$(sysctl -n dev.pro1x_battery.0.status)"
+	done
+	sysctl dev.pro1x_battery.0.input_suspend=0
+	sysctl dev.qcom_dpu.0.display=1
+	echo "=== power: done, rebooting"
+	reboot
+fi
+
 if [ -e /dev/gpt/userdata ] && [ -d $HOST ] &&
     mount -t ext2fs -o ro /dev/gpt/userdata $HOST; then
 	echo "--- userdata at $HOST:"

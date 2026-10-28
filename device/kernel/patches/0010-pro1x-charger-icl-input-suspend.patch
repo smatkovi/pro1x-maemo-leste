@@ -1,4 +1,4 @@
-From e4621d9d20e452bd807391df7fe0f665b70a175a Mon Sep 17 00:00:00 2001
+From 69f730e900ab439e7e4662d9c165e1769d6e3b1e Mon Sep 17 00:00:00 2001
 From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
 Date: Wed, 28 Oct 2026 23:13:03 +0100
 Subject: [PATCH] pro1x-charger-icl: input_suspend, the phone on its battery
@@ -9,11 +9,11 @@ for a charge limit: USBIN_CMD_IL's suspend bit (smb5), set and cleared
 from the poll, cleared when the module goes; a suspended input is not
 taken for the charger watchdog having bitten.
 ---
- drivers/power/supply/pro1x-charger-icl.c | 30 ++++++++++++++++++++++--
- 1 file changed, 28 insertions(+), 2 deletions(-)
+ drivers/power/supply/pro1x-charger-icl.c | 37 ++++++++++++++++++++++--
+ 1 file changed, 35 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/power/supply/pro1x-charger-icl.c b/drivers/power/supply/pro1x-charger-icl.c
-index c8bdf21b95..d3daaa9610 100644
+index c8bdf21b95..12f68a4e94 100644
 --- a/drivers/power/supply/pro1x-charger-icl.c
 +++ b/drivers/power/supply/pro1x-charger-icl.c
 @@ -38,6 +38,8 @@
@@ -74,7 +74,21 @@ index c8bdf21b95..d3daaa9610 100644
  				c->recovered = true;
  				regmap_update_bits(c->map, c->base + CHGR_ENABLE_CMD, CHGR_ENABLE, 0);
  				msleep(50);
-@@ -228,7 +249,12 @@ static int pro1x_chg_probe(struct platform_device *pdev)
+@@ -213,6 +234,13 @@ static int pro1x_chg_probe(struct platform_device *pdev)
+ 	if (!c->map)
+ 		return dev_err_probe(dev, -ENODEV, "no parent regmap\n");
+ 
++	/*
++	 * The suspend bit outlives a reboot (and FreeBSD's or a killed
++	 * logger's run): the input back, unless input_suspend says otherwise
++	 * at the first poll.
++	 */
++	regmap_update_bits(c->map, c->base + USBIN_CMD_IL, USBIN_SUSPEND, 0);
++
+ 	rd(c, WD_CFG, &wd);
+ 	rd(c, SNARL_BARK_BITE_CFG, &wd2);
+ 	dev_info(dev, "watchdog cfg 0x%02x, snarl/bark/bite 0x%02x\n", wd, wd2);
+@@ -228,7 +256,12 @@ static int pro1x_chg_probe(struct platform_device *pdev)
  
  static void pro1x_chg_remove(struct platform_device *pdev)
  {
