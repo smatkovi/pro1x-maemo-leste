@@ -21,10 +21,13 @@ xset s off -dpms
 
 meegofeedbackd &
 feedback=$!
+# the event sounds (system bus, as on the N9)
+ngfd &
+events=$!
 mcompositor &
 compositor=$!
 sleep 2
 QT_SCALE_FACTOR=$SCALE sysuid &
 sysui=$!
 QT_SCALE_FACTOR=$SCALE meegotouchhome
-kill $sysui $compositor $feedback 2> /dev/null
+kill $sysui $compositor $feedback $events 2> /dev/null

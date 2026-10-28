@@ -61,8 +61,12 @@ if ! chroot "$MNT" pacman -Q gconf > /dev/null 2>&1; then
 	chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
 rm -rf /home/alarm/aur/gconf
 install -d -o alarm -g alarm /home/alarm/aur
-su alarm -c 'cd /home/alarm/aur && git clone -q https://aur.archlinux.org/gconf.git &&
-	cd gconf && makepkg --nocheck --noconfirm > makepkg.log 2>&1' ||
+su alarm -c 'cd /home/alarm/aur && git clone -q https://aur.archlinux.org/gconf.git'
+# its dependencies installed by root first (makepkg runs without root)
+deps=$(cd /home/alarm/aur/gconf && bash -c '. ./PKGBUILD; echo "${depends[@]} ${makedepends[@]}"' |
+	sed 's/[<>=][^ ]*//g')
+pacman -S --noconfirm --needed $deps > /dev/null
+su alarm -c 'cd /home/alarm/aur/gconf && makepkg --nocheck --noconfirm > makepkg.log 2>&1' ||
 	{ tail -30 /home/alarm/aur/gconf/makepkg.log; exit 1; }
 pacman -U --noconfirm /home/alarm/aur/gconf/gconf-*.pkg.tar.* > /dev/null
 EOF
@@ -109,14 +113,36 @@ part() {
 	make)
 		;;
 	esac
-	if [ $kind = make ]; then
-		make -j"$jobs" "$@" > make.log 2>&1 || { grep -m20 "error" make.log; exit 1; }
-		make install "$@" > install.log 2>&1 || { tail -20 install.log; exit 1; }
-	else
-		make -j"$jobs" > make.log 2>&1 || { grep -m20 "error" make.log; exit 1; }
-		make install > install.log 2>&1 || { tail -20 install.log; exit 1; }
-	fi
+	# -k: parts not ported yet (some status menu plugins) do not stop the
+	# rest; what must exist is checked at the end
+	[ $kind = make ] || set --
+	make -k -j"$jobs" "$@" > make.log 2>&1 ||
+	    { echo "   $name: not all of it builds:"; grep -m5 "error:" make.log | sed 's/^/     /'; }
+	make -k install "$@" > install.log 2>&1 || true
 	echo "$want" > "$stamp"
+}
+
+# The sound daemon for events (Nemo's ngfd, the open successor of the N9's)
+# and its client library, from their upstream tags; Harmattan's mce-dev
+# lacks a signal name newer mce has
+upstream() {
+	local name=$1 tag=$2; shift 2
+	local stamp=$B/$name.done
+	if [ "$(cat $stamp 2> /dev/null)" = "$tag" ]; then
+		echo "   $name: built"
+		return
+	fi
+	echo "   $name $tag"
+	rm -rf "$B/$name"
+	git clone -q --branch "$tag" "https://github.com/sailfishos/$name.git" "$B/$name"
+	cd "$B/$name"
+	git submodule update -q --init
+	./autogen.sh > autogen.log 2>&1 || autoreconf -i -f > autogen.log 2>&1
+	./configure --prefix=/usr --sysconfdir=/etc "$@" > configure.log 2>&1 ||
+	    { tail -20 configure.log; exit 1; }
+	make -j"$jobs" > make.log 2>&1 || { grep -m20 "error" make.log; exit 1; }
+	make install > install.log 2>&1 || { tail -20 install.log; exit 1; }
+	echo "$tag" > "$stamp"
 }
 
 part libmlocale configure -prefix /usr -release
@@ -127,12 +153,24 @@ part mcompositor qmake mcompositor.pro
 part libdsme make
 part mce-dev make
 part qmsystem2 qmake libqmsystem2.pro
-part system-ui qmake project.pro
+pacman -S --noconfirm --needed check gstreamer gst-plugins-base gst-plugins-good \
+	libcanberra > /dev/null
+upstream libngf 0.29
+CPPFLAGS='-DMCE_LED_PATTERN_DEACTIVATED_SIG="led_pattern_deactivated_ind"' \
+	upstream ngfd 1.4.13 --disable-systemd
+# system-ui plays its notifications' sounds through ngfd (libngf)
+part system-ui qmake project.pro DEFINES+=HAVE_LIBNGF
 part meegotouchhome qmake projects.pro
 part duicontrolpanel qmake projects.pro
 part meegotouch-controlpanelapplets qmake meegotouch-controlpanelapplets.pro
 part meegofeedbackd qmake meegofeedbackd.pro
 ldconfig
+missing=
+for f in /usr/lib/libmeegotouchcore.so /usr/bin/mcompositor /usr/bin/sysuid \
+	/usr/bin/meegotouchhome /usr/bin/meegofeedbackd /usr/bin/ngfd; do
+	[ -e $f ] || missing="$missing $f"
+done
+[ -z "$missing" ] || { echo "missing:$missing"; exit 1; }
 EOF
 
 # --- the N9's theme, fonts and sounds (Nokia's, from the phone's own copy) ---
@@ -148,13 +186,19 @@ if [ -n "$N9_ROOT" ] && [ -d "$N9_ROOT/usr/share/themes/blanco" ]; then
 		"$MNT/usr/share/themes/"
 	cp -a "$N9_ROOT"/usr/share/fonts/*/NokiaPure* "$MNT/usr/share/fonts/nokia/" 2> /dev/null ||
 		cp -a "$N9_ROOT"/usr/share/fonts/nokia/. "$MNT/usr/share/fonts/nokia/" 2> /dev/null || true
-	for d in ui-tones ring-tones; do
+	for d in ui-tones ring-tones vibra; do
 		cp -a "$N9_ROOT/usr/share/sounds/$d" "$MNT/usr/share/sounds/"
 	done
+	# ngfd's events: the N9's own, in place of Nemo's
+	rm -rf "$MNT/usr/share/ngfd/events.d"
+	cp -a "$N9_ROOT/usr/share/ngfd/events.d" "$MNT/usr/share/ngfd/events.d"
 	chroot "$MNT" fc-cache -f > /dev/null 2>&1 || true
 else
 	log "no N9 root file system: the MeeGo look draws without its theme"
 fi
+
+# ngfd with the plugins that run here (harmattan-qt5/ngfd-meego)
+install -m 644 "$MNT/usr/src/harmattan-qt5/ngfd-meego/ngfd.ini" "$MNT/usr/share/ngfd/ngfd.ini"
 
 # --- the session ------------------------------------------------------------------
 log "meego-session"
