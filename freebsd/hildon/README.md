@@ -102,10 +102,9 @@ FreeBSD's libcanberra package leaves out) and the notifications and
 alarms (`hildon-plugins-notify-sv`: hildon-home's sound daemon decodes
 AAC, Ogg and MP3 tones into WAV files in `~/.local/share/sounds` with
 GStreamer, then plays them). The sound files themselves are Maemo 5's,
-from Leste's archive (`osso-sounds-*`, `maemo-ringtones-mr0`); the
-`osso-sounds-*` ones are Nokia's under an all-rights-reserved licence, so
-they belong in one's own image, not in a public release (`build.sh`,
-LESTE_DATA). `../vm/vm.sh` with `AUDIO=wav` records the VM's sound card
+from Leste's archive (`osso-sounds-*`, `maemo-ringtones-mr0`), passed on
+as Leste passes them on (the `osso-sounds-*` ones are Nokia's, all rights
+reserved). `../vm/vm.sh` with `AUDIO=wav` records the VM's sound card
 into a WAV file, which is how the sounds were checked.
 
 MeeGo apps: `qt-components` is com.nokia.meego, the Nokia N9's Qt Quick

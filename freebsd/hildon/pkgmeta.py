@@ -146,10 +146,9 @@ RUNTIME = {
     'jib': ['qt5-sqldrivers-sqlite3'],
     'dorian': ['qt5-sqldrivers-sqlite3'],
     # the chess engine the game runs
-    'osso-chess-ui': ['gnuchess'],
-    # the click sounds, through libcanberra's PulseAudio driver (the sound
-    # files are osso-sounds-ui's, see build.sh LESTE_DATA)
-    'maemo-input-sounds': ['libcanberra', 'libcanberra-pulse', 'pulseaudio'],
+    'osso-chess-ui': ['gnuchess', 'osso-sounds-game-chess'],
+    # the click sounds, through libcanberra's PulseAudio driver
+    'maemo-input-sounds': ['libcanberra', 'libcanberra-pulse', 'pulseaudio', 'osso-sounds-ui'],
     'libcanberra-pulse': ['libcanberra'],
     # alarmd asks clockd for the time; the alarm dialog is a system UI
     # plugin, it rings through the notification plugin
@@ -638,10 +637,11 @@ apps = sorted(x['name'] for x in meta.values()
               if any(os.path.isdir(os.path.join(x['root'], d, 'share/applications'))
                      for d in ('usr/local', 'usr')))
 # and what works without an entry: the on-screen keyboard, daemons, the
-# alarm dialog (with alarmd and the system UI), the click sounds
+# alarm dialog (with alarmd and the system UI), the click sounds, the
+# ringtones and call sounds the profiles and alarms choose from
 apps = sorted(set(apps) | {x['name'] for x in meta.values() if x['name'] in (
     'hildon-input-method-plugins', 'headphoned', 'wifi-assistant', 'hildon-status-menu',
-    'osso-systemui-alarm', 'maemo-input-sounds')})
+    'osso-systemui-alarm', 'maemo-input-sounds', 'maemo-ringtones-mr0', 'osso-sounds-rtc')})
 for name, comment, desc, root, deps in (
         ('hildon-session', "Maemo Leste's Hildon session for FreeBSD",
          'hildon-session (startx hildon-session, or "startx hildon" on the Pro1X) '
