@@ -61,6 +61,9 @@ if [ -x /sbin/pro1x-bootmenu ] && [ -x /sbin/pro1x-boot ]; then
   trial=$(pro1x-boot trial-check 2>/dev/null) || trial=none
   entries=$(pro1x-boot entries)
   want=$(pro1x-boot take-next)
+  # a one-shot choice (another system tried from the PC, say) gets the
+  # watchdog like a trial start: a hang ends in the default system again
+  oneshot=${want:+1}
   [ -n "$want" ] || want=$(pro1x-boot get-default)
   timeout=$(pro1x-boot get-timeout)
   count=0
@@ -202,14 +205,16 @@ SNAPS
   fi
   # The running system reads this (MeeGo may boot the Leste image).
   pro1x-boot set-current "$key"
-  # On trial: the SoC's watchdog runs from here on (the APSS watchdog,
-  # 0x0f017000, as for FreeBSD above). qcom_wdt finds it running and the
-  # kernel feeds it until the system takes it over (dsme on Leste,
-  # systemd's RuntimeWatchdog) or for at most 15 minutes; pro1x-boot-trial
-  # in the system confirms the start once its user interface runs, or
-  # reboots. A start that hangs thus resets the phone, and the bootloader
+  # On trial, and for a one-shot choice: the SoC's watchdog runs from here
+  # on (the APSS watchdog, 0x0f017000, as for FreeBSD above). qcom_wdt
+  # finds it running and the kernel feeds it until the system takes it
+  # over (dsme on Leste and the MeeGo copy, systemd's RuntimeWatchdog
+  # elsewhere, 66-boot-trial-install.sh) or for at most 15 minutes. A start
+  # that hangs thus resets the phone: into the default system after a
+  # one-shot choice; on trial pro1x-boot-trial in the system confirms the
+  # start once its user interface runs, or reboots, and the bootloader
   # takes one of the trial's tries for every start.
-  if [ "$trial" = running ]; then
+  if [ "$trial" = running ] || [ -n "$oneshot" ]; then
     echo 900 > /sys/module/watchdog/parameters/open_timeout 2> /dev/null
     if command -v devmem > /dev/null; then
       devmem 0x0f017008 32 0
@@ -218,7 +223,7 @@ SNAPS
       devmem 0x0f017014 32 0xfffff
       devmem 0x0f017008 32 1
     fi
-    modprobe qcom_wdt || log_warning_msg "pro1x-loop-root: no watchdog for the trial start"
+    modprobe qcom_wdt || log_warning_msg "pro1x-loop-root: no watchdog for this start"
   fi
 fi
 

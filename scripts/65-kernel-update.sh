@@ -15,6 +15,11 @@
 #       the initramfs scripts of this repository into Leste, the initramfs
 #       for the new kernel made in Leste, the boot image here (50), on the
 #       phone as /host/boot_b-<version>.img. Writes no partition.
+#   ... 65-kernel-update.sh refresh
+#       prepare for the kernel that runs already (its modules are on the
+#       phone): the initramfs and the boot image made again, after changes
+#       to the boot menu or the initramfs scripts only. Then flash with
+#       TRIES=0 (the kernel is known to start).
 #   ... 65-kernel-update.sh flash
 #       saves boot_b as /host/boot_b-before-<version>.img, then writes the
 #       prepared image into boot_b (60-flash-slot-b.sh) and puts slot b on
@@ -47,22 +52,25 @@ case "${1:-}" in
 status)
 	ph "echo running: \$(uname -r); echo modules on userdata:; ls $STORE 2>/dev/null || echo '  (none)'; echo boot images:; ls -la /host/boot_b-*.img"
 	exit 0 ;;
-prepare|flash) ;;
+prepare|refresh|flash) ;;
 *)	sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 1 ;;
 esac
 
 running=$(ph uname -r)
-[ "$KVER" != "$running" ] || {
-	echo "the phone runs $KVER already: give the new kernel a version of its own (KLOCAL)"
+[ "$1" != prepare ] || [ "$KVER" != "$running" ] || {
+	echo "the phone runs $KVER already: give the new kernel a version of its own (KLOCAL), or refresh"
 	exit 1
 }
+[ "$1" != refresh ] || [ "$KVER" = "$running" ] ||
+    { echo "refresh is for the running kernel ($running), not $KVER"; exit 1; }
 
-if [ "$1" = prepare ]; then
+if [ "$1" = prepare ] || [ "$1" = refresh ]; then
 	for f in "$OUT/Image.gz" "$OUT/sm6115-fxtec-pro1x.dtb" "$OUT/config-$KVER" \
 	    "$OUT/modules/lib/modules/$KVER/modules.dep"; do
 		[ -f "$f" ] || { echo "missing: $f"; exit 1; }
 	done
 
+	if [ "$1" = prepare ]; then
 	log "modules $KVER to $STORE"
 	# (a version that is there already is replaced: it is not the running one)
 	tar -C "$OUT/modules/lib/modules" --owner=0 --group=0 -cf - "$KVER" |
@@ -72,6 +80,7 @@ if [ "$1" = prepare ]; then
 		rm -f $STORE/$KVER/build $STORE/$KVER/source"
 	log "modules of the running kernel ($running) to $STORE, if not there yet"
 	ph "[ -d $STORE/$running ] || cp -a /lib/modules/$running $STORE/$running"
+	fi
 
 	log "pro1x-boot and the trial's parts into the systems (66-boot-trial-install.sh)"
 	tar -C "$REPO" --owner=0 --group=0 -cf - tools/pro1x-boot tools/pro1x-boot-trial \
