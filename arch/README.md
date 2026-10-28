@@ -48,5 +48,13 @@ menu's default stays Leste), so every way back is a reboot:
   its watchdog driver): holding the power key restarts the phone, and
   the menu starts Leste after 5 s.
 
+First boot (2026-10-28): Arch comes up on Leste's kernel in about a
+minute, with SSH over USB, NetworkManager, ModemManager, the DSP daemons
+and the watchdog; phoc draws with the GPU (freedreno, FD610). Phosh does
+not stay up yet: its home bar asks for a layer surface of height 0
+anchored only at the bottom, and phoc ends the connection ("height 0
+requested without setting top and bottom anchors"). The clock starts at
+1970 until a saved RTC offset exists (`/host/pro1x-rtc-offset`).
+
 Untested so far: everything on the phone (the first boot, the screen's
 rotation, touch), and mobile data (no SIM).

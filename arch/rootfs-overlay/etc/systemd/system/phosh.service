@@ -26,6 +26,9 @@ StandardOutput=journal
 StandardError=journal
 UtmpIdentifier=tty7
 UtmpMode=user
+# logind activates the session only on the foreground VT, and phoc waits
+# for that ("Timeout waiting session to become active")
+ExecStartPre=+/usr/bin/chvt 7
 ExecStart=/usr/bin/phosh-session
 Restart=always
 RestartSec=5s

@@ -1,0 +1,6 @@
+# The keyboard slide's switch (SW_KEYPAD_SLIDE on gpio-keys, beside its
+# keys): phoc 0.57 has no case for it and aborts ("on_switch_toggled: code
+# should not be reached"), so libinput leaves the switch out.
+[Pro1X keyboard slide switch]
+MatchName=gpio-keys
+AttrEventCode=-SW_KEYPAD_SLIDE;
