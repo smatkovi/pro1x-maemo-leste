@@ -33,6 +33,10 @@ PARTS=(
   "hildon-home|0d34886acdc2|1"
   "hildon-desktop|1273f9eee252|2"
   "mce|422d5f2bd618|2"
+  # the location framework's two bugs (patches/fixes): liblocation linked
+  # to its libraries, location-ui's dialogs without an answer at the start
+  "liblocation|d1ae86503411|1"
+  "location-ui|55b9700aed33|1"
 )
 if [ -n "$ONLY" ]; then
   sel=()
@@ -110,9 +114,9 @@ for entry in "${PARTS[@]}"; do
   git -C "$d" clean -fdxq
   # Quilt packages take the patch at the end of their series, the others
   # directly
-  # the MeeGo-like home (patches/meego) and the display's low power mode
-  # (patches/lpm), where a part has one
-  for kind in hidpi meego lpm; do
+  # the MeeGo-like home (patches/meego), the display's low power mode
+  # (patches/lpm) and bug fixes (patches/fixes), where a part has one
+  for kind in hidpi meego lpm fixes; do
     p=$REPO/patches/$kind/$name.patch
     [ -f "$p" ] || continue
     if [ -f "$d/debian/patches/series" ]; then
@@ -138,7 +142,7 @@ install(TARGETS radiostates DESTINATION ${MCE_MODULE_DIR})
 CMAKE
   fi
   (cd "$d" && DEBEMAIL="pro1x-maemo-leste" dch -v "$(dpkg-parsechangelog -S Version)+pro1x$n" \
-    -D unstable "F(x)tec Pro1X: HiDPI, MeeGo-like home, low power mode (pro1x-maemo-leste patches/).")
+    -D unstable "F(x)tec Pro1X: HiDPI, MeeGo-like home, low power mode, fixes (pro1x-maemo-leste patches/).")
   # mce builds against libcal: next to 47-libcal.sh's patched libcal1 only
   # the libcal-dev of that build fits
   if [ "$name" = mce ] && ls "$SRC"/libcal-dev_*+pro1x1_*.deb > /dev/null 2>&1; then

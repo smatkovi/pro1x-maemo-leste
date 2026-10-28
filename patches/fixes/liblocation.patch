@@ -1,0 +1,31 @@
+liblocation.so.0 named none of the libraries it uses (GLib, GObject, GConf,
+libdbus, dbus-glib): programs that did not link them themselves (a Qt
+program's plugin) failed to load it.
+
+diff --git a/configure.ac b/configure.ac
+index 0890b4b..25ba7e6 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -9,7 +9,7 @@ AC_PROG_CC
+ AC_PROG_INSTALL
+ AM_PROG_LIBTOOL
+ 
+-PKG_CHECK_MODULES(LIBLOCATION, glib-2.0 gconf-2.0 dbus-glib-1)
++PKG_CHECK_MODULES(LIBLOCATION, glib-2.0 gobject-2.0 gconf-2.0 dbus-1 dbus-glib-1)
+ AC_SUBST(LIBLOCATION_CFLAGS)
+ AC_SUBST(LIBLOCATION_LIBS)
+ 
+diff --git a/src/Makefile.am b/src/Makefile.am
+index c2c6ee2..7b30e3c 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -12,7 +12,8 @@ liblocation_la_SOURCES = \
+ 	location-version.h
+ 
+ liblocation_la_CFLAGS = $(LIBLOCATION_CFLAGS) -Wall
+-liblocation_la_LDFLAGS = -lm -Wl,--as-needed
++liblocation_la_LDFLAGS = -Wl,--as-needed
++liblocation_la_LIBADD = $(LIBLOCATION_LIBS) -lm
+ 
+ liblocationincludedir=$(includedir)/location
+ liblocationinclude_HEADERS = \

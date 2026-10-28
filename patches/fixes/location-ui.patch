@@ -1,0 +1,33 @@
+The built-in dialogs (the privacy disclaimer among them) started with the
+response 0, which is "accepted", where -1 is "no answer" (as after a
+close): a liblocation client that asked for the disclaimer while the
+dialog was open got InUse with response 0 and took it as accepted.
+
+diff --git a/src/main.c b/src/main.c
+index a713607..0614ad6 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -107,17 +107,17 @@ static struct client_request_table clireq_table[5] = {
+ 
+ static struct location_ui_dialog funcmap[6] = {
+ 	{"/com/nokia/location/ui/bt_disconnected",
+-	 create_bt_disconnected_dialog, NULL, 0, 0, 0, 0, 0},
++	 create_bt_disconnected_dialog, NULL, 0, 0, 0, -1, 0},
+ 	{"/com/nokia/location/ui/disclaimer",
+-	 create_disclaimer_dialog, NULL, 0, 0, 0, 0, 0},
++	 create_disclaimer_dialog, NULL, 0, 0, 0, -1, 0},
+ 	{"/com/nokia/location/ui/enable_gps",
+-	 create_enable_gps_dialog, NULL, 0, 0, 0, 0, 0},
++	 create_enable_gps_dialog, NULL, 0, 0, 0, -1, 0},
+ 	{"/com/nokia/location/ui/enable_network",
+-	 create_enable_network_dialog, NULL, 0, 0, 0, 0, 0},
++	 create_enable_network_dialog, NULL, 0, 0, 0, -1, 0},
+ 	{"/com/nokia/location/ui/enable_positioning",
+-	 create_positioning_dialog, NULL, 0, 0, 0, 0, 0},
++	 create_positioning_dialog, NULL, 0, 0, 0, -1, 0},
+ 	{"/com/nokia/location/ui/enable_agnss",
+-	 create_agnss_dialog, NULL, 0, 0, 0, 0, 0},
++	 create_agnss_dialog, NULL, 0, 0, 0, -1, 0},
+ };
+ 
+ static display_close_map dc_map[2] = {
