@@ -141,6 +141,40 @@ ldconfig
 EOF
 fi
 
+# Qt 5's positioning module (meecast's GPS place), which Arch Linux ARM
+# does not have (qt5-location): from Qt's qtlocation of qt5-base's version,
+# the library and its GeoClue 2 plugin only, into the Qt of the system;
+# what it put there is listed in $B/qt5-positioning.files
+QTLOC=qtlocation-everywhere-opensource-src-5.15.19
+QTLOC_SHA256=d521e36220e061ebfc4109fcbfa4092e861ed1ca54229ffee2eafa1e26f45fd8
+if ! chroot "$MNT" pacman -Qq qt5-location > /dev/null 2>&1 &&
+    [ ! -f "$MNT$B/qt5-positioning.files" ]; then
+	log "QtPositioning (${QTLOC##*-})"
+	mkdir -p "$MNT$B/dl" "$MNT$B/build"
+	f=$MNT$B/dl/$QTLOC.tar.xz
+	[ -f "$f" ] || curl -sSfL -o "$f" "https://download.qt.io/archive/qt/5.15/${QTLOC##*-}/submodules/$QTLOC.tar.xz"
+	echo "$QTLOC_SHA256  $f" | sha256sum -c --quiet -
+	rm -rf "${MNT:?}$B/build/qtlocation"
+	mkdir "$MNT$B/build/qtlocation"
+	tar -xJf "$f" -C "$MNT$B/build/qtlocation" --strip-components=1
+	chroot "$MNT" /bin/bash -euo pipefail -s "$B" "$JOBS" <<'EOF'
+cd "$1/build/qtlocation"
+mkdir _build && cd _build
+qmake-qt5 .. > qmake.log 2>&1 || { tail -20 qmake.log; exit 1; }
+make qmake_all > qmake_all.log 2>&1 || { tail -20 qmake_all.log; exit 1; }
+make -C src -j"$2" sub-positioning > make.log 2>&1 || { grep -m20 -E "error:|Error [0-9]" make.log; exit 1; }
+make -C src/plugins/position/geoclue2 -j"$2" >> make.log 2>&1 || { grep -m20 -E "error:|Error [0-9]" make.log; exit 1; }
+st=$PWD/_stage
+for d in src/positioning src/plugins/position/geoclue2; do
+	make -C "$d" install INSTALL_ROOT="$st" >> install.log 2>&1 || { tail -20 install.log; exit 1; }
+done
+(cd "$st" && find . ! -type d | sed 's/^\.//') > "$1/qt5-positioning.files.new"
+cp -a "$st/." /
+ldconfig
+mv "$1/qt5-positioning.files.new" "$1/qt5-positioning.files"
+EOF
+fi
+
 log "sources"
 for p in "${APPS[@]}"; do
 	name=${p%%|*}
@@ -213,6 +247,14 @@ while IFS= read -r p; do
 		case $name in
 		calendar-backend|qalendar|cal-home-widget)
 			export PKG_CONFIG_PATH=/opt/libical3/lib/pkgconfig CPATH=/opt/libical3/include
+			;;
+		# Arch has espeak-ng only: its espeak API under espeak's names
+		mstardict)
+			c=$B/compat/espeak
+			mkdir -p "$c/include/espeak" "$c/lib"
+			echo '#include <espeak-ng/speak_lib.h>' > "$c/include/espeak/speak_lib.h"
+			ln -sfn /usr/lib/libespeak-ng.so "$c/lib/libespeak.so"
+			export CPATH=$c/include LIBRARY_PATH=$c/lib
 			;;
 		esac
 		if [ -f debian/patches/series ]; then
