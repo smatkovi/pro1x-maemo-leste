@@ -81,9 +81,11 @@ hq5_qmake() {
 # (what such a part installs there, unsysroot takes back out)
 hq5_sysroot_features() {
 	local pr=$1 f
-	find "$pr" -name '*.prf' -printf '%P\n' | while read -r f; do
+	# (and the .pri files a feature includes, duicontrolpanel's dcpconfig.pri;
+	# their prefixes stay, the headers below one are the sysroot's)
+	find "$pr" \( -name '*.prf' -o -path '*/mkspecs/*.pri' \) -printf '%P\n' | while read -r f; do
 		sed -i -E -e "s#(^|[^A-Za-z0-9_/.]|-[LI])/usr/local/#\\1$SYSROOT/usr/local/#g" \
-		    -e "s#\\\$\\\$M_PREFIX/include#$SYSROOT/usr/local/include#g" "$SYSROOT/$f"
+		    -e "s#\\\$\\\$([A-Z_]*PREFIX)/include#$SYSROOT/usr/local/include#g" "$SYSROOT/$f"
 	done
 }
 
