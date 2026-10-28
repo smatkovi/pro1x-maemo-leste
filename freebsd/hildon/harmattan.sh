@@ -9,7 +9,7 @@
 # build files made /usr/local/ (FreeBSD's place for packages; the paths
 # the parts build in, themes, plugin and data directories, follow them).
 HQ5_URL=https://github.com/smatkovi/harmattan-qt5.git
-HQ5_REV=85beb23cc49e2b750eae94a8a8144900c90e2573
+HQ5_REV=6b1d74f00450ab5ae2ca03d8939a1468b9e4c688
 
 HARMATTAN=(
 	"libmlocale|!"
@@ -84,10 +84,11 @@ hq5_qmake() {
 hq5_sysroot_features() {
 	local pr=$1 f
 	# (and the .pri files a feature includes, duicontrolpanel's dcpconfig.pri;
-	# their prefixes stay, the headers below one are the sysroot's)
+	# their prefixes stay; the headers and libraries below one, $$X_PREFIX or
+	# $${X_PREFIX} with /include or /lib, are the sysroot's)
 	find "$pr" \( -name '*.prf' -o -path '*/mkspecs/*.pri' \) -printf '%P\n' | while read -r f; do
 		sed -i -E -e "s#(^|[^A-Za-z0-9_/.]|-[LI])/usr/local/#\\1$SYSROOT/usr/local/#g" \
-		    -e "s#\\\$\\\$([A-Z_]*PREFIX)/include#$SYSROOT/usr/local/include#g" "$SYSROOT/$f"
+		    -e "s#\\\$\\\$\\{?[A-Z_]*PREFIX\\}?/(include|lib)#$SYSROOT/usr/local/\\1#g" "$SYSROOT/$f"
 	done
 }
 
