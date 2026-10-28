@@ -19,8 +19,9 @@ REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 MNT=${MNT:-/mnt/arch}
 JOBS=${JOBS:-$(nproc)}
 B=/usr/src/hildon
-# (Pure Maps and OSM Scout Server: Arch has them as Flatpaks)
-SKIP=" ffmpeg8-libs qt5-webengine qt5-webkit jib dorian hexagonrpc libqrtr-glib libqmi libssc qrtr rmtfs tqftpserv pd-mapper maplibre-native-qt nemo-qml-plugin-dbus mapbox-gl-qml pure-maps osmscout-server "
+# (Pure Maps and OSM Scout Server: Arch has them as Flatpaks; countdowntimer
+# needs Phonon, which Arch Linux ARM no longer has for Qt 5)
+SKIP=" ffmpeg8-libs qt5-webengine qt5-webkit jib dorian hexagonrpc libqrtr-glib libqmi libssc qrtr rmtfs tqftpserv pd-mapper maplibre-native-qt nemo-qml-plugin-dbus mapbox-gl-qml pure-maps osmscout-server countdowntimer "
 log() { echo ">> $*"; }
 
 mountpoint -q "$MNT" || { echo "$MNT is not mounted"; exit 1; }
@@ -74,7 +75,7 @@ for p in cmake qt5-base qt5-svg qt5-declarative \
 	qt5-x11extras qt5-xmlpatterns qt5-location qt5-tools qt5-websockets \
 	poppler-glib libical espeak-ng expat libxkbfile curl libsigc++ \
 	evolution-data-server sdl12-compat sdl_mixer sdl_image gnuchess \
-	python python-pip gettext libevent json-c protobuf-c dpkg phonon-qt5; do
+	python python-pip gettext libevent json-c protobuf-c dpkg; do
 	if pacman -Si "$p" > /dev/null 2>&1; then have="$have $p"
 	else echo "   (Arch Linux ARM has no $p)"; fi
 done
@@ -104,7 +105,8 @@ if [ ! -f "$MNT/usr/lib/pkgconfig/vte.pc" ]; then
 	chroot "$MNT" /bin/bash -euo pipefail -s "$B/build/$VTE" "$JOBS" <<'EOF'
 cd "$1"
 export CFLAGS="-O2 -pipe -std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration -Wno-error=int-conversion"
-./configure --prefix=/usr --libexecdir=/usr/lib/vte --disable-static \
+# (its config.guess is older than aarch64)
+./configure --build=aarch64-unknown-linux-gnu --prefix=/usr --libexecdir=/usr/lib/vte --disable-static \
 	--with-gtk=2.0 --disable-introspection --disable-python --disable-gtk-doc \
 	> configure.log 2>&1 || { tail -20 configure.log; exit 1; }
 make -j"$2" > make.log 2>&1 || { grep -m20 -E "error:|Error [0-9]" make.log; exit 1; }
