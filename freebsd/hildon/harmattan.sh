@@ -174,7 +174,8 @@ custom_harmattan_qmsystem2() {
 	sed -i 's/^SUBDIRS  = system keyd$/SUBDIRS  = system/' libqmsystem2.pro
 	hq5_qmake_part libqmsystem2.pro "LIBS+=-Wl,--as-needed -linotify -Wl,--no-as-needed"
 }
-custom_harmattan_duicontrolpanel() { hq5_qmake_part projects.pro; }
+# (backtrace(3) is in libexecinfo on FreeBSD)
+custom_harmattan_duicontrolpanel() { hq5_qmake_part projects.pro "LIBS+=-lexecinfo"; }
 custom_harmattan_system_ui() { hq5_qmake_part project.pro; }
 custom_harmattan_statusmenu_plugins() { hq5_qmake_part statusmenu-plugins.pro; }
 custom_harmattan_meegotouchhome() { hq5_qmake_part projects.pro; }
