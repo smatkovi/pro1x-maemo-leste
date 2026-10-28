@@ -179,7 +179,7 @@ rm -f /usr/lib/meegofeedbackd/sources/libmeegofeedback-reactionmap.so
 # the input method: its server (with Qt 5's platform input context for the
 # applications), the N9's keyboard and its engine interface; legacy mode as
 # Harmattan built it
-part meego-im-framework qmake maliit-framework.pro CONFIG+=enable-legacy \
+part meego-im-framework qmake maliit-framework.pro CONFIG+=enable-legacy CONFIG+=notests \
 	CONFIG+=enable-contextkit CONFIG+=nodoc
 part libmeegoimengine qmake meegoimengine.pro
 part meego-keyboard qmake m-keyboard.pro
