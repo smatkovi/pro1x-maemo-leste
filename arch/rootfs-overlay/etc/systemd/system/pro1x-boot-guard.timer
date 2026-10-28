@@ -1,0 +1,9 @@
+[Unit]
+Description=Reboot 15 minutes after an unconfirmed boot (pro1x-boot-ok)
+ConditionPathExists=!/var/lib/pro1x/boot-ok
+
+[Timer]
+OnBootSec=15min
+
+[Install]
+WantedBy=timers.target

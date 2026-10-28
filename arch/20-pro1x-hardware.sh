@@ -178,6 +178,9 @@ systemctl enable pro1x-rtc.service pro1x-hexagonrpcd.service pro1x-sensors.servi
 	pro1x-gnss.service pro1x-steps.service pro1x-audio-init.service pro1x-usb0.service \
 	rmtfs.service tqftpserv.service gpsd.service \
 	NetworkManager.service ModemManager.service bluetooth.service sshd.service phosh.service
+# until the first boot is confirmed (pro1x-boot-ok), an unreachable boot
+# reboots into the boot menu's default system after 15 minutes
+systemctl enable pro1x-boot-guard.timer
 # NetworkManager has the interfaces, not Arch Linux ARM's systemd-networkd
 systemctl disable systemd-networkd.service systemd-networkd.socket 2> /dev/null || true
 # replaced by pro1x-sensors.service (libssc)

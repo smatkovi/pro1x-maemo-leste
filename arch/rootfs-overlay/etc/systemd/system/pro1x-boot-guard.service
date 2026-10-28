@@ -1,0 +1,10 @@
+# Until a first boot is confirmed (pro1x-boot-ok), a boot that nobody
+# could reach ends in a reboot: "pro1x-boot next arch" is for one start
+# only, so the boot menu then starts its default system (Leste) again.
+[Unit]
+Description=Reboot into the default system if this boot was not confirmed
+ConditionPathExists=!/var/lib/pro1x/boot-ok
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl reboot

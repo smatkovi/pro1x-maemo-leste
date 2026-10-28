@@ -1,0 +1,8 @@
+#!/bin/sh
+# pro1x-boot-ok: this system is reachable; pro1x-boot-guard stops checking.
+# Run it once after the first boot (over SSH or in a terminal).
+set -e
+mkdir -p /var/lib/pro1x
+touch /var/lib/pro1x/boot-ok
+systemctl disable --now pro1x-boot-guard.timer 2> /dev/null || true
+echo "boot confirmed, the guard is off"

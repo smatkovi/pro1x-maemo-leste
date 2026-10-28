@@ -33,5 +33,20 @@ image: one line `key|Label|/image.img|` each in `/host/pro1x-boot/extra`.
 - Sensors (iio-sensor-proxy), GPS (gpsd from pro1x-gnss), step counter
   (`org.pro1x.Steps`), audio (Leste's UCM profile), Bluetooth.
 
+## If it hangs
+
+The first start goes through `pro1x-boot next arch` (once; the boot
+menu's default stays Leste), so every way back is a reboot:
+
+- systemd feeds the SoC's watchdog (`qcom_wdt`, as dsme does on Leste):
+  a hung system resets the phone after 30 s; a kernel panic reboots after
+  10 s.
+- Until `pro1x-boot-ok` has been run once (over SSH or in a terminal),
+  `pro1x-boot-guard.timer` reboots 15 minutes after the start, for a boot
+  that came up without USB networking or WLAN.
+- What neither covers (a hang in the boot menu or before the kernel has
+  its watchdog driver): holding the power key restarts the phone, and
+  the menu starts Leste after 5 s.
+
 Untested so far: everything on the phone (the first boot, the screen's
 rotation, touch), and mobile data (no SIM).
