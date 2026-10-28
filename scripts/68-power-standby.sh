@@ -55,7 +55,13 @@ which_runs() {
 	done
 }
 
-current=$(which_runs "$@")
+current=
+for i in $(seq 12); do
+	usbnet
+	current=$(which_runs "$@")
+	[ -n "$current" ] && break
+	sleep 10
+done
 [ -n "$current" ] || { echo "the phone does not answer"; exit 1; }
 port 0
 for k in "$@"; do
