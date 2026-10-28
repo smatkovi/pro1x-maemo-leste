@@ -234,6 +234,17 @@ EXCLUDE = {
     'gtk': (['usr/local/bin/gtk-update-icon-cache', 'usr/local/share/man/man1/gtk-update-icon-cache.1*',
              'usr/local/share/gtk-doc/*', 'usr/local/lib/libgtk-x11-2.0.so.0.2400.33',
              'usr/local/lib/libgdk-x11-2.0.so.0.2400.33'], ['gtk-update-icon-cache']),
+    # Harmattan's test suites (some need stub libraries of their build) and
+    # the N9's restore-factory-settings script stay out
+    'harmattan-contextkit': (['usr/local/lib/libcontext*-tests', 'usr/local/share/libcontext*-tests'], []),
+    'harmattan-duicontrolpanel': (['share'], []),
+    'harmattan-libcontentaction': (['usr/local/share/libcontentaction-tests'], []),
+    'harmattan-libmeegoimengine': (['usr/local/lib/libmeegoimengine-tests',
+                                    'usr/local/share/libmeegoimengine-tests'], []),
+    'harmattan-meego-im-framework': (['usr/local/lib/meego-im-framework-tests'], []),
+    'harmattan-meego-im-settings-applet': (['usr/local/lib/meego-im-settings-applet-tests',
+                                            'usr/local/share/meego-im-settings-applet-tests'], []),
+    'harmattan-meegotouch-controlpanelapplets': (['mcpapplets-rfs.sh'], []),
 }
 # Packages of this repository without a part: the Hildon session for any
 # FreeBSD (freebsd/hildon/rootfs) and one to install everything

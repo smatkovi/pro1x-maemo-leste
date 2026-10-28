@@ -1,0 +1,21 @@
+Finish a download that ended before its decompressor started
+
+A small file (address_parser_postal_codes.dat.bz2, 3 kB) can arrive
+before bunzip2 has started. onDownloaded() then returned without closing
+the process' input, and the finished signal does not come again: the
+download ended in a time-out after a minute (seen on FreeBSD).
+
+diff --git a/server/src/filedownloader.cpp b/server/src/filedownloader.cpp
+index 95359e1..187dc88 100644
+--- a/server/src/filedownloader.cpp
++++ b/server/src/filedownloader.cpp
+@@ -404,6 +404,9 @@ void FileDownloader::onProcessStarted()
+ {
+   m_process_started = true;
+   onNetworkReadyRead(); // pipe all data in that has been collected already
++  // a small file may have been downloaded before the process started:
++  // onDownloaded() returned then, and nothing closes the process' input
++  if (m_reply && m_reply->isFinished()) onDownloaded();
+ }
+ 
+ void FileDownloader::onProcessRead()
