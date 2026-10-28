@@ -54,6 +54,16 @@ reach the phone. The device tree is the new kernel's with the memory banks
 the bootloader fills in. Measure nothing in that start: the first kernel's
 firmware state carries over a kexec.
 
+**It does not work from a running Leste (2026-10-28):** every Linux
+kernel started that way stops about 0.23 s into its boot, right after the
+I/O schedulers register (the RAM console, `ignore_loglevel`), and the
+watchdog resets the phone into boot_b. That includes the flashed kernel
+started into itself, so it says nothing about the new kernel: something
+the running system leaves active (a DMA engine, a block whose clocks went
+off at its shutdown) stops the next kernel. FreeBSD and KolibriOS start
+from the boot menu's initramfs instead, before any of that runs. The
+script stays for a probe from there.
+
 Then, with the phone's owner there:
 
 ```sh
