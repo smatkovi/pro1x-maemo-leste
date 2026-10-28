@@ -1,0 +1,11 @@
+#!/bin/sh
+# pro1x-desktop phosh|meego|hildon: the session the phone starts for alarm
+# (as root): enables that one's unit, disables the others and switches now.
+set -eu
+want=${1:?phosh, meego or hildon}
+case $want in phosh|meego|hildon) ;; *) echo "phosh, meego or hildon" >&2; exit 2 ;; esac
+[ -f "/etc/systemd/system/$want.service" ] || { echo "$want is not installed" >&2; exit 1; }
+for s in phosh meego hildon; do
+	[ "$s" = "$want" ] || systemctl disable --now "$s.service" 2> /dev/null || true
+done
+systemctl enable --now "$want.service"

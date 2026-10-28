@@ -1,0 +1,30 @@
+#!/bin/sh
+# meego-session: the Nokia N9's user interface (harmattan-qt5) as an X11
+# session, started by meego.service through xinit: the compositing window
+# manager (mcompositor, with the swipe gestures), the system UI (status bar,
+# notifications), the feedback daemon and the home screen.
+#
+# The N9 drew at 854x480; the Pro1X's 2160x1080 panel is scaled for the
+# applications by QT_SCALE_FACTOR (MEEGO_SCALE, default 2.25), while
+# mcompositor composites at the panel's own size.
+SCALE=${MEEGO_SCALE:-2.25}
+export M_THEME_NAME=${M_THEME_NAME:-blanco}
+export QT_QPA_PLATFORMTHEME=none
+export XDG_CURRENT_DESKTOP=MeeGo
+[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] ||
+	export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+
+# the N9's theme for libmeegotouch, once
+gconftool-2 -g /meegotouch/theme/name 2> /dev/null | grep -q . ||
+	gconftool-2 -s -t string /meegotouch/theme/name "$M_THEME_NAME"
+xset s off -dpms
+
+meegofeedbackd &
+feedback=$!
+mcompositor &
+compositor=$!
+sleep 2
+QT_SCALE_FACTOR=$SCALE sysuid &
+sysui=$!
+QT_SCALE_FACTOR=$SCALE meegotouchhome
+kill $sysui $compositor $feedback 2> /dev/null
