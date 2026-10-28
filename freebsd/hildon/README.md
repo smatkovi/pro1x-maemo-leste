@@ -97,8 +97,8 @@ button).
 
 Sounds play through PulseAudio, which the session starts: the Maemo 5
 key and touch screen clicks (`maemo-input-sounds`, at the profile's
-levels, with libcanberra's PulseAudio driver `libcanberra-pulse`, which
-FreeBSD's libcanberra package leaves out) and the notifications and
+levels, with libcanberra's PulseAudio driver, FreeBSD's
+`libcanberra-pulse`) and the notifications and
 alarms (`hildon-plugins-notify-sv`: hildon-home's sound daemon decodes
 AAC, Ogg and MP3 tones into WAV files in `~/.local/share/sounds` with
 GStreamer, then plays them). The sound files themselves are Maemo 5's,

@@ -66,12 +66,6 @@ TARBALL = {
                      "8.1 (LGPL parts only), which the qt5-webengine package of FreeBSD "
                      "15.1 (release_1) links; beside FFmpeg 9 of FreeBSD's quarterly "
                      "packages, without headers.", ['LGPL21+'], 'https://ffmpeg.org/'),
-    'libcanberra-pulse': ('0.30', "libcanberra's PulseAudio driver",
-                          "The PulseAudio output module of libcanberra 0.30, the "
-                          "version of FreeBSD's libcanberra package, which has only "
-                          "its OSS driver: for maemo-input-sounds and the other "
-                          "Maemo programs that play their sounds through PulseAudio.",
-                          ['LGPL21+'], 'https://0pointer.de/lennart/projects/libcanberra/'),
     'qt5-webkit': ('5.212.0.a4', 'QtWebKit with a more modern WebKit code base',
                    "QtWebKit 5.212.0-alpha4, the last release of the Qt port of WebKit, "
                    "with the patches of FreeBSD's port and Arch's: WebKit 1 (QWebView, "
@@ -147,9 +141,9 @@ RUNTIME = {
     'dorian': ['qt5-sqldrivers-sqlite3'],
     # the chess engine the game runs
     'osso-chess-ui': ['gnuchess', 'osso-sounds-game-chess'],
-    # the click sounds, through libcanberra's PulseAudio driver
+    # the click sounds, through libcanberra's PulseAudio driver (FreeBSD's
+    # libcanberra-pulse)
     'maemo-input-sounds': ['libcanberra', 'libcanberra-pulse', 'pulseaudio', 'osso-sounds-ui'],
-    'libcanberra-pulse': ['libcanberra'],
     # alarmd asks clockd for the time; the alarm dialog is a system UI
     # plugin, it rings through the notification plugin
     'alarmd': ['clockd'],

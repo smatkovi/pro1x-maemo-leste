@@ -42,9 +42,13 @@ export XDG_DATA_DIRS=/usr/local/share/pro1x/hicolor-hildon:${XDG_DATA_DIRS:-/usr
 # Qt 5's tools (qmlscene, for QML apps such as gPodder)
 export PATH=$PATH:/usr/local/lib/qt5/bin
 
+# A daemon restarted when it ends, for as long as this session runs: a
+# loop left over from a session that was killed would restart a daemon
+# without its bus every 2 s for ever.
+session=$$
 respawn() {
 	trap 'kill $pid 2> /dev/null; exit 0' TERM
-	while :; do
+	while kill -0 "$session" 2> /dev/null; do
 		"$@" &
 		pid=$!
 		wait $pid

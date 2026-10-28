@@ -57,9 +57,7 @@ APPS=(
 	"profilesx|"
 	"status-menu-applet-profiles|"
 	# the Maemo 5 key and touch screen clicks (libcanberra, the profile's
-	# key sound level), which play through PulseAudio: libcanberra's
-	# PulseAudio driver, which FreeBSD's package leaves out
-	"libcanberra-pulse|!"
+	# key sound level)
 	"maemo-input-sounds|"
 	"hildon-input-method-plugins|--disable-dependency-tracking"
 	# Leste's extras
@@ -164,7 +162,6 @@ REV+=(
 	[hamsterfiler]=19ac58143e2e [qt-components]=c967fbd79e75
 	[meego-clock]=8c9e205
 	[ffmpeg8-libs]=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
-	[libcanberra-pulse]=c2b671e67e0c288a69fc33dc1b6f1b534d07882c2aceed37004bf48c601afa72
 	[qt5-webengine]=c5de7df005189a2ef727a40b13408ff3a14a0bbedce07af986aac59722d4cf09
 	[qt5-webkit]=9ca126da9273664dd23a3ccd0c9bebceb7bb534bddd743db31caf6a5a6d4a9e6
 	[jib]=5dd4a340d20d [dorian]=da92eda1d5d9
@@ -191,7 +188,6 @@ URL+=(
 	[qt-components]=https://github.com/sailfishos/qt-components.git
 	[meego-clock]=https://github.com/smatkovi/meego-clock.git
 	[ffmpeg8-libs]=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
-	[libcanberra-pulse]=http://0pointer.de/lennart/projects/libcanberra/libcanberra-0.30.tar.xz
 	[qt5-webengine]=pkg:release_1
 	[qt5-webkit]=https://github.com/qtwebkit/qtwebkit/releases/download/qtwebkit-5.212.0-alpha4/qtwebkit-5.212.0-alpha4.tar.xz
 	[jib]=$GH_EXTRAS/jib.git [dorian]=$GH_EXTRAS/dorian.git
@@ -599,26 +595,6 @@ custom_hamsterfiler() { qt_cmake; }
 # FFmpeg 9. Only the versioned libraries: no headers, no unversioned links,
 # so nothing else builds on them. LGPL (no GPL or non-free parts); its own
 # decoders only, as Chromium uses them.
-# libcanberra 0.30, FreeBSD's version, for its PulseAudio driver only: the
-# module beside FreeBSD's OSS one, which FreeBSD's libcanberra loads by
-# the driver's name
-custom_libcanberra_pulse() {
-	./configure --host=$TARGET --build=x86_64-pc-linux-gnu --prefix=/usr/local \
-	    --disable-static --enable-pulse --disable-alsa --disable-oss \
-	    --disable-gstreamer --disable-null --disable-udev --disable-gtk \
-	    --disable-gtk3 --disable-tdb --disable-lynx > configure.out 2>&1 ||
-	    { tail -30 configure.out; exit 1; }
-	# linked with FreeBSD's libcanberra (its soname, libcanberra.so.0),
-	# which exports all the calls the module makes, not the one built here
-	sed -i -e '/^libcanberra_pulse_la_LIBADD/,/^$/s/libcanberra\.la/-lcanberra/' \
-	    -e '/^libcanberra_pulse_la_DEPENDENCIES/,/^[a-z]/s/^\tlibcanberra\.la$/\t$(am__DEPENDENCIES_1)/' \
-	    src/Makefile
-	make -j"$JOBS" -C src libcanberra-pulse.la > make.out 2>&1 ||
-	    { grep -m20 -E "error:|Error [0-9]" make.out; tail -20 make.out; exit 1; }
-	install -d "$PR/usr/local/lib/libcanberra-0.30"
-	install -m 755 src/.libs/libcanberra-pulse.so "$PR/usr/local/lib/libcanberra-0.30/"
-}
-
 custom_ffmpeg8_libs() {
 	# configure takes CPPFLAGS and the like from the environment: not
 	# the Leste parts' (glibc-compat.h)
