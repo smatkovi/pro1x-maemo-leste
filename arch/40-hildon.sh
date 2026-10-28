@@ -121,7 +121,10 @@ while IFS= read -r p; do
 			--localstatedir=/var --disable-gtk-doc $args > configure.log 2>&1 ||
 			{ tail -25 configure.log; exit 1; }
 		find . -name Makefile -exec sed -i 's/ -Werror\([=a-z-]*\)\?//g' {} +
-		make -j"$jobs" > make.log 2>&1 || { grep -m20 "error" make.log; exit 1; }
+		# today's Perl refuses defined(@array) (GTK 2's demo generator)
+		[ ! -f demos/gtk-demo/geninclude.pl ] ||
+		    sed -i -e 's/defined *(\(@[a-z_]*\))/\1/' -e 's/defined *\(@[a-z_]*\)/\1/' demos/gtk-demo/geninclude.pl
+		make -j"$jobs" > make.log 2>&1 || { grep -m20 -E "error:|Error [0-9]|\*\*\*" make.log; exit 1; }
 		make install > install.log 2>&1 || { tail -20 install.log; exit 1; }
 	fi
 	ldconfig

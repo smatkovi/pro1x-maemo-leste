@@ -140,7 +140,7 @@ upstream() {
 	./autogen.sh > autogen.log 2>&1 || autoreconf -i -f > autogen.log 2>&1
 	./configure --prefix=/usr --sysconfdir=/etc "$@" > configure.log 2>&1 ||
 	    { tail -20 configure.log; exit 1; }
-	make -j"$jobs" > make.log 2>&1 || { grep -m20 "error" make.log; exit 1; }
+	make -j"$jobs" > make.log 2>&1 || { grep -m20 -E "error:|Error [0-9]|\*\*\*" make.log; exit 1; }
 	make install > install.log 2>&1 || { tail -20 install.log; exit 1; }
 	echo "$tag" > "$stamp"
 }
@@ -156,10 +156,12 @@ part qmsystem2 qmake libqmsystem2.pro
 pacman -S --noconfirm --needed check gstreamer gst-plugins-base gst-plugins-good \
 	libcanberra > /dev/null
 upstream libngf 0.29
-CPPFLAGS='-DMCE_LED_PATTERN_DEACTIVATED_SIG="led_pattern_deactivated_ind"' \
+CPPFLAGS='-DMCE_LED_PATTERN_DEACTIVATED_SIG=\"led_pattern_deactivated_ind\"' \
 	upstream ngfd 1.4.13 --disable-systemd
 # system-ui plays its notifications' sounds through ngfd (libngf)
 part system-ui qmake project.pro DEFINES+=HAVE_LIBNGF
+# the status menu's rows (volume, internet connection, Bluetooth)
+part statusmenu-plugins qmake statusmenu-plugins.pro
 part meegotouchhome qmake projects.pro
 part duicontrolpanel qmake projects.pro
 part meegotouch-controlpanelapplets qmake meegotouch-controlpanelapplets.pro
@@ -167,7 +169,8 @@ part meegofeedbackd qmake meegofeedbackd.pro
 ldconfig
 missing=
 for f in /usr/lib/libmeegotouchcore.so /usr/bin/mcompositor /usr/bin/sysuid \
-	/usr/bin/meegotouchhome /usr/bin/meegofeedbackd /usr/bin/ngfd; do
+	/usr/bin/meegotouchhome /usr/bin/meegofeedbackd /usr/bin/ngfd \
+	/usr/lib/meegotouch/applicationextensions/libstatusindicatormenu-volume.so; do
 	[ -e $f ] || missing="$missing $f"
 done
 [ -z "$missing" ] || { echo "missing:$missing"; exit 1; }

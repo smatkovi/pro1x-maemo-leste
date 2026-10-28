@@ -81,6 +81,8 @@ chroot "$MNT" /bin/bash -uo pipefail -s "$JOBS" "$SKIP" <<'EOF'
 jobs=$1 skip=$2
 B=/usr/src/hildon
 declare -A REV URL
+# apps.sh's FreeBSD-only paths (the DSP headers) ask for the repository
+REPO=$B
 . $B/apps-arch.sh
 # native in place of the FreeBSD build's cross helpers
 JOBS=$jobs CC=gcc CXX=g++ AR=ar SYSROOT= TARGET=aarch64-linux-gnu HOSTTOOLS=()
@@ -100,14 +102,14 @@ qt_qmake() {
 	[ $# -gt 0 ] && shift
 	qmake-qt5 -spec linux-maemo PREFIX=/usr "$@" $pro > qmake.out 2>&1 ||
 	    { tail -20 qmake.out; exit 1; }
-	make -j"$JOBS" > make.out 2>&1 || { grep -m20 -E "error:|Error [0-9]" make.out; exit 1; }
+	make -j"$JOBS" > make.out 2>&1 || { grep -m20 -E "error:|Error [0-9]|\*\*\*" make.out; exit 1; }
 	make install INSTALL_ROOT="$PR" > install.out 2>&1 || { tail -20 install.out; exit 1; }
 }
 qt_cmake() {
 	cmake -S . -B _build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
 	    -DCMAKE_CXX_FLAGS="-DQ_WS_MAEMO_5 $CXXFLAGS" "$@" > cmake.out 2>&1 ||
 	    { tail -30 cmake.out; exit 1; }
-	cmake --build _build -j"$JOBS" > make.out 2>&1 || { grep -m20 "error" make.out; exit 1; }
+	cmake --build _build -j"$JOBS" > make.out 2>&1 || { grep -m20 -E "error:|Error [0-9]|\*\*\*" make.out; exit 1; }
 	DESTDIR="$PR" cmake --install _build > install.out 2>&1 || { tail -20 install.out; exit 1; }
 }
 failed=
@@ -147,7 +149,7 @@ while IFS= read -r p; do
 				--localstatedir=/var --disable-static --disable-gtk-doc $args \
 				> configure.log 2>&1 || { tail -25 configure.log; exit 1; }
 			find . -name Makefile -exec sed -i 's/ -Werror\([=a-z-]*\)\?//g' {} +
-			make -j"$JOBS" > make.log 2>&1 || { grep -m20 "error" make.log; exit 1; }
+			make -j"$JOBS" > make.log 2>&1 || { grep -m20 -E "error:|Error [0-9]|\*\*\*" make.log; exit 1; }
 			make install DESTDIR="$PR" > install.log 2>&1 || { tail -20 install.log; exit 1; }
 			;;
 		esac
