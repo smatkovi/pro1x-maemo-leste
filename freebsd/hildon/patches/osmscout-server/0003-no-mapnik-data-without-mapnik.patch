@@ -1,0 +1,22 @@
+No Mapnik data where Mapnik is not built in
+
+The settings turned Mapnik's data off only when libosmscout is there.
+A build with neither (Pure Maps' vector tiles, Valhalla) offers the
+custom profile only when Valhalla is missing too, and its default
+downloads Mapnik's world data (700 MB) that it cannot use.
+
+diff --git a/server/src/appsettings.cpp b/server/src/appsettings.cpp
+index c7a4ec7..4292d97 100644
+--- a/server/src/appsettings.cpp
++++ b/server/src/appsettings.cpp
+@@ -235,7 +235,9 @@ void AppSettings::initDefaults()
+       setValue(VALHALLA_MASTER_SETTINGS "use_valhalla", 1);
+     }
+ 
+-  if (!hasBackendMapnik() && hasBackendOsmScout())
++  // (also without libosmscout: the custom profile's default downloads
++  // Mapnik's data, of no use where Mapnik is not built in)
++  if (!hasBackendMapnik())
+     {
+       setValue(MAPMANAGER_SETTINGS "mapnik", 0);
+       setValue(MAPNIKMASTER_SETTINGS "use_mapnik", 0);

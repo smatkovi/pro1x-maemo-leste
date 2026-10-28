@@ -48,6 +48,7 @@ cp -a "$REPO/patches/meego/." "$MNT$B/patches/meego/"
 # those of FreeBSD's patches that are no FreeBSD matter (Qt 5.15, today's
 # compilers); the others are its paths and its interfaces
 FBSD_PATCHES="easylist/0001-missing-semicolon.patch
+	cal-home-widget/0001-const-comparison.patch
 	qt-components/0002-qt-5-15-install.patch
 	qt-components/0003-theme-images-directory.patch
 	qt-components/0004-harmattan-fonts.patch

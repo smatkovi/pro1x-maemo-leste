@@ -1,0 +1,16 @@
+The events' comparison callable as const
+
+libstdc++ requires it of a multiset's comparison from C++17 on (GCC 16
+builds as C++20 by default).
+
+--- a/src/cal-home-calendar-util.h	2026-10-28 17:35:08.614819998 +0100
++++ b/src/cal-home-calendar-util.h	2026-10-28 17:35:08.616391180 +0100
+@@ -27,7 +27,7 @@
+ 
+ struct CComponentCompare
+ {
+-  bool operator()(CComponent* c1, CComponent* c2)
++  bool operator()(CComponent* c1, CComponent* c2) const
+   {
+     return c1->getDateStart() < c2->getDateStart();
+   }

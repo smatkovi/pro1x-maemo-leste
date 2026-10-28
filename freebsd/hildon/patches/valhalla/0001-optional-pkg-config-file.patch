@@ -1,0 +1,21 @@
+Make libvalhalla.pc optional (VALHALLA_NO_PKGCONFIG)
+
+Its install step builds the file with "cmake --build ." in the install's
+working directory, which is not the build directory when the install is
+run with cmake --install <dir>. The packaging writes its own.
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index bf75b62..3cfc78c 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -282,7 +282,9 @@ install(FILES ${valhalla_hdrs}
+   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/valhalla"
+   COMPONENT development)
+ 
+-if(PKG_CONFIG_FOUND)
++# VALHALLA_NO_PKGCONFIG: no libvalhalla.pc (a packaging writes its own; its
++# install step runs cmake in the install's working directory)
++if(PKG_CONFIG_FOUND AND NOT VALHALLA_NO_PKGCONFIG)
+   ## Configure libvalhalla.pc file with valhalla target linking options via PkgConfig linker
+   set(CMAKE_PkgConfig_LINK_EXECUTABLE "<CMAKE_COMMAND> -DINPUT=${VALHALLA_SOURCE_DIR}/libvalhalla.pc.in -DOUTPUT=<TARGET> -DVERSION=${VERSION} -Dprefix=${CMAKE_INSTALL_PREFIX} -Dexec_prefix=${CMAKE_INSTALL_PREFIX} -Dlibdir=${CMAKE_INSTALL_LIBDIR} -Dincludedir=${CMAKE_INSTALL_INCLUDEDIR} -Ddeplibs=\"<FLAGS> <LINK_FLAGS> <LINK_LIBRARIES>\" -P ${CMAKE_SOURCE_DIR}/cmake/PkgConfig.cmake")
+ 

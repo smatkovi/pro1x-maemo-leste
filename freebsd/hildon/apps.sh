@@ -891,12 +891,90 @@ custom_pure_maps() {
 	        /usr/local/lib/libpython3.12.so.1.0
 }
 
-# OSM Scout Server, Pure Maps' offline maps and search: vector tiles for
-# MapLibre and geocoder-nlp on FreeBSD's libpostal; no Mapnik raster tiles,
-# no Valhalla routing yet, no systemd (it starts through D-Bus)
+# Valhalla, OSM Scout Server's routing, as pure-maps-ports builds it for
+# Leste (and Flathub): its library, static in the server, on protobuf
+# 3.21's lite library, static too, with the code generator (protoc) built
+# for this PC from the same source: generated code and library have to
+# match. Below $VL in the sysroot, for the build only (not packaged):
+# FreeBSD's protobuf there is another version, so the libraries have names
+# of their own and the headers go first.
+REV+=([valhalla]=cbabe7cfbad2
+	[protobuf3]=4eab9b524aa5913c6fffb20b2a8abf5ef7f95a80bc0701f3a6dbb4c607f73460)
+URL+=([valhalla]=https://github.com/valhalla/valhalla.git
+	[protobuf3]=https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protobuf-cpp-3.21.12.tar.gz)
+VL=/usr/local/valhalla-lite
+osmscout_valhalla() {
+	local b=$BUILD/osmscout-valhalla d=$SYSROOT$VL stamp
+	stamp="${REV[valhalla]} ${REV[protobuf3]}"
+	[ "$(cat "$d/.stamp" 2> /dev/null)" = "$stamp" ] && return 0
+	fetch_src protobuf3 && fetch_src valhalla || return 1
+	rm -rf "$b" "$d"
+	mkdir -p "$b"
+	log "  protoc 3.21 for the PC, protobuf-lite 3.21 and Valhalla for FreeBSD"
+	# (the PC's compiler: CC, CXX and the flags here are FreeBSD's)
+	env -u CC -u CXX -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS \
+	    cmake -S "$SRC/protobuf3" -B "$b/protoc" -DCMAKE_BUILD_TYPE=Release \
+	    -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++ \
+	    -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+	    -Dprotobuf_WITH_ZLIB=OFF > "$b/protoc.log" 2>&1 &&
+	    cmake --build "$b/protoc" -j"$JOBS" --target protoc >> "$b/protoc.log" 2>&1 ||
+	    { grep -m20 -E "error:|Error" "$b/protoc.log"; return 1; }
+	cmake -S "$SRC/protobuf3" -B "$b/protobuf" -DCMAKE_TOOLCHAIN_FILE="$H/qt5host/toolchain.cmake" \
+	    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$VL \
+	    -DCMAKE_POSITION_INDEPENDENT_CODE=ON -Dprotobuf_BUILD_TESTS=OFF \
+	    -Dprotobuf_BUILD_PROTOC_BINARIES=OFF -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+	    -Dprotobuf_WITH_ZLIB=OFF > "$b/protobuf.log" 2>&1 &&
+	    cmake --build "$b/protobuf" -j"$JOBS" >> "$b/protobuf.log" 2>&1 &&
+	    DESTDIR=$SYSROOT cmake --install "$b/protobuf" >> "$b/protobuf.log" 2>&1 ||
+	    { grep -m20 -E "error:|Error" "$b/protobuf.log"; return 1; }
+	cp -a "$SRC/valhalla" "$b/valhalla-src"
+	local q
+	for q in "$REPO/freebsd/hildon/patches/valhalla"/*.patch; do
+		patch -s -p1 -d "$b/valhalla-src" < "$q" || return 1
+	done
+	cmake -S "$b/valhalla-src" -B "$b/valhalla" -DCMAKE_TOOLCHAIN_FILE="$H/qt5host/toolchain.cmake" \
+	    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$VL \
+	    -DCMAKE_CXX_FLAGS="-I$d/include $CPPFLAGS $CXXFLAGS" \
+	    -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+	    -DENABLE_TOOLS=OFF -DENABLE_DATA_TOOLS=OFF -DENABLE_SERVICES=OFF -DENABLE_HTTP=OFF \
+	    -DENABLE_PYTHON_BINDINGS=OFF -DENABLE_TESTS=OFF -DENABLE_BENCHMARKS=OFF \
+	    -DENABLE_CCACHE=OFF -DENABLE_WERROR=OFF -DENABLE_SINGLE_FILES_WERROR=OFF \
+	    -DVALHALLA_NO_PKGCONFIG=ON -DProtobuf_PROTOC_EXECUTABLE="$b/protoc/protoc" \
+	    -DProtobuf_INCLUDE_DIR="$d/include" -DProtobuf_LIBRARY="$d/lib/libprotobuf-lite.a" \
+	    -DProtobuf_LITE_LIBRARY="$d/lib/libprotobuf-lite.a" > "$b/valhalla.log" 2>&1 &&
+	    cmake --build "$b/valhalla" -j"$JOBS" >> "$b/valhalla.log" 2>&1 &&
+	    DESTDIR=$SYSROOT cmake --install "$b/valhalla" >> "$b/valhalla.log" 2>&1 ||
+	    { grep -m20 -E "error:|Error" "$b/valhalla.log"; return 1; }
+	# the headers Valhalla's include (rapidjson's, date's); the libraries
+	# under names of their own, named as files (-l:) in a pkg-config file
+	# (qmake asks pkg-config without --static)
+	mkdir -p "$d/include/valhalla/third_party" "$d/lib/pkgconfig"
+	cp -a "$b/valhalla-src/third_party/rapidjson/include/rapidjson" \
+	    "$b/valhalla-src/third_party/date/include/date" "$d/include/valhalla/third_party/"
+	mv "$d/lib/libvalhalla.a" "$d/lib/libvalhalla-lite.a"
+	mv "$d/lib/libprotobuf-lite.a" "$d/lib/libvalhalla-protobuf-lite.a"
+	cat > "$d/lib/pkgconfig/libvalhalla.pc" <<-PC
+	prefix=$VL
+	libdir=\${prefix}/lib
+	includedir=\${prefix}/include
+
+	Name: libvalhalla
+	Description: Valhalla routing library (static, on protobuf-lite 3.21)
+	Version: 3.4.0
+	Libs: -L\${libdir} -l:libvalhalla-lite.a -l:libvalhalla-protobuf-lite.a -lz -pthread
+	Cflags: -I\${includedir} -I\${includedir}/valhalla/third_party
+	PC
+	echo "$stamp" > "$d/.stamp"
+}
+
+# OSM Scout Server, Pure Maps' offline maps, search and routing: vector
+# tiles for MapLibre, geocoder-nlp on FreeBSD's libpostal, Valhalla
+# (above); no Mapnik raster tiles, no systemd (it starts through D-Bus)
 custom_osmscout_server() {
+	osmscout_valhalla || return 1
+	local PKG_CONFIG_LIBDIR="$SYSROOT$VL/lib/pkgconfig:$PKG_CONFIG_LIBDIR"
 	qt_qmake osmscout-server.pro SCOUT_FLAVOR=kirigami \
-	    CONFIG+=disable_mapnik CONFIG+=disable_valhalla CONFIG+=disable_systemd \
+	    CONFIG+=disable_mapnik CONFIG+=disable_systemd \
 	    CONFIG+=use_dbusactivation DBUS_SERVICE_PATH=/usr/local/share/dbus-1/services &&
 	    map_entries osmscout-server osmscout-server-gui osmscout-server-gui.desktop \
 	        "OSM Scout Server" "Offline maps, search and routing for Pure Maps" osmscout-server
