@@ -60,14 +60,17 @@ dpms() { cat /sys/class/drm/card*-DSI-*/dpms 2> /dev/null | head -1 || echo -; }
 	echo "# s mA mV % status input usb display vlow vmin irq/s ctxt/s idle%"
 } > "$log"
 
-t0=$(date +%s)
+# the time since boot: the clock may jump meanwhile (the RTC's offset set
+# after the start)
+now() { cut -d. -f1 /proc/uptime; }
+t0=$(now)
 i0=$(irqs) c0=$(ctxt)
 set -- $(cpu)
 tot0=$1 idle0=$2
 end=$((t0 + minutes * 60))
-while [ "$(date +%s)" -lt "$end" ]; do
+while [ "$(now)" -lt "$end" ]; do
 	sleep "$iv"
-	t=$(($(date +%s) - t0))
+	t=$(($(now) - t0))
 	i1=$(irqs) c1=$(ctxt)
 	set -- $(cpu)
 	tot1=$1 idle1=$2
