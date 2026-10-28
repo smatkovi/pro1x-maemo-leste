@@ -22,6 +22,7 @@ entry uses the Leste image.
 | 41 | `41-leste-helpers.sh` | Leste-side helpers of the session: the Pro1X's sensors, slide switch and side keys as the N9's input device (`sensors/`), dsme's IP heartbeat service (`iphb/`), PulseAudio's main volume interface for the volume bar (`mainvolume/`), BME's event file (`bme/`), Nokia's positioning daemon for QtLocation on Leste's gpsd (`positioning/`), Leste applications in Harmattan's application grid (`leste-apps/`) |
 | 40 | `40-harmattan-session.sh` | Mounts and starts the session (installed as `/usr/lib/pro1x-meego/harmattan-session`, run by the `pro1x-meego` OpenRC service in the MeeGo boot); runs Harmattan's own upstart jobs (`run_job`) |
 | 45 | `45-meego-image.sh` | MeeGo's own copy of the Leste system underneath (`/host/meego-leste.img`), so that the MeeGo boot no longer shares the Leste system's image; run it last |
+| 50 | `50-harmattan-qt5-debs.sh` | Not Nokia's binaries: the open parts of the N9's user interface in their Qt 5 port ([harmattan-qt5](https://github.com/smatkovi/harmattan-qt5)) as Leste packages (`harmattan-<part>`, with Sailfish OS's `ngfd` and `libngf`), built natively on the phone in a chroot of an overlay on the read-only `meego-leste.img`; the packages go to `/host/hq5-leste/debs` |
 
 Steps 20-38 and 41 work on the mounted image (`H=/mnt/harmattan`); 39 and
 41 also build on Leste. `30-graft-debian-runtime.sh undo` restores the
