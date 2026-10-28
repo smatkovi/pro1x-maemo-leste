@@ -51,7 +51,7 @@ fi
 x=()
 for p in $HILDON_PRUNE; do x+=(-x "$p"); done
 python3 -I "$REPO/freebsd/pkgfetch.py" "${x[@]}" "$WORK/pkgs/site" \
-    "$WORK/pkgs/cache" "$PKGURL" $HILDON_PKGS $APPS_PKGS > "$H/sysroot.want"
+    "$WORK/pkgs/cache" "$PKGURL" $HILDON_PKGS $APPS_PKGS $HARMATTAN_PKGS > "$H/sysroot.want"
 while read -r f; do
 	grep -qxF "$f" "$H/sysroot.list" && continue
 	log "sysroot: $(basename "$f")"
@@ -171,6 +171,7 @@ declare -A URL REV=(
 URL[mce-dev]=https://github.com/maemo-leste/mce.git
 # The apps: APPS, their REV and URL
 . "$REPO/freebsd/hildon/apps.sh"
+. "$REPO/freebsd/hildon/harmattan.sh"
 
 # Parts without autotools: "name|!" builds with custom_<name> in the tree
 custom_profiled() {
@@ -237,6 +238,19 @@ pkg_site() {
 # part FreeBSD no longer builds for quarterly (kept as $SRC/<part>.pkg)
 fetch_src() {
 	local name=$1 url=${URL[$1]:-https://github.com/maemo-leste/$1.git}
+	# a part of harmattan-qt5: its directory of the one checkout
+	if [ "${kind:-}" = harmattan ]; then
+		[ -d "$SRC/harmattan-qt5/.git" ] || git clone -q "$HQ5_URL" "$SRC/harmattan-qt5"
+		git -C "$SRC/harmattan-qt5" cat-file -e "$HQ5_REV^{commit}" 2> /dev/null ||
+		    git -C "$SRC/harmattan-qt5" fetch -q origin
+		if [ "$(cat "$SRC/$name/.hq5rev" 2> /dev/null)" != "$HQ5_REV" ]; then
+			git -C "$SRC/harmattan-qt5" checkout -q -f "$HQ5_REV"
+			rm -rf "${SRC:?}/$name"
+			cp -a "$SRC/harmattan-qt5/${name#harmattan-}" "$SRC/$name"
+			echo "$HQ5_REV" > "$SRC/$name/.hq5rev"
+		fi
+		return
+	fi
 	local rev=${REV[$1]:?no pinned revision for $1} f
 	case $url in
 	pkg:*)
@@ -381,6 +395,8 @@ finish_part() {
 	esac > "$PR.url"
 	cp -a "$PR/." "$STAGE/"
 	cp -a "$PR/." "$SYSROOT/"
+	# the qmake features of the N9's parts, for the parts built on them
+	[ "${kind:-}" != harmattan ] || hq5_sysroot_features "$PR"
 }
 
 # The ELF files: no build paths in them
@@ -615,7 +631,8 @@ mkdir -p "$SRC" "$BUILD" "$H/pkgroot" "$STAGE/usr/local/share" "$STAGE/usr/local
 wanted() {
 	[ $# -eq 1 ] && return 0
 	case " ${*:2} " in *" $1 "*) return 0 ;; esac
-	[ "$2" = apps ] && [ "$kind" = app ]
+	[ "$2" = apps ] && [ "$kind" = app ] && return 0
+	[ "$2" = harmattan ] && [ "$kind" = harmattan ]
 }
 kind=desktop
 for entry in "${PARTS[@]}"; do
@@ -654,5 +671,13 @@ if [ $# -eq 0 ] || [[ " $* " == *" pro1x-standby "* ]]; then
 	dsp_tool pro1x-standby bin "x11 xext xi cairo pangocairo sqlite3 dbus-1" ||
 	    failed+=(pro1x-standby)
 fi
+# the N9's user interface (harmattan.sh): in order, each on the ones before
+kind=harmattan
+for entry in "${HARMATTAN[@]}"; do
+	name=harmattan-${entry%%|*}
+	[ $# -gt 0 ] && wanted "$name" "$@" || continue
+	fetch_src "$name"
+	(build_part "$name" "${entry#*|}") || { failed+=("$name"); break; }
+done
 [ ${#failed[@]} -eq 0 ] || log "apps that failed: ${failed[*]}"
 log "done: $STAGE"
