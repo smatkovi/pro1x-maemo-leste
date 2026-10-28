@@ -99,6 +99,7 @@ sudo -n install -m 0755 "$REPO/initramfs/hooks/pro1x-loop" \
 sudo -n install -m 0755 "$REPO/initramfs/local-top/pro1x-loop-root" \
   "$DST_MNT/etc/initramfs-tools/scripts/local-top/"
 sudo -n install -m 0755 "$REPO/initramfs/init-bottom/pro1x-move-host" \
+  "$REPO/initramfs/init-bottom/pro1x-overlay-root" \
   "$DST_MNT/etc/initramfs-tools/scripts/init-bottom/"
 
 echo ">> adjusting fstab (no separate /boot on this device)"

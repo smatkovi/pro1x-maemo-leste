@@ -63,7 +63,8 @@ if [ -x /sbin/pro1x-bootmenu ] && [ -x /sbin/pro1x-boot ]; then
   default=0
   set --
   while IFS='|' read -r key label image; do
-    [ "$key" = "$want" ] && default=$count
+    # a snapshot (system@number) preselects its system's snapshots entry
+    { [ "$key" = "$want" ] || [ "$key" = "${want%@*}@" ]; } && default=$count
     set -- "$@" "$label"
     count=$((count + 1))
   done <<EOF
@@ -76,6 +77,51 @@ EOF
   line=$(echo "$entries" | sed -n "$((choice + 1))p")
   key=${line%%|*}
   image=${line##*|}
+  # A system's snapshots (Btrfs): a second menu, newest first, 8 to a page
+  # and "More" for the next. A snapshot chosen with "pro1x-boot next
+  # system@number" starts after the countdown (at once without a menu);
+  # chosen by hand, the menu waits.
+  case $key in
+  *@)
+    sys=${key%@}
+    snaps=$(pro1x-boot snapshots "$sys")
+    total=$(echo "$snaps" | grep -c .)
+    page=0 sdefault=0 stimeout=0 direct=
+    case $want in
+    "$sys"@[0-9]*)
+      n=$(echo "$snaps" | cut -d'|' -f1 | grep -nx "$want" | cut -d: -f1)
+      if [ -n "$n" ]; then
+        page=$(((n - 1) / 8)) sdefault=$(((n - 1) % 8)) stimeout=$timeout
+        [ "$timeout" -gt 0 ] && [ "$count" -gt 1 ] || direct=1
+      fi ;;
+    esac
+    while :; do
+      pagelines=$(echo "$snaps" | sed -n "$((page * 8 + 1)),$((page * 8 + 8))p")
+      set --
+      while IFS='|' read -r skey slabel; do
+        set -- "$@" "${skey#*@} $slabel"
+      done <<SNAPS
+$pagelines
+SNAPS
+      more=
+      [ "$total" -gt $(((page + 1) * 8)) ] && { more=$#; set -- "$@" "More ..."; }
+      if [ -n "$direct" ]; then
+        schoice=$sdefault
+      else
+        schoice=$(pro1x-bootmenu -t "$stimeout" -d "$sdefault" "$@") || schoice=$sdefault
+      fi
+      if [ -n "$more" ] && [ "$schoice" = "$more" ]; then
+        page=$((page + 1)) sdefault=0 stimeout=0
+        continue
+      fi
+      break
+    done
+    key=$(echo "$pagelines" | sed -n "$((schoice + 1))p" | cut -d'|' -f1)
+    [ -n "$key" ] || key=$sys
+    # read-only snapshot, its changes in RAM (init-bottom/pro1x-overlay-root)
+    [ "$key" = "$sys" ] || SUBVOL=@snapshots/${key#*@}/snapshot
+    ;;
+  esac
   if [ "$key" = sailfish ]; then
     log_begin_msg "Switching to Sailfish OS (slot a)"
     pro1x-boot slot a && sync && umount /host && reboot -f
@@ -150,5 +196,15 @@ fi
 [ -b /dev/loop0 ] || mknod /dev/loop0 b 7 0
 losetup /dev/loop0 "/host$IMAGE" \
   || panic "pro1x-loop-root: losetup on /host$IMAGE failed"
+
+# A Btrfs image (Arch): the root is its subvolume @, or a snapshot of it,
+# mounted read-only below a RAM overlay (init-bottom/pro1x-overlay-root);
+# initramfs-tools mounts the root with what /conf/param.conf says
+if [ "$(blkid -o value -s TYPE /dev/loop0 2>/dev/null)" = btrfs ]; then
+  modprobe btrfs 2>/dev/null
+  echo "ROOTFSTYPE=btrfs" >> /conf/param.conf
+  echo "ROOTFLAGS='-o subvol=${SUBVOL:-@},noatime,compress=zstd:1'" >> /conf/param.conf
+  [ -z "${SUBVOL:-}" ] || : > /conf/pro1x-overlay
+fi
 
 exit 0

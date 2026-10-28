@@ -24,3 +24,9 @@ if [ -x /usr/local/sbin/pro1x-bootmenu ]; then
   # Touchscreen for choosing by tap; everything else is built in.
   manual_add_modules goodix_ts
 fi
+# Btrfs roots (Arch) and their snapshots below a RAM overlay
+# (local-top/pro1x-loop-root, init-bottom/pro1x-overlay-root)
+manual_add_modules btrfs overlay
+if [ -x /sbin/blkid ]; then
+  copy_exec /sbin/blkid /sbin
+fi

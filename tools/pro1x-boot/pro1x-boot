@@ -17,13 +17,17 @@
 # Kali (/kali.img, kali/ in the repo), LuneOS (/luneos.img, luneos/) and
 # Arch Linux ARM (/arch.img, arch/) boot Leste's kernel from their own images;
 # more such systems can be listed in $CONF/extra (lines key|label|image|,
-# read by the initramfs too, so a new one needs no new boot image); FreeBSD (/freebsd/kernel.bin,
+# read by the initramfs too, so a new one needs no new boot image).
+# A system on Btrfs (Arch) lists its snapshots in $CONF/snapshots/<key>
+# (lines number|label, written by the system itself): the menu then has
+# "<label>: snapshots", and <key>@<number> boots that snapshot (read-only,
+# with its changes in RAM); FreeBSD (/freebsd/kernel.bin,
 # freebsd/) its own kernel, which the initramfs starts with kexec.
 # Works in the initramfs, in Maemo Leste/MeeGo (userdata on /host) and in
 # Sailfish OS (userdata on /userdata), so the choice never depends on keys:
 # pick the next system from the running one, then reboot.
 #
-# Internal, for the initramfs: entries, take-next, get-default, get-timeout,
+# Internal, for the initramfs: entries, snapshots, take-next, get-default, get-timeout,
 # set-current.
 set -eu
 
@@ -49,7 +53,8 @@ all_entries() {
 	[ ! -f "$CONF/extra" ] || grep -E '^[a-z0-9-]+\|[^|]+\|/[^|]+\|$' "$CONF/extra" || true
 }
 
-# key|label|image of the systems that are installed
+# key|label|image of the systems that are installed, and after a system
+# with snapshots one entry key@|label: snapshots|image for them
 entries() {
 	all_entries | while IFS='|' read -r key label images needs; do
 		image=
@@ -57,15 +62,31 @@ entries() {
 			[ -f "$HOST$i" ] && { image=$i; break; }
 		done
 		if [ -n "$images" ]; then
-			[ -n "$image" ] && { [ -z "$needs" ] || [ -f "$HOST$needs" ]; } &&
+			if [ -n "$image" ] && { [ -z "$needs" ] || [ -f "$HOST$needs" ]; }; then
 				echo "$key|$label|$image"
+				[ ! -s "$CONF/snapshots/$key" ] ||
+					echo "$key@|$label: snapshots|$image"
+			fi
 		elif part_of boot_a >/dev/null 2>&1; then
 			echo "$key|$label|$image"
 		fi
 	done
 }
 
+# key@number|label of a system's snapshots, newest first
+snapshots() {
+	[ -f "$CONF/snapshots/$1" ] || return 0
+	grep -E '^[0-9]+\|' "$CONF/snapshots/$1" | sort -t'|' -k1,1 -rn |
+		sed "s/^/$1@/"
+}
+
 valid_key() {
+	case $1 in
+	*@[0-9]*)
+		snapshots "${1%@*}" | cut -d'|' -f1 | grep -qx "$1" ||
+			die "no snapshot ${1#*@} of '${1%@*}'"
+		return ;;
+	esac
 	all_entries | cut -d'|' -f1 | grep -qx "$1" || die "unknown system '$1' ($(all_entries | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//; s/ /, /g'))"
 }
 
@@ -124,6 +145,13 @@ list)
 	entries | while IFS='|' read -r key label image; do
 		echo "  $key  $label${image:+  ($HOST$image)}"
 	done
+	for f in "$CONF"/snapshots/*; do
+		[ -s "$f" ] || continue
+		echo "snapshots of ${f##*/} (pro1x-boot next ${f##*/}@<number>):"
+		snapshots "${f##*/}" | while IFS='|' read -r key label; do
+			echo "  $key  $label"
+		done
+	done
 	echo "running: $(cat "$CONF/current" 2>/dev/null || echo ?)"
 	echo "default: $(cat "$CONF/default" 2>/dev/null || echo leste)"
 	echo "next:    $(cat "$CONF/next" 2>/dev/null || echo -)"
@@ -159,6 +187,10 @@ reboot)
 	reboot
 	;;
 entries) entries ;;
+snapshots)
+	[ $# -eq 2 ] || die "usage: pro1x-boot snapshots <system>"
+	snapshots "$2"
+	;;
 take-next)
 	# Print the one-shot choice and forget it.
 	if [ -f "$CONF/next" ]; then cat "$CONF/next"; rm -f "$CONF/next"; sync; fi

@@ -33,6 +33,27 @@ image: one line `key|Label|/image.img|` each in `/host/pro1x-boot/extra`.
 - Sensors (iio-sensor-proxy), GPS (gpsd from pro1x-gnss), step counter
   (`org.pro1x.Steps`), audio (Leste's UCM profile), Bluetooth.
 
+## Btrfs and snapshots
+
+`15-btrfs.sh` (as root in Leste, the image not mounted) copies the ext4
+image into a Btrfs image with the subvolumes `@` (root), `@home`,
+`@snapshots` (`/.snapshots`), `@log` (`/var/log`) and `@pkg` (pacman's
+cache), and sets up snapper with snap-pac: a snapshot before and after
+every pacman transaction (installs and updates), up to 50 kept. The ext4
+image stays as `/host/arch-ext4.img`.
+
+- `pro1x-snapshot-menu.path` writes the snapshots to
+  `/host/pro1x-boot/snapshots/arch` whenever `/.snapshots` changes; the
+  boot menu then has "Arch Linux ARM: snapshots", a second menu with all
+  of them, newest first, eight to a page ("More ..." for the next).
+- A snapshot boots read-only with its changes in RAM (an overlay; gone at
+  the next start). `pro1x-rollback <number>` makes it Arch's root for good
+  (the one before stays as `@.before-rollback-<date>`).
+- From another system: `pro1x-boot next arch@<number>`, `pro1x-boot list`
+  shows the numbers.
+- This needs a boot image whose initramfs mounts Btrfs roots and knows
+  the snapshot menu (`tools/pro1x-boot`, `initramfs/`).
+
 ## If it hangs
 
 The first start goes through `pro1x-boot next arch` (once; the boot

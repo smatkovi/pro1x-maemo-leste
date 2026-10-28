@@ -1,0 +1,23 @@
+#!/bin/sh
+# A Btrfs snapshot booted from the boot menu (local-top/pro1x-loop-root):
+# it is read-only, so the root becomes an overlay of it with its changes in
+# RAM; they are gone at the next start. pro1x-rollback (in the system)
+# makes a snapshot the system's root for good.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+  prereqs) prereqs; exit 0 ;;
+esac
+
+[ -e /conf/pro1x-overlay ] || exit 0
+. /scripts/functions
+modprobe overlay 2>/dev/null
+o=/run/pro1x-overlay
+mkdir -p $o
+mount -t tmpfs -o mode=0755 pro1x-overlay $o &&
+  mkdir -p $o/lower $o/upper $o/work &&
+  mount --move "${rootmnt:?}" $o/lower &&
+  mount -t overlay overlay \
+    -o lowerdir=$o/lower,upperdir=$o/upper,workdir=$o/work "$rootmnt" ||
+  panic "pro1x-overlay-root: no overlay over the snapshot"
+exit 0

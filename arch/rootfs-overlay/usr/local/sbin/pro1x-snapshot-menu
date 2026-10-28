@@ -1,0 +1,19 @@
+#!/bin/sh
+# pro1x-snapshot-menu: the snapshots of / (snapper's config "root") for the
+# Pro1X boot menu, as /host/pro1x-boot/snapshots/arch (number|label, read
+# by pro1x-boot and the initramfs); run by pro1x-snapshot-menu.path when
+# /.snapshots changes.
+set -eu
+out=${PRO1X_BOOT_HOST:-/host}/pro1x-boot/snapshots/arch
+mkdir -p "${out%/*}"
+snapper --no-dbus -c root --csvout --separator '|' --no-headers \
+	list --columns number,type,date,description |
+	awk -F'|' '$1 != 0 {
+		when = substr($3, 1, 16)
+		what = $4
+		if ($2 == "pre") what = what " (before)"
+		else if ($2 == "post") what = what " (after)"
+		if (length(what) > 40) what = substr(what, 1, 39) "~"
+		print $1 "|" when " " what
+	}' > "$out.new"
+mv "$out.new" "$out"

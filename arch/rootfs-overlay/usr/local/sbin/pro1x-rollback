@@ -1,0 +1,20 @@
+#!/bin/sh
+# pro1x-rollback <number>: makes snapper's snapshot <number> the root of
+# Arch (subvolume @) from its next start; the root until then stays as
+# @.before-rollback-<date> (delete it with btrfs subvolume delete once the
+# rolled-back system is fine). Works from the running system and from a
+# snapshot booted from the boot menu.
+set -eu
+n=${1:?usage: pro1x-rollback <snapshot number> (snapper list)}
+[ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
+[ -d "/.snapshots/$n/snapshot" ] || { echo "no snapshot $n" >&2; exit 1; }
+top=$(mktemp -d)
+# the image is always on loop0 (the initramfs sets it up)
+mount -o subvolid=5 /dev/loop0 "$top"
+trap 'umount "$top"; rmdir "$top"' EXIT
+stamp=$(date +%Y%m%d-%H%M%S)
+btrfs -q subvolume snapshot "$top/@snapshots/$n/snapshot" "$top/@.new"
+mv "$top/@" "$top/@.before-rollback-$stamp"
+mv "$top/@.new" "$top/@"
+sync
+echo "snapshot $n is Arch's root from the next start; the one before is @.before-rollback-$stamp"

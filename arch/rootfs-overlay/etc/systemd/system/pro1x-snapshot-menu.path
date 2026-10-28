@@ -1,0 +1,10 @@
+# A snapshot made or removed (snapper, snap-pac): the boot menu's list anew
+[Unit]
+Description=Snapshots for the Pro1X boot menu, when they change
+
+[Path]
+PathChanged=/.snapshots
+Unit=pro1x-snapshot-menu.service
+
+[Install]
+WantedBy=multi-user.target

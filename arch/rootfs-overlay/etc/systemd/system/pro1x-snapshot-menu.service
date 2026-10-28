@@ -1,0 +1,11 @@
+# The snapshots for the boot menu (pro1x-snapshot-menu)
+[Unit]
+Description=Snapshots for the Pro1X boot menu
+RequiresMountsFor=/.snapshots /host
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pro1x-snapshot-menu
+
+[Install]
+WantedBy=multi-user.target
