@@ -44,6 +44,16 @@ PHONE="ssh root@172.16.42.1" OUT=$WORK/out-pro1x.2 WORK=$WORK \
 4. builds the boot image (50-build-bootimg.sh) and puts it on the phone as
    `/host/boot_b-<version>.img`.
 
+Before it is flashed, the new kernel can be started once with kexec from
+the running Leste, boot_b unchanged (`67-kernel-kexec-probe.sh`, same
+variables): if it hangs, the SoC's watchdog (armed before the jump, fed
+by the new kernel only until dsme takes it, for at most 5 minutes) resets
+the phone into boot_b's old kernel and Leste, instead of the trial's way
+back to Sailfish OS, which waits for its LUKS code with nobody able to
+reach the phone. The device tree is the new kernel's with the memory banks
+the bootloader fills in. Measure nothing in that start: the first kernel's
+firmware state carries over a kexec.
+
 Then, with the phone's owner there:
 
 ```sh
