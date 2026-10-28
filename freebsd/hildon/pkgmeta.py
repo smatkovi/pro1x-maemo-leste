@@ -136,11 +136,12 @@ UPSTREAM = {
                   "turn-by-turn navigation with voice, online or with OSM Scout "
                   "Server; menu entries for MeeGo's home and Hildon, with Kirigami's "
                   "touch layout (pure-maps-mobile).", ['GPLv3+']),
-    'osmscout-server': ('3.1.7', 'Offline maps and search for Pure Maps',
+    'osmscout-server': ('3.1.7', 'Offline maps, search and routing for Pure Maps',
                         "OSM Scout Server, the Kirigami version: downloads OpenStreetMap "
                         "data per country and serves Pure Maps vector tiles and search "
-                        "(geocoder-nlp on libpostal) on 127.0.0.1:8553, started through "
-                        "D-Bus; without Mapnik raster tiles and Valhalla routing.",
+                        "(geocoder-nlp on libpostal) and offline routing (Valhalla 3.4.0, "
+                        "static, on protobuf-lite 3.21) on 127.0.0.1:8553, started through "
+                        "D-Bus; without Mapnik raster tiles.",
                         ['GPLv3+']),
 }
 MAINTAINER = 'sebastian.matkovich@gmail.com'
@@ -204,6 +205,12 @@ LICENSES = {
     'osso-systemui-dbus-dev': ['LGPL21'],
     'libplayback': ['LGPL21'],
     'osso-systemui-alarm': ['LGPL21'],
+    # Harmattan's (harmattan-qt5): LGPL 2.1 in LICENSE.LGPL or the sources'
+    # headers, not in debian/copyright; statusmenu-plugins as the rest
+    **{'harmattan-' + p: ['LGPL21'] for p in (
+        'duicontrolpanel', 'libcontentaction', 'libmeegotouch', 'libmlocale',
+        'mcompositor', 'meegotouch-controlpanelapplets', 'meegotouchhome',
+        'meegotouchtheme', 'qmsystem2', 'statusmenu-plugins', 'system-ui')},
 }
 # Where debian/control describes a part badly
 DESCRIBE = {
@@ -300,6 +307,8 @@ REVISION = {
     # 2026-10-27: sounds: no Linux-only time stamps (it aborted), the decoded
     # tones in the user's directory, the decoder's caps as GTypes (it crashed)
     'hildon-plugins-notify-sv': 1,
+    # 2026-10-28: offline routing (Valhalla), no Mapnik data downloads
+    'osmscout-server': 1,
 }
 
 

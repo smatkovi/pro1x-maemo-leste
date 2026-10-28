@@ -127,6 +127,37 @@ Qt apps build with the PC's `moc`, `uic` and `rcc` (the same Qt 5.15 as
 FreeBSD's) against FreeBSD's Qt in the sysroot (`qt_qmake`, `qt_cmake` in
 `apps.sh`), with Leste's "maemo" qmake spec on FreeBSD's.
 
+### The Harmattan stack
+
+`harmattan.sh` builds the Nokia N9's own user interface in its Qt 5 port
+([harmattan-qt5](https://github.com/smatkovi/harmattan-qt5), at `HQ5_REV`),
+one part per directory there, named `harmattan-<directory>`: libmlocale,
+libmeegotouch, contextkit, libcontentaction, mcompositor, libdsme's D-Bus
+names, mce-dev, qmsystem2, duicontrolpanel, system-ui (sysuid), the status
+menu plugins, meegotouchhome (the three-page home), the settings applets,
+meegofeedbackd, the reaction maps, the input method framework, the engine
+library, the N9 keyboard, its settings applet and the base meegotouch
+theme. The FreeBSD changes are in harmattan-qt5 itself (libc++ has neither
+`std::tr1` nor `auto_ptr`; the POSIX headers glibc brings in by the way;
+`LOCAL_PEERCRED` for libdsme; no `-Wl` rpath trick), the cross build's
+in `harmattan.sh`: the host's `mgen`, `mmoc` and `m-servicefwgen`, and the
+installed qmake features and `.pri` files pointed at the sysroot. They are
+built and packaged, not yet run on FreeBSD (no MeeGo session for it yet);
+the blanco theme and the N9's fonts and sounds are Nokia's and not in them.
+`build.sh harmattan` builds them all, `build.sh harmattan-<directory>` one.
+
+### Maps
+
+Pure Maps and OSM Scout Server as
+[pure-maps-ports](https://github.com/smatkovi/pure-maps-ports) builds them
+for Leste. OSM Scout Server has offline routing: Valhalla 3.4.0 (the
+version its own packagings build and its routing data is made for),
+static in the server, on protobuf-lite 3.21 (static too; its `protoc` is
+built for the PC from the same source, since the generated code has to
+match the library). Both are built below `/usr/local/valhalla-lite` in the
+sysroot for the server's build only: FreeBSD's protobuf there is
+version 29 (`osmscout_valhalla` in `apps.sh`).
+
 ### Web engines
 
 FreeBSD's quarterly packages for arm64 have neither QtWebEngine nor
