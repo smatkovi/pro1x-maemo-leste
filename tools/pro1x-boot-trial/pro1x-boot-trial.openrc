@@ -6,8 +6,10 @@
 description="Confirm a trial start of a new kernel"
 
 depend() {
-	need localmount
-	after xorg
+	# no "need localmount": Leste's OpenRC (on sysvinit) has no such
+	# service, and the service would never start; /host is the
+	# initramfs's mount anyway
+	after xorg hildon-desktop
 }
 
 start() {
