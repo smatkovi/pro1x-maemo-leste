@@ -44,17 +44,42 @@ sed -e 's|/usr/local|/usr|g' -e 's|libdata/pkgconfig|lib/pkgconfig|g' \
 mkdir -p "$MNT$B/patches/hidpi" "$MNT$B/patches/meego"
 cp -a "$REPO/patches/hidpi/." "$MNT$B/patches/hidpi/"
 cp -a "$REPO/patches/meego/." "$MNT$B/patches/meego/"
+# those of FreeBSD's patches that are no FreeBSD matter (Qt 5.15, today's
+# compilers); the others are its paths and its interfaces
+FBSD_PATCHES="easylist/0001-missing-semicolon.patch
+	qt-components/0002-qt-5-15-install.patch
+	qt-components/0003-theme-images-directory.patch
+	qt-components/0004-harmattan-fonts.patch
+	qt-components/0005-qt-5-15-orientation.patch
+	qt-components/0006-window-takes-its-own-size.patch
+	qt-components/0007-hidden-info-banner-takes-no-taps.patch
+	qt-components/0008-derived-styles-set-the-base-property.patch
+	qt-components/0009-closed-dialog-takes-no-taps.patch"
+rm -rf "${MNT:?}$B/patches/fbsd"
+for q in $FBSD_PATCHES; do
+	mkdir -p "$MNT$B/patches/fbsd/${q%%/*}"
+	cp "$REPO/freebsd/hildon/patches/$q" "$MNT$B/patches/fbsd/$q"
+done
 bash -c "declare -A REV URL; . '$MNT$B/apps-arch.sh'; declare -p APPS REV URL" > "$MNT$B/apps-tables.sh"
 . "$MNT$B/apps-tables.sh"
 
 log "packages"
 chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
-pacman -S --noconfirm --needed cmake qt5-base qt5-svg qt5-declarative \
+# only those Arch Linux ARM has (qt5-location and qt5-websockets it has
+# not): one unknown name would make pacman install none of them. dpkg for
+# dpkg-parsechangelog, which configure.ac files call for their version.
+have=
+for p in cmake qt5-base qt5-svg qt5-declarative \
 	qt5-quickcontrols qt5-quickcontrols2 qt5-graphicaleffects qt5-multimedia \
 	qt5-x11extras qt5-xmlpatterns qt5-location qt5-tools qt5-websockets \
 	poppler-glib libical espeak-ng expat libxkbfile curl libsigc++ \
 	evolution-data-server sdl12-compat sdl_mixer sdl_image gnuchess \
-	python python-pip gettext libevent json-c protobuf-c > /dev/null || true
+	python python-pip gettext libevent json-c protobuf-c dpkg phonon-qt5; do
+	if pacman -Si "$p" > /dev/null 2>&1; then have="$have $p"
+	else echo "   (Arch Linux ARM has no $p)"; fi
+done
+# shellcheck disable=SC2086
+pacman -S --noconfirm --needed $have > /dev/null
 gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
 # Leste's Qt spec: Linux with Maemo 5's define and platform
 d=$(qmake-qt5 -query QT_INSTALL_ARCHDATA)/mkspecs/linux-maemo
@@ -62,6 +87,31 @@ mkdir -p "$d"
 printf 'include(../linux-g++/qmake.conf)\nQMAKE_PLATFORM += maemo5\nDEFINES += Q_WS_MAEMO_5\n' > "$d/qmake.conf"
 printf '#include "../linux-g++/qplatformdefs.h"\n' > "$d/qplatformdefs.h"
 EOF
+
+# GTK 2's VTE (0.28, libvte.so.9), which osso-xterm is written for; Arch
+# has only the GTK 3 and 4 ones
+VTE=vte-0.28.2
+VTE_SHA256=86cf0b81aa023fa93ed415653d51c96767f20b2d7334c893caba71e42654b0ae
+if [ ! -f "$MNT/usr/lib/pkgconfig/vte.pc" ]; then
+	log "$VTE (GTK 2)"
+	mkdir -p "$MNT$B/dl"
+	f=$MNT$B/dl/$VTE.tar.xz
+	[ -f "$f" ] || curl -sSfL -o "$f" "https://download.gnome.org/sources/vte/0.28/$VTE.tar.xz"
+	echo "$VTE_SHA256  $f" | sha256sum -c --quiet -
+	rm -rf "${MNT:?}$B/build/$VTE"
+	mkdir -p "$MNT$B/build"
+	tar -xJf "$f" -C "$MNT$B/build"
+	chroot "$MNT" /bin/bash -euo pipefail -s "$B/build/$VTE" "$JOBS" <<'EOF'
+cd "$1"
+export CFLAGS="-O2 -pipe -std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration -Wno-error=int-conversion"
+./configure --prefix=/usr --libexecdir=/usr/lib/vte --disable-static \
+	--with-gtk=2.0 --disable-introspection --disable-python --disable-gtk-doc \
+	> configure.log 2>&1 || { tail -20 configure.log; exit 1; }
+make -j"$2" > make.log 2>&1 || { grep -m20 -E "error:|Error [0-9]" make.log; exit 1; }
+make install > install.log 2>&1 || { tail -20 install.log; exit 1; }
+ldconfig
+EOF
+fi
 
 log "sources"
 for p in "${APPS[@]}"; do
@@ -136,6 +186,9 @@ while IFS= read -r p; do
 				[ -n "$q" ] && patch -s -p1 < "debian/patches/$q"
 			done
 		fi
+		for q in "$B/patches/fbsd/$name"/*.patch; do
+			[ ! -f "$q" ] || patch -s -p1 < "$q"
+		done
 		for d in hidpi meego; do
 			[ ! -f "$B/patches/$d/$name.patch" ] || patch -s -p1 < "$B/patches/$d/$name.patch"
 		done
