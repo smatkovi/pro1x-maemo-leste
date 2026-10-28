@@ -67,3 +67,8 @@ harmattan-libmeegoimengine|installs, its libraries resolve (VM); not run yet (no
 harmattan-meego-keyboard|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
 harmattan-meego-im-settings-applet|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
 harmattan-meegotouchtheme|built (data)
+maplibre-native-qt|runs (VM, through Pure Maps)
+mapbox-gl-qml|runs (VM, through Pure Maps)
+nemo-qml-plugin-dbus|runs (VM, through Pure Maps)
+pure-maps|runs (VM: the map)
+osmscout-server|runs (VM: Liechtenstein downloaded through its map manager, an offline route across Vaduz with Valhalla, 4 maneuvers)
