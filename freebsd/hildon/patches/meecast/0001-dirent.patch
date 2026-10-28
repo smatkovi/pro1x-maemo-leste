@@ -1,0 +1,22 @@
+FreeBSD: dirent.h is all the source list needs (no Linux <linux/fs.h>,
+no 4.2BSD <sys/dir.h>).
+
+--- a/meecast/core/sourcelist.h
++++ b/meecast/core/sourcelist.h
+@@ -37,14 +37,8 @@
+ #include "stationlist.h"
+ #include "abstractconfig.h"
+ ////////////////////////////////////////////////////////////////////////////////
+-#if defined (BSD) && !_POSIX_SOURCE
+-    #include <sys/dir.h>
+-    typedef struct dirent Dirent;
+-#else
+-    #include <dirent.h>
+-    #include <linux/fs.h>
+-    typedef struct dirent Dirent;
+-#endif
++#include <dirent.h>
++typedef struct dirent Dirent;
+ ////////////////////////////////////////////////////////////////////////////////
+ namespace Core {
+ ////////////////////////////////////////////////////////////////////////////////

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Type=Application
+Name=MeeCast
+Comment=Weather forecast
+Exec=/usr/local/lib/meecast/bin/omweather-qml
+Icon=/usr/local/lib/meecast/share/icons/meecast.svg
+X-Osso-Type=application/x-executable

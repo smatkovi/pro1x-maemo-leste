@@ -94,6 +94,9 @@ APPS=(
 	"qt-components|!"
 	# the Nokia N9's clock in QML on them (github.com/smatkovi)
 	"meego-clock|!"
+	# MeeCast, the weather forecast of Maemo 5 and the N9 (Qt 5, QtQuick
+	# Controls 2), with its weather sources
+	"meecast|!"
 	# The web engines, which FreeBSD's quarterly packages no longer have for
 	# arm64: QtWebEngine as FreeBSD 15.1 built it (its release_1 set), with
 	# the FFmpeg 8.1 libraries it links; QtWebKit from its last release.
@@ -160,7 +163,7 @@ REV+=(
 	[countdowntimer]=ddc1f7027af9 [easylist]=d5c5bcc6c677 [flappybird]=21f81151207a
 	[qshot]=f10335de9c66 [mihphoto]=bab0cb18bc0e
 	[hamsterfiler]=19ac58143e2e [qt-components]=c967fbd79e75
-	[meego-clock]=8c9e205
+	[meego-clock]=8c9e205 [meecast]=f8f26737cb74
 	[ffmpeg8-libs]=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
 	[qt5-webengine]=c5de7df005189a2ef727a40b13408ff3a14a0bbedce07af986aac59722d4cf09
 	[qt5-webkit]=9ca126da9273664dd23a3ccd0c9bebceb7bb534bddd743db31caf6a5a6d4a9e6
@@ -187,6 +190,7 @@ URL+=(
 	[hamsterfiler]=$GH_EXTRAS/hamsterfiler.git
 	[qt-components]=https://github.com/sailfishos/qt-components.git
 	[meego-clock]=https://github.com/smatkovi/meego-clock.git
+	[meecast]=https://github.com/Meecast/meecast.git
 	[ffmpeg8-libs]=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
 	[qt5-webengine]=pkg:release_1
 	[qt5-webkit]=https://github.com/qtwebkit/qtwebkit/releases/download/qtwebkit-5.212.0-alpha4/qtwebkit-5.212.0-alpha4.tar.xz
@@ -764,6 +768,26 @@ custom_qt_components() {
 }
 
 custom_meego_clock() { qt_qmake meego-clock.pro; }
+
+# MeeCast: its libraries (sqlite3, libxml2 bundled), the weather sources
+# and their station databases, the QML application (omweather-qml). The
+# bundled libxml2 turns its thread support on by _REENTRANT or
+# _POSIX_C_SOURCE, which glibc defines by default and FreeBSD does not. Its
+# QMAKE_LRELEASE is gettext's msgfmt (it compiles .po files). Its own tree,
+# /opt/com.meecast.omweather (Sailfish's place for it, built into code and
+# QML too), goes to /usr/local/lib/meecast.
+custom_meecast() {
+	grep -rlZ /opt/com.meecast.omweather . --include='*.pro' --include='*.pri' \
+	    --include='*.cpp' --include='*.h' --include='*.c' --include='*.qml' \
+	    --include='*.js' --include='*.desktop' --include='*.xml' --include='*.in' |
+	    xargs -0 -r sed -i 's|/opt/com\.meecast\.omweather|/usr/local/lib/meecast|g'
+	qt_qmake meecast.pro QMAKE_CFLAGS+=-D_REENTRANT QMAKE_LRELEASE=msgfmt &&
+	    usr_to_local "$PR" &&
+	# started directly, not through Sailfish's invoker (extra/meecast has
+	# Hildon's menu entry)
+	sed -i 's|^Exec=.*omweather-qml.*|Exec=/usr/local/lib/meecast/bin/omweather-qml|' \
+	    "$PR/usr/local/share/applications/meecast.desktop"
+}
 
 # Dorian installs its menu entry and icons below /usr/share
 custom_dorian() { qt_qmake dorian.pro && usr_to_local "$PR"; }

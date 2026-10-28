@@ -157,6 +157,8 @@ RUNTIME = {
     'statusbar-alarm': ['alarmd'],
     # QML on the MeeGo components; its alarms are alarmd's
     'meego-clock': ['qt-components', 'alarmd', 'clockd'],
+    # QML on QtQuick Controls 2, its stations in SQLite
+    'meecast': ['qt5-quickcontrols2', 'qt5-graphicaleffects', 'qt5-sqldrivers-sqlite3'],
 }
 # Where debian/copyright says only "GPL" (any version) or nothing
 LICENSES = {
