@@ -1,0 +1,5 @@
+# No clock scaling of the UFS storage: under heavy writes (a native
+# build) the kernel's devfreq worker hung in ufshcd_devfreq_scale with
+# all I/O blocked behind it (2026-10-28, kernel 7.1.0+): every system on
+# the storage froze. Fixed clocks, the highest ones.
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="4804000.ufshc", ATTR{clkscale_enable}="0"
