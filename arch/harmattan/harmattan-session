@@ -8,7 +8,8 @@
 # applications by QT_SCALE_FACTOR (MEEGO_SCALE, default 2.25), while
 # mcompositor composites at the panel's own size.
 SCALE=${MEEGO_SCALE:-2.25}
-export M_THEME_NAME=${M_THEME_NAME:-blanco}
+# the Pro1X theme: blanco dark everywhere (harmattan-qt5 meegotouchtheme/pro1x)
+export M_THEME_NAME=${M_THEME_NAME:-pro1x}
 export QT_QPA_PLATFORMTHEME=none
 export XDG_CURRENT_DESKTOP=MeeGo
 [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] ||

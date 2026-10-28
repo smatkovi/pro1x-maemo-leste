@@ -197,6 +197,8 @@ else
 	log "no N9 root file system: the MeeGo look draws without its theme"
 fi
 
+# the Pro1X theme (blanco dark everywhere), on top of the N9's
+cp -a "$MNT/usr/src/harmattan-qt5/meegotouchtheme/pro1x" "$MNT/usr/share/themes/"
 # ngfd with the plugins that run here (harmattan-qt5/ngfd-meego)
 install -m 644 "$MNT/usr/src/harmattan-qt5/ngfd-meego/ngfd.ini" "$MNT/usr/share/ngfd/ngfd.ini"
 
