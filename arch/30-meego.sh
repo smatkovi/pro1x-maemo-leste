@@ -82,6 +82,9 @@ git -C $S fetch -q origin
 git -C $S checkout -q -f "$rev"
 git -C $S reset -q --hard "origin/$rev" 2> /dev/null || true
 B=/usr/src/harmattan-qt5-build
+# libmeegotouch and the others put their qmake features below /usr/share/qt
+# (where Debian's Qt 4 had them); Arch's qmake looks below /usr/lib/qt only
+export QMAKEFEATURES=/usr/share/qt/mkspecs/features
 mkdir -p $B
 
 # A part built in a copy of its source (several run generators there),
@@ -113,13 +116,14 @@ part() {
 	make)
 		;;
 	esac
-	# -k: parts not ported yet (some status menu plugins) do not stop the
-	# rest; what must exist is checked at the end
+	# -k: what does not build does not stop the rest (what must exist is
+	# checked at the end); such a part is built again on the next run
 	[ $kind = make ] || set --
+	local ok=1
 	make -k -j"$jobs" "$@" > make.log 2>&1 ||
-	    { echo "   $name: not all of it builds:"; grep -m5 -e "error:" -e "\*\*\*" make.log | sed 's/^/     /' || true; }
+	    { ok=; echo "   $name: not all of it builds:"; grep -m5 -e "error:" -e "\*\*\*" make.log | sed 's/^/     /' || true; }
 	make -k install "$@" > install.log 2>&1 || true
-	echo "$want" > "$stamp"
+	[ -z "$ok" ] || echo "$want" > "$stamp"
 }
 
 # The sound daemon for events (Nemo's ngfd, the open successor of the N9's)
