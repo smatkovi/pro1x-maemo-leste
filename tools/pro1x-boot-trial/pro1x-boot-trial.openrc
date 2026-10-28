@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+# A trial start of a new kernel (pro1x-boot trial): pro1x-boot-trial
+# confirms it once the user interface runs, or reboots after ten minutes.
+# Does nothing without a trial.
+
+description="Confirm a trial start of a new kernel"
+
+depend() {
+	need localmount
+	after xorg
+}
+
+start() {
+	[ -f /host/pro1x-boot/trial ] || return 0
+	ebegin "Trial start of kernel $(uname -r)"
+	start-stop-daemon --start --background --exec /usr/local/sbin/pro1x-boot-trial -- wait
+	eend $?
+}

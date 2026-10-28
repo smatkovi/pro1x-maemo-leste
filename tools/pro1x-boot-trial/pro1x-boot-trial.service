@@ -1,0 +1,13 @@
+# A trial start of a new kernel (pro1x-boot trial): pro1x-boot-trial
+# confirms it once the user interface runs, or reboots after ten minutes.
+[Unit]
+Description=Confirm a trial start of a new kernel
+ConditionPathExists=/host/pro1x-boot/trial
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/pro1x-boot-trial wait
+
+[Install]
+WantedBy=multi-user.target

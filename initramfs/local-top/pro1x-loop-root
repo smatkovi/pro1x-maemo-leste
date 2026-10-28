@@ -55,6 +55,10 @@ mount -t ext4 -o rw,noatime "$dev" /host \
 # default; after the countdown the preselected entry starts by itself.
 if [ -x /sbin/pro1x-bootmenu ] && [ -x /sbin/pro1x-boot ]; then
   export PRO1X_BOOT_HOST=/host
+  # A trial of a new kernel (pro1x-boot trial, 65-kernel-update.sh): over
+  # if a start of it was confirmed (slot b successful again), dropped if
+  # another kernel runs, else this start is one of its tries
+  trial=$(pro1x-boot trial-check 2>/dev/null) || trial=none
   entries=$(pro1x-boot entries)
   want=$(pro1x-boot take-next)
   [ -n "$want" ] || want=$(pro1x-boot get-default)
@@ -134,6 +138,9 @@ SNAPS
     # (kernel environment, e.g. hint.ufshci.0.disabled=1).
     log_begin_msg "Starting FreeBSD"
     pro1x-boot set-current freebsd
+    # FreeBSD has its own kernel: a Linux kernel on trial that came as far
+    # as this menu counts as started
+    [ "$trial" != running ] || pro1x-boot trial-ok > /dev/null
     args=$(cat "/host${image%/*}/cmdline" 2>/dev/null)
     # The time: the RTC only counts, Leste keeps the offset (pro1x-rtc)
     off=$(cat /host/pro1x-rtc-offset 2>/dev/null)
@@ -188,6 +195,24 @@ SNAPS
   fi
   # The running system reads this (MeeGo may boot the Leste image).
   pro1x-boot set-current "$key"
+  # On trial: the SoC's watchdog runs from here on (the APSS watchdog,
+  # 0x0f017000, as for FreeBSD above). qcom_wdt finds it running and the
+  # kernel feeds it until the system takes it over (dsme on Leste,
+  # systemd's RuntimeWatchdog) or for at most 15 minutes; pro1x-boot-trial
+  # in the system confirms the start once its user interface runs, or
+  # reboots. A start that hangs thus resets the phone, and the bootloader
+  # takes one of the trial's tries for every start.
+  if [ "$trial" = running ]; then
+    echo 900 > /sys/module/watchdog/parameters/open_timeout 2> /dev/null
+    if command -v devmem > /dev/null; then
+      devmem 0x0f017008 32 0
+      devmem 0x0f017004 32 1
+      devmem 0x0f017010 32 0xfffff
+      devmem 0x0f017014 32 0xfffff
+      devmem 0x0f017008 32 1
+    fi
+    modprobe qcom_wdt || log_warning_msg "pro1x-loop-root: no watchdog for the trial start"
+  fi
 fi
 
 [ -f "/host$IMAGE" ] || panic "pro1x-loop-root: /host$IMAGE does not exist"

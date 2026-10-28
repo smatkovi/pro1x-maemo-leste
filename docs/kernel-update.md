@@ -56,6 +56,40 @@ the new image into boot_b. It does not reboot.
 `status` lists the module versions on the phone, the running kernel and the
 saved boot images.
 
+## Trial starts: back to slot a by itself
+
+`flash` puts slot b on trial (`pro1x-boot trial <version> 3`). The phone's
+bootloader then takes one try for every start of slot b while the slot is
+not marked "successful". When none are left, it starts slot a, Sailfish
+OS. It did exactly that on 2026-10-24, before `pro1x-boot` kept slot b
+marked successful.
+
+A start on trial is confirmed when it went well, and it has to end in a
+reboot when it did not:
+
+- `pro1x-boot-trial` (in every Linux system, from `66-boot-trial-install.sh`)
+  waits for the user interface (Hildon, MeeGo, Phosh, LuneOS, X). Once it
+  runs, it confirms the start (`/host/pro1x-boot/trial-ok`). Without one
+  after ten minutes (`/host/pro1x-boot/trial-wait`), it reboots.
+- The initramfs starts the SoC's watchdog for a start on trial. The kernel
+  (`qcom_wdt`) feeds it until the system takes it over (dsme on Leste,
+  systemd's `RuntimeWatchdogSec` on Arch, Kali, LuneOS), for at most 15
+  minutes. A start that hangs thus resets the phone. A kernel panic reboots
+  after 10 s (`panic=10`).
+- The boot after a confirmed start ends the trial: slot b is successful
+  again, with 7 tries (`pro1x-boot trial-check` in the initramfs).
+
+So with 3 tries, a kernel that does not come up ends in Sailfish after the
+third failed start, without the PC. Some details:
+
+- Choosing FreeBSD in the menu counts as a good start: FreeBSD has its own
+  kernel, and the Linux kernel got as far as the menu.
+- `pro1x-boot trial-stop` ends a trial by hand, and `pro1x-boot list`
+  shows it.
+- Sailfish asks for its LUKS code; from there boot_b can be written back
+  (see below).
+- `TRIES=0 ... flash` writes without a trial.
+
 ## The way back
 
 Btrfs snapshots do not help here. They cover Arch's root only, and boot_b

@@ -121,6 +121,10 @@ log "boot menu"
 apt-get install -y -q --no-install-recommends gcc libc6-dev
 gcc -O2 -Wall -o /usr/local/sbin/pro1x-bootmenu "$REPO/tools/pro1x-bootmenu/pro1x-bootmenu.c"
 install -m 755 "$REPO/tools/pro1x-boot/pro1x-boot" /usr/local/sbin/
+# a new kernel's trial start (pro1x-boot trial): confirmed once Hildon runs
+install -m 755 "$REPO/tools/pro1x-boot-trial/pro1x-boot-trial" /usr/local/sbin/
+install -m 755 "$REPO/tools/pro1x-boot-trial/pro1x-boot-trial.openrc" /etc/init.d/pro1x-boot-trial
+rc-update add pro1x-boot-trial default
 # FreeBSD's writable ZFS pool in a file on userdata (freebsd/README.md)
 install -m 755 "$REPO/tools/pro1x-freebsd-pool/pro1x-freebsd-pool" /usr/local/sbin/
 

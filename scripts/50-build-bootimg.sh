@@ -39,6 +39,9 @@ CMDLINE="$CMDLINE loglevel=4 earlycon=msm_geni_serial,0x4a90000"
 # nodes without a driver) that is for ever: give up waiting after the
 # deferred probe timeout instead, so DDR and the NoCs can scale down
 CMDLINE="$CMDLINE fw_devlink.sync_state=timeout"
+# A panic reboots (after 10 s, ramoops keeps its messages): on a trial of
+# a new kernel the bootloader then counts the start as failed
+CMDLINE="$CMDLINE panic=10"
 CMDLINE="$CMDLINE console=ttyMSM0,115200n8 console=tty1"
 
 for f in "$OUT/Image.gz" "$OUT/initrd.img-$KVER" "$OUT/sm6115-fxtec-pro1x.dtb"; do

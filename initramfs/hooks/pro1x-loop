@@ -23,6 +23,8 @@ if [ -x /usr/local/sbin/pro1x-bootmenu ]; then
   fi
   # Touchscreen for choosing by tap; everything else is built in.
   manual_add_modules goodix_ts
+  # The SoC's watchdog for trial boots of a new kernel (pro1x-boot trial)
+  manual_add_modules qcom_wdt
 fi
 # Btrfs roots (Arch) and their snapshots below a RAM overlay
 # (local-top/pro1x-loop-root, init-bottom/pro1x-overlay-root)

@@ -1,0 +1,52 @@
+#!/bin/sh
+# pro1x-boot-trial -- confirm a trial start of a new kernel (pro1x-boot
+# trial, scripts/65-kernel-update.sh) in the system it started.
+#
+#   pro1x-boot-trial wait     what the boot service runs (Leste's init
+#                             script, a systemd unit elsewhere)
+#
+# Only while the running kernel is on trial: once the system's user
+# interface runs (Hildon, MeeGo, Phosh, LuneOS, an X server), the start is
+# confirmed ($CONF/trial-ok), and the next boot ends the trial (slot b
+# successful again). The SoC's watchdog, which the initramfs started for
+# the trial, is stopped if no daemon of the system has taken it over.
+# Without a user interface after $CONF/trial-wait seconds (600) it
+# reboots: the bootloader has taken a try for this start, and after the
+# last one it starts slot a (Sailfish OS).
+#
+# Needs no pro1x-boot: only userdata (/host), mounted by the initramfs in
+# every system it starts.
+CONF=${PRO1X_BOOT_HOST:-/host}/pro1x-boot
+UI="hildon-desktop mcompositor meegotouchhome phoc phosh luna-next surface-manager Xorg"
+
+[ "${1:-}" = wait ] || { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+[ -f "$CONF/trial" ] || exit 0
+[ "$(cut -d' ' -f1 "$CONF/trial")" = "$(uname -r)" ] || exit 0
+[ ! -f "$CONF/trial-ok" ] || exit 0
+
+say() { logger -t pro1x-boot-trial "$*" 2> /dev/null || echo "pro1x-boot-trial: $*"; }
+running() {
+	for p in $UI; do
+		pgrep -x "$p" > /dev/null 2>&1 && return 0
+	done
+	return 1
+}
+
+wait=$(cat "$CONF/trial-wait" 2> /dev/null || echo 600)
+t=0
+while [ "$t" -lt "$wait" ]; do
+	if running; then
+		touch "$CONF/trial-ok"
+		sync
+		# the watchdog: busy if a daemon feeds it (dsme, systemd); else
+		# the kernel does, until its deadline: stop it ("V", magic close)
+		{ printf V > /dev/watchdog; } 2> /dev/null || true
+		say "start of $(uname -r) confirmed; the next boot ends the trial"
+		exit 0
+	fi
+	sleep 10
+	t=$((t + 10))
+done
+say "no user interface after $wait s: rebooting (a failed start of the kernel on trial)"
+sync
+reboot

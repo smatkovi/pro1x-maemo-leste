@@ -17,7 +17,10 @@
 #       phone as /host/boot_b-<version>.img. Writes no partition.
 #   ... 65-kernel-update.sh flash
 #       saves boot_b as /host/boot_b-before-<version>.img, then writes the
-#       prepared image into boot_b (60-flash-slot-b.sh). Does not reboot.
+#       prepared image into boot_b (60-flash-slot-b.sh) and puts slot b on
+#       trial: TRIES starts (3), which pro1x-boot-trial confirms in the
+#       system or the bootloader counts as failed; after the last it
+#       starts slot a, Sailfish OS (TRIES=0: no trial). Does not reboot.
 #       Only with the phone's owner there: a kernel that does not boot
 #       leaves the phone in fastboot or hanging (back: fastboot, or Sailfish
 #       in slot a, then boot_b-before-<version>.img into boot_b).
@@ -70,6 +73,11 @@ if [ "$1" = prepare ]; then
 	log "modules of the running kernel ($running) to $STORE, if not there yet"
 	ph "[ -d $STORE/$running ] || cp -a /lib/modules/$running $STORE/$running"
 
+	log "pro1x-boot and the trial's parts into the systems (66-boot-trial-install.sh)"
+	tar -C "$REPO" --owner=0 --group=0 -cf - tools/pro1x-boot tools/pro1x-boot-trial \
+	    scripts/66-boot-trial-install.sh |
+	    ph "set -e; t=\$(mktemp -d); tar -C \$t -xf -; REPO=\$t bash \$t/scripts/66-boot-trial-install.sh; rm -r \$t"
+
 	log "initramfs scripts of this repository into Leste"
 	tar -C "$REPO/initramfs" --owner=0 --group=0 -cf - hooks local-top init-bottom |
 	    ph "set -e; t=\$(mktemp -d); tar -C \$t -xf -
@@ -114,4 +122,13 @@ ph "cat /host/boot_b-before-$KVER.img" > "$OUT/boot_b-before-$KVER.img"
 log "saved: $OUT/boot_b-before-$KVER.img (fastboot flash boot_b ...)"
 log "writing $IMG into boot_b"
 ph "TARGET=b IMG=$IMG VBMETA= sh -s flash" < "$REPO/scripts/60-flash-slot-b.sh"
+# The trial (pro1x-boot trial, docs/kernel-update.md): $TRIES starts of
+# slot b, each confirmed by pro1x-boot-trial or counted as failed by the
+# bootloader, which then starts slot a (Sailfish OS). TRIES=0: no trial.
+TRIES=${TRIES:-3}
+if [ "$TRIES" != 0 ]; then
+	ph "/usr/local/sbin/pro1x-boot trial $KVER $TRIES"
+else
+	log "no trial (TRIES=0): slot b stays successful"
+fi
 log "done: $KVER boots after the next reboot (not done here); back: TARGET=b IMG=/host/boot_b-before-$KVER.img VBMETA= sh 60-flash-slot-b.sh flash"
