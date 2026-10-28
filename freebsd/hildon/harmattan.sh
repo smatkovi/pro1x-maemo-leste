@@ -89,10 +89,11 @@ hq5_sysroot_features() {
 
 # /usr/ in the build files is /usr/local/ here
 hq5_usr_local() {
-	grep -rlZE '/usr/(include|lib|share|bin|sbin|libexec)' . --include='*.pro' \
+	grep -rlZE '/usr(/|[[:space:]]*$)' . --include='*.pro' \
 	    --include='*.pri' --include='*.prf' --include='*.prf.in' --include='*.pc.in' \
 	    --include='*.in' 2> /dev/null |
-	    xargs -0 -r sed -i -E 's#/usr/(include|lib|share|bin|sbin|libexec)#/usr/local/\1#g'
+	    xargs -0 -r sed -i -E -e 's#/usr/(include|lib|share|bin|sbin|libexec)#/usr/local/\1#g' \
+	        -e 's#^([[:space:]]*[A-Z_]+[[:space:]]*[+*]?=[[:space:]]*)/usr[[:space:]]*$#\1/usr/local#'
 }
 
 # The parts with a configure script of their own that runs qmake: configure
@@ -175,7 +176,11 @@ custom_harmattan_qmsystem2() {
 	hq5_qmake_part libqmsystem2.pro "LIBS+=-Wl,--as-needed -linotify -Wl,--no-as-needed"
 }
 # (backtrace(3) is in libexecinfo on FreeBSD)
-custom_harmattan_duicontrolpanel() { hq5_qmake_part projects.pro "LIBS+=-lexecinfo"; }
+custom_harmattan_duicontrolpanel() {
+	hq5_qmake_part projects.pro "LIBS+=-lexecinfo"
+	# its tests and their scripts
+	rm -rf "$PR/usr/local/lib/duicontrolpanel-tests" "$PR/usr/local/share/duicontrolpanel-tests"
+}
 custom_harmattan_system_ui() { hq5_qmake_part project.pro; }
 custom_harmattan_statusmenu_plugins() { hq5_qmake_part statusmenu-plugins.pro; }
 custom_harmattan_meegotouchhome() { hq5_qmake_part projects.pro; }
