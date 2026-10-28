@@ -59,6 +59,27 @@ cp -L /etc/resolv.conf "$R/etc/resolv.conf"
 # no services started by the packages' scripts in the chroot
 printf '#!/bin/sh\nexit 101\n' > "$R/usr/sbin/policy-rc.d"
 chmod 755 "$R/usr/sbin/policy-rc.d"
+# icu-config, which Debian 12's ICU no longer has: libmlocale's and
+# libmeegotouch's configure scripts look for it (without, they build
+# without ICU: no calendars, collation or number formats of their own)
+mkdir -p "$R/usr/local/bin"
+cat > "$R/usr/local/bin/icu-config" <<'ICU'
+#!/bin/sh
+# icu-config from ICU's pkg-config files (meego/50-harmattan-qt5-debs.sh)
+for a; do
+	case $a in
+	--exists) pkg-config --exists icu-i18n icu-uc || exit 1 ;;
+	--version) pkg-config --modversion icu-uc ;;
+	--cflags|--cxxflags|--cppflags|--cppflags-searchpath) pkg-config --cflags icu-i18n icu-uc ;;
+	--ldflags|--ldflags-searchpath|--ldflags-libsonly) pkg-config --libs icu-i18n icu-uc ;;
+	--bindir|--sbindir) echo /usr/bin ;;
+	--prefix) pkg-config --variable=prefix icu-uc ;;
+	--icudata) pkg-config --variable=ICUDATA_NAME icu-uc ;;
+	*) echo "icu-config: $a is not known here" >&2; exit 1 ;;
+	esac
+done
+ICU
+chmod 755 "$R/usr/local/bin/icu-config"
 
 log "build dependencies"
 chroot "$R" /bin/bash -euo pipefail <<'EOF'
@@ -69,7 +90,7 @@ apt-get -y -q --no-install-recommends install \
 	python3 doxygen \
 	qtbase5-dev qtbase5-private-dev qtdeclarative5-dev libqt5x11extras5-dev \
 	libqt5svg5-dev libqt5opengl5-dev qttools5-dev qttools5-dev-tools \
-	libicu-dev libdbus-glib-1-dev libxml2-dev libpolkit-gobject-1-dev intltool \
+	libicu-dev icu-devtools libdbus-glib-1-dev libxml2-dev libpolkit-gobject-1-dev intltool \
 	gtk-doc-tools gobject-introspection libgirepository1.0-dev libcdb-dev \
 	libxdamage-dev libxcomposite-dev libxrandr-dev libxtst-dev libxi-dev libx11-xcb-dev \
 	libpulse-dev libsndfile1-dev libgconf2-dev gconf2 libprofile-dev \
