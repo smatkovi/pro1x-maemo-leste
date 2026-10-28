@@ -124,7 +124,8 @@ mkdir -p "$U/sm4250"
 cp -a /usr/share/alsa/ucm2/Pro1X "$U/"
 ln -sfn ../Pro1X/Pro1X.conf "$U/sm4250/sm4250.conf"
 # udev: SSC sensor types and mount matrix, stable WLAN MAC
-install -m 644 "$REPO/rootfs-overlay/etc/udev/rules.d/81-pro1x-sensors.rules" \
+install -m 644 "$REPO/rootfs-overlay/etc/udev/rules.d/60-pro1x-ufs.rules" \
+	"$REPO/rootfs-overlay/etc/udev/rules.d/81-pro1x-sensors.rules" \
 	"$REPO/rootfs-overlay/etc/udev/rules.d/82-pro1x-wlan-mac.rules" "$MNT/etc/udev/rules.d/"
 install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/pro1x-wlan-mac" "$MNT/usr/local/sbin/"
 install -D -m 644 "$REPO/rootfs-overlay/etc/modprobe.d/pro1x-dt2w.conf" "$MNT/etc/modprobe.d/pro1x-dt2w.conf"
