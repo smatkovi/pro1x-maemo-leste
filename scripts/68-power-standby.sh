@@ -15,7 +15,7 @@
 # itself; the log says which samples had it off. Logs to OUTDIR
 # (default ./power-<date>).
 set -uo pipefail
-PORT=${PORT:?set PORT=<the hub port's sysfs directory>}
+PORT=${PORT:?set PORT=<the sysfs directory of the hub port>}
 MINUTES=${MINUTES:-30}
 USBIF=${USBIF:-enp19s0u1u1}
 OUTDIR=${OUTDIR:-power-$(date +%Y%m%d-%H%M)}
