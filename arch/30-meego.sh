@@ -171,13 +171,18 @@ part statusmenu-plugins qmake statusmenu-plugins.pro
 part meegotouchhome qmake projects.pro
 part meegotouch-controlpanelapplets qmake meegotouch-controlpanelapplets.pro
 part meegofeedbackd qmake meegofeedbackd.pro
+# the reaction maps: the N9's touch feedback on the touch itself (the
+# keyboard's key clicks); one source only, as meegofeedbackd plays each
+# loaded one: XRecord, which sees the touchscreen as X does
+part meegofeedback-reactionmaps qmake meegofeedback-reactionmaps.pro
+rm -f /usr/lib/meegofeedbackd/sources/libmeegofeedback-reactionmap.so
 # the input method: its server (with Qt 5's platform input context for the
 # applications), the N9's keyboard and its engine interface; legacy mode as
-# Harmattan built it; no reaction maps yet (the keyboard's tap sounds)
+# Harmattan built it
 part meego-im-framework qmake maliit-framework.pro CONFIG+=enable-legacy \
 	CONFIG+=enable-contextkit CONFIG+=nodoc
 part libmeegoimengine qmake meegoimengine.pro
-part meego-keyboard qmake m-keyboard.pro CONFIG+=noreactionmap
+part meego-keyboard qmake m-keyboard.pro
 part meego-im-settings-applet qmake mim-settings-applet.pro
 # their GConf defaults (the N9's keyboard, British English)
 GCONF_CONFIG_SOURCE=xml:merged:/etc/gconf/gconf.xml.defaults gconftool-2 \
