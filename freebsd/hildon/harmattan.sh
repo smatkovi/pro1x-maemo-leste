@@ -14,8 +14,8 @@ HQ5_REV=85b546ddebe02c9d3486290a8b2f81bf2bb4b0e5
 HARMATTAN=(
 	"libmlocale|!"
 	"libmeegotouch|!"
-	"contextkit|--disable-doc --disable-coverage MOC=$H/qt5host/bin/moc"
-	"libcontentaction|--disable-doc --disable-coverage MOC=$H/qt5host/bin/moc"
+	"contextkit|--disable-doc --disable-coverage MOC=$H/qt5host/bin/moc UIC=$H/qt5host/bin/uic RCC=$H/qt5host/bin/rcc"
+	"libcontentaction|--disable-doc --disable-coverage MOC=$H/qt5host/bin/moc UIC=$H/qt5host/bin/uic RCC=$H/qt5host/bin/rcc"
 	"mcompositor|!"
 	"libdsme|!"
 	"mce-dev|!"
