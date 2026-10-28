@@ -151,6 +151,19 @@ custom_harmattan_libmeegotouch() {
 		    { tail -n 20 "$t/qmake-host.out"; tail -n 20 "$t/make-host.out"; exit 1; }
 		install -m 755 "$t/$t" "$H/qt5host/hq5bin/$t"
 	done
+	# m-servicefwgen too (duicontrolpanel's qmake runs it), from a copy of
+	# its directory beside it (its .pro includes ../../mkspecs), into the
+	# copy: the cross build packages its own
+	rm -rf tools/host-m-servicefwgen
+	cp -a tools/m-servicefwgen.d tools/host-m-servicefwgen
+	find tools/host-m-servicefwgen -name '*.o' -delete
+	(cd tools/host-m-servicefwgen && rm -f Makefile &&
+	    env -u CC -u CXX -u CPP -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS \
+	    -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR -u PKG_CONFIG_PATH \
+	    sh -c '/usr/bin/qmake-qt5 m-servicefwgen.d.pro -after DESTDIR=. > qmake-host.out 2>&1 &&
+	    make -j"$1" > make-host.out 2>&1' sh "$JOBS") ||
+	    { tail -n 20 tools/host-m-servicefwgen/make-host.out; exit 1; }
+	install -m 755 tools/host-m-servicefwgen/m-servicefwgen "$H/qt5host/hq5bin/m-servicefwgen"
 	hq5_make_install
 }
 
