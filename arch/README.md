@@ -49,6 +49,12 @@ phone's own Harmattan image, nothing of them is in this repository. The
 apps leave out the web engines (QtWebEngine has no Arch Linux ARM package,
 QtWebKit would build for hours) and so Jib and Dorian.
 
+Pure Maps and OSM Scout Server come from Flathub (aarch64), not from these
+builds: `bash arch/42-flatpak-apps.sh` installs flatpak and both apps
+system-wide. Their KDE runtimes (5.15-25.08 and 5.15-23.08) need about
+2-3 GB, so run it with that much free in the image (after
+`15-btrfs.sh`'s compression, or a larger image).
+
 ## Btrfs and snapshots
 
 `15-btrfs.sh` (as root in Leste, the image not mounted) copies the ext4
