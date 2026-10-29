@@ -28,10 +28,10 @@ log() { echo ">> $*"; }
 # repository's patches for the part change), in build order
 PARTS=(
   "gtk|d1e3c3b3e5e3|1"
-  "libhildon|e734f0d533aa|1"
-  "hildon-status-menu|33ba47660e7c|1"
+  "libhildon|e734f0d533aa|2"
+  "hildon-status-menu|33ba47660e7c|2"
   "hildon-home|0d34886acdc2|1"
-  "hildon-desktop|1273f9eee252|2"
+  "hildon-desktop|1273f9eee252|3"
   "mce|422d5f2bd618|3"
   # the location framework's two bugs (patches/fixes): liblocation linked
   # to its libraries, location-ui's dialogs without an answer at the start

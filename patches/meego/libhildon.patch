@@ -1,0 +1,339 @@
+MeeGo-like look (pro1x-maemo-leste patches/meego): while the root window
+has _HILDON_MEEGO_LOOK (hildon-desktop sets it), the application menu as a
+list (one column), as the N9's menus; the columns of selectors with
+several of them (the date and time pickers) as the N9's wheels: the
+chosen row in a band, the others fading out, a column that stops rolling
+chooses the row in its middle.
+
+diff --git a/hildon/hildon-app-menu.c b/hildon/hildon-app-menu.c
+index 4f8cf4e..62aa0de 100644
+--- a/hildon/hildon-app-menu.c
++++ b/hildon/hildon-app-menu.c
+@@ -406,7 +406,9 @@ screen_size_changed                            (GdkScreen     *screen,
+ {
+     hildon_app_menu_apply_style (GTK_WIDGET (menu));
+ 
+-    if (gdk_screen_get_width (screen) > gdk_screen_get_height (screen)) {
++    /* The MeeGo-like look: a list, as the N9's menus */
++    if (gdk_screen_get_width (screen) > gdk_screen_get_height (screen) &&
++        !_hildon_meego_look ()) {
+         hildon_app_menu_set_columns (menu, 2);
+     } else {
+         hildon_app_menu_set_columns (menu, 1);
+@@ -730,6 +732,11 @@ hildon_app_menu_apply_style                     (GtkWidget *widget)
+         external_border = 0;
+     }
+     priv->width_request = gdk_screen_get_width (screen) - external_border * 2;
++    /* The MeeGo-like look: a list as wide as the screen in portrait
++     * (hildon-desktop places it so) */
++    if (_hildon_meego_look ())
++        priv->width_request = MIN (gdk_screen_get_width (screen),
++                                   gdk_screen_get_height (screen));
+ 
+     if (widget->window)
+       gdk_window_move_resize (widget->window,
+@@ -886,6 +893,9 @@ hildon_app_menu_popup                           (HildonAppMenu *menu,
+ 
+     if (hildon_app_menu_has_visible_children (menu)) {
+         GtkWindowGroup *group;
++        /* in the look of the moment (a list in the MeeGo-like one) */
++        if (GTK_WIDGET_REALIZED (menu))
++            screen_size_changed (gtk_widget_get_screen (GTK_WIDGET (menu)), menu);
+         hildon_app_menu_set_parent_window (menu, parent_window);
+         group = gtk_window_get_group (parent_window);
+         gtk_window_group_add_window (group, GTK_WINDOW (menu));
+diff --git a/hildon/hildon-main.c b/hildon/hildon-main.c
+index 54e15f3..48633e4 100644
+--- a/hildon/hildon-main.c
++++ b/hildon/hildon-main.c
+@@ -119,6 +119,33 @@ _hildon_scale (void)
+   return scale;
+ }
+ 
++gboolean
++_hildon_meego_look (void)
++{
++  GdkDisplay *display = gdk_display_get_default ();
++  Display *dpy;
++  Atom type;
++  int format;
++  unsigned long n, after;
++  unsigned char *data = NULL;
++  gboolean on = FALSE;
++
++  if (!display)
++    return FALSE;
++  dpy = GDK_DISPLAY_XDISPLAY (display);
++  if (XGetWindowProperty (dpy, DefaultRootWindow (dpy),
++                          gdk_x11_get_xatom_by_name_for_display (display,
++                                                                 "_HILDON_MEEGO_LOOK"),
++                          0, 1, False, XA_CARDINAL, &type, &format, &n,
++                          &after, &data) == Success && data)
++    {
++      on = n == 1 && format == 32 && *(long *) data != 0;
++      XFree (data);
++    }
++
++  return on;
++}
++
+ void
+ hildon_init (void)
+ {
+diff --git a/hildon/hildon-private.h b/hildon/hildon-private.h
+index a3f49bf..6129171 100644
+--- a/hildon/hildon-private.h
++++ b/hildon/hildon-private.h
+@@ -62,6 +62,11 @@ _hildon_scale                                   (void);
+ 
+ #define HILDON_S(x) ((gint) floor ((x) * _hildon_scale () + 0.5))
+ 
++/* The MeeGo-like look (pro1x-maemo-leste patches/meego): on while the root
++ * window has _HILDON_MEEGO_LOOK, which hildon-desktop sets */
++G_GNUC_INTERNAL gboolean
++_hildon_meego_look                              (void);
++
+ G_GNUC_INTERNAL void
+ hildon_gtk_window_set_flag                                        (GtkWindow      *window,
+                                                                    HildonFlagFunc  func,
+diff --git a/hildon/hildon-touch-selector.c b/hildon/hildon-touch-selector.c
+index 1abc526..54e9b80 100644
+--- a/hildon/hildon-touch-selector.c
++++ b/hildon/hildon-touch-selector.c
+@@ -811,6 +811,208 @@ hildon_touch_selector_row_activated_cb          (GtkTreeView       *tree_view,
+   gtk_tree_path_free (child_path);
+ }
+ 
++/* The MeeGo-like look (hildon-desktop's _HILDON_MEEGO_LOOK): the columns
++ * of a selector with several of them (the date and time pickers) as the
++ * N9's wheels: the chosen row in a band in the middle, the rows above and
++ * below fading out, and a column that stops rolling chooses the row in its
++ * middle. Lists of one column stay Hildon's. */
++static gboolean
++meego_wheel (HildonTouchSelectorColumn *column)
++{
++  GtkTreeView *tv = column->priv->tree_view;
++
++  return _hildon_meego_look () &&
++         hildon_touch_selector_get_num_columns (column->priv->parent) > 1 &&
++         gtk_tree_selection_get_mode (gtk_tree_view_get_selection (tv)) ==
++         GTK_SELECTION_BROWSE;
++}
++
++/* The row's middle in the middle of the column */
++static void
++meego_wheel_center (HildonTouchSelectorColumn *column, GtkTreePath *path)
++{
++  GtkTreeView *tv = column->priv->tree_view;
++  GdkRectangle rect;
++  gint y;
++
++  if (!GTK_WIDGET_REALIZED (column->priv->panarea))
++    return;
++  gtk_tree_view_get_background_area (tv, path, NULL, &rect);
++  gtk_tree_view_convert_bin_window_to_tree_coords (tv, 0,
++                                                   rect.y + rect.height / 2,
++                                                   NULL, &y);
++  hildon_pannable_area_scroll_to (HILDON_PANNABLE_AREA (column->priv->panarea),
++                                  -1, y);
++}
++
++static gboolean
++meego_wheel_expose (GtkWidget      *widget,
++                    GdkEventExpose *event,
++                    gpointer        data)
++{
++  HildonTouchSelectorColumn *column = HILDON_TOUCH_SELECTOR_COLUMN (data);
++  GtkTreeView *tv = GTK_TREE_VIEW (widget);
++  GtkTreeModel *model;
++  GtkTreeIter iter;
++  GdkColor *bg;
++  cairo_t *cr;
++  cairo_pattern_t *fade;
++  gint w, h, fh;
++
++  if (event->window != gtk_tree_view_get_bin_window (tv) ||
++      !meego_wheel (column))
++    return FALSE;
++
++  gdk_drawable_get_size (event->window, &w, &h);
++  bg = &widget->style->base[GTK_STATE_NORMAL];
++
++  /* the band around the chosen row: the row as the others first (not in
++   * the theme's colour of chosen rows), then the band over it */
++  if (gtk_tree_selection_get_selected (gtk_tree_view_get_selection (tv),
++                                       &model, &iter)) {
++    GtkTreePath *path = gtk_tree_model_get_path (model, &iter);
++    GtkTreeViewColumn *tree_column = gtk_tree_view_get_column (tv, 0);
++    GdkRectangle rect, cell_area;
++    GList *cells, *l;
++    gint line = MAX (1, HILDON_S (1));
++
++    /* (without a column the area has no width) */
++    gtk_tree_view_get_background_area (tv, path, NULL, &rect);
++    rect.x = 0;
++    rect.width = w;
++    cr = gdk_cairo_create (event->window);
++    gdk_cairo_region (cr, event->region);
++    cairo_clip (cr);
++    gdk_cairo_rectangle (cr, &rect);
++    cairo_set_source_rgb (cr, bg->red / 65535.0, bg->green / 65535.0,
++                          bg->blue / 65535.0);
++    cairo_fill (cr);
++    cairo_destroy (cr);
++    if (tree_column) {
++      gtk_tree_view_get_cell_area (tv, path, tree_column, &cell_area);
++      gtk_tree_view_column_cell_set_cell_data (tree_column, model, &iter,
++                                               FALSE, FALSE);
++      cells = gtk_cell_layout_get_cells (GTK_CELL_LAYOUT (tree_column));
++      for (l = cells; l; l = l->next) {
++        GtkCellRenderer *cell = l->data;
++        GdkRectangle area = cell_area;
++        gint x, width;
++
++        if (!cell->visible ||
++            !gtk_tree_view_column_cell_get_position (tree_column, cell,
++                                                     &x, &width))
++          continue;
++        area.x += x;
++        area.width = width;
++        gtk_cell_renderer_render (cell, event->window, widget, &rect,
++                                  &area, &event->area, 0);
++      }
++      g_list_free (cells);
++    }
++    gtk_tree_path_free (path);
++
++    cr = gdk_cairo_create (event->window);
++    gdk_cairo_region (cr, event->region);
++    cairo_clip (cr);
++    cairo_set_source_rgba (cr, 1, 1, 1, 0.10);
++    cairo_rectangle (cr, 0, rect.y, w, rect.height);
++    cairo_fill (cr);
++    cairo_set_source_rgba (cr, 1, 1, 1, 0.35);
++    cairo_rectangle (cr, 0, rect.y, w, line);
++    cairo_rectangle (cr, 0, rect.y + rect.height - line, w, line);
++    cairo_fill (cr);
++  } else {
++    cr = gdk_cairo_create (event->window);
++    gdk_cairo_region (cr, event->region);
++    cairo_clip (cr);
++  }
++
++  /* the rows fading out towards the top and the bottom */
++  fh = h / 3;
++  fade = cairo_pattern_create_linear (0, 0, 0, fh);
++  cairo_pattern_add_color_stop_rgba (fade, 0, bg->red / 65535.0,
++                                     bg->green / 65535.0, bg->blue / 65535.0,
++                                     0.9);
++  cairo_pattern_add_color_stop_rgba (fade, 1, bg->red / 65535.0,
++                                     bg->green / 65535.0, bg->blue / 65535.0,
++                                     0);
++  cairo_set_source (cr, fade);
++  cairo_rectangle (cr, 0, 0, w, fh);
++  cairo_fill (cr);
++  cairo_pattern_destroy (fade);
++  fade = cairo_pattern_create_linear (0, h - fh, 0, h);
++  cairo_pattern_add_color_stop_rgba (fade, 0, bg->red / 65535.0,
++                                     bg->green / 65535.0, bg->blue / 65535.0,
++                                     0);
++  cairo_pattern_add_color_stop_rgba (fade, 1, bg->red / 65535.0,
++                                     bg->green / 65535.0, bg->blue / 65535.0,
++                                     0.9);
++  cairo_set_source (cr, fade);
++  cairo_rectangle (cr, 0, h - fh, w, fh);
++  cairo_fill (cr);
++  cairo_pattern_destroy (fade);
++
++  cairo_destroy (cr);
++  return FALSE;
++}
++
++/* Rolled: drawn anew as a whole (the tree view moves what it drew, the
++ * band and the fading would move with it) */
++static void
++meego_wheel_scrolled (GtkAdjustment *adjustment,
++                      gpointer       data)
++{
++  HildonTouchSelectorColumn *column = HILDON_TOUCH_SELECTOR_COLUMN (data);
++
++  if (meego_wheel (column))
++    gtk_widget_queue_draw (GTK_WIDGET (column->priv->tree_view));
++}
++
++/* Stopped rolling (and not held): the row in the middle is the chosen one */
++static void
++meego_wheel_stopped (HildonPannableArea *panarea,
++                     gpointer            data)
++{
++  HildonTouchSelectorColumn *column = HILDON_TOUCH_SELECTOR_COLUMN (data);
++  HildonTouchSelector *selector = column->priv->parent;
++  GtkTreeView *tv = column->priv->tree_view;
++  GtkTreeSelection *selection = gtk_tree_view_get_selection (tv);
++  GtkTreePath *path = NULL;
++  GtkTreeModel *model;
++  GtkTreeIter iter;
++  GdkModifierType mask;
++  gint w, h;
++
++  if (!meego_wheel (column) || !GTK_WIDGET_REALIZED (tv))
++    return;
++  gdk_window_get_pointer (GTK_WIDGET (tv)->window, NULL, NULL, &mask);
++  if (mask & GDK_BUTTON1_MASK)
++    return;
++  gdk_drawable_get_size (gtk_tree_view_get_bin_window (tv), &w, &h);
++  /* the chosen row while it is (about) in the middle, else the one there */
++  if (gtk_tree_selection_get_selected (selection, &model, &iter)) {
++    GdkRectangle rect;
++
++    path = gtk_tree_model_get_path (model, &iter);
++    gtk_tree_view_get_background_area (tv, path, NULL, &rect);
++    if (ABS (rect.y + rect.height / 2 - h / 2) > rect.height / 2 + 1) {
++      gtk_tree_path_free (path);
++      path = NULL;
++    }
++  }
++  if (!path &&
++      !gtk_tree_view_get_path_at_pos (tv, 1, h / 2, &path, NULL, NULL, NULL))
++    return;
++  if (!gtk_tree_selection_path_is_selected (selection, path)) {
++    gtk_tree_selection_select_path (selection, path);
++    hildon_touch_selector_emit_value_changed (selector,
++                                              g_slist_index (selector->priv->columns,
++                                                             column));
++  }
++  meego_wheel_center (column, path);
++  gtk_tree_path_free (path);
++}
++
+ static void
+ _row_tapped_cb (GtkTreeView * tree_view, GtkTreePath * path, gpointer user_data)
+ {
+@@ -826,6 +1028,10 @@ _row_tapped_cb (GtkTreeView * tree_view, GtkTreePath * path, gpointer user_data)
+   num_column = g_slist_index (selector->priv->columns, column);
+ 
+   hildon_touch_selector_emit_value_changed (selector, num_column);
++
++  /* a wheel rolls to the tapped row */
++  if (meego_wheel (column))
++    meego_wheel_center (column, path);
+ }
+ 
+ 
+@@ -911,6 +1117,16 @@ _create_new_column (HildonTouchSelector * selector,
+   g_signal_connect (G_OBJECT (tv), "row-activated",
+                     G_CALLBACK (hildon_touch_selector_row_activated_cb), new_column);
+ 
++  /* the MeeGo-like look's wheels */
++  g_signal_connect_object (G_OBJECT (tv), "expose-event",
++                           G_CALLBACK (meego_wheel_expose), new_column,
++                           G_CONNECT_AFTER);
++  g_signal_connect_object (hildon_pannable_area_get_vadjustment (HILDON_PANNABLE_AREA (panarea)),
++                           "value-changed", G_CALLBACK (meego_wheel_scrolled),
++                           new_column, 0);
++  g_signal_connect_object (G_OBJECT (panarea), "panning-finished",
++                           G_CALLBACK (meego_wheel_stopped), new_column, 0);
++
+   return new_column;
+ }
+ 

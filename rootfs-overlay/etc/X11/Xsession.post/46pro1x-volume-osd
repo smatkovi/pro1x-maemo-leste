@@ -1,0 +1,6 @@
+# F(x)tec Pro1X (sourced by Xsession-post): the N9's volume bar for
+# Hildon's MeeGo-like look (tools/pro1x-volume-osd), unseen while the look
+# is off.
+if [ -x /usr/local/bin/pro1x-volume-osd ]; then
+	/usr/local/bin/pro1x-volume-osd > /dev/null 2>&1 &
+fi

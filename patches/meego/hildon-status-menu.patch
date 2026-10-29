@@ -1,0 +1,345 @@
+MeeGo-like look (pro1x-maemo-leste patches/meego): while the root window
+has _HILDON_MEEGO_LOOK (hildon-desktop sets it), the status area as the
+N9's status bar: one row, black, across the screen (hildon-desktop places
+it so), the signal and the other icons on the left, the battery and the
+clock on the right.
+
+diff --git a/src/hd-status-area-box.c b/src/hd-status-area-box.c
+index eae207c..cc4d5cb 100644
+--- a/src/hd-status-area-box.c
++++ b/src/hd-status-area-box.c
+@@ -41,11 +41,17 @@
+ #define MAX_VISIBLE_CHILDREN_PORTRAIT 6
+ #define MAX_VISIBLE_CHILDREN_LANDSCAPE 8
+ 
++/* in one row (the MeeGo-like look's status bar): as many as the two rows */
++#define MAX_VISIBLE_CHILDREN_ONE_ROW_PORTRAIT 6
++#define MAX_VISIBLE_CHILDREN_ONE_ROW_LANDSCAPE 12
++
+ struct _HDStatusAreaBoxPrivate
+ {
+   GList *children;
+ 
+   guint max_visible_children;
++
++  gboolean one_row;
+ };
+ 
+ typedef struct _HDStatusAreaBoxChild HDStatusAreaBoxChild;
+@@ -198,13 +204,25 @@ hd_status_area_box_size_allocate (GtkWidget     *widget,
+       /* there are some widgets which need a size request */
+       gtk_widget_size_request (info->widget, &child_requisition);
+ 
+-      child_allocation.x = allocation->x +
+-                           border_width +
+-                           PADDING_LEFT +
+-                           (visible_children / 2) * (ITEM_WIDTH + SPACING);
+-      child_allocation.y = allocation->y +
+-                           border_width +
+-                           (visible_children % 2 * (ITEM_HEIGHT + SPACING));
++      if (priv->one_row)
++        {
++          child_allocation.x = allocation->x +
++                               border_width +
++                               PADDING_LEFT +
++                               visible_children * (ITEM_WIDTH + SPACING);
++          child_allocation.y = allocation->y +
++                               MAX (0, (allocation->height - ITEM_HEIGHT) / 2);
++        }
++      else
++        {
++          child_allocation.x = allocation->x +
++                               border_width +
++                               PADDING_LEFT +
++                               (visible_children / 2) * (ITEM_WIDTH + SPACING);
++          child_allocation.y = allocation->y +
++                               border_width +
++                               (visible_children % 2 * (ITEM_HEIGHT + SPACING));
++        }
+ 
+       child_allocation.width = ITEM_WIDTH;
+       child_allocation.height = ITEM_HEIGHT;
+@@ -246,9 +264,13 @@ hd_status_area_box_size_request (GtkWidget      *widget,
+   priv = HD_STATUS_AREA_BOX (widget)->priv;
+ 
+   if (is_portrait_mode (widget))
+-    priv->max_visible_children = MAX_VISIBLE_CHILDREN_PORTRAIT;
++    priv->max_visible_children = priv->one_row ?
++                                 MAX_VISIBLE_CHILDREN_ONE_ROW_PORTRAIT :
++                                 MAX_VISIBLE_CHILDREN_PORTRAIT;
+   else
+-    priv->max_visible_children = MAX_VISIBLE_CHILDREN_LANDSCAPE;
++    priv->max_visible_children = priv->one_row ?
++                                 MAX_VISIBLE_CHILDREN_ONE_ROW_LANDSCAPE :
++                                 MAX_VISIBLE_CHILDREN_LANDSCAPE;
+ 
+   border_width = gtk_container_get_border_width (GTK_CONTAINER (widget));
+ 
+@@ -274,6 +296,14 @@ hd_status_area_box_size_request (GtkWidget      *widget,
+       requisition->width = 0;
+       requisition->height = 0;
+     }
++  else if (priv->one_row)
++    {
++      requisition->width =  2 * border_width +
++                            PADDING_LEFT +
++                            visible_children * ITEM_WIDTH +
++                            (visible_children - 1) * SPACING;
++      requisition->height = 2 * border_width + ITEM_HEIGHT;
++    }
+   else
+     {
+       /* width is maximum width of both rows */
+@@ -383,6 +413,20 @@ hd_status_area_box_pack (HDStatusAreaBox *box,
+   gtk_widget_set_parent (child, GTK_WIDGET (box));  
+ }
+ 
++/* The icons in one row instead of two (the MeeGo-like look) */
++void
++hd_status_area_box_set_one_row (HDStatusAreaBox *box,
++                                gboolean         one_row)
++{
++  g_return_if_fail (HD_IS_STATUS_AREA_BOX (box));
++
++  if (box->priv->one_row != !!one_row)
++    {
++      box->priv->one_row = !!one_row;
++      gtk_widget_queue_resize (GTK_WIDGET (box));
++    }
++}
++
+ void
+ hd_status_area_box_reorder_child (HDStatusAreaBox *box,
+                                   GtkWidget       *child,
+diff --git a/src/hd-status-area-box.h b/src/hd-status-area-box.h
+index 62c1dab..e918c30 100644
+--- a/src/hd-status-area-box.h
++++ b/src/hd-status-area-box.h
+@@ -56,6 +56,8 @@ GtkWidget *hd_status_area_box_new           (void);
+ void       hd_status_area_box_pack          (HDStatusAreaBox *box,
+                                              GtkWidget       *child,
+                                              guint            position);
++void       hd_status_area_box_set_one_row   (HDStatusAreaBox *box,
++                                             gboolean         one_row);
+ void       hd_status_area_box_reorder_child (HDStatusAreaBox *box,
+                                              GtkWidget       *child,
+                                              guint            position);
+diff --git a/src/hd-status-area.c b/src/hd-status-area.c
+index bab8d70..889fbf2 100644
+--- a/src/hd-status-area.c
++++ b/src/hd-status-area.c
+@@ -51,6 +51,10 @@
+ #define CUSTOM_MARGIN_9 HD_S (9)
+ #define CUSTOM_MARGIN_10 HD_S (10)
+ 
++/* The MeeGo-like look (hildon-desktop's patches/meego): the N9's status
++ * bar, 36 of its 480 pixels high, as hildon-desktop places it */
++#define MEEGO_BAR_HEIGHT HD_S (36)
++
+ /* Configuration file keys */
+ 
+ static GQuark      quark_hd_status_area_image = 0;
+@@ -82,9 +86,17 @@ struct _HDStatusAreaPrivate
+   GtkWidget *clock_box;
+ 
+   GtkWidget *main_alignment;
++  GtkWidget *main_hbox;
++  GtkWidget *left_alignment;
++  GtkWidget *left_hbox;
++  GtkWidget *special_hbox;
+ 
+   gboolean resize_after_map : 1;
+   gboolean status_area_visible;
++
++  /* the MeeGo-like look, while the root window has _HILDON_MEEGO_LOOK */
++  gboolean meego;
++  Atom meego_atom;
+ };
+ 
+ G_DEFINE_TYPE_WITH_PRIVATE (HDStatusArea, hd_status_area, GTK_TYPE_WINDOW);
+@@ -163,6 +175,131 @@ configure_event_cb (GtkWidget         *widget,
+   return FALSE;
+ }
+ 
++/* The MeeGo-like look: one row as high as the N9's status bar, black,
++ * across the screen as hildon-desktop places it then: the first special
++ * item (the signal) and the other icons on the left, the other special
++ * items (the battery) and the clock on the right */
++static void
++meego_layout (HDStatusArea *status_area)
++{
++  HDStatusAreaPrivate *priv = HD_STATUS_AREA_PRIVATE (status_area);
++  GtkWidget *w[HD_STATUS_AREA_NUM_SPECIAL_ITEMS + 2];
++  guint i, n = 0;
++
++  /* off their places */
++  w[n++] = priv->clock_box;
++  w[n++] = priv->icon_box;
++  for (i = 0; i < HD_STATUS_AREA_NUM_SPECIAL_ITEMS; i++)
++    if (priv->special_item_image[i])
++      w[n++] = priv->special_item_image[i];
++  for (i = 0; i < n; i++)
++    {
++      g_object_ref (w[i]);
++      if (gtk_widget_get_parent (w[i]))
++        gtk_container_remove (GTK_CONTAINER (gtk_widget_get_parent (w[i])),
++                              w[i]);
++    }
++
++  if (priv->meego)
++    {
++      gtk_widget_hide (priv->left_alignment);
++      if (priv->special_item_image[0])
++        gtk_box_pack_start (GTK_BOX (priv->main_hbox),
++                            priv->special_item_image[0], FALSE, FALSE,
++                            HD_S (HILDON_MARGIN_DEFAULT));
++      gtk_box_pack_start (GTK_BOX (priv->main_hbox), priv->icon_box,
++                          FALSE, FALSE, 0);
++      gtk_box_pack_end (GTK_BOX (priv->main_hbox), priv->clock_box,
++                        FALSE, FALSE, HD_S (HILDON_MARGIN_DEFAULT));
++      for (i = HD_STATUS_AREA_NUM_SPECIAL_ITEMS - 1; i > 0; i--)
++        if (priv->special_item_image[i])
++          gtk_box_pack_end (GTK_BOX (priv->main_hbox),
++                            priv->special_item_image[i], FALSE, FALSE,
++                            HD_S (HILDON_MARGIN_HALF));
++      gtk_alignment_set (GTK_ALIGNMENT (priv->main_alignment),
++                         0.5, 0.5, 1.0, 0.0);
++    }
++  else
++    {
++      gtk_widget_show (priv->left_alignment);
++      gtk_box_pack_start (GTK_BOX (priv->left_hbox), priv->clock_box,
++                          FALSE, FALSE, 0);
++      gtk_box_reorder_child (GTK_BOX (priv->left_hbox), priv->clock_box, 0);
++      for (i = 0; i < HD_STATUS_AREA_NUM_SPECIAL_ITEMS; i++)
++        if (priv->special_item_image[i])
++          gtk_box_pack_start (GTK_BOX (priv->special_hbox),
++                              priv->special_item_image[i], FALSE, FALSE, 0);
++      gtk_box_pack_start (GTK_BOX (priv->main_hbox), priv->icon_box,
++                          TRUE, TRUE, 0);
++      gtk_alignment_set (GTK_ALIGNMENT (priv->main_alignment),
++                         0.5, 0.5, 0.0, 0.0);
++    }
++  for (i = 0; i < n; i++)
++    g_object_unref (w[i]);
++
++  hd_status_area_box_set_one_row (HD_STATUS_AREA_BOX (priv->icon_box),
++                                  priv->meego);
++  gtk_widget_set_size_request (GTK_WIDGET (status_area), -1,
++                               priv->meego ? MEEGO_BAR_HEIGHT
++                                           : STATUS_AREA_HEIGHT);
++  /* asked for anew: hildon-desktop gives it the look's place */
++  gtk_window_resize (GTK_WINDOW (status_area), 1,
++                     priv->meego ? MEEGO_BAR_HEIGHT : STATUS_AREA_HEIGHT);
++  gtk_widget_queue_draw (GTK_WIDGET (status_area));
++}
++
++static void
++meego_update (HDStatusArea *status_area)
++{
++  HDStatusAreaPrivate *priv = HD_STATUS_AREA_PRIVATE (status_area);
++  Display *dpy = GDK_DISPLAY_XDISPLAY (gdk_display_get_default ());
++  Atom type;
++  int format;
++  unsigned long n, after;
++  unsigned char *data = NULL;
++  gboolean meego = FALSE;
++
++  if (XGetWindowProperty (dpy, DefaultRootWindow (dpy), priv->meego_atom,
++                          0, 1, False, XA_CARDINAL, &type, &format, &n,
++                          &after, &data) == Success && data)
++    {
++      meego = n == 1 && format == 32 && *(long *) data != 0;
++      XFree (data);
++    }
++  if (meego != priv->meego)
++    {
++      priv->meego = meego;
++      meego_layout (status_area);
++    }
++}
++
++static GdkFilterReturn
++meego_root_filter (GdkXEvent *xevent,
++                   GdkEvent  *event,
++                   gpointer   data)
++{
++  XEvent *xev = xevent;
++  HDStatusAreaPrivate *priv = HD_STATUS_AREA_PRIVATE (data);
++
++  if (xev->type == PropertyNotify && xev->xproperty.atom == priv->meego_atom)
++    meego_update (HD_STATUS_AREA (data));
++
++  return GDK_FILTER_CONTINUE;
++}
++
++static void
++meego_watch (HDStatusArea *status_area)
++{
++  HDStatusAreaPrivate *priv = HD_STATUS_AREA_PRIVATE (status_area);
++  GdkWindow *root = gdk_get_default_root_window ();
++
++  priv->meego_atom = gdk_x11_get_xatom_by_name ("_HILDON_MEEGO_LOOK");
++  gdk_window_set_events (root, gdk_window_get_events (root)
++                               | GDK_PROPERTY_CHANGE_MASK);
++  gdk_window_add_filter (root, meego_root_filter, status_area);
++  meego_update (status_area);
++}
++
+ static void
+ hd_status_area_init (HDStatusArea *status_area)
+ {
+@@ -208,6 +345,11 @@ hd_status_area_init (HDStatusArea *status_area)
+   special_hbox = gtk_hbox_new (FALSE, HD_S (HILDON_MARGIN_HALF));
+   gtk_widget_show (special_hbox);
+ 
++  priv->main_hbox = main_hbox;
++  priv->left_alignment = left_alignment;
++  priv->left_hbox = left_hbox;
++  priv->special_hbox = special_hbox;
++
+   priv->clock_box = gtk_alignment_new (0.5, 0.5, 0.0, 0.0);
+ /*  gtk_widget_set_size_request (priv->clock_box, SPECIAL_ICON_WIDTH * 2, STATUS_AREA_ICON_HEIGHT); */
+   gtk_widget_show (priv->clock_box);
+@@ -218,6 +360,9 @@ hd_status_area_init (HDStatusArea *status_area)
+       priv->special_item_image[i] = gtk_image_new ();
+       gtk_widget_set_size_request (priv->special_item_image[i], SPECIAL_ICON_WIDTH, SPECIAL_ICON_HEIGHT);
+       gtk_widget_show (priv->special_item_image[i]);
++      /* gone with its plugin (plugin_added_cb), for meego_layout */
++      g_object_add_weak_pointer (G_OBJECT (priv->special_item_image[i]),
++                                 (gpointer *) &priv->special_item_image[i]);
+     }
+ 
+   priv->icon_box = hd_status_area_box_new ();
+@@ -238,6 +383,8 @@ hd_status_area_init (HDStatusArea *status_area)
+    * program is full-screen) */
+   g_signal_connect (G_OBJECT (status_area), "configure-event",
+                     G_CALLBACK (configure_event_cb), status_area);
++
++  meego_watch (status_area);
+ }
+ 
+ static GObject *
+@@ -265,6 +412,9 @@ hd_status_area_dispose (GObject *object)
+   HDStatusArea *status_area = HD_STATUS_AREA (object);
+   HDStatusAreaPrivate *priv = HD_STATUS_AREA_PRIVATE (status_area);
+ 
++  gdk_window_remove_filter (gdk_get_default_root_window (),
++                            meego_root_filter, status_area);
++
+   if (priv->plugin_manager)
+     priv->plugin_manager = (g_object_unref (priv->plugin_manager), NULL);
+ 
+@@ -586,9 +736,10 @@ hd_status_area_expose_event (GtkWidget *widget,
+   gdk_cairo_region (cr, event->region);
+   cairo_clip (cr);
+ 
+-  /* Draw transparent background */
++  /* Draw transparent background (the N9's status bar is black) */
+   cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
+-  cairo_set_source_rgba (cr, 0.0, 0.0, 0.0, 0.0);
++  cairo_set_source_rgba (cr, 0.0, 0.0, 0.0,
++                         HD_STATUS_AREA_PRIVATE (widget)->meego ? 1.0 : 0.0);
+   cairo_paint (cr);
+ 
+   cairo_destroy (cr);

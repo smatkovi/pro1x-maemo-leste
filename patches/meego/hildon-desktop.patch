@@ -3,7 +3,11 @@ MeeGo-like home (pro1x-maemo-leste patches/meego), on with GConf
 task navigator in a ring, changed by swiping, without the top left buttons;
 in applications, swipes from the left or right edge to the open
 applications, from the top edge down to close, a tap on the top edge for
-the menu.
+the menu. Applications without a title bar below the status area, which
+lies across the top as the N9's thin status bar; the root window's
+_HILDON_MEEGO_LOOK for the other parts (hildon-status-menu, libhildon); the
+application menu as a list below the bar; the launcher's icons in the
+N9's shape (the N9's own where its theme is installed).
 
 diff --git a/src/hildon-desktop-views.schemas b/src/hildon-desktop-views.schemas
 index 8da5ccc..a493524 100644
@@ -139,18 +143,19 @@ index f3cf6e3..b7e99b4 100644
  
  ClutterActor *hd_home_get_edit_button (HdHome *home);
 diff --git a/src/home/hd-render-manager.c b/src/home/hd-render-manager.c
-index c039af9..3e55c3d 100644
+index c039af9..55e524a 100644
 --- a/src/home/hd-render-manager.c
 +++ b/src/home/hd-render-manager.c
-@@ -46,6 +46,7 @@
+@@ -46,6 +46,8 @@
  #include "hd-app.h"
  #include "hd-dialog.h"
  #include "hd-app-menu.h"
 +#include "hd-meego.h"
++#include "hd-status-area.h"
  
  #include <matchbox/core/mb-wm.h>
  #include <matchbox/theme-engines/mb-wm-theme.h>
-@@ -926,7 +927,9 @@ void hd_render_manager_sync_clutter_before ()
+@@ -926,7 +928,9 @@ void hd_render_manager_sync_clutter_before ()
        case HDRM_STATE_HOME_PORTRAIT: /* Fallen truth */
        case HDRM_STATE_HOME:
          blur |=  HDRM_ZOOM_FOR_HOME;
@@ -161,7 +166,7 @@ index c039af9..3e55c3d 100644
            btn_state |= HDTB_VIS_BTN_LAUNCHER;
          else
            btn_state |= HDTB_VIS_BTN_SWITCHER;
-@@ -962,7 +965,8 @@ void hd_render_manager_sync_clutter_before ()
+@@ -962,7 +966,8 @@ void hd_render_manager_sync_clutter_before ()
          break;
        case HDRM_STATE_TASK_NAV:
        case HDRM_STATE_TASK_NAV_PORTRAIT:
@@ -171,7 +176,7 @@ index c039af9..3e55c3d 100644
          clutter_actor_show(CLUTTER_ACTOR(priv->home));
          blur |=  HDRM_BLUR_HOME |
                   HDRM_ZOOM_FOR_TASK_NAV |
-@@ -1864,6 +1868,8 @@ out:
+@@ -1864,6 +1869,8 @@ out:
      g_warning("Set state complete %s ",	hd_render_manager_state_str(priv->state));
  
    priv->in_set_state = FALSE;
@@ -180,6 +185,157 @@ index c039af9..3e55c3d 100644
  }
  
  /* Upgrade the current state to portrait. */
+@@ -2945,6 +2952,20 @@ void hd_render_manager_place_titlebar_elements (void)
+ 
+   x = 0;
+ 
++  /* The MeeGo-like look: the status area across the top as the N9's status
++   * bar (hd_status_area_request_geometry keeps it so), no operator name */
++  if (hd_meego_pages_enabled ())
++    {
++      if (priv->status_area && CLUTTER_ACTOR_IS_VISIBLE(priv->status_area))
++        {
++          hd_status_area_update_geometry (priv->status_area_client);
++        }
++      if (priv->operator)
++        clutter_actor_hide (priv->operator);
++      hd_title_bar_update (priv->title_bar);
++      return;
++    }
++
+   /* Check whether buttons are visible based on state rather than anything
+    * else. As actual actor visibilities may only be set on idle. */
+   if (hd_title_bar_get_state(priv->title_bar) & HDTB_VIS_BTN_LEFT_MASK)
+diff --git a/src/home/hd-task-navigator.c b/src/home/hd-task-navigator.c
+index b3245a5..efc0d16 100644
+--- a/src/home/hd-task-navigator.c
++++ b/src/home/hd-task-navigator.c
+@@ -61,6 +61,7 @@
+ #include "hd-switcher.h"
+ #include "hd-render-manager.h"
+ #include "hd-title-bar.h"
++#include "hd-meego.h"
+ #include "hd-clutter-cache.h"
+ #include "hd-transition.h"
+ #include "hd-theme.h"
+@@ -2944,10 +2945,12 @@ hd_task_navigator_zoom_in (HdTaskNavigator * self, ClutterActor * win,
+   hd_render_manager_unzoom_background ();
+   zoom_in (apthumb);
+ 
+-  /* Crossfade .plate with .titlebar. */
++  /* Crossfade .plate with .titlebar (none in the MeeGo-like look, which
++   * has no title bar, hd-meego.c). */
+   clutter_actor_show (apthumb->titlebar);
+   clutter_actor_set_opacity (apthumb->titlebar, 0);
+-  clutter_effect_fade (Zoom_effect, apthumb->titlebar, 255, NULL, NULL);
++  clutter_effect_fade (Zoom_effect, apthumb->titlebar,
++                       hd_meego_pages_enabled () ? 0 : 255, NULL, NULL);
+   clutter_effect_fade (Zoom_effect, apthumb->plate,      0, NULL, NULL);
+ 
+   /* Fade out our notification smoothly if we have one. */
+@@ -3038,7 +3041,8 @@ hd_task_navigator_zoom_out (HdTaskNavigator * self, ClutterActor * win,
+    * .titlebar shown but transparent." but i can't recall why.  Anyway,
+    * let's hide it afterwards.) */
+   clutter_actor_show (apthumb->titlebar);
+-  clutter_actor_set_opacity (apthumb->titlebar, 255);
++  clutter_actor_set_opacity (apthumb->titlebar,
++                             hd_meego_pages_enabled () ? 0 : 255);
+   clutter_effect_fade (Zoom_effect, apthumb->titlebar,   0,
+                        (ClutterEffectCompleteFunc)hide_when_complete,
+                        apthumb->titlebar);
+diff --git a/src/home/hd-title-bar.c b/src/home/hd-title-bar.c
+index 327173a..d336134 100644
+--- a/src/home/hd-title-bar.c
++++ b/src/home/hd-title-bar.c
+@@ -39,6 +39,7 @@
+ #include "hd-transition.h"
+ #include "hd-util.h"
+ #include "hd-task-navigator.h"
++#include "hd-meego.h"
+ 
+ #include <matchbox/theme-engines/mb-wm-theme-png.h>
+ #include <matchbox/theme-engines/mb-wm-theme-xml.h>
+@@ -640,6 +641,20 @@ static void hd_title_bar_set_state_real(HdTitleBar *bar,
+             clutter_actor_raise_top(hd_render_manager_get_status_area());
+         }
+     }
++
++  /* The MeeGo-like look has no title bar (hd-meego.c), only Home's edit
++   * mode keeps its buttons */
++  if (hd_meego_pages_enabled ()
++      && !STATE_IS_EDIT_MODE (hd_render_manager_get_state ()))
++    {
++      clutter_actor_hide (CLUTTER_ACTOR (bar));
++      clutter_actor_hide (CLUTTER_ACTOR (priv->foreground));
++    }
++  else
++    {
++      clutter_actor_show (CLUTTER_ACTOR (bar));
++      clutter_actor_show (CLUTTER_ACTOR (priv->foreground));
++    }
+ }
+ 
+ #ifndef G_DEBUG_DISABLE
+diff --git a/src/launcher/hd-launcher-tile.c b/src/launcher/hd-launcher-tile.c
+index a21162e..81f6fbd 100644
+--- a/src/launcher/hd-launcher-tile.c
++++ b/src/launcher/hd-launcher-tile.c
+@@ -37,6 +37,7 @@
+ #include "hd-gtk-style.h"
+ #include "tidy/tidy-highlight.h"
+ #include "hd-transition.h"
++#include "hd-meego.h"
+ 
+ #define I_(str) (g_intern_static_string ((str)))
+ #define HD_PARAM_READWRITE (G_PARAM_READWRITE | \
+@@ -360,8 +361,13 @@ hd_launcher_tile_set_icon_name (HdLauncherTile *tile,
+    * border around them, or the glow effect won't work properly. We use
+    * gdk_pixbuf_new_from_file_at_size as the pixbuf pointed to by fname
+    * isn't actually guaranteed to be the correct size.  */
+-  pixbuf = gdk_pixbuf_new_from_file_at_size(fname,
+-      HD_LAUNCHER_TILE_ICON_REAL_SIZE, HD_LAUNCHER_TILE_ICON_REAL_SIZE, 0);
++  if (hd_meego_pages_enabled ())
++    /* in the N9's shape (hd-meego.c) */
++    pixbuf = hd_meego_launcher_icon (priv->icon_name, fname,
++                                     HD_LAUNCHER_TILE_ICON_REAL_SIZE);
++  else
++    pixbuf = gdk_pixbuf_new_from_file_at_size(fname,
++        HD_LAUNCHER_TILE_ICON_REAL_SIZE, HD_LAUNCHER_TILE_ICON_REAL_SIZE, 0);
+ 
+   if (pixbuf)
+     {
+diff --git a/src/launcher/hd-launcher-tree.c b/src/launcher/hd-launcher-tree.c
+index 83969c0..83f1d28 100644
+--- a/src/launcher/hd-launcher-tree.c
++++ b/src/launcher/hd-launcher-tree.c
+@@ -394,6 +394,15 @@ hd_launcher_tree_handle_theme_changed (HdLauncherTree *tree)
+   g_signal_emit (tree, tree_signals[FINISHED], 0);
+ }
+ 
++/* The launcher's tiles anew, as after a change of the icon theme (the
++ * MeeGo-like look's icons, hd-meego.c) */
++void
++hd_launcher_tree_refresh (HdLauncherTree *tree)
++{
++  if (HD_IS_LAUNCHER_TREE (tree))
++    hd_launcher_tree_handle_theme_changed (tree);
++}
++
+ /**
+  * hd_launcher_tree_populate:
+  * @tree: a #HdLauncherTree
+diff --git a/src/launcher/hd-launcher-tree.h b/src/launcher/hd-launcher-tree.h
+index b829ecd..4dc6029 100644
+--- a/src/launcher/hd-launcher-tree.h
++++ b/src/launcher/hd-launcher-tree.h
+@@ -63,6 +63,7 @@ GType           hd_launcher_tree_get_type (void) G_GNUC_CONST;
+ HdLauncherTree *hd_launcher_tree_new         (void);
+ 
+ void            hd_launcher_tree_populate    (HdLauncherTree *tree);
++void            hd_launcher_tree_refresh     (HdLauncherTree *tree);
+ 
+ GList *         hd_launcher_tree_get_items   (HdLauncherTree *tree);
+ guint           hd_launcher_tree_get_size    (HdLauncherTree *tree);
 diff --git a/src/main.c b/src/main.c
 index 35f9d99..a7601df 100644
 --- a/src/main.c
@@ -200,6 +356,108 @@ index 35f9d99..a7601df 100644
    clutter_x11_add_filter (hd_clutter_x11_event_filter, wm);
  
    app_mgr = hd_app_mgr_get ();
+diff --git a/src/mb/hd-app-menu.c b/src/mb/hd-app-menu.c
+index b5530e3..f1ddabc 100644
+--- a/src/mb/hd-app-menu.c
++++ b/src/mb/hd-app-menu.c
+@@ -24,6 +24,7 @@
+ #include "hd-wm.h"
+ #include "hd-app-menu.h"
+ #include "hd-util.h"
++#include "hd-meego.h"
+ #include <matchbox/theme-engines/mb-wm-theme.h>
+ 
+ static void
+@@ -152,6 +153,14 @@ hd_app_menu_request_geometry (MBWindowManagerClient *client,
+   if (wm_geometry.width > wm_geometry.height)
+     frame_geometry.x += 56; /* the specified margin in landscape */
+   frame_geometry.width = wm_geometry.width - 2*frame_geometry.x;
++  /* The MeeGo-like look: a list below the status bar, as wide as the
++   * screen in portrait (hd-meego.c, libhildon's HildonAppMenu) */
++  if (hd_meego_pages_enabled ())
++    {
++      frame_geometry.width = MIN (wm_geometry.width, wm_geometry.height);
++      frame_geometry.x = (wm_geometry.width - frame_geometry.width) / 2;
++      frame_geometry.y = HD_MEEGO_BAR_HEIGHT;
++    }
+ 
+   /* Calculate window size from frame */
+   client->window->geometry.x      = frame_geometry.x + west;
+diff --git a/src/mb/hd-status-area.c b/src/mb/hd-status-area.c
+index 8cbac5b..d1cadd5 100644
+--- a/src/mb/hd-status-area.c
++++ b/src/mb/hd-status-area.c
+@@ -27,6 +27,7 @@
+ #include "hd-render-manager.h"
+ #include "hd-title-bar.h"
+ #include "hd-wm.h"
++#include "hd-meego.h"
+ 
+ #include <matchbox/theme-engines/mb-wm-theme.h>
+ #include <matchbox/theme-engines/mb-wm-theme-xml.h>
+@@ -108,20 +109,43 @@ hd_status_area_request_geometry (MBWindowManagerClient *client,
+                                  MBGeometry            *new_geometry,
+                                  MBWMClientReqGeomType  flags)
+ {
+-  client->frame_geometry.x = new_geometry->x;
+-  client->frame_geometry.y = new_geometry->y;
+-  client->frame_geometry.width  = new_geometry->width;
+-  client->frame_geometry.height = new_geometry->height;
+-  client->window->geometry.x = new_geometry->x;
+-  client->window->geometry.y = new_geometry->y;
+-  client->window->geometry.width  = new_geometry->width;
+-  client->window->geometry.height = new_geometry->height;
++  MBGeometry geom = *new_geometry;
++
++  /* The MeeGo-like look: across the top as the N9's status bar
++   * (hd-meego.c), or as high above the screen when it is out of the way */
++  if (hd_meego_pages_enabled ())
++    {
++      geom.x = 0;
++      geom.width = hd_comp_mgr_get_current_screen_width ();
++      geom.height = HD_MEEGO_BAR_HEIGHT;
++      if (geom.y < 0)
++        geom.y = -geom.height;
++    }
++
++  client->frame_geometry.x = geom.x;
++  client->frame_geometry.y = geom.y;
++  client->frame_geometry.width  = geom.width;
++  client->frame_geometry.height = geom.height;
++  client->window->geometry.x = geom.x;
++  client->window->geometry.y = geom.y;
++  client->window->geometry.width  = geom.width;
++  client->window->geometry.height = geom.height;
+ 
+   mb_wm_client_geometry_mark_dirty (client);
+ 
+   return True; /* Geometry accepted */
+ }
+ 
++/* Its place for the current look and orientation (hd-meego.c) */
++void
++hd_status_area_update_geometry (MBWindowManagerClient *client)
++{
++  MBGeometry geom = client->frame_geometry;
++
++  hd_status_area_request_geometry (client, &geom, MBWMClientReqGeomForced);
++  mb_wm_comp_mgr_client_configure (client->cm_client);
++}
++
+ MBWindowManagerClient*
+ hd_status_area_new (MBWindowManager *wm, MBWMClientWindow *win)
+ {
+diff --git a/src/mb/hd-status-area.h b/src/mb/hd-status-area.h
+index c0ca512..16098cd 100644
+--- a/src/mb/hd-status-area.h
++++ b/src/mb/hd-status-area.h
+@@ -51,4 +51,6 @@ MBWindowManagerClient* hd_status_area_new (MBWindowManager *wm,
+ 
+ int hd_status_area_class_type (void);
+ 
++void hd_status_area_update_geometry (MBWindowManagerClient *client);
++
+ #endif
 diff --git a/src/util/Makefile.am b/src/util/Makefile.am
 index 84c1bb1..1ed349f 100644
 --- a/src/util/Makefile.am
@@ -222,10 +480,10 @@ index 84c1bb1..1ed349f 100644
  noinst_LTLIBRARIES = libutil.la
 diff --git a/src/util/hd-meego.c b/src/util/hd-meego.c
 new file mode 100644
-index 0000000..cc41cd5
+index 0000000..dea0571
 --- /dev/null
 +++ b/src/util/hd-meego.c
-@@ -0,0 +1,377 @@
+@@ -0,0 +1,681 @@
 +/*
 + * MeeGo-like home: the home views (Hildon's desktops, up to four), the
 + * launcher and the task navigator as pages side by side in a ring,
@@ -247,13 +505,28 @@ index 0000000..cc41cd5
 + * down to close it; a tap on the top edge opens its menu. Thin input-only
 + * windows along those edges catch them, above the application, only while
 + * one is in front.
++ *
++ * Applications have no title bar: the status area lies across the top as
++ * the N9's thin status bar (hildon-status-menu draws it so while the root
++ * window has _HILDON_MEEGO_LOOK, which libhildon's menus and pickers follow
++ * too), the applications' windows begin below it. The top edge is then
++ * the left half of that bar: a tap there opens the application's menu, a
++ * swipe down from it closes the application; the right half, with the
++ * battery and the clock, opens the status menu. The launcher's icons get
++ * the N9's shape: the N9's own icon where its theme is installed and has
++ * one for the application, else the application's icon in the N9's
++ * rounded square.
 + */
 +
++#include <math.h>
++#include <string.h>
 +#include <gconf/gconf-client.h>
 +#include <glib.h>
 +
++#include <X11/Xatom.h>
 +#include <X11/Xutil.h>
 +#include <matchbox/core/mb-wm.h>
++#include <matchbox/theme-engines/mb-wm-theme-xml.h>
 +
 +#include "hd-meego.h"
 +#include "hd-comp-mgr.h"
@@ -261,6 +534,8 @@ index 0000000..cc41cd5
 +#include "hd-wm.h"
 +#include "hd-render-manager.h"
 +#include "hd-task-navigator.h"
++#include "launcher/hd-launcher.h"
++#include "launcher/hd-launcher-tree.h"
 +#include "hd-util.h"
 +
 +#define GCONF_KEY_MEEGO_PAGES "/apps/osso/hildon-desktop/meego_pages"
@@ -292,6 +567,67 @@ index 0000000..cc41cd5
 +
 +static void edges_update (void);
 +
++/* The root window's _HILDON_MEEGO_LOOK (1) while the look is on */
++static void
++root_property_update (void)
++{
++  Display *dpy;
++  Window root;
++  Atom atom;
++  long on = 1;
++
++  if (!hd_mb_wm)
++    return;
++  dpy = hd_mb_wm->xdpy;
++  root = hd_mb_wm->root_win->xwindow;
++  atom = XInternAtom (dpy, "_HILDON_MEEGO_LOOK", False);
++  if (enabled)
++    XChangeProperty (dpy, root, atom, XA_CARDINAL, 32, PropModeReplace,
++                     (unsigned char *) &on, 1);
++  else
++    XDeleteProperty (dpy, root, atom);
++}
++
++/* The theme's north decor of applications (Hildon's title bar) as high as
++ * the status bar while the look is on, the theme's own height else. A new
++ * theme (the user chose another) brings its own height. */
++static MBWMTheme *decor_theme;
++static int decor_north;
++
++static void
++app_decor_update (void)
++{
++  MBWindowManagerClient *c;
++  MBWMXmlClient *xc;
++  MBWMXmlDecor *d;
++  int want;
++
++  if (!hd_mb_wm || !hd_mb_wm->theme)
++    return;
++  xc = mb_wm_xml_client_find_by_type (hd_mb_wm->theme->xml_clients,
++                                      MBWMClientTypeApp);
++  d = xc ? mb_wm_xml_decor_find_by_type (xc->decors, MBWMDecorTypeNorth)
++         : NULL;
++  if (!d)
++    return;
++  if (hd_mb_wm->theme != decor_theme)
++    {
++      decor_theme = hd_mb_wm->theme;
++      decor_north = d->height;
++    }
++  want = enabled ? HD_MEEGO_BAR_HEIGHT : decor_north;
++  if (d->height == want)
++    return;
++  d->height = want;
++  /* the applications' decors anew and the applications laid out again, as
++   * after a change of the theme */
++  mb_wm_stack_enumerate (hd_mb_wm, c)
++    if (MB_WM_CLIENT_CLIENT_TYPE (c) == MBWMClientTypeApp)
++      mb_wm_client_theme_change (c);
++  mb_wm_display_sync_queue (hd_mb_wm, MBWMSyncGeometry | MBWMSyncVisibility
++                                      | MBWMSyncDecor);
++}
++
 +static void
 +meego_pages_changed (GConfClient *client, guint id, GConfEntry *entry,
 +                     gpointer data)
@@ -301,10 +637,16 @@ index 0000000..cc41cd5
 +  if (on != enabled)
 +    {
 +      enabled = on;
++      root_property_update ();
++      app_decor_update ();
 +      edges_update ();
-+      /* the top left buttons come and go with the pages */
++      /* the top left buttons come and go with the pages, the title bar
++       * and the status area's place with the look */
 +      hd_render_manager_set_state (hd_render_manager_get_state ());
 +      hd_render_manager_restack ();
++      hd_render_manager_place_titlebar_elements ();
++      /* the launcher's icons in the other shape */
++      hd_launcher_tree_refresh (hd_launcher_get_tree ());
 +    }
 +}
 +
@@ -318,6 +660,7 @@ index 0000000..cc41cd5
 +                        GCONF_CLIENT_PRELOAD_NONE, NULL);
 +  gconf_client_notify_add (client, GCONF_KEY_MEEGO_PAGES,
 +                           meego_pages_changed, NULL, NULL, NULL);
++  root_property_update ();
 +}
 +
 +static void
@@ -331,9 +674,13 @@ index 0000000..cc41cd5
 +  sw = STATE_IS_PORTRAIT (state) ? h : w;
 +  sh = STATE_IS_PORTRAIT (state) ? w : h;
 +  strip = MAX (8, MAX (sw, sh) / EDGE_FRACTION);
-+  XMoveResizeWindow (dpy, edges[EDGE_LEFT], 0, strip, strip, sh - strip);
-+  XMoveResizeWindow (dpy, edges[EDGE_RIGHT], sw - strip, strip, strip, sh - strip);
-+  XMoveResizeWindow (dpy, edges[EDGE_TOP], 0, 0, sw, strip);
++  /* the top edge: the left half of the status bar (the right one opens
++   * the status menu) */
++  XMoveResizeWindow (dpy, edges[EDGE_LEFT], 0, HD_MEEGO_BAR_HEIGHT,
++                     strip, sh - HD_MEEGO_BAR_HEIGHT);
++  XMoveResizeWindow (dpy, edges[EDGE_RIGHT], sw - strip, HD_MEEGO_BAR_HEIGHT,
++                     strip, sh - HD_MEEGO_BAR_HEIGHT);
++  XMoveResizeWindow (dpy, edges[EDGE_TOP], 0, 0, sw / 2, HD_MEEGO_BAR_HEIGHT);
 +}
 +
 +static void
@@ -390,6 +737,15 @@ index 0000000..cc41cd5
 +void
 +hd_meego_state_changed (void)
 +{
++  /* hildon-desktop's start: the window manager is there now */
++  static gboolean started;
++
++  if (!started && hd_mb_wm)
++    {
++      started = TRUE;
++      root_property_update ();
++    }
++  app_decor_update ();
 +  edges_update ();
 +}
 +
@@ -603,17 +959,230 @@ index 0000000..cc41cd5
 +   * brings the page on the right */
 +  g_idle_add (change_page, GINT_TO_POINTER (dx < 0 ? 1 : -1));
 +}
++
++/* The launcher's icons in the N9's shape.
++ *
++ * The N9's own icons (its theme, blanco, is Nokia's and not part of this:
++ * used where it is installed) for the applications Hildon names by these
++ * icons; the others in the N9's rounded square, a superellipse
++ * |x|^n + |y|^n = 1 with n = 2.6 (as the outlines of the N9's icons are,
++ * 78 of their 80 pixels wide). */
++static const struct
++{
++  const char *hildon, *n9;
++} n9_icons[] = {
++  { "general_web", "icon-l-browser" },
++  { "general_email", "icon-l-email" },
++  { "general_sms", "icon-l-conversation" },
++  { "general_contacts", "icon-l-contacts" },
++  { "general_calendar", "icon-l-calendar" },
++  { "general_clock", "icon-l-clock" },
++  { "general_call", "icon-l-telephony" },
++  { "general_application_call", "icon-l-telephony" },
++  { "general_image_viewer", "icon-l-gallery" },
++  { "general_map", "icon-l-maps" },
++  { "general_mediaplayer", "icon-l-music" },
++  { "general_video_player", "icon-l-videos-tv" },
++  { "general_notes", "icon-l-notes" },
++  { "general_settings", "icon-l-settings" },
++  { "general_pdf", "icon-l-documents" },
++  { "general_rss", "icon-l-rss" },
++  { "tasklaunch_calculator", "icon-l-calculator" },
++  { "tasklaunch_camera", "icon-l-camera" },
++  { "tasklaunch_user_guide", "icon-l-user-guide" },
++  { "tasklaunch_default_application", "icon-l-default-application" },
++  { "terminal", "icon-l-terminal" },
++  { "firefox", "icon-l-firefox" },
++  { "firefox-esr", "icon-l-firefox" },
++  { "skype", "icon-l-skype" },
++  { "twitter", "icon-l-twitter" },
++  { "facebook", "icon-l-facebook" },
++};
++static const char *n9_icon_dirs[] = {
++  "/usr/share/themes/blanco/meegotouch/icons",
++  "/usr/local/share/themes/blanco/meegotouch/icons",
++};
++
++#define SQUIRCLE_N 2.6
++/* 4 x 4 samples a pixel */
++#define SQUIRCLE_SAMPLES 4
++/* an icon covering less than this of the shape (in 1/100) goes on a plate */
++#define SQUIRCLE_FULL 90
++/* the icon on a plate: 72 % of it, as the N9's own drawings in theirs */
++#define PLATE_ICON 72
++/* an icon lighter than this on average (0..255) on a dark plate */
++#define PLATE_LIGHT 190
++
++/* The shape's coverage of each pixel of a size x size icon (0..255), the
++ * N9's one pixel margin around it */
++static const guchar *
++squircle_mask (int size)
++{
++  static guchar *mask;
++  static int mask_size;
++  double r = size / 2.0 - 1, c = size / 2.0;
++  int x, y, i, j, n;
++
++  if (mask && mask_size == size)
++    return mask;
++  g_free (mask);
++  mask = g_malloc (size * size);
++  mask_size = size;
++  for (y = 0; y < size; y++)
++    for (x = 0; x < size; x++)
++      {
++        n = 0;
++        for (j = 0; j < SQUIRCLE_SAMPLES; j++)
++          for (i = 0; i < SQUIRCLE_SAMPLES; i++)
++            {
++              double px = fabs (x + (i + 0.5) / SQUIRCLE_SAMPLES - c) / r;
++              double py = fabs (y + (j + 0.5) / SQUIRCLE_SAMPLES - c) / r;
++
++              if (pow (px, SQUIRCLE_N) + pow (py, SQUIRCLE_N) <= 1)
++                n++;
++            }
++        mask[y * size + x] = n * 255 / (SQUIRCLE_SAMPLES * SQUIRCLE_SAMPLES);
++      }
++  return mask;
++}
++
++static GdkPixbuf *
++n9_icon (const gchar *icon_name, gint size)
++{
++  guint i, j;
++
++  if (!icon_name)
++    return NULL;
++  for (i = 0; i < G_N_ELEMENTS (n9_icons); i++)
++    if (!strcmp (n9_icons[i].hildon, icon_name))
++      for (j = 0; j < G_N_ELEMENTS (n9_icon_dirs); j++)
++        {
++          gchar *path = g_strdup_printf ("%s/%s.png", n9_icon_dirs[j],
++                                         n9_icons[i].n9);
++          GdkPixbuf *p = NULL;
++
++          if (g_file_test (path, G_FILE_TEST_EXISTS))
++            p = gdk_pixbuf_new_from_file_at_size (path, size, size, NULL);
++          g_free (path);
++          if (p)
++            return p;
++        }
++  return NULL;
++}
++
++/* The icon from @fname (or the N9's for @icon_name) at @size, in the N9's
++ * shape: an icon that (nearly) fills the square cut to the shape, any
++ * other on a light plate of that shape */
++GdkPixbuf *
++hd_meego_launcher_icon (const gchar *icon_name, const gchar *fname, gint size)
++{
++  GdkPixbuf *src, *out;
++  const guchar *mask;
++  guchar *s, *d;
++  int x, y, w, h, ss, ds, covered = 0, inside = 0;
++  long light = 0;
++
++  if ((out = n9_icon (icon_name, size)))
++    return out;
++  src = gdk_pixbuf_new_from_file_at_size (fname, size, size, NULL);
++  if (!src)
++    return NULL;
++  if (!gdk_pixbuf_get_has_alpha (src))
++    {
++      GdkPixbuf *a = gdk_pixbuf_add_alpha (src, FALSE, 0, 0, 0);
++
++      g_object_unref (src);
++      src = a;
++    }
++  w = gdk_pixbuf_get_width (src);
++  h = gdk_pixbuf_get_height (src);
++  mask = squircle_mask (size);
++
++  /* how much of the shape the icon covers, where it is in the square, and
++   * how light it is */
++  s = gdk_pixbuf_get_pixels (src);
++  ss = gdk_pixbuf_get_rowstride (src);
++  for (y = 0; y < size; y++)
++    for (x = 0; x < size; x++)
++      if (mask[y * size + x] == 255)
++        {
++          int sx = x - (size - w) / 2, sy = y - (size - h) / 2;
++
++          inside++;
++          if (sx >= 0 && sy >= 0 && sx < w && sy < h
++              && s[sy * ss + sx * 4 + 3] >= 200)
++            {
++              const guchar *p = s + sy * ss + sx * 4;
++
++              covered++;
++              light += (p[0] * 3 + p[1] * 6 + p[2]) / 10;
++            }
++        }
++
++  out = gdk_pixbuf_new (GDK_COLORSPACE_RGB, TRUE, 8, size, size);
++  d = gdk_pixbuf_get_pixels (out);
++  ds = gdk_pixbuf_get_rowstride (out);
++  if (covered * 100 >= inside * SQUIRCLE_FULL)
++    {
++      /* cut to the shape */
++      gdk_pixbuf_fill (out, 0);
++      gdk_pixbuf_copy_area (src, 0, 0, w, h, out, (size - w) / 2,
++                            (size - h) / 2);
++      for (y = 0; y < size; y++)
++        for (x = 0; x < size; x++)
++          d[y * ds + x * 4 + 3] = d[y * ds + x * 4 + 3]
++                                  * mask[y * size + x] / 255;
++    }
++  else
++    {
++      /* a plate, light grey getting darker downwards and at its rim (dark
++       * grey for a light icon, as the N9's settings and terminal), the
++       * icon smaller in its middle */
++      int iw = MAX (1, w * PLATE_ICON / 100), ih = MAX (1, h * PLATE_ICON / 100);
++      int top = covered && light / covered > PLATE_LIGHT ? 0x4a : 0xf2;
++
++      for (y = 0; y < size; y++)
++        for (x = 0; x < size; x++)
++          {
++            guchar *p = d + y * ds + x * 4;
++            int v = top - 0x26 * y / size;
++
++            /* a darker line along the edge: where the shape fades out */
++            if (mask[y * size + x] < 255 ||
++                (x > 0 && mask[y * size + x - 1] < 255) ||
++                (x < size - 1 && mask[y * size + x + 1] < 255) ||
++                (y > 0 && mask[(y - 1) * size + x] < 255) ||
++                (y < size - 1 && mask[(y + 1) * size + x] < 255))
++              v = MAX (0, v - 0x30);
++            p[0] = p[1] = p[2] = v;
++            p[3] = mask[y * size + x];
++          }
++      gdk_pixbuf_composite (src, out, (size - iw) / 2, (size - ih) / 2,
++                            iw, ih, (size - iw) / 2.0, (size - ih) / 2.0,
++                            (double) iw / w, (double) ih / h,
++                            GDK_INTERP_BILINEAR, 255);
++    }
++  g_object_unref (src);
++  return out;
++}
 diff --git a/src/util/hd-meego.h b/src/util/hd-meego.h
 new file mode 100644
-index 0000000..e480c0b
+index 0000000..d9a9aee
 --- /dev/null
 +++ b/src/util/hd-meego.h
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,23 @@
 +#ifndef __HD_MEEGO_H__
 +#define __HD_MEEGO_H__
 +
 +#include <glib.h>
++#include <gdk-pixbuf/gdk-pixbuf.h>
 +#include <X11/Xlib.h>
++
++#include "hd-util.h"
++
++/* The N9's status bar, 36 of its 480 pixels: the status area across the
++ * top in the MeeGo-like look, the applications below it */
++#define HD_MEEGO_BAR_HEIGHT HD_S (36)
 +
 +/* MeeGo-like home pages (hd-meego.c) */
 +void hd_meego_init (void);
@@ -621,6 +1190,8 @@ index 0000000..e480c0b
 +void hd_meego_x_event (XEvent *xev);
 +void hd_meego_leave_home (int dir);
 +void hd_meego_state_changed (void);
++GdkPixbuf *hd_meego_launcher_icon (const gchar *icon_name, const gchar *fname,
++                                   gint size);
 +
 +#endif
 diff --git a/src/util/hd-xinput.c b/src/util/hd-xinput.c
