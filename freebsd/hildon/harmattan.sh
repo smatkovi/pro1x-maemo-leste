@@ -9,7 +9,7 @@
 # build files made /usr/local/ (FreeBSD's place for packages; the paths
 # the parts build in, themes, plugin and data directories, follow them).
 HQ5_URL=https://github.com/smatkovi/harmattan-qt5.git
-HQ5_REV=4491a3d1c533a88f5ad3bad1765dc62ad39f5a6e
+HQ5_REV=278a4b8143eae2beafcfb6c071b3e0619c693d8f
 
 HARMATTAN=(
 	"libmlocale|!"
@@ -32,8 +32,24 @@ HARMATTAN=(
 	"meego-keyboard|!"
 	"meego-im-settings-applet|!"
 	"meegotouchtheme|!"
+	# the applications in the N9's look (apps/<name>: new ones, in QML with
+	# com.nokia.meego, qt-components of apps.sh)
+	"meego-calendar|!"
+	"meego-music|!"
+	"meego-phone|!"
+	"meego-messages|!"
+	"meego-mail|!"
+	"meego-contacts|!"
+	"meego-gallery|!"
+	"meego-video|!"
+	"meego-notes|!"
+	"meego-calculator|!"
+	"meego-camera|!"
+	"meego-browser|!"
+	"meego-maps|!"
 )
-# Each part is "harmattan-<directory>" here (its source, root and package;
+# Each part is "harmattan-<directory>" here (a directory of the repository
+# or of its apps/; its source, root and package;
 # some directories have the names of Leste's parts, mce-dev): the revision
 # and the source its package names
 for _p in "${HARMATTAN[@]}"; do
@@ -226,3 +242,17 @@ custom_harmattan_mce_dev() {
 	    "$v" > "$PR/usr/local/libdata/pkgconfig/mce.pc"
 }
 
+# The applications: Qt Quick, one qmake project each
+custom_harmattan_meego_calendar() { qt_qmake meego-calendar.pro; }
+custom_harmattan_meego_music() { qt_qmake meego-music.pro; }
+custom_harmattan_meego_phone() { qt_qmake meego-phone.pro; }
+custom_harmattan_meego_messages() { qt_qmake meego-messages.pro; }
+custom_harmattan_meego_mail() { qt_qmake meego-mail.pro; }
+custom_harmattan_meego_contacts() { qt_qmake meego-contacts.pro; }
+custom_harmattan_meego_gallery() { qt_qmake meego-gallery.pro; }
+custom_harmattan_meego_video() { qt_qmake meego-video.pro; }
+custom_harmattan_meego_notes() { qt_qmake meego-notes.pro; }
+custom_harmattan_meego_calculator() { qt_qmake meego-calculator.pro; }
+custom_harmattan_meego_camera() { qt_qmake meego-camera.pro; }
+custom_harmattan_meego_browser() { qt_qmake meego-browser.pro; }
+custom_harmattan_meego_maps() { qt_qmake meego-maps.pro; }

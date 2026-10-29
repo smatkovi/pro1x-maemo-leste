@@ -1,8 +1,9 @@
 #!/bin/bash
 # The Nokia N9's user interface in its Qt 5 port (github.com/smatkovi/
 # harmattan-qt5) as Maemo Leste packages: one arm64 .deb per part,
-# harmattan-<directory>, and Sailfish OS's ngfd and libngf (the event
-# sound daemon the system UI plays through), built natively on the phone.
+# harmattan-<directory>, Sailfish OS's ngfd and libngf (the event sound
+# daemon the system UI plays through) and qt-components (com.nokia.meego,
+# which the applications of apps/ draw with), built natively on the phone.
 # The parts, their order and their build arguments are arch/30-meego.sh's.
 #
 # The build runs in a chroot of an overlay on meego-leste.img, mounted
@@ -28,6 +29,9 @@ W=${W:-/host/hq5-leste}
 OUT=${OUT:-$W/debs}
 HQ5_URL=${HQ5_URL:-https://github.com/smatkovi/harmattan-qt5.git}
 HQ5_REV=${HQ5_REV:-$(sed -n 's/^HQ5_REV=//p' "$REPO/freebsd/hildon/harmattan.sh")}
+# qt-components at FreeBSD's pin too (freebsd/hildon/apps.sh), with those of
+# its patches that are no FreeBSD matter (arch/41-hildon-apps.sh's)
+QTC_REV=${QTC_REV:-$(sed -n 's/.*\[qt-components\]=\([0-9a-f]*\).*/\1/p' "$REPO/freebsd/hildon/apps.sh")}
 # the packages' revision: <upstream version>+pro1x<PKGREV>
 PKGREV=${PKGREV:-1}
 JOBS=${JOBS:-$(nproc)}
@@ -36,6 +40,7 @@ log() { echo ">> $*"; }
 
 [ -f "$LOWER" ] || { echo "no $LOWER"; exit 1; }
 [ -n "$HQ5_REV" ] || { echo "no HQ5_REV"; exit 1; }
+[ -n "$QTC_REV" ] || { echo "no QTC_REV"; exit 1; }
 [ -z "$(losetup -j "$LOWER")" ] ||
     { echo "$LOWER is attached to a loop device (losetup -j): in use, not a lower layer"; exit 1; }
 
@@ -56,6 +61,12 @@ for m in proc sys dev dev/pts; do
 done
 rm -f "$R/etc/resolv.conf"
 cp -L /etc/resolv.conf "$R/etc/resolv.conf"
+rm -rf "$R/usr/src/hq5-patches"
+mkdir -p "$R/usr/src/hq5-patches"
+for q in "$REPO"/freebsd/hildon/patches/qt-components/00*.patch; do
+	case ${q##*/} in 0001-*) continue ;; esac  # FreeBSD's /usr/local
+	cp "$q" "$R/usr/src/hq5-patches/"
+done
 # no services started by the packages' scripts in the chroot
 printf '#!/bin/sh\nexit 101\n' > "$R/usr/sbin/policy-rc.d"
 chmod 755 "$R/usr/sbin/policy-rc.d"
@@ -96,13 +107,14 @@ apt-get -y -q --no-install-recommends install \
 	libxcb-shape0-dev libxcb-render0-dev libdsme0.2.0-dev libxkbfile-dev \
 	libpulse-dev libsndfile1-dev libgconf2-dev gconf2 libprofile-dev \
 	check libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libcanberra-dev \
+	qml-module-qtquick2 \
 	> /tmp/apt-install.log 2>&1 || { tail -20 /tmp/apt-install.log; exit 1; }
 EOF
 
 log "harmattan-qt5 $HQ5_REV"
 rc=0
-chroot "$R" /bin/bash -uo pipefail -s "$HQ5_URL" "$HQ5_REV" "$JOBS" "$PKGREV" "$ONLY" <<'EOF' || rc=$?
-url=$1 rev=$2 jobs=$3 pkgrev=$4 only=$5
+chroot "$R" /bin/bash -uo pipefail -s "$HQ5_URL" "$HQ5_REV" "$JOBS" "$PKGREV" "$ONLY" "$QTC_REV" <<'EOF' || rc=$?
+url=$1 rev=$2 jobs=$3 pkgrev=$4 only=$5 qtcrev=$6
 export DEBIAN_FRONTEND=noninteractive QT_SELECT=qt5 LC_ALL=C.UTF-8
 # Qt 5's qmake, which the configure scripts call too
 export PATH=/usr/lib/qt5/bin:$PATH
@@ -120,7 +132,7 @@ failed=
 
 # mkdeb NAME VERSION ROOT [control lines...]: ROOT as package NAME; its
 # Depends from the libraries its ELF files need (dpkg -S: Leste's
-# packages and the parts installed before it)
+# packages and the parts installed before it), and DEPENDS (QML modules)
 mkdeb() {
 	local name=$1 version=$2 root=$3 d f deps so p
 	shift 3
@@ -137,6 +149,7 @@ mkdeb() {
 		p=$(dpkg -S "*/$so" 2> /dev/null | grep -v '^diversion' | head -1 | cut -d: -f1)
 		[ -n "$p" ] && echo "$p"
 	done | sort -u | paste -sd, - | sed 's/,/, /g')
+	[ -z "${DEPENDS:-}" ] || deps=${deps:+$deps, }$DEPENDS
 	{
 		echo "Package: $name"
 		echo "Version: $version"
@@ -178,13 +191,15 @@ want() {
 # installed into its own root, packaged and installed (arch/30-meego.sh's
 # part(), into a root of its own instead of /)
 part() {
-	local name=$1 kind=$2 stamp v pr
+	local name=$1 kind=$2 stamp v pr dir=$1
 	shift 2
-	stamp="$(git -C $S log -1 --format=%H -- "$name") $pkgrev"
+	# (the applications are below apps/)
+	[ -d "$S/$dir" ] || dir=apps/$name
+	stamp="$(git -C $S log -1 --format=%H -- "$dir") $pkgrev"
 	want "$name" "$stamp" || return 0
 	echo "   $name"
 	rm -rf "$B/$name"
-	cp -a "$S/$name" "$B/$name"
+	cp -a "$S/$dir" "$B/$name"
 	pr=$B/root/$name
 	rm -rf "$pr"
 	mkdir -p "$pr"
@@ -264,6 +279,38 @@ upstream() {
 	echo "$tag $pkgrev" > "$B/$name.done"
 }
 
+# qt-components REV: com.nokia.meego (the MeeGo style only, no examples or
+# tests) at its revision, with the patches (what its configure script
+# writes, as freebsd/hildon/apps.sh's custom_qt_components)
+qtcomponents() {
+	local rev=$1 pr q
+	want qt-components "$rev $pkgrev" || return 0
+	echo "   qt-components $rev"
+	rm -rf "$B/qt-components"
+	pr=$B/root/qt-components
+	rm -rf "$pr"
+	mkdir -p "$pr"
+	(
+		git clone -q https://github.com/sailfishos/qt-components.git "$B/qt-components" || exit 1
+		cd "$B/qt-components" || exit 1
+		git checkout -q "$rev" || exit 1
+		for q in /usr/src/hq5-patches/*.patch; do
+			patch -s -p1 < "$q" || exit 1
+		done
+		printf 'Q_COMPONENTS_SOURCE_TREE = %s\nQ_COMPONENTS_BUILD_TREE = %s\n' "$PWD" "$PWD" \
+		    > .qmake.cache
+		mkdir -p features
+		echo "CONFIG += meego" > features/qt-components-config.prf
+		QMAKEFEATURES=$PWD/features:$QMAKEFEATURES qmake qt-components.pro -r CONFIG+=meego \
+		    > qmake.log 2>&1 || { tail -20 qmake.log; exit 1; }
+		make -j"$jobs" > make.log 2>&1 || { grep -m10 -E "error:|\*\*\*" make.log; exit 1; }
+		make install INSTALL_ROOT="$pr" > install.log 2>&1 || { tail -20 install.log; exit 1; }
+	) || { failed="$failed qt-components"; echo "     qt-components failed"; return 1; }
+	DEPENDS=qml-module-qtquick2 mkdeb qt-components "1.4.9+git${rev:0:7}+pro1x$pkgrev" "$pr" ||
+	    { failed="$failed qt-components(package)"; return 1; }
+	echo "$rev $pkgrev" > "$B/qt-components.done"
+}
+
 part libmlocale configure -prefix /usr -release -nomake demos -nomake tests -nomake benchmarks
 part libmeegotouch configure -prefix /usr -release -no-werror -nomake demos -nomake tests -nomake benchmarks
 part contextkit autotools --disable-doc --disable-coverage
@@ -292,6 +339,30 @@ part libmeegoimengine qmake meegoimengine.pro
 part meego-keyboard qmake m-keyboard.pro
 part meego-im-settings-applet qmake mim-settings-applet.pro
 part meegotouchtheme qmake theme.pro
+# the applications in the N9's look (apps/), on com.nokia.meego, with the
+# QML modules and services they use
+qtcomponents "$qtcrev"
+q=qt-components
+DEPENDS=$q part meego-calculator qmake meego-calculator.pro
+DEPENDS=$q part meego-notes qmake meego-notes.pro
+DEPENDS=$q part meego-contacts qmake meego-contacts.pro
+DEPENDS=$q part meego-gallery qmake meego-gallery.pro
+DEPENDS="$q, libqt5sql5-sqlite" part meego-calendar qmake meego-calendar.pro
+DEPENDS="$q, libqt5sql5-sqlite" CONTROL="Recommends: modemmanager" \
+	part meego-messages qmake meego-messages.pro
+DEPENDS="$q, pulseaudio-utils" CONTROL="Recommends: modemmanager" \
+	part meego-phone qmake meego-phone.pro
+DEPENDS="$q, ca-certificates" part meego-mail qmake meego-mail.pro
+DEPENDS="$q, ca-certificates" CONTROL="Recommends: qml-module-qtpositioning, geoclue-2.0" \
+	part meego-maps qmake meego-maps.pro
+DEPENDS="$q, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good" \
+	part meego-music qmake meego-music.pro
+DEPENDS="$q, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good" CONTROL="Recommends: gstreamer1.0-libav" \
+	part meego-video qmake meego-video.pro
+DEPENDS="$q, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good" \
+	CONTROL="Recommends: gstreamer1.0-libcamera, gstreamer1.0-plugins-ugly" \
+	part meego-camera qmake meego-camera.pro
+DEPENDS=$q CONTROL="Recommends: qml-module-qtwebengine" part meego-browser qmake meego-browser.pro
 
 missing=
 for f in mcompositor sysuid meegotouchhome meegofeedbackd ngfd meego-im-uiserver; do

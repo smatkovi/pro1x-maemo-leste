@@ -241,13 +241,17 @@ fetch_src() {
 	local name=$1 url=${URL[$1]:-https://github.com/maemo-leste/$1.git}
 	# a part of harmattan-qt5: its directory of the one checkout
 	if [ "${kind:-}" = harmattan ]; then
+		local d
 		[ -d "$SRC/harmattan-qt5/.git" ] || git clone -q "$HQ5_URL" "$SRC/harmattan-qt5"
 		git -C "$SRC/harmattan-qt5" cat-file -e "$HQ5_REV^{commit}" 2> /dev/null ||
 		    git -C "$SRC/harmattan-qt5" fetch -q origin
 		if [ "$(cat "$SRC/$name/.hq5rev" 2> /dev/null)" != "$HQ5_REV" ]; then
 			git -C "$SRC/harmattan-qt5" checkout -q -f "$HQ5_REV"
 			rm -rf "${SRC:?}/$name"
-			cp -a "$SRC/harmattan-qt5/${name#harmattan-}" "$SRC/$name"
+			# (the applications are below apps/)
+			d=${name#harmattan-}
+			[ -d "$SRC/harmattan-qt5/$d" ] || d=apps/$d
+			cp -a "$SRC/harmattan-qt5/$d" "$SRC/$name"
 			echo "$HQ5_REV" > "$SRC/$name/.hq5rev"
 		fi
 		return
@@ -278,9 +282,11 @@ fetch_src() {
 	esac
 	# a part of a big repository: only its directories (SPARSE), the
 	# others' files not even downloaded
-	if [ ! -d "$SRC/$name/.git" ] && [ -n "${SPARSE[$1]:-}" ]; then
-		git clone -q --filter=blob:none --no-checkout "$url" "$SRC/$name" &&
-		    git -C "$SRC/$name" sparse-checkout set ${SPARSE[$1]} || return 1
+	if [ -n "${SPARSE[$1]:-}" ]; then
+		[ -d "$SRC/$name/.git" ] ||
+		    git clone -q --filter=blob:none --no-checkout "$url" "$SRC/$name" || return 1
+		# shellcheck disable=SC2086
+		git -C "$SRC/$name" sparse-checkout set ${SPARSE[$1]} || return 1
 	fi
 	[ -d "$SRC/$name/.git" ] || git clone -q "$url" "$SRC/$name"
 	git -C "$SRC/$name" cat-file -e "$rev^{commit}" 2> /dev/null ||

@@ -310,7 +310,7 @@ URL+=(
 	[maemo-translate]=$GH_EXTRAS/maemo-translate.git
 	[maemo-translate-data-de]=$GH_EXTRAS/maemo-translate-data.git
 )
-SPARSE+=([maemo-translate-data-de]=model/de)
+SPARSE+=([maemo-translate-data-de]="model/de debian")
 URL+=(
 	[maepad]=$GM_EXTRAS/maepad.git
 	[mstardict]=$GH_EXTRAS/mstardict.git [osso-mahjong]=$GH_EXTRAS/osso-mahjong.git

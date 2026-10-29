@@ -49,6 +49,7 @@ pacman -Sy --noconfirm --needed base-devel git \
 	qt5-base qt5-x11extras qt5-declarative qt5-svg qt5-tools icu \
 	dbus-glib libxml2 polkit intltool gtk-doc gobject-introspection \
 	tinycdb libxdamage libxcomposite libxrandr libxtst libpulse libsndfile \
+	gstreamer gst-plugins-base gst-plugins-good \
 	xorg-server xorg-xinit xf86-input-libinput xorg-xinput xorg-xrandr \
 	xorg-xset xorg-xprop xdotool doxygen > /dev/null
 gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
@@ -90,16 +91,18 @@ mkdir -p $B
 # A part built in a copy of its source (several run generators there),
 # installed into / ; a part already built at this revision is skipped
 part() {
-	local name=$1 kind=$2; shift 2
+	local name=$1 kind=$2 dir=$1; shift 2
 	local stamp=$B/$name.done want
-	want=$(git -C $S log -1 --format=%H -- "$name")
+	# (the applications are below apps/)
+	[ -d "$S/$dir" ] || dir=apps/$name
+	want=$(git -C $S log -1 --format=%H -- "$dir")
 	if [ "$(cat $stamp 2> /dev/null)" = "$want" ]; then
 		echo "   $name: built"
 		return
 	fi
 	echo "   $name"
 	rm -rf "$B/$name"
-	cp -a "$S/$name" "$B/$name"
+	cp -a "$S/$dir" "$B/$name"
 	cd "$B/$name"
 	case $kind in
 	configure)
@@ -188,6 +191,11 @@ part meego-im-framework qmake maliit-framework.pro CONFIG+=enable-legacy CONFIG+
 part libmeegoimengine qmake meegoimengine.pro
 part meego-keyboard qmake m-keyboard.pro
 part meego-im-settings-applet qmake mim-settings-applet.pro
+# the applications in the N9's look (apps/), on com.nokia.meego (qt-components,
+# arch/41-hildon-apps.sh)
+for a in calendar music phone messages mail contacts gallery video notes calculator camera browser maps; do
+	part meego-$a qmake meego-$a.pro
+done
 # their GConf defaults (the N9's keyboard, British English)
 GCONF_CONFIG_SOURCE=xml:merged:/etc/gconf/gconf.xml.defaults gconftool-2 \
 	--makefile-install-rule /usr/share/gconf/schemas/meego-im-framework.schemas \

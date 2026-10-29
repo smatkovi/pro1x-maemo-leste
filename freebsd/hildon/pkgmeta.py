@@ -62,7 +62,10 @@ LOCAL = {
                       "(tools/pro1x-standby); Nokia's icons and font are not "
                       'included.', ['UNKNOWN']),
 }
-# Parts from a release tarball (build.sh fetch_src): version, comment,
+# The N9's applications of harmattan-qt5 (apps/; harmattan.sh), new ones
+# in QML with com.nokia.meego: what their .desktop files say of them
+MEEGO_APPS = ('browser', 'calculator', 'calendar', 'camera', 'contacts', 'gallery', 'mail', 'maps', 'messages', 'music', 'notes', 'phone', 'video')
+
 # description, licences, home page
 TARBALL = {
     'ffmpeg8-libs': ('8.1.2', "FFmpeg 8.1's libraries, for FreeBSD 15.1's QtWebEngine",
@@ -148,6 +151,19 @@ UPSTREAM = {
                         "D-Bus; without Mapnik raster tiles.",
                         ['GPLv3+']),
 }
+for _a in MEEGO_APPS:
+    try:
+        with open(os.path.join(SRC, 'harmattan-meego-' + _a, 'data', 'meego-%s.desktop' % _a)) as _f:
+            _c = re.search(r'^Comment=(.*)$', _f.read(), re.M).group(1)
+    except (OSError, AttributeError):
+        _c = "The Nokia N9's %s" % _a
+    UPSTREAM['harmattan-meego-' + _a] = (
+        '0.1', _c,
+        '%s: in QML with com.nokia.meego, for Hildon and the N9\'s user interface '
+        '(harmattan-qt5 apps/meego-%s); it draws with the N9\'s blanco theme, '
+        'which is not included.' % (_c.replace(', as on the Nokia N9', ''), _a),
+        ['BSD3CLAUSE'])
+
 MAINTAINER = 'sebastian.matkovich@gmail.com'
 # What a part needs besides the libraries it links: interpreters, the
 # modules it loads, the session around it
@@ -185,6 +201,19 @@ RUNTIME = {
     'statusbar-alarm': ['alarmd'],
     # QML on the MeeGo components; its alarms are alarmd's
     'meego-clock': ['qt-components', 'alarmd', 'clockd'],
+    # the N9's applications: QML on the MeeGo components; SQLite (calendar,
+    # messages), GStreamer's decoders and encoders (music, video, camera),
+    # a web engine (browser), positions (maps). Phone and messages need
+    # ModemManager, which FreeBSD does not have ("No modem").
+    **{'harmattan-meego-' + a: ['qt-components'] for a in MEEGO_APPS},
+    'harmattan-meego-calendar': ['qt-components', 'qt5-sqldrivers-sqlite3'],
+    'harmattan-meego-messages': ['qt-components', 'qt5-sqldrivers-sqlite3'],
+    'harmattan-meego-music': ['qt-components', 'gstreamer1-plugins-good'],
+    'harmattan-meego-video': ['qt-components', 'gstreamer1-plugins-good'],
+    'harmattan-meego-camera': ['qt-components', 'gstreamer1-plugins-good',
+                               'gstreamer1-plugins-jpeg'],
+    'harmattan-meego-browser': ['qt-components', 'qt5-webengine'],
+    'harmattan-meego-maps': ['qt-components', 'qt5-location'],
     # QML on QtQuick Controls 2, its stations in SQLite
     'meecast': ['qt5-quickcontrols2', 'qt5-graphicaleffects', 'qt5-sqldrivers-sqlite3'],
     # its tile cache is an SQLite database (QtSql)
@@ -210,8 +239,15 @@ LICENSES = {
     'osso-systemui-dbus-dev': ['LGPL21'],
     'libplayback': ['LGPL21'],
     'osso-systemui-alarm': ['LGPL21'],
-    # Mozilla's Bergamot models (firefox-translations-models), MPL 2.0
+    # Maemo Translate and its libraries (their LICENSE files): Mozilla's
+    # Bergamot models (firefox-translations-models) and kotki (Bergamot's
+    # translator) MPL 2.0, Marian MIT, ruy and sentencepiece Apache 2.0
     'maemo-translate-data-de': ['MPL20'],
+    'maemo-translate': ['MPL20'],
+    'kotki': ['MPL20'],
+    'marian-lite': ['MIT'],
+    'ruy': ['APACHE20'],
+    'sentencepiece-browsermt': ['APACHE20'],
     # Harmattan's (harmattan-qt5): LGPL 2.1 in LICENSE.LGPL or the sources'
     # headers, not in debian/copyright; statusmenu-plugins as the rest
     **{'harmattan-' + p: ['LGPL21'] for p in (
