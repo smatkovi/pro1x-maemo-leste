@@ -1,0 +1,47 @@
+#!/bin/sh
+# pro1x-fm-audio-test [MHZ [SECONDS]] -- records the FM receiver's sound.
+#
+# For kernels with the SLIMbus FM path (7.1.0-pro1x.6, patches 0018-0021):
+# shows what the kernel made of the SLIMbus, switches the receiver on at
+# MHZ (default 99.9) with pro1x-fm-test, routes SLIMBUS_8_TX to the
+# MultiMedia3 front end, records SECONDS (default 10) to /tmp/fm.wav and
+# says how loud it is. Plays nothing; `paplay /tmp/fm.wav` does. Root.
+MHZ=${1:-99.9}
+SECS=${2:-10}
+ROUTE="MultiMedia3 Mixer SLIMBUS_8_TX"
+
+echo "== kernel: $(uname -r)"
+dmesg | grep -i -E 'slim|ngd|wcn399x|bam_dma|a584000|a5c0000|arm-smmu.*(fault|sid)' | tail -25
+echo "== SLIMbus devices"
+ls /sys/bus/slimbus/devices/ 2>/dev/null || echo "(no SLIMbus)"
+for d in /sys/bus/slimbus/devices/*; do
+	[ -e "$d" ] && echo "$(basename "$d"): driver $(basename "$(readlink "$d/driver" 2>/dev/null)" 2>/dev/null)"
+done
+pcm=$(sed -n 's/^00-\([0-9]*\): MultiMedia3 .*/\1/p' /proc/asound/pcm | sed 's/^0*\([0-9]\)/\1/')
+echo "== MultiMedia3 is hw:Pro1X,${pcm:-?}"
+amixer -c Pro1X cget name="$ROUTE" > /dev/null 2>&1 ||
+	{ echo "no mixer control '$ROUTE': the kernel has no FM audio path"; exit 1; }
+
+echo "== receiver on at $MHZ MHz"
+pro1x-fm-test -t $((SECS + 8)) "$MHZ" &
+radio=$!
+sleep 3
+amixer -q -c Pro1X cset name="$ROUTE" 1
+echo "== recording $SECS s"
+arecord -D "hw:Pro1X,$pcm" -f S16_LE -r 48000 -c 2 -d "$SECS" /tmp/fm.wav
+rec=$?
+amixer -q -c Pro1X cset name="$ROUTE" 0
+wait $radio
+[ $rec = 0 ] || { echo "arecord failed ($rec); dmesg:"; dmesg | tail -20; exit 1; }
+python3 - /tmp/fm.wav <<'EOF'
+import array, math, sys, wave
+w = wave.open(sys.argv[1])
+a = array.array('h', w.readframes(w.getnframes()))
+if not a:
+    sys.exit('no samples')
+rms = math.sqrt(sum(x * x for x in a) / len(a))
+peak = max(abs(x) for x in a)
+print('%d frames, RMS %.0f (%.1f dBFS), peak %d, %s' % (
+    w.getnframes(), rms, 20 * math.log10(max(rms, 1) / 32768), peak,
+    'silent' if peak == 0 else 'sound'))
+EOF
