@@ -5,7 +5,7 @@ HILDON_PKGS="gtk2 gconf2 dbus dbus-glib gnome-menus libcanberra libcanberra-gtk2
 	libSM libXcomposite libXdamage libXfixes libXi libXt libXrandr libXft
 	sqlite3 libxml2 pango glib libinotify xorg-server libexif xrdb"
 # Not needed to build against
-HILDON_PRUNE="llvm* spirv-llvm-translator* python3* py3*-* perl5* samba* qt6-*"
+HILDON_PRUNE="llvm* spirv-llvm-translator* python3* py3*-* perl5* samba*"
 # What the apps (apps.sh) build on and run with (the second part: what
 # QtWebEngine and QtWebKit link)
 APPS_PKGS="gtk3 vte poppler-glib upower gstreamer1 gstreamer1-plugins pulseaudio
@@ -23,7 +23,9 @@ APPS_PKGS="gtk3 vte poppler-glib upower gstreamer1 gstreamer1-plugins pulseaudio
 	kf5-kirigami2 s2 abseil pyotherside-qt5 qt5-sensors
 	kyotocabinet marisa-trie libmicrohttpd libpostal
 	gpsd libsoup sdl_ttf check telepathy-glib telepathy-mission-control
-	libaccounts-glib libglade2 mobile-broadband-provider-info iso-codes"
+	libaccounts-glib libglade2 mobile-broadband-provider-info iso-codes
+	qt6-base qt6-svg qt6-declarative qt6-5compat qt6-charts qt6-multimedia
+	qt6-webengine qt6-tools"
 
 # What the N9's user interface (harmattan.sh) builds on beyond the apps'
 # libraries: tinycdb for contextkit's property cache

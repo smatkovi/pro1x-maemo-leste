@@ -1,0 +1,15 @@
+--- a/src/plugins/platformthemes/maemo5/platformtheme.h
++++ b/src/plugins/platformthemes/maemo5/platformtheme.h
+@@ -1,6 +1,12 @@
+ #pragma once
+ 
++#include <QtCore/qtversion.h>
++/* Qt 6.10 split the generic Unix themes into a header each */
++#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
++#include <private/qgnometheme_p.h>
++#else
+ #include <private/qgenericunixthemes_p.h>
++#endif
+ 
+ class QMaemo5Theme : public QGnomeTheme
+ {

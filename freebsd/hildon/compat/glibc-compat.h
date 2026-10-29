@@ -25,6 +25,11 @@
 #define HOST_NAME_MAX 255
 #endif
 
+/* glibc's malloc_trim(3), returning free memory to the system: FreeBSD's
+ * jemalloc does that by itself */
+#include <stddef.h>
+static inline int malloc_trim(size_t pad) { (void)pad; return 0; }
+
 /* glibc's name for the comparison function of qsort(3) and bsearch(3) */
 typedef int (*__compar_fn_t)(const void *, const void *);
 

@@ -1,0 +1,11 @@
+--- a/src/plugins/styles/maemo5/maemo5style/CMakeLists.txt
++++ b/src/plugins/styles/maemo5/maemo5style/CMakeLists.txt
+@@ -19,6 +19,8 @@
+     ${CMAKE_CURRENT_SOURCE_DIR}/../../gtk2/qgtkstyle_p.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/../../gtk2/qgtkglobal_p.h
+     ${CMAKE_CURRENT_SOURCE_DIR}/../../pixmapcache.h
++    ${CMAKE_CURRENT_SOURCE_DIR}/../../qstylehelper.h
++    ${CMAKE_CURRENT_SOURCE_DIR}/../../qstylehelper.cpp
+ )
+ 
+ target_compile_definitions(maemo5style PRIVATE QT_NO_ANIMATION=1)

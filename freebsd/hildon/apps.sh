@@ -168,6 +168,19 @@ APPS=(
 	# the phone (calls and SMS through the modem's D-Bus services; without
 	# its Telepathy module for now)
 	"sphone|!"
+	# Leste's Qt 6 platform for Maemo: the Hildon style, the platform plugin
+	# (Hildon's window properties) and the Maemo widgets
+	# (not yet the platform plugin qt6-qpa-maemo: a copy of Qt 6.8's xcb
+	# plugin, whose backing store API Qt 6.11 changed; Qt 6 apps run on
+	# FreeBSD's xcb plugin, without Hildon's window properties)
+	"qt6-style-maemo|!"
+	"qt6-maemo|!"
+	"qt6csv|!"
+	# Qt 6 apps: the weather forecast, then the chats and messages on
+	# Telepathy Qt 6
+	"nomweather|!"
+	"telepathy-qt6|!"
+	"conversations|!"
 	"tinymail|--with-platform=maemo-leste --with-ssl=nss --disable-idle --disable-imap-part-fetch ac_cv_libiconv_utf8=yes --with-iconv-detect-h=$REPO/freebsd/hildon/compat/camel-iconv-detect.h"
 	"modest|"
 )
@@ -243,6 +256,12 @@ REV+=(
 	[tinymail]=b26e5f078476 [modest]=655c79292815
 	[evolution-data-server]=df4ec29950f29a76eac6fbe0f814c48d2cef7d3fdb905002a4a883dd761ce93c
 	[sphone]=45663ccd15ec
+	[qt6-style-maemo]=da82bac04cd0f650d0a0388499f4b9b44b18e0935fb4da8c75fdae8b59c92fe8
+	[qt6-qpa-maemo]=06ac140112aea01bc8d807b0a647a2352ac8d152c38307f6f086cdc384c55b48
+	[qt6-maemo]=e21dc3165a9ccb1df6aeaac8f7f5cc71ea93333b0951632585628eec0323f0a6
+	[qt6csv]=bca1fd34ad102058cc9c8a793bcb1e211abbdb851d4ba5219bd6346e0d9a58d4
+	[nomweather]=b25d2ab69fc1 [conversations]=f4ccce53bb08
+	[telepathy-qt6]=619a87e18e8b0a575316a8a5215ce487cb391c3d30c958ff94d396022ae2aa11
 )
 URL+=(
 	[libbaseencode]=https://github.com/paolostivanin/libbaseencode.git
@@ -256,6 +275,12 @@ URL+=(
 	[libglibutil]=https://github.com/sailfishos/libglibutil.git
 	[libgofono]=https://github.com/sailfishos/libgofono.git
 	[evolution-data-server]=https://download.gnome.org/sources/evolution-data-server/3.56/evolution-data-server-3.56.2.tar.xz
+	[qt6-style-maemo]=https://maedevu.maemo.org/leste/pool/main/q/qt6-style-maemo/qt6-style-maemo_6.1.2.orig.tar.gz
+	[qt6-qpa-maemo]=https://maedevu.maemo.org/leste/pool/main/q/qt6-qpa-maemo/qt6-qpa-maemo_6.1.1.orig.tar.gz
+	[qt6-maemo]=https://maedevu.maemo.org/leste/pool/main/q/qt6-maemo/qt6-maemo_0.4.5%2B5m7.tar.gz
+	[qt6csv]=https://maedevu.maemo.org/leste/pool/main/q/qt6csv/qt6csv_1.7.0.orig.tar.gz
+	[nomweather]=$GH_EXTRAS/nomweather.git
+	[telepathy-qt6]=https://maedevu.maemo.org/leste/pool/main/t/telepathy-qt6/telepathy-qt6_0.9.10.orig.tar.gz
 )
 URL+=(
 	[maepad]=$GM_EXTRAS/maepad.git
@@ -1209,3 +1234,73 @@ json.dump(m, sys.stdout)' > "$PR.manifest"
 }
 
 custom_sphone() { qt_cmake; }
+
+# --- Qt 6 ----------------------------------------------------------------
+# cmake for Qt 6 [arguments...], as qt_cmake: FreeBSD's Qt 6 in the sysroot,
+# the PC's Qt 6 tools (moc, rcc, uic) through QT_HOST_PATH; the PC's is
+# newer than FreeBSD's 6.11, with the same moc output revision
+qt6_cmake() {
+	qt_host
+	cmake -S . -B _build -DCMAKE_TOOLCHAIN_FILE="$H/qt5host/toolchain.cmake" \
+	    -DQT_HOST_PATH=/usr -DQT_HOST_PATH_CMAKE_DIR=/usr/lib/cmake \
+	    -DQT_NO_PACKAGE_VERSION_CHECK=TRUE -DQT_NO_PACKAGE_VERSION_INCOMPATIBLE_WARNING=TRUE \
+	    -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release \
+	    -DCMAKE_C_FLAGS="$CPPFLAGS $CFLAGS" -DCMAKE_CXX_FLAGS="$CPPFLAGS $CXXFLAGS" \
+	    -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" -DCMAKE_SHARED_LINKER_FLAGS="$LDFLAGS" \
+	    -DCMAKE_MODULE_LINKER_FLAGS="$LDFLAGS" "$@" > cmake.out 2>&1 ||
+	    { tail -30 cmake.out; exit 1; }
+	cmake --build _build -j"$JOBS" > make.out 2>&1 ||
+	    { grep -m20 -E "error:|Error [0-9]" make.out; tail -20 make.out; exit 1; }
+	DESTDIR="$PR" cmake --install _build > install.out 2>&1 ||
+	    { tail -20 install.out; exit 1; }
+}
+# Qt 6.10 made the private modules (Qt6::GuiPrivate, ...) components of
+# their own, which Leste's sources (for Debian's Qt 6.8) do not ask for
+qt6_private() {
+	sed -i "s/^find_package(Qt6 REQUIRED COMPONENTS \(.*\))$/find_package(Qt6 REQUIRED COMPONENTS \1 $*)/" CMakeLists.txt
+}
+# ... and their CMake packages pass those on: they ask for them themselves
+qt6_private_config() {
+	local f
+	for f in $(find "$PR"/usr/local/lib/cmake -name '*Config.cmake'); do
+		sed -i '1i find_package(Qt6 QUIET COMPONENTS CorePrivate GuiPrivate WidgetsPrivate)' "$f"
+	done
+}
+custom_qt6_style_maemo() {
+	qt6_private CorePrivate GuiPrivate WidgetsPrivate DBus
+	# Qt 6.11's private theme headers include Qt D-Bus's
+	sed -i 's/^        Qt6::GuiPrivate$/        Qt6::GuiPrivate\n        Qt6::DBus/' \
+	    src/plugins/platformthemes/maemo5/CMakeLists.txt
+	qt6_cmake
+	qt6_private_config
+}
+custom_qt6_qpa_maemo() {
+	qt6_private CorePrivate GuiPrivate WidgetsPrivate OpenGLPrivate
+	qt6_cmake
+}
+custom_qt6_maemo() {
+	qt6_private CorePrivate GuiPrivate WidgetsPrivate
+	qt6_cmake
+	qt6_private_config
+}
+custom_qt6csv() { qt6_cmake; }
+# QML compiled at run time, not ahead of time: the PC's newer qmlcachegen
+# writes C++ for Qt internals FreeBSD's Qt 6.11 does not have yet
+qt6_no_cachegen() {
+	find . -name CMakeLists.txt -exec sed -i \
+	    's/^\([[:space:]]*\)\(qt6\?_add_qml_module([^ )]*\)$/\1\2 NO_CACHEGEN/' {} +
+}
+custom_nomweather() { qt6_no_cachegen; qt6_cmake; }
+# Telepathy Qt for Qt 6, with its service side (Conversations'), without
+# tests, examples and Farstream. Its CMake files name /usr/local
+# absolutely: they find their prefix from where they are instead, which
+# is /usr/local on FreeBSD and the sysroot's for the builds here.
+custom_telepathy_qt6() {
+	local f
+	qt6_cmake -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_FARSTREAM=OFF
+	for f in "$PR"/usr/local/lib/cmake/TelepathyQt6*/*.cmake; do
+		sed -i -e 's|"/usr/local/|"${_tpqt_prefix}/|g' -e 's|;/usr/local/|;${_tpqt_prefix}/|g' "$f"
+		sed -i '1i get_filename_component(_tpqt_prefix "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)' "$f"
+	done
+}
+custom_conversations() { qt6_no_cachegen; qt6_cmake; }
