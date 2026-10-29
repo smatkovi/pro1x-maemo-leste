@@ -1,0 +1,17 @@
+# German for pro1x-look
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: de\n"
+
+msgid "Desktop"
+msgstr "Desktop"
+
+msgid "Home views, with the application menu and the open applications behind the buttons in the top left corner, as on the Nokia N900."
+msgstr "Startseiten, mit dem Anwendungsmenü und den offenen Anwendungen hinter den Schaltflächen oben links, wie auf dem Nokia N900."
+
+msgid "The home views, the applications and the open applications as pages side by side, changed by a swipe. In an application a swipe from the left or right edge goes to the open applications, one down from the top edge closes it, as on the Nokia N9."
+msgstr "Startseiten, Anwendungen und offene Anwendungen als Seiten nebeneinander, gewechselt durch Wischen. In einer Anwendung führt Wischen vom linken oder rechten Rand zu den offenen Anwendungen, Wischen vom oberen Rand nach unten schließt sie, wie auf dem Nokia N9."
+
+msgid "Ends the Hildon session and starts Xfce; Hildon in Xfce's menu switches back."
+msgstr "Beendet die Hildon-Sitzung und startet Xfce; Hildon in Xfces Menü wechselt zurück."

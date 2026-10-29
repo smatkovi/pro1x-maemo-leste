@@ -1,0 +1,9 @@
+[Desktop Entry]
+Encoding=UTF-8
+Type=HildonControlPanelPlugin
+Name=Desktop
+Comment=Maemo's or the Nokia N9's desktop
+Icon=general_applications
+X-Text-Domain=pro1x-look
+X-control-panel-plugin=libpro1x-look.so
+Categories=personalisation

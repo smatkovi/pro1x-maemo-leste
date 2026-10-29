@@ -16,6 +16,11 @@ top left corner go.
 
     gconftool-2 -s -t bool /apps/osso/hildon-desktop/meego_pages true
 
+or in Settings, Desktop (the control panel applet `apps/pro1x-look`):
+Maemo or MeeGo, and on FreeBSD Xfce in Hildon's place. hildon-desktop
+follows the key at once. On Arch the session decides (`pro1x-desktop
+hildon|meego`, `arch/hildon/hildon-session` sets the key at its start).
+
 A swipe counts when it is twice as far across as down and covers a third
 of the screen, or a tenth within 300 ms (Harmattan's home screen,
 `meegotouchhome`'s `PagedPanning`). hildon-desktop sees it in the X events

@@ -38,6 +38,10 @@ LOCAL = {
                     'matchbox decorations) by one factor; pro1x-hidpi makes the '
                     "theme for the configured factor and the session's environment "
                     '(tools/pro1x-hidpi).', ['UNKNOWN']),
+    'pro1x-look': ('1.0', "The control panel's choice of Hildon's style",
+                   "A control panel applet: Hildon in Maemo's style or in the Nokia "
+                   "N9's (pages and edge swipes, patches/meego), or Xfce in its "
+                   'place (apps/pro1x-look).', ['UNKNOWN']),
     'pro1x-steps': ('1.0', "The Pro1X's hardware step counter on D-Bus",
                     "pro1x-steps reads the ADSP's pedometer through libssc and "
                     'serves the count as org.pro1x.Steps on the system bus '
@@ -153,6 +157,7 @@ RUNTIME = {
     'gpodder-leste': ['python312', 'pyotherside-qt5', 'qt5-declarative',
                       'qt5-quickcontrols', 'qt5-quickcontrols2', 'qt5-graphicaleffects'],
     'pro1x-hidpi': ['xrdb'],
+    'pro1x-look': ['hildon-control-panel', 'hildon-desktop'],
     'wifi-assistant': ['curl'],
     'pro1x-steps': ['hexagonrpc', 'dbus'],
     'pro1x-proximity': ['hexagonrpc', 'dbus'],

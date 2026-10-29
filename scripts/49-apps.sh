@@ -1,6 +1,7 @@
 #!/bin/bash
-# Builds and installs the Pro1X camera app (apps/), installs the Maemo 5
-# ports from their repositories' releases, and printing (CUPS).
+# Builds and installs the Pro1X camera app and the control panel's Desktop
+# applet (apps/), installs the Maemo 5 ports from their repositories'
+# releases, and printing (CUPS).
 #
 # Runs as root INSIDE the target (chroot or the running phone), after
 # 48-camera-stack.sh. Needs network for the build dependencies.
@@ -11,7 +12,8 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get install -y -q --no-install-recommends build-essential qtbase5-dev \
   qtbase5-dev-tools qt5-qmake libqt5maemo5-dev libqt5x11extras5-dev \
-  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev curl
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev curl \
+  hildon-control-panel-dev libhildon1-dev libgconf2-dev libosso-dev gettext
 
 rm -rf "$SRC/pro1x-camera"
 mkdir -p "$SRC"
@@ -20,6 +22,11 @@ cd "$SRC/pro1x-camera"
 qmake
 make -j"$(nproc)"
 make install
+
+# Settings, Desktop: Hildon in Maemo's style or in the N9's (patches/meego)
+rm -rf "$SRC/pro1x-look"
+cp -r "$REPO/apps/pro1x-look" "$SRC/pro1x-look"
+make -C "$SRC/pro1x-look" install PREFIX=/usr
 
 # Ports of Maemo 5 apps, each in its own repository with release packages
 # (Pedometer Home Widget on tools/pro1x-steps, headphoned, gPodder 4,

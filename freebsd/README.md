@@ -142,7 +142,8 @@ happens; with `pro1x.standby=off` black after 3 minutes, since scfb has
 no DPMS), `startx hildon` or
 `startx xfce`; without an argument `pro1x.desktop=hildon` in
 `freebsd/cmdline` picks Hildon. "Hildon" in Xfce's menu and "Xfce" in
-Hildon's (`pro1x-desktop hildon|xfce`) switch without leaving X:
+Hildon's, or Xfce in Hildon's Settings, Desktop (`apps/pro1x-look`), switch
+without leaving X (`pro1x-desktop hildon|xfce`):
 `~/.xinitrc` runs the desktops one after the other on the same server.
 A short press on the power key goes to the stand-by screen (or blanks
 the screen) or brings the desktop back, held

@@ -483,6 +483,27 @@ hidpi_tool() {
 	cp -a "$PR/." "$STAGE/"
 }
 
+# The control panel's Desktop applet (apps/pro1x-look): Maemo's or the
+# N9's style of Hildon, or Xfce
+look_applet() {
+	local b=$BUILD/pro1x-look src=$REPO/apps/pro1x-look
+	log "pro1x-look"
+	mkdir -p "$b"
+	# shellcheck disable=SC2046
+	$CC $CPPFLAGS $CFLAGS $LDFLAGS -fPIC -shared -DLOCALEDIR='"/usr/local/share/locale"' \
+	    -o "$b/libpro1x-look.so" "$src/pro1x-look.c" \
+	    $(pkg-config --cflags --libs hildon-1 hildon-control-panel gconf-2.0 libosso gtk+-2.0) \
+	    > "$b/make.out" 2>&1 || { grep -m20 error "$b/make.out"; return 1; }
+	msgfmt -o "$b/de.mo" "$src/de.po"
+	PR=$H/pkgroot/pro1x-look
+	rm -rf "$PR"
+	install -D -m 644 "$b/libpro1x-look.so" "$PR/usr/local/lib/hildon-control-panel/libpro1x-look.so"
+	install -D -m 644 "$src/pro1x-look.desktop" \
+	    "$PR/usr/local/share/applications/hildon-control-panel/pro1x-look.desktop"
+	install -D -m 644 "$b/de.mo" "$PR/usr/local/share/locale/de/LC_MESSAGES/pro1x-look.mo"
+	cp -a "$PR/." "$STAGE/"
+}
+
 # This repository's small tools (tools/): the step counter and the
 # proximity sensor (libssc), the modem's GNSS for gpsd (QMI), the stand-by
 # screen, with their files (extra/<tool>)
@@ -661,6 +682,9 @@ if [ $# -eq 0 ] || [[ " $* " == *" data "* ]]; then
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-hidpi "* ]]; then
 	hidpi_tool
+fi
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-look "* ]]; then
+	look_applet || failed+=(pro1x-look)
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-steps "* ]]; then
 	dsp_tool pro1x-steps sbin "libssc gio-unix-2.0" || failed+=(pro1x-steps)
