@@ -69,9 +69,11 @@ if [ -x /sbin/pro1x-bootmenu ] && [ -x /sbin/pro1x-boot ]; then
   count=0
   default=0
   set --
+  # a snapshot (system@number) preselects its system's snapshots entry; a
+  # system without @ its own entry, not the snapshots one after it
+  case $want in *@*) snapentry=${want%@*}@ ;; *) snapentry= ;; esac
   while IFS='|' read -r key label image; do
-    # a snapshot (system@number) preselects its system's snapshots entry
-    { [ "$key" = "$want" ] || [ "$key" = "${want%@*}@" ]; } && default=$count
+    { [ "$key" = "$want" ] || [ "$key" = "$snapentry" ]; } && default=$count
     set -- "$@" "$label"
     count=$((count + 1))
   done <<EOF
