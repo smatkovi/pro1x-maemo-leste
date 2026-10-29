@@ -36,8 +36,10 @@ tools/pro1x-autosuspend/wakemeas.sh 60
   `hciconfig hci0 down` drops it to 0. Android switches the UART clock off
   while the Bluetooth chip sleeps (in-band sleep); in mainline `hci_qca` that
   hook (`__serial_clock_off`) is an empty TODO, and qcom_geni_serial only
-  has its wake-up interrupt for system suspend. In a suspend the serial
-  port is suspended anyway; while awake it costs CX nominal.
+  has its wake-up interrupt for system suspend. It even stayed powered in a
+  suspend: the open serdev port keeps it up as a runtime PM child. Patches
+  0023 and 0024 (7.1.0-pro1x.7) switch it off between the in-band sleeps
+  and for a suspend, see "The Bluetooth UART between in-band sleeps".
 - **Too many wake-ups for cluster sleep.** The CPU clusters' deeper idle
   state was rejected in over 99 % of the attempts (`Rejected` equal to
   `Above` in `/sys/kernel/debug/pm_genpd/power-domain-cpu-cluster*/idle_states`):
@@ -270,8 +272,161 @@ Larger, not done: the touchscreen asleep while dt2w is off or the phone is
 in a pocket (needs mce's proximity), the LED patterns in the LPG instead of
 mce's timer, sensor batching in the ADSP requests (libssc asks for every
 sample as a wake-up), the panel's ELVDD/ELVSS enable (gpio65) as a
-regulator, the Bluetooth UART clock off between transfers (`hci_qca`'s
-empty `__serial_clock_off`).
+regulator. (The Bluetooth UART clock off between transfers: patches 0023
+and 0024, below.)
+
+## The Bluetooth UART between in-band sleeps (2026-10-29, 7.1.0-pro1x.7, untested)
+
+With Bluetooth up, the UART (`4a8c000.serial`) kept its clock, its CX
+performance vote and its interconnect votes for good, in the RPM's sleep
+set too, so the SoC could not reach vlow or vmin, awake or in a suspend.
+Qualcomm's in-band sleep (HCI_IBS) has both sides tell when they sleep
+(`HCI_IBS_SLEEP_IND`) and wake the other one before they send
+(`HCI_IBS_WAKE_IND`, answered by `HCI_IBS_WAKE_ACK`); `hci_qca` tracked
+that in a TX and an RX vote, but its clock hooks were empty.
+
+- `0023-serdev-qcom-geni-uart-powered-down-while-open.patch`: serdev gets
+  `serdev_device_pm_put()` and `serdev_device_pm_get()` (drop and take back
+  the controller's runtime PM reference that `serdev_device_open()` took);
+  a GENI UART owned by a serdev controller is held by that controller, not
+  by a reference of its own, so it powers down (clocks, OPP/CX vote,
+  interconnect, pins in their sleep state) once the client lets go and the
+  serial core's port device has nothing left to send. While it is down its
+  interrupt is off and its wake-up interrupt (GPIO 11, RX, an MPM pin)
+  resumes it; it stays up 200 ms after a wake-up or the last received byte
+  (`power/autosuspend_delay_ms`). For a suspend it is now forced off also
+  while the port stays open.
+- `0024-bluetooth-hci_qca-uart-off-while-both-sides-sleep.patch`: both
+  votes off, the UART may power down; a vote on (the host waking the chip
+  for TX, the chip's `WAKE_IND` for RX) brings it up first. The chip's
+  first `WAKE_IND` byte is lost while the UART comes up; the chip repeats
+  it until it gets the `WAKE_ACK`. Not while IBS is off (patch download,
+  memory dump, power off, SSR), and after the download the RX vote starts
+  on, until the chip's first `SLEEP_IND`. The FM receiver's commands go
+  through the same wake-up (`qca_enqueue()`).
+
+To check on the phone: `cat /sys/kernel/debug/bluetooth/hci0/ibs/*`
+(`uart_idle` 1 while both sleep, `votes_off`/`votes_on` counting up,
+`ibs_recv_wakes` and `ibs_sent_wacks` too),
+`cat /sys/devices/platform/soc@0/4ac0000.geniqup/4a8c000.serial/power/runtime_status`
+(`suspended` between the transfers), CX in `pm_genpd_summary` at 0 with
+Bluetooth up, and that Bluetooth and the FM radio still work: a scan
+(`hcitool lescan`, `bluetoothctl scan on`), a connection, an FM station
+with RDS. If something breaks: `echo on > .../4a8c000.serial/power/control`
+forbids the UART's runtime PM, which is the old behaviour (until the next
+boot); `echo auto` allows it again. Lost wake-ups (the chip's events
+arriving late or not at all, `Frame reassembly failed` in `dmesg`) would
+mean the chip does not repeat its `WAKE_IND` fast enough: then a longer
+`autosuspend_delay_ms` first.
+
+## Wake-up audit (2026-10-29)
+
+From the logs of 2026-10-25 (per interrupt, MeeGo, display off, before
+patch 0008) and 2026-10-28 (`~/ps/pro1x-power/2026-10-28`, totals only,
+Leste and MeeGo on 7.1.0-pro1x.1, display off, on the battery):
+
+- **The first five minutes after a start cost about 100 mA:** Leste at
+  -237 to -257 mA and about 400 interrupts a second until 290 s into the
+  run, then -137 to -171 mA (mean -145 mA after the first 5 minutes,
+  against -160 mA over the whole run) and 27-48 interrupts a second; MeeGo
+  the same until 165 s (-160 mA after it). The step comes about 300 s
+  after the system's start, which is PulseAudio's suspend-on-idle timeout
+  (`timeout=300` in `rootfs-overlay/etc/pulse/default.pa.d/50-pro1x.pa`,
+  set because every resume of the card pops in the loudspeaker): the sound
+  card and the ADSP's audio path running silence. Not proven yet; the
+  logger's new `pcm` column (ALSA substreams running) shows it in the next
+  runs. If so, every sound costs 5 minutes at +100 mA, and it keeps
+  `pro1x-autosuspend` (which waits for running substreams) from suspending
+  meanwhile: then the pop has to be fixed (aw87339 sequencing) so that the
+  timeout can go down to the N9's 1-5 s.
+- **Steady state, 27-48 interrupts a second on Leste (41-64 on MeeGo).**
+  On 2026-10-25 (MeeGo, about 170 a second then) they were mostly timers
+  and IPIs: function-call IPIs 57/s (remote task wake-ups go through
+  them), the arch timer 44/s, the broadcast timer (`arch_mem_timer`) 34/s
+  and its IPIs 14/s for CPUs in their deep idle state, rescheduling IPIs
+  12/s; then the battery ADC 3.8/s (on USB), UFS 3.2/s, the RPM's glink
+  1.8/s, the Bluetooth UART 1.7/s, Wi-Fi 0.7/s. By process: `rcu_preempt`
+  13/s (lazy RCU since 0008), kworkers around 25/s, `upowerd` 3.5/s (fixed
+  by the `NoPollBatteries` override), UFS clock gating and scaling 4/s,
+  `jbd2` 1.4/s. The 2026-10-28 logs have no breakdown.
+- **Changed:** `0025-power-pro1x-adc-battery-charge-pace-only-while-charging.patch`:
+  with the cable in but nothing charging (the charger's input suspended,
+  which is how every standby measurement runs, or a full battery) the
+  battery was read at the charging pace, every 5 s, a burst of ADC
+  conversions each time; now every 30 s as on the battery. The Bluetooth
+  UART (0023/0024, above). Kernel option: the trace events
+  (`device/kernel/leste.fragment`, tracepoints only).
+- **Tools:** `tools/pro1x-wakeups [SECONDS]` counts, from the trace
+  events, the interrupts, each CPU's idle exits, the timer and hrtimer
+  callbacks (and the tasks their timers wake), the work items, the task
+  wake-ups, the IPIs and who sent the function-call ones, plus the
+  context switches per process; the trace buffer is read only at the end.
+  `pro1x-powerlog` now ends with the interrupts per second over the run
+  by source, the mean without the first 5 minutes, the `pcm` column, and
+  runs `pro1x-wakeups` for a minute halfway through when it is installed
+  (`68-power-standby.sh` installs both and fetches `<name>.wakeups`).
+- **Next, from pro1x-wakeups on the phone:** whatever leads its lists.
+  Candidates seen in the Leste image: `cron` (once a minute), `rsyslog`
+  and `jbd2` (writes every few seconds keep UFS waking: a longer
+  `vm.dirty_writeback_centisecs`, `commit=` for the root), `dsme-thermal`,
+  `icd2` (Wi-Fi scans while disconnected), `haveged`.
+
+## The notify_rpm test (2026-10-31, with the owner)
+
+What it shows: whether the RPM takes the SoC into vlow/vmin once the MPM
+hands it over (patch 0011), and whether the RTC alarm (PMIC RTC over the
+SPMI arbiter, an MPM pin) wakes it again. The test runs on 7.1.0-pro1x.7
+(0001-0025; it has everything of pro1x.6).
+
+Before: the kernel on the phone, from the build host (Leste, over USB):
+
+    WORK=/run/media/sebastian/2e638a7f-26db-4e89-9446-81d688464798/pro1x-leste
+    PHONE="ssh ... root@172.16.42.1" \
+        WORK=$WORK OUT=$WORK/out-pro1x.7 bash scripts/65-kernel-update.sh prepare
+    PHONE=... WORK=$WORK OUT=$WORK/out-pro1x.7 bash scripts/65-kernel-update.sh flash
+
+then a reboot with the owner there (trial boot, `pro1x-boot-trial`
+confirms it), `uname -r` 7.1.0-pro1x.7, Wi-Fi up, and its address.
+
+The test: the cable out (the USB gadget does not come back from a
+suspend yet), over Wi-Fi, the phone lying still:
+
+1. Without the hand-over, for comparison (vlow and vmin must stay +0):
+   `PHONE="ssh ... root@<Wi-Fi address>" bash scripts/69-rpm-test.sh 60 norpm bt-down`
+2. With it, Bluetooth down (the SoC's own state only):
+   `... bash scripts/69-rpm-test.sh 60 rpm bt-down`.
+   Expected: `OK: suspended`, vlow or vmin `+1` or more with an
+   accumulated duration close to the 60 s, woken by the RTC alarm's
+   interrupt (`pm_wakeup_irq`).
+3. If 2 woke up: the same for 600 s, and the battery's voltage before and
+   after (the log has both; the current while suspended cannot be read).
+4. With Bluetooth up (patches 0023/0024 too):
+   `... bash scripts/69-rpm-test.sh 60 rpm bt-up`; afterwards Bluetooth and
+   the FM radio still work (see the section on the Bluetooth UART).
+5. Awake, Bluetooth up, display off: `pro1x-wakeups 60` (and the IBS
+   counters and the UART's `runtime_status`) for the wake-up audit.
+
+`scripts/69-rpm-test.sh` copies `tools/pro1x-rpmtest` to the phone, starts
+it detached, waits and fetches its log to `~/ps/pro1x-power/<date>/`.
+`pro1x-rpmtest` arms the RTC alarm first, then switches `notify_rpm` on,
+syncs and suspends (s2idle); back, `notify_rpm` goes off before anything
+else, also when the suspend fails or the script is killed, and it is off
+after any reboot. Around the suspend it stops `pro1x-hexagonrpcd`, takes
+the Bluetooth UART's wake-up away and switches `pm_debug_messages` on,
+and puts all of it back afterwards. Its log: `qcom_stats` before and after
+(vlow, vmin and the subsystems, raw RPM values), the battery, CX in
+`pm_genpd_summary`, the IBS counters, the suspend statistics, the wake-up
+interrupt, the interrupts during the try and the kernel's log of it; the
+last line `OK` or `FAILED` with the vlow/vmin deltas.
+
+If the phone does not come back (the script says so about four minutes
+after the alarm): the SoC did not wake up. Hold the power key until it
+restarts (`qcom_wdt` stops the watchdog for a suspend, so nothing resets
+it by itself); `notify_rpm` is off after the restart. Then
+`FETCH=1 PHONE=... bash scripts/69-rpm-test.sh` fetches the log, which
+ends before the suspend. Next steps then: the vMPM timer values and the
+MPM's pin enables in the log of the hand-over (0011), or vlow without
+vmin, before the test is repeated.
 
 ## FreeBSD
 

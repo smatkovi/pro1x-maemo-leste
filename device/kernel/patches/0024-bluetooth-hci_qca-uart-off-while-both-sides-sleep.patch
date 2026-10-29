@@ -1,0 +1,266 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 29 Oct 2026 20:10:00 +0100
+Subject: [PATCH] Bluetooth: hci_qca: let the UART power down while both
+ sides sleep (IBS)
+
+HCI_IBS tracks whether the host needs the UART for TX (tx_vote) or RX
+(rx_vote), but __serial_clock_off() and __serial_clock_on() were empty
+TODOs: the UART kept its clock and, on Qualcomm SoCs, its CX and
+interconnect votes as long as Bluetooth was up, which keeps the SoC out of
+vlow and vmin. Android switches the UART off between the in-band sleep
+indications.
+
+With both votes off the UART's serdev controller may now power down
+(serdev_device_pm_put()); a vote on brings it up again first
+(serdev_device_pm_get(), synchronous, from the IBS work items). The
+controller wakes the host with HCI_IBS_WAKE_IND, which the UART's wake-up
+interrupt catches on RX; that byte is lost while the UART comes up, and
+the controller repeats it until it gets HCI_IBS_WAKE_ACK.
+
+The UART stays up while IBS is off (patch download, memory dump, power
+off, SSR) and before the port is closed: qca_uart_keep_up() after setting
+QCA_IBS_DISABLED or QCA_SSR_TRIGGERED. After the download the controller
+runs awake until its first HCI_IBS_SLEEP_IND and may send without a
+wake-up indication till then, so setup starts with the RX vote on and the
+RX state awake. The votes get a mutex of their own (vote work items and
+qca_suspend() changed them concurrently; the comment asked for the ibs
+spinlock, which no caller held and which a sleeping vote cannot take).
+debugfs: ibs/uart_idle.
+
+The FM receiver of the WCN399x shares the link: its commands go through
+qca_enqueue() and so through the same wake-up.
+---
+diff --git a/drivers/bluetooth/hci_qca.c b/drivers/bluetooth/hci_qca.c
+index cfbe99e00b..d99272451e 100644
+--- a/drivers/bluetooth/hci_qca.c
++++ b/drivers/bluetooth/hci_qca.c
+@@ -155,6 +155,8 @@ struct qca_data {
+ 	u8 rx_ibs_state;	/* HCI_IBS receive side power state */
+ 	bool tx_vote;		/* Clock must be on for TX */
+ 	bool rx_vote;		/* Clock must be on for RX */
++	bool uart_idle;		/* The UART let power down: both sides asleep */
++	struct mutex vote_lock;	/* tx_vote, rx_vote, uart_idle */
+ 	struct timer_list tx_idle_timer;
+ 	u32 tx_idle_delay;
+ 	struct timer_list wake_retrans_timer;
+@@ -287,30 +289,68 @@ static const char *qca_get_rampatch_name(struct hci_uart *hu)
+ 	}
+ }
+ 
+-static void __serial_clock_on(struct tty_struct *tty)
++/*
++ * With both sides asleep, the UART may power down (its clock, and the CX
++ * and interconnect votes that come with it, which keep the SoC out of its
++ * sleep states). The controller then wakes us with HCI_IBS_WAKE_IND: the
++ * UART's wake-up interrupt catches its edge on RX, the byte itself is lost
++ * while the UART comes up, and the controller sends it again until it gets
++ * HCI_IBS_WAKE_ACK. Before the host sends, the TX vote brings the UART up.
++ * Called with vote_lock held.
++ */
++static void __serial_clock_on(struct hci_uart *hu)
+ {
+-	/* TODO: Some chipset requires to enable UART clock on client
+-	 * side to save power consumption or manual work is required.
+-	 * Please put your code to control UART clock here if needed
+-	 */
++	struct qca_data *qca = hu->priv;
++	int ret;
++
++	if (!qca->uart_idle)
++		return;
++
++	ret = serdev_device_pm_get(hu->serdev);
++	if (ret) {
++		BT_ERR("UART not powered up: %d", ret);
++		return;
++	}
++	qca->uart_idle = false;
+ }
+ 
+-static void __serial_clock_off(struct tty_struct *tty)
++static void __serial_clock_off(struct hci_uart *hu)
+ {
+-	/* TODO: Some chipset requires to disable UART clock on client
+-	 * side to save power consumption or manual work is required.
+-	 * Please put your code to control UART clock off here if needed
+-	 */
++	struct qca_data *qca = hu->priv;
++
++	/* Not without IBS: patch download, memory dump, power off, SSR */
++	if (!hu->serdev || qca->uart_idle ||
++	    test_bit(QCA_IBS_DISABLED, &qca->flags) ||
++	    test_bit(QCA_SSR_TRIGGERED, &qca->flags))
++		return;
++
++	serdev_device_pm_put(hu->serdev);
++	qca->uart_idle = true;
+ }
+ 
+-/* serial_clock_vote needs to be called with the ibs lock held */
++/*
++ * The UART up for good, before IBS is disabled or the port closed: call it
++ * after setting QCA_IBS_DISABLED or QCA_SSR_TRIGGERED, so that no vote can
++ * let it power down again.
++ */
++static void qca_uart_keep_up(struct hci_uart *hu)
++{
++	struct qca_data *qca = hu->priv;
++
++	mutex_lock(&qca->vote_lock);
++	__serial_clock_on(hu);
++	mutex_unlock(&qca->vote_lock);
++}
++
++/* serial_clock_vote may sleep: call it without the ibs lock */
+ static void serial_clock_vote(unsigned long vote, struct hci_uart *hu)
+ {
+ 	struct qca_data *qca = hu->priv;
+ 	unsigned int diff;
++	bool old_vote, new_vote;
+ 
+-	bool old_vote = (qca->tx_vote | qca->rx_vote);
+-	bool new_vote;
++	mutex_lock(&qca->vote_lock);
++	old_vote = qca->tx_vote | qca->rx_vote;
+ 
+ 	switch (vote) {
+ 	case HCI_IBS_VOTE_STATS_UPDATE:
+@@ -320,7 +360,7 @@ static void serial_clock_vote(unsigned long vote, struct hci_uart *hu)
+ 			qca->vote_off_ms += diff;
+ 		else
+ 			qca->vote_on_ms += diff;
+-		return;
++		goto out;
+ 
+ 	case HCI_IBS_TX_VOTE_CLOCK_ON:
+ 		qca->tx_vote = true;
+@@ -344,16 +384,16 @@ static void serial_clock_vote(unsigned long vote, struct hci_uart *hu)
+ 
+ 	default:
+ 		BT_ERR("Voting irregularity");
+-		return;
++		goto out;
+ 	}
+ 
+ 	new_vote = qca->rx_vote | qca->tx_vote;
+ 
+ 	if (new_vote != old_vote) {
+ 		if (new_vote)
+-			__serial_clock_on(hu->tty);
++			__serial_clock_on(hu);
+ 		else
+-			__serial_clock_off(hu->tty);
++			__serial_clock_off(hu);
+ 
+ 		BT_DBG("Vote serial clock %s(%s)", str_true_false(new_vote),
+ 		       str_true_false(vote));
+@@ -369,6 +409,8 @@ static void serial_clock_vote(unsigned long vote, struct hci_uart *hu)
+ 		}
+ 		qca->vote_last_jif = jiffies;
+ 	}
++out:
++	mutex_unlock(&qca->vote_lock);
+ }
+ 
+ /* Builds and sends an HCI_IBS command packet.
+@@ -603,6 +645,7 @@ static int qca_open(struct hci_uart *hu)
+ 	skb_queue_head_init(&qca->rx_memdump_q);
+ 	spin_lock_init(&qca->hci_ibs_lock);
+ 	mutex_init(&qca->hci_memdump_lock);
++	mutex_init(&qca->vote_lock);
+ 	qca->workqueue = alloc_ordered_workqueue("qca_wq", 0);
+ 	if (!qca->workqueue) {
+ 		BT_ERR("QCA Workqueue not initialized properly");
+@@ -698,6 +741,7 @@ static void qca_debugfs_init(struct hci_dev *hdev)
+ 	debugfs_create_u64("tx_votes_on", mode, ibs_dir, &qca->tx_votes_on);
+ 	debugfs_create_u64("tx_votes_off", mode, ibs_dir, &qca->tx_votes_off);
+ 	debugfs_create_bool("rx_vote", mode, ibs_dir, &qca->rx_vote);
++	debugfs_create_bool("uart_idle", mode, ibs_dir, &qca->uart_idle);
+ 	debugfs_create_u64("rx_votes_on", mode, ibs_dir, &qca->rx_votes_on);
+ 	debugfs_create_u64("rx_votes_off", mode, ibs_dir, &qca->rx_votes_off);
+ 	debugfs_create_u64("votes_on", mode, ibs_dir, &qca->votes_on);
+@@ -736,6 +780,9 @@ static int qca_close(struct hci_uart *hu)
+ 	if (!test_bit(QCA_BT_OFF, &qca->flags))
+ 		qca_power_off(hu);
+ 
++	/* The port is closed after this */
++	set_bit(QCA_IBS_DISABLED, &qca->flags);
++	qca_uart_keep_up(hu);
+ 	serial_clock_vote(HCI_IBS_VOTE_STATS_UPDATE, hu);
+ 
+ 	skb_queue_purge(&qca->tx_wait_q);
+@@ -756,6 +803,7 @@ static int qca_close(struct hci_uart *hu)
+ 
+ 	hu->priv = NULL;
+ 
++	mutex_destroy(&qca->vote_lock);
+ 	kfree(qca);
+ 
+ 	return 0;
+@@ -1094,6 +1142,7 @@ static void qca_controller_memdump(struct work_struct *work)
+ 			 */
+ 			set_bit(QCA_IBS_DISABLED, &qca->flags);
+ 			set_bit(QCA_MEMDUMP_COLLECTION, &qca->flags);
++			qca_uart_keep_up(hu);
+ 			dump = (void *) skb->data;
+ 			qca_memdump->ram_dump_size = __le32_to_cpu(dump->dump_size);
+ 			if (!(qca_memdump->ram_dump_size)) {
+@@ -1661,6 +1710,7 @@ static void qca_hw_error(struct hci_dev *hdev, u8 code)
+ 
+ 	set_bit(QCA_SSR_TRIGGERED, &qca->flags);
+ 	set_bit(QCA_HW_ERROR_EVENT, &qca->flags);
++	qca_uart_keep_up(hu);
+ 	bt_dev_info(hdev, "mem_dump_status: %d", qca->memdump_state);
+ 
+ 	if (qca->memdump_state == QCA_MEMDUMP_IDLE) {
+@@ -1742,6 +1792,7 @@ static void qca_reset(struct hci_dev *hdev)
+ 	struct qca_data *qca = hu->priv;
+ 
+ 	set_bit(QCA_SSR_TRIGGERED, &qca->flags);
++	qca_uart_keep_up(hu);
+ 	if (qca->memdump_state == QCA_MEMDUMP_IDLE) {
+ 		set_bit(QCA_MEMDUMP_COLLECTION, &qca->flags);
+ 		qca_send_crashbuffer(hu);
+@@ -1961,6 +2012,7 @@ static int qca_setup(struct hci_uart *hu)
+ 	struct qca_btsoc_version ver;
+ 	struct qca_serdev *qcadev = serdev_device_get_drvdata(hu->serdev);
+ 	const char *soc_name;
++	unsigned long flags;
+ 
+ 	ret = qca_check_speeds(hu);
+ 	if (ret)
+@@ -1969,6 +2021,7 @@ static int qca_setup(struct hci_uart *hu)
+ 	clear_bit(QCA_ROM_FW, &qca->flags);
+ 	/* Patch downloading has to be done without IBS mode */
+ 	set_bit(QCA_IBS_DISABLED, &qca->flags);
++	qca_uart_keep_up(hu);
+ 
+ 	/* Enable controller to do both LE scan and BR/EDR inquiry
+ 	 * simultaneously.
+@@ -2069,6 +2122,16 @@ static int qca_setup(struct hci_uart *hu)
+ 	ret = qca_uart_setup(hdev, qca_baudrate, soc_type, ver,
+ 			firmware_name, rampatch_name);
+ 	if (!ret) {
++		/*
++		 * The controller runs awake after the download, until its
++		 * HCI_IBS_SLEEP_IND: it may send without HCI_IBS_WAKE_IND till
++		 * then, so the RX vote holds the UART up.
++		 */
++		serial_clock_vote(HCI_IBS_RX_VOTE_CLOCK_ON, hu);
++		spin_lock_irqsave(&qca->hci_ibs_lock, flags);
++		qca->rx_ibs_state = HCI_IBS_RX_AWAKE;
++		spin_unlock_irqrestore(&qca->hci_ibs_lock, flags);
++
+ 		clear_bit(QCA_IBS_DISABLED, &qca->flags);
+ 		qca_debugfs_init(hdev);
+ 		hu->hdev->hw_error = qca_hw_error;
+@@ -2274,6 +2337,9 @@ static void qca_power_off(struct hci_uart *hu)
+ 	qca_flush(hu);
+ 	spin_unlock_irqrestore(&qca->hci_ibs_lock, flags);
+ 
++	/* Up for what follows: the baud rate, the power pulse, closing */
++	qca_uart_keep_up(hu);
++
+ 	/* Non-serdev device usually is powered by external power
+ 	 * and don't need additional action in driver for power down
+ 	 */

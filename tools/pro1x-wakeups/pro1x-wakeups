@@ -1,0 +1,134 @@
+#!/bin/sh
+# What wakes the phone while it idles: the count of each source over
+# SECONDS (default 60), per second, from the kernel's trace events. The
+# trace buffer is read only at the end, so the measurement itself wakes
+# nothing up meanwhile.
+#
+#   pro1x-wakeups [SECONDS] [OUT]       (as root, the display off first)
+#
+# Prints, the largest first:
+#   - interrupts by name (/proc/interrupts, also without tracing)
+#   - how often each CPU came out of idle
+#   - timer and hrtimer callbacks by function; the ones that wake a task
+#     (hrtimer_wakeup: nanosleep, poll and select timeouts; process_timeout:
+#     schedule_timeout) by that task
+#   - work items by function
+#   - task wake-ups by task
+#   - IPIs by type, and the function-call IPIs by the code that sent them
+#     (remote wake-ups go through those)
+#   - context switches by process (/proc, also without tracing)
+# OUT keeps the raw trace (default: deleted afterwards). Needs the trace
+# events (CONFIG_FTRACE in device/kernel/leste.fragment, from 7.1.0-pro1x.7
+# on); without them only the interrupts and context switches.
+set -u
+T=${1:-60}
+OUT=${2:-}
+TR=/sys/kernel/tracing
+TMP=$(mktemp -d /run/pro1x-wakeups.XXXXXX) || exit 1
+trap 'rm -rf "$TMP"' EXIT
+
+EVENTS="irq/irq_handler_entry timer/timer_expire_entry timer/hrtimer_expire_entry
+	workqueue/workqueue_execute_start sched/sched_wakeup ipi/ipi_raise
+	ipi/ipi_send_cpu ipi/ipi_send_cpumask power/cpu_idle"
+
+[ -e $TR/events ] || mount -t tracefs nodev $TR 2> /dev/null
+tracing=0
+[ -w $TR/tracing_on ] && [ -d $TR/events/timer ] && tracing=1
+
+snap_irq() {
+	awk 'NR == 1 { n = NF; next }
+	     { s = 0; for (i = 2; i <= n + 1 && i <= NF; i++) if ($i ~ /^[0-9]+$/) s += $i
+	       d = ""; for (j = n + 2; j <= NF; j++) d = d " " $j
+	       print $1, s, d }' /proc/interrupts
+}
+snap_ctx() {
+	for p in /proc/[0-9]*; do
+		c=$(awk '/^(non)?voluntary_ctxt_switches/ { s += $2 } END { print s }' $p/status 2> /dev/null)
+		[ -n "$c" ] && echo "${p#/proc/} $c $(tr -d '\n' < $p/comm 2> /dev/null)"
+	done
+}
+
+if [ $tracing = 1 ]; then
+	echo 0 > $TR/tracing_on
+	old_kb=$(cat $TR/buffer_size_kb)
+	echo 4096 > $TR/buffer_size_kb
+	echo > $TR/trace
+	for e in $EVENTS; do
+		[ -w $TR/events/$e/enable ] && echo 1 > $TR/events/$e/enable
+	done
+fi
+snap_irq > $TMP/irq1
+snap_ctx > $TMP/ctx1
+[ $tracing = 1 ] && echo 1 > $TR/tracing_on
+sleep "$T"
+[ $tracing = 1 ] && echo 0 > $TR/tracing_on
+snap_irq > $TMP/irq2
+snap_ctx > $TMP/ctx2
+
+echo "# pro1x-wakeups: $T s, kernel $(uname -r), $(date '+%F %T')," \
+    "display $(cat /sys/class/drm/card*-DSI-*/dpms 2> /dev/null | head -1)"
+echo "== interrupts/s"
+awk -v T="$T" 'NR == FNR { a[$1] = $2; next }
+	($1 in a) { d = $2 - a[$1]; if (d > 0) { n = $1; $1 = ""; $2 = ""; printf "%8.2f %s%s\n", d / T, n, $0 } }' \
+	$TMP/irq1 $TMP/irq2 | sort -rn | head -25
+
+if [ $tracing = 1 ]; then
+	for e in $EVENTS; do
+		[ -w $TR/events/$e/enable ] && echo 0 > $TR/events/$e/enable
+	done
+	cat $TR/trace > $TMP/trace
+	echo > $TR/trace
+	echo "$old_kb" > $TR/buffer_size_kb
+	[ -n "$OUT" ] && cp $TMP/trace "$OUT"
+	grep -q 'LOST\|lost' $TMP/trace && echo "# (events lost: the buffer was too small)"
+
+	awk -v T="$T" '
+	function top(title, arr,    k, cmd) {
+		cmd = "sort -rn | head -20"
+		print "== " title
+		fflush()
+		for (k in arr) printf "%8.2f %s\n", arr[k] / T, k | cmd
+		close(cmd)
+	}
+	function field(name,    i) {
+		for (i = 1; i <= NF; i++) if (index($i, name "=") == 1) return substr($i, length(name) + 2)
+		return ""
+	}
+	/^#/ { next }
+	{
+		cpu = ""
+		for (i = 1; i <= NF; i++) if ($i ~ /^\[[0-9]+\]$/) { cpu = $i; break }
+		ev = ""
+		for (i = 1; i <= NF; i++) if ($i ~ /:$/ && $i !~ /^[0-9.]+:$/) { ev = $i; break }
+		sub(/:$/, "", ev)
+	}
+	ev == "irq_handler_entry" { last[cpu] = "" }
+	ev == "timer_expire_entry" { f = field("function"); timers["timer " f]++; last[cpu] = f; next }
+	ev == "hrtimer_expire_entry" { f = field("function"); timers["hrtimer " f]++; last[cpu] = f; next }
+	ev == "workqueue_execute_start" { works[$NF]++; last[cpu] = ""; next }
+	ev == "sched_wakeup" {
+		c = field("comm"); gsub(/[0-9]+/, "N", c)
+		if (last[cpu] == "hrtimer_wakeup" || last[cpu] == "process_timeout")
+			tasktimers[c " (" last[cpu] ")"]++
+		wakes[c]++; last[cpu] = ""; next
+	}
+	ev == "ipi_raise" { r = $0; sub(/[^(]*\(/, "", r); sub(/\)$/, "", r); ipis[r]++; next }
+	ev == "ipi_send_cpu" || ev == "ipi_send_cpumask" {
+		s = field("callsite"); sub(/\+0x.*/, "", s); senders[s]++; next
+	}
+	ev == "cpu_idle" { if (field("state") == "4294967295") exits["cpu" field("cpu_id")]++; next }
+	END {
+		top("idle exits/s per CPU", exits)
+		top("timer callbacks/s", timers)
+		top("tasks woken by their own timers/s", tasktimers)
+		top("work items/s", works)
+		top("task wake-ups/s", wakes)
+		top("IPIs/s by type", ipis)
+		top("function-call IPIs/s by sender", senders)
+	}' $TMP/trace
+fi
+
+echo "== context switches/s per process"
+awk -v T="$T" 'NR == FNR { a[$1] = $2; next }
+	($1 in a) { d = $2 - a[$1]; if (d > 0) { $2 = ""; printf "%8.2f %s\n", d / T, $0 } }' \
+	$TMP/ctx1 $TMP/ctx2 | sort -rn | head -20

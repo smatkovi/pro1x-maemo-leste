@@ -90,8 +90,10 @@ for k in "$@"; do
 		current=$k
 	fi
 	log "$k: logger for $MINUTES min"
-	timeout 60 $(sshc "$k") "$(var SUDO "$k") sh -c 'cat > /usr/local/bin/pro1x-powerlog && chmod 755 /usr/local/bin/pro1x-powerlog'" \
-	    < "$REPO/tools/pro1x-powerlog/pro1x-powerlog"
+	for t in pro1x-powerlog pro1x-wakeups; do
+		timeout 60 $(sshc "$k") "$(var SUDO "$k") sh -c 'cat > /usr/local/bin/$t && chmod 755 /usr/local/bin/$t'" \
+		    < "$REPO/tools/$t/$t"
+	done
 	on "$k" "setsid nohup /usr/local/bin/pro1x-powerlog $k $MINUTES 30 > /dev/null 2>&1 < /dev/null &"
 	sleep 20
 	on "$k" "$DISPLAY_OFF"
@@ -106,6 +108,7 @@ for k in "$@"; do
 	sleep 30
 	f=$(on "$k" "ls -t /host/pro1x-power/$k-*.log 2>/dev/null | head -1")
 	on "$k" "cat $f" > "$OUTDIR/$k.log"
+	on "$k" "cat ${f%.log}.wakeups 2>/dev/null" > "$OUTDIR/$k.wakeups" || true
 	log "$k: $(tail -1 "$OUTDIR/$k.log")"
 done
 log "done: $OUTDIR"

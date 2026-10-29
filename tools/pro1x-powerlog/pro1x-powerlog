@@ -8,20 +8,26 @@
 # Meant for unattended runs (scripts/68-power-standby.sh): start it, take
 # the USB power away, read the log afterwards. A line per sample:
 #
-#   s  mA  mV  %  status  input  usb  display  vlow  vmin  irq/s  ctxt/s  idle%
+#   s  mA  mV  %  status  input  usb  display  vlow  vmin  irq/s  ctxt/s  idle%  pcm
 #
 # mA is the battery's current_now (the fuel gauge's current, negative while
 # discharging), the status the battery's, input the charger's USB input
 # (on, or susp: suspended), usb the gadget's state, display the panel's DPMS
 # state, vlow and vmin the counts of the SoC's sleep states, irq/s and
-# ctxt/s since the sample before, idle% the CPUs' idle share in that time.
+# ctxt/s since the sample before, idle% the CPUs' idle share in that time,
+# pcm the number of ALSA substreams running (PulseAudio keeps the card
+# running for 300 s after the last sound, 50-pro1x.pa).
 #
 # For the run the charger's input is suspended (pro1x-charger-icl's
 # input_suspend): the phone runs from its battery with the cable in, which
 # is how it is measured on a hub that cannot switch off its ports' power.
-# It is resumed at the end, also when the logger is killed. The last line:
-# the mean current of the samples with the input suspended and the display
-# off, and how many there were.
+# It is resumed at the end, also when the logger is killed. At the end: the
+# interrupts per second over the run, by source; the last line the mean
+# current of the samples with the input suspended and the display off, and
+# how many there were, also without the first 5 minutes (start-up, the
+# sound card's idle time). With pro1x-wakeups installed it runs for a minute
+# halfway through, into NAME-<date>.wakeups next to the log (what woke the
+# CPUs: timers, work items, tasks, IPIs).
 set -u
 name=${1:?name} minutes=${2:?minutes} iv=${3:-30}
 
@@ -46,10 +52,16 @@ mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug 2>
 count() { awk '/^Count/ {print $2; exit}' /sys/kernel/debug/qcom_stats/$1 2> /dev/null || echo -; }
 irqs() { awk 'NR > 1 { for (i = 2; i <= NF; i++) if ($i ~ /^[0-9]+$/) s += $i; else break }
 	END { print s + 0 }' /proc/interrupts; }
+# per source: name, count
+irq_each() { awk 'NR == 1 { n = NF; next }
+	{ s = 0; for (i = 2; i <= n + 1 && i <= NF; i++) if ($i ~ /^[0-9]+$/) s += $i
+	  d = ""; for (j = n + 2; j <= NF; j++) d = d " " $j
+	  print $1, s, d }' /proc/interrupts; }
 ctxt() { awk '/^ctxt/ {print $2}' /proc/stat; }
 cpu() { awk '/^cpu / {print $2 + $3 + $4 + $5 + $6 + $7 + $8, $5 + $6; exit}' /proc/stat; }
 gadget() { cat /sys/class/udc/*/state 2> /dev/null | head -1 | tr ' ' _ || echo -; }
 dpms() { cat /sys/class/drm/card*-DSI-*/dpms 2> /dev/null | head -1 || echo -; }
+pcm() { grep -l RUNNING /proc/asound/card*/pcm*/sub*/status 2> /dev/null | wc -l; }
 
 {
 	echo "# $name: $(. /etc/os-release 2> /dev/null; echo "${PRETTY_NAME:-?}"), kernel $(uname -r)"
@@ -57,7 +69,7 @@ dpms() { cat /sys/class/drm/card*-DSI-*/dpms 2> /dev/null | head -1 || echo -; }
 	echo "# wlan $(cat /sys/class/net/wlan0/operstate 2> /dev/null || echo -)," \
 	    "bluetooth $( [ -e /sys/class/bluetooth/hci0 ] && echo present || echo -)," \
 	    "mem_sleep $(cat /sys/power/mem_sleep 2> /dev/null)"
-	echo "# s mA mV % status input usb display vlow vmin irq/s ctxt/s idle%"
+	echo "# s mA mV % status input usb display vlow vmin irq/s ctxt/s idle% pcm"
 } > "$log"
 
 # the time since boot: the clock may jump meanwhile (the RTC's offset set
@@ -65,6 +77,10 @@ dpms() { cat /sys/class/drm/card*-DSI-*/dpms 2> /dev/null | head -1 || echo -; }
 now() { cut -d. -f1 /proc/uptime; }
 t0=$(now)
 i0=$(irqs) c0=$(ctxt)
+irqf=$(mktemp /run/pro1x-powerlog.XXXXXX 2> /dev/null || echo /tmp/pro1x-powerlog.$$)
+irq_each > "$irqf"
+wakeups=$(command -v pro1x-wakeups)
+half=$((t0 + minutes * 30))
 set -- $(cpu)
 tot0=$1 idle0=$2
 end=$((t0 + minutes * 60))
@@ -80,10 +96,22 @@ while [ "$(now)" -lt "$end" ]; do
 	echo "$t $((ua / 1000)) $((uv / 1000)) $(cat $B/capacity 2> /dev/null) $(cat $B/status 2> /dev/null)" \
 	    "$(input) $(gadget) $(dpms) $(count vlow) $(count vmin)" \
 	    "$(( (i1 - i0) / dt )) $(( (c1 - c0) / dt ))" \
-	    "$(( tot1 > tot0 ? 100 * (idle1 - idle0) / (tot1 - tot0) : 0 ))" >> "$log"
+	    "$(( tot1 > tot0 ? 100 * (idle1 - idle0) / (tot1 - tot0) : 0 ))" "$(pcm)" >> "$log"
 	i0=$i1 c0=$c1 tot0=$tot1 idle0=$idle1
+	if [ -n "$wakeups" ] && [ "$(now)" -ge "$half" ]; then
+		"$wakeups" 60 > "${log%.log}.wakeups" 2>&1 &
+		wakeups=
+	fi
 done
-awk '!/^#/ && ($6 == "susp" || $5 == "Discharging") && $8 == "Off" { s += $2; n++ }
-	END { if (n) printf "# mean %.0f mA over %d samples on the battery, display off\n", s / n, n;
-	      else print "# no samples on the battery with the display off" }' "$log" >> "$log"
+wait
+irq_each | awk -v T=$(($(now) - t0)) 'NR == FNR { a[$1] = $2; next }
+	($1 in a) { d = $2 - a[$1]; if (d > 0) { n = $1; $1 = ""; $2 = ""; printf "# irq/s %.2f %s%s\n", d / T, n, $0 } }' \
+	"$irqf" - | sort -k3 -rn | head -20 >> "$log"
+rm -f "$irqf"
+awk '!/^#/ && ($6 == "susp" || $5 == "Discharging") && $8 == "Off" { s += $2; n++
+		if ($1 > 300) { s5 += $2; n5++ } }
+	END { if (!n) { print "# no samples on the battery with the display off"; exit }
+	      printf "# mean %.0f mA over %d samples on the battery, display off", s / n, n
+	      if (n5) printf "; %.0f mA after the first 5 min (%d samples)", s5 / n5, n5
+	      printf "\n" }' "$log" >> "$log"
 echo "$log"

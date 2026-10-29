@@ -42,3 +42,11 @@ CONFIG_RADIO_QCA_FM=m
 CONFIG_SLIMBUS=m
 CONFIG_SLIM_QCOM_NGD_CTRL=m
 CONFIG_SND_SOC_WCN399X=m
+
+# Wake-up audit (tools/pro1x-wakeups): the trace events of interrupts,
+# timers, work items, task wake-ups and IPIs (with the IPI's call site), to
+# tell what wakes an idle phone. Tracepoints only, no function tracer
+# (no patched function entries); switched off they cost nothing.
+CONFIG_FTRACE=y
+CONFIG_ENABLE_DEFAULT_TRACERS=y
+# CONFIG_FUNCTION_TRACER is not set

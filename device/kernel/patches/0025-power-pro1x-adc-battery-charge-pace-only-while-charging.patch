@@ -1,0 +1,37 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 29 Oct 2026 20:20:00 +0100
+Subject: [PATCH] power: supply: pro1x-adc-battery: the fast pace only while
+ charging
+
+The battery was read every 5 s, a burst of ADC conversions each time,
+whenever the cable was in. With the charger's input suspended (the
+standby measurements run like that, on the battery with the cable in) or
+a full battery nothing charges, and the readings came six times as often
+as on the battery for nothing (pm-adc5 interrupts, 3.8 a second on USB on
+2026-10-25, the work items and the SPMI traffic), in every measurement.
+Poll at the charging pace only while charge current flows.
+---
+diff --git a/drivers/power/supply/pro1x-adc-battery.c b/drivers/power/supply/pro1x-adc-battery.c
+index ccf22ac56b..b727029297 100644
+--- a/drivers/power/supply/pro1x-adc-battery.c
++++ b/drivers/power/supply/pro1x-adc-battery.c
+@@ -37,7 +37,9 @@
+ #include <linux/unaligned.h>
+ 
+ /*
+- * Every 5 s on a charger, every poll_battery_ms (30 s) on the battery, on
++ * Every 5 s while charging, every poll_battery_ms (30 s) otherwise (on the
++ * battery, but also with the cable in and no charge current: the charger's
++ * input suspended for a standby measurement, a full battery), on
+  * the freezable power efficient workqueue: the N9's fuel gauge integrated
+  * in hardware and was read every 360 s; this estimate needs ADC readings,
+  * but not every 5 s while the phone lies idle. The filters count in 5 s
+@@ -376,7 +378,7 @@ static bool adc_battery_update(struct adc_battery *b)
+ 	}
+ 	b->cap = new_cap;
+ 	b->status = adc_battery_status(b, b->v_f, usb);
+-	b->interval_ms = usb ? POLL_MS : clamp(poll_battery_ms, 5000U, 360000U);
++	b->interval_ms = charging ? POLL_MS : clamp(poll_battery_ms, 5000U, 360000U);
+ 
+ 	if (debug)
+ 		dev_info(b->dev, "v=%d uV i=%d uA esr=%u mOhm ocv=%d uV est=%d%% q=%lld uAh cap=%d%% usb=%d gap=%lldms\n",

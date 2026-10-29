@@ -1,0 +1,176 @@
+#!/bin/sh
+# One s2idle suspend with the MPM handing the SoC to the RPM (patch 0011's
+# notify_rpm), with an RTC alarm as the way back, and notify_rpm switched off
+# again by itself; for a test with someone at the phone (docs/power-management.md,
+# "The notify_rpm test").
+#
+#   pro1x-rpmtest [SECONDS] [rpm|norpm] [bt-down|bt-up]   (as root)
+#
+#   SECONDS   how long to sleep: the RTC alarm (default 60)
+#   rpm       notify_rpm on for the suspend (default); norpm: the same
+#             suspend without it, to compare
+#   bt-down   Bluetooth down for the suspend (default: only the MPM and the
+#             RPM are tested); bt-up: Bluetooth stays up (the UART powered
+#             down by patches 0023/0024, also through the suspend)
+#
+# Order: the RTC alarm first, then notify_rpm on, sync, the suspend; back
+# from it, notify_rpm off before anything else (also when the suspend fails
+# or the script is killed). notify_rpm is off after a reboot as well (module
+# parameter, default off). If the phone does not come back after SECONDS
+# plus a minute: hold the power key until it restarts (about 10-15 s); the
+# log up to the suspend is on userdata already (synced).
+#
+# Around the suspend, as pro1x-autosuspend does: hexagonrpcd stopped (the
+# ADSP's sensor process crashes otherwise), the Bluetooth UART not a wake-up
+# source (its wake-up interrupt woke the system at once), pm_debug_messages
+# on (the kernel logs the time suspended and the wake-up interrupt). All of
+# it put back afterwards. Up to TRIES (3) attempts when a wake-up event
+# aborts the suspend (oFono talking to the modem in the first minutes).
+#
+# Log: /host/pro1x-power/rpmtest-<date>.log (/var/log/pro1x-power without
+# /host): before and after, the SoC sleep states and the subsystems' sleep
+# counts (qcom_stats: Count, Last Entered/Exited At, Accumulated Duration,
+# raw RPM values), the power domains (CX's performance state), the battery,
+# the suspend statistics and the wake-up interrupt, the interrupts during
+# the suspend and the kernel log of it. The last line: OK or FAILED with
+# the deltas of vlow and vmin.
+set -u
+secs=${1:-60}
+mode=${2:-rpm}
+bt=${3:-bt-down}
+tries=${TRIES:-3}
+case $secs in *[!0-9]* | '') echo "SECONDS: a number" >&2; exit 2 ;; esac
+case $mode in rpm | norpm) ;; *) echo "mode: rpm or norpm" >&2; exit 2 ;; esac
+case $bt in bt-down | bt-up) ;; *) echo "bluetooth: bt-down or bt-up" >&2; exit 2 ;; esac
+
+NR=/sys/module/irq_qcom_mpm/parameters/notify_rpm
+STATS=/sys/kernel/debug/qcom_stats
+RTC=/sys/class/rtc/rtc0
+BAT=/sys/class/power_supply/battery
+UART=$(ls -d /sys/devices/platform/soc*/*.geniqup/4a8c000.serial 2> /dev/null | head -1)
+
+dir=/host/pro1x-power
+{ [ -d /host/pro1x-boot ] || mountpoint -q /host 2> /dev/null; } || dir=/var/log/pro1x-power
+mkdir -p $dir
+log=$dir/rpmtest-$(date +%Y%m%d-%H%M%S).log
+say() { echo "$*" | tee -a "$log"; }
+sec() { echo "== $*" >> "$log"; }
+
+rpm_off() { [ -w $NR ] && echo 0 > $NR; }
+# notify_rpm off on every way out
+trap 'rpm_off' EXIT
+trap 'rpm_off; exit 1' INT TERM HUP
+
+mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug 2> /dev/null
+
+say "# pro1x-rpmtest $secs s, $mode, $bt: $(. /etc/os-release 2> /dev/null; echo "${PRETTY_NAME:-?}"), kernel $(uname -r), $(date '+%F %T')"
+[ -w $NR ] || { say "FAILED: no $NR (a kernel with patch 0011 and the MPM driver loaded)"; exit 1; }
+[ -w $RTC/wakealarm ] || { say "FAILED: no $RTC/wakealarm"; exit 1; }
+grep -q s2idle /sys/power/mem_sleep || { say "FAILED: no s2idle in /sys/power/mem_sleep"; exit 1; }
+say "# notify_rpm $(cat $NR), rtc $(cat $RTC/name 2> /dev/null) wakeup $(cat $RTC/device/power/wakeup 2> /dev/null)," \
+    "mem_sleep $(cat /sys/power/mem_sleep), usb $(cat /sys/class/udc/*/state 2> /dev/null | head -1)"
+[ "$(cat /sys/class/udc/*/state 2> /dev/null | head -1)" = configured ] &&
+	say "# USB connected: the gadget does not come back from a suspend yet (use Wi-Fi)"
+
+stats() {
+	for f in $STATS/*; do
+		[ -f "$f" ] || continue
+		printf '%s: %s\n' "${f##*/}" "$(tr '\n' ' ' < "$f" | tr -s ' ')"
+	done
+}
+count() { awk '/^Count/ { print $2; exit }' $STATS/$1 2> /dev/null || echo 0; }
+dur() { awk '/^Accumulated Duration/ { print $3; exit }' $STATS/$1 2> /dev/null || echo 0; }
+battery() {
+	echo "current_now $(cat $BAT/current_now 2> /dev/null) uA, voltage_now $(cat $BAT/voltage_now 2> /dev/null) uV," \
+	    "capacity $(cat $BAT/capacity 2> /dev/null) %, status $(cat $BAT/status 2> /dev/null)," \
+	    "input_suspend $(cat /sys/module/pro1x_charger_icl/parameters/input_suspend 2> /dev/null)"
+}
+ibs() {
+	for f in /sys/kernel/debug/bluetooth/hci0/ibs/*; do
+		[ -f "$f" ] && printf '%s=%s ' "${f##*/}" "$(cat "$f")"
+	done 2> /dev/null
+	echo
+}
+irq_each() { awk 'NR == 1 { n = NF; next }
+	{ s = 0; for (i = 2; i <= n + 1 && i <= NF; i++) if ($i ~ /^[0-9]+$/) s += $i
+	  d = ""; for (j = n + 2; j <= NF; j++) d = d " " $j
+	  print $1, s, d }' /proc/interrupts; }
+
+sec "before"
+stats >> "$log"
+battery >> "$log"
+grep -E '^ *(domain|---|perf)|cx|CX|4a8c000' /sys/kernel/debug/pm_genpd/pm_genpd_summary >> "$log" 2> /dev/null
+echo "ibs: $(ibs)" >> "$log"
+v0=$(count vlow) m0=$(count vmin) vd0=$(dur vlow) md0=$(dur vmin)
+
+# --- the suspend's surroundings ------------------------------------------------
+hexa=
+if rc-service pro1x-hexagonrpcd status > /dev/null 2>&1; then
+	rc-service pro1x-hexagonrpcd stop > /dev/null 2>&1 && hexa=1
+fi
+uartwake=
+if [ -n "$UART" ] && [ "$(cat $UART/power/wakeup 2> /dev/null)" = enabled ]; then
+	echo disabled > $UART/power/wakeup && uartwake=1
+fi
+btwas=
+if [ $bt = bt-down ] && hciconfig hci0 2> /dev/null | grep -q 'UP RUNNING'; then
+	hciconfig hci0 down && btwas=1
+	sleep 1
+fi
+[ -n "$UART" ] && say "# BT UART: runtime $(cat $UART/power/runtime_status 2> /dev/null), wakeup $(cat $UART/power/wakeup 2> /dev/null)," \
+    "uart_idle $(cat /sys/kernel/debug/bluetooth/hci0/ibs/uart_idle 2> /dev/null || echo -)"
+dbg0=$(cat /sys/power/pm_debug_messages 2> /dev/null)
+echo 1 > /sys/power/pm_debug_messages 2> /dev/null
+irq_each > /run/pro1x-rpmtest.irq
+echo "pro1x-rpmtest: suspend $secs s, $mode" > /dev/kmsg
+
+# --- the suspend ------------------------------------------------------------------
+ok=0
+t=1
+while [ $t -le $tries ]; do
+	echo 0 > $RTC/wakealarm
+	echo +$secs > $RTC/wakealarm
+	say "# try $t: alarm $(cat $RTC/wakealarm), rtc now $(cat $RTC/since_epoch), $(date '+%T')"
+	[ $mode = rpm ] && echo 1 > $NR
+	sync
+	echo mem > /sys/power/state
+	ret=$?
+	rpm_off
+	say "# back $(date '+%T'), state write $ret, notify_rpm $(cat $NR)"
+	[ $ret = 0 ] && { ok=1; break; }
+	say "# aborted: $(for f in /sys/power/suspend_stats/*fail*; do printf '%s=%s ' "${f##*/}" "$(cat "$f")"; done 2> /dev/null)"
+	t=$((t + 1))
+	sleep 5
+done
+echo 0 > $RTC/wakealarm
+
+# --- back ---------------------------------------------------------------------------
+sec "after"
+stats >> "$log"
+battery >> "$log"
+echo "pm_wakeup_irq $(cat /sys/power/pm_wakeup_irq 2> /dev/null)" >> "$log"
+echo "ibs: $(ibs)" >> "$log"
+grep -r . /sys/power/suspend_stats 2> /dev/null | sed 's|/sys/power/suspend_stats/||' | tr '\n' ' ' >> "$log"
+echo >> "$log"
+sec "interrupts during the try (count, name)"
+irq_each | awk 'NR == FNR { a[$1] = $2; next } ($1 in a) && $2 > a[$1] { n = $1; d = $2 - a[$1]; $1 = ""; $2 = ""; print d, n $0 }' \
+	/run/pro1x-rpmtest.irq - | sort -rn | head -15 >> "$log"
+rm -f /run/pro1x-rpmtest.irq
+sec "kernel log"
+dmesg | sed -n '/pro1x-rpmtest: suspend/,$p' | tail -150 >> "$log"
+
+# put everything back
+[ -n "$dbg0" ] && echo "$dbg0" > /sys/power/pm_debug_messages 2> /dev/null
+[ -n "$uartwake" ] && echo enabled > $UART/power/wakeup
+[ -n "$btwas" ] && hciconfig hci0 up
+[ -n "$hexa" ] && rc-service pro1x-hexagonrpcd start > /dev/null 2>&1
+
+v1=$(count vlow) m1=$(count vmin) vd1=$(dur vlow) md1=$(dur vmin)
+res="vlow +$((v1 - v0)) (duration +$((vd1 - vd0))), vmin +$((m1 - m0)) (duration +$((md1 - md0)))"
+if [ $ok = 1 ]; then
+	say "OK: suspended ($mode, $bt), $res, woken by irq $(cat /sys/power/pm_wakeup_irq 2> /dev/null)"
+else
+	say "FAILED: no suspend in $tries tries, $res"
+fi
+sync
+echo "$log"

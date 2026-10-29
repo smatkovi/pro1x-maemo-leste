@@ -1,0 +1,380 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 29 Oct 2026 20:00:00 +0100
+Subject: [PATCH] tty: serdev, serial: qcom-geni: a serdev client may let the
+ UART power down while the port is open
+
+A Bluetooth chip on a GENI UART keeps the UART's clock, its CX rail
+performance vote and its interconnect votes up for as long as Bluetooth is
+up: the port is open, and an open port is never runtime suspended. Those
+votes are in the RPM's sleep set too, so the SoC never reaches vlow or
+vmin. Qualcomm's in-band sleep (HCI_IBS) lets both sides say when they
+sleep; Android switches the UART off between them, and mainline hci_qca
+has an empty hook for it.
+
+serdev: serdev_device_pm_put() drops the controller's runtime PM
+reference that serdev_device_open() took, serdev_device_pm_get() takes it
+back. The controller is a runtime PM descendant of the UART's device, so
+the UART powers down once the client has let go, the serial core's port
+device has no more to send (it brings the port up again for a write by
+itself), and nothing else holds it. serdev_device_close() takes the
+reference back if the client had dropped it, and closes the port before
+it drops the reference, so that the port is up while it is closed.
+
+qcom-geni: a port that a serdev controller owns is held by that
+controller once open, not by a reference of its own, so its client's
+reference is the one that counts. Powered down while open, the port:
+  - has its interrupt disabled (the wake-up interrupt, on RX, resumes it,
+    as the PM core does for a dedicated wake-up interrupt);
+  - stays up for 200 ms (autosuspend) after a wake-up or the last
+    received byte, so that the remote side can repeat what got lost
+    while it came up;
+  - answers tx_empty and get_mctrl without touching its registers;
+  - is brought up for uart_suspend_port() and then forced off for the
+    system's sleep (pm_runtime_force_suspend()), also while the serdev
+    controller holds it; back with pm_runtime_force_resume(). Before,
+    an open serdev port stayed powered through s2idle.
+Ports without a serdev controller and the console behave as before,
+except that a closed port powers down 200 ms after its last use.
+---
+diff --git a/drivers/tty/serdev/core.c b/drivers/tty/serdev/core.c
+index e9d044a331..fc4e2aebbd 100644
+--- a/drivers/tty/serdev/core.c
++++ b/drivers/tty/serdev/core.c
+@@ -181,12 +181,67 @@ void serdev_device_close(struct serdev_device *serdev)
+ 	if (!ctrl || !ctrl->ops->close)
+ 		return;
+ 
+-	pm_runtime_put(&ctrl->dev);
++	/* Up while it is closed, also after serdev_device_pm_put() */
++	if (serdev->pm_released) {
++		pm_runtime_get_sync(&ctrl->dev);
++		serdev->pm_released = false;
++	}
+ 
+ 	ctrl->ops->close(ctrl);
++
++	pm_runtime_put(&ctrl->dev);
+ }
+ EXPORT_SYMBOL_GPL(serdev_device_close);
+ 
++/**
++ * serdev_device_pm_put() - let the controller power down while it is open
++ * @serdev:	serdev device
++ *
++ * Drops the runtime PM reference on the controller that serdev_device_open()
++ * took, so that the UART can power down while the port stays open. For a
++ * device that wakes the host before it sends, with an edge on RX that the
++ * UART's wake-up interrupt catches, and that repeats what got lost while the
++ * UART came up (Qualcomm's HCI in-band sleep, for one). Writes bring the
++ * controller up by themselves; changing the baud rate, flow control or the
++ * modem lines and waiting for the transmitter need serdev_device_pm_get()
++ * first; serdev_device_close() takes it back itself. Not to be called
++ * concurrently with serdev_device_pm_get() or serdev_device_close().
++ */
++void serdev_device_pm_put(struct serdev_device *serdev)
++{
++	if (serdev->pm_released)
++		return;
++
++	serdev->pm_released = true;
++	pm_runtime_put(&serdev->ctrl->dev);
++}
++EXPORT_SYMBOL_GPL(serdev_device_pm_put);
++
++/**
++ * serdev_device_pm_get() - bring the controller up again
++ * @serdev:	serdev device
++ *
++ * Takes back the reference that serdev_device_pm_put() dropped: the UART is
++ * up when it returns. May sleep.
++ *
++ * Return: 0 on success (also when it was not dropped) or a negative errno,
++ * and the controller still let power down then.
++ */
++int serdev_device_pm_get(struct serdev_device *serdev)
++{
++	int ret;
++
++	if (!serdev->pm_released)
++		return 0;
++
++	ret = pm_runtime_resume_and_get(&serdev->ctrl->dev);
++	if (!ret)
++		serdev->pm_released = false;
++
++	return ret;
++}
++EXPORT_SYMBOL_GPL(serdev_device_pm_get);
++
+ static void devm_serdev_device_close(void *serdev)
+ {
+ 	serdev_device_close(serdev);
+diff --git a/drivers/tty/serial/qcom_geni_serial.c b/drivers/tty/serial/qcom_geni_serial.c
+index 17da115b1e..bf974d2545 100644
+--- a/drivers/tty/serial/qcom_geni_serial.c
++++ b/drivers/tty/serial/qcom_geni_serial.c
+@@ -144,6 +144,8 @@ struct qcom_geni_serial_port {
+ 	unsigned int tx_remaining;
+ 	unsigned int tx_queued;
+ 	int wakeup_irq;
++	bool serdev_owned;
++	bool rpm_irq_off;
+ 	bool rx_tx_swap;
+ 	bool cts_rts_swap;
+ 	bool manual_flow;
+@@ -167,6 +169,24 @@ static inline struct qcom_geni_serial_port *to_dev_port(struct uart_port *uport)
+ 	return container_of(uport, struct qcom_geni_serial_port, uport);
+ }
+ 
++/*
++ * How long a UART stays up after it was woken up through its wake-up
++ * interrupt or last received something, when nothing else holds it: long
++ * enough for the remote side to repeat what got lost meanwhile.
++ */
++#define QCOM_GENI_UART_AUTOSUSPEND_MS	200
++
++/*
++ * A serdev controller keeps an open port up: it is a runtime PM descendant
++ * of the port's device from serdev_device_open() on, and its client may let
++ * the port power down meanwhile (serdev_device_pm_put()).
++ */
++static bool qcom_geni_serial_serdev_owned(struct uart_port *uport)
++{
++	return uport->state &&
++	       uport->state->port.client_ops != &tty_port_default_client_ops;
++}
++
+ static struct qcom_geni_serial_port qcom_geni_console_port = {
+ 	.uport = {
+ 		.iotype = UPIO_MEM,
+@@ -227,13 +247,21 @@ static unsigned int qcom_geni_serial_get_mctrl(struct uart_port *uport)
+ {
+ 	unsigned int mctrl = TIOCM_DSR | TIOCM_CAR;
+ 	u32 geni_ios;
++	int active;
+ 
+ 	if (uart_console(uport)) {
+ 		mctrl |= TIOCM_CTS;
+ 	} else {
++		/* Powered down by its serdev client: the line is not seen */
++		active = pm_runtime_get_if_active(uport->dev);
++		if (!active)
++			return mctrl | TIOCM_CTS;
++
+ 		geni_ios = readl(uport->membase + SE_GENI_IOS);
+ 		if (!(geni_ios & IO2_DATA_IN))
+ 			mctrl |= TIOCM_CTS;
++		if (active > 0)
++			pm_runtime_put(uport->dev);
+ 	}
+ 
+ 	return mctrl;
+@@ -633,7 +661,19 @@ static void handle_rx_uart(struct uart_port *uport, u32 bytes)
+ 
+ static unsigned int qcom_geni_serial_tx_empty(struct uart_port *uport)
+ {
+-	return !readl(uport->membase + SE_GENI_TX_FIFO_STATUS);
++	unsigned int empty;
++	int active;
++
++	/* Powered down by its serdev client, with nothing left to send */
++	active = pm_runtime_get_if_active(uport->dev);
++	if (!active)
++		return TIOCSER_TEMT;
++
++	empty = !readl(uport->membase + SE_GENI_TX_FIFO_STATUS);
++	if (active > 0)
++		pm_runtime_put(uport->dev);
++
++	return empty;
+ }
+ 
+ static void qcom_geni_serial_stop_tx_dma(struct uart_port *uport)
+@@ -1073,6 +1113,8 @@ static irqreturn_t qcom_geni_serial_isr(int isr, void *dev)
+ 	if (uport->suspended)
+ 		return IRQ_NONE;
+ 
++	pm_runtime_mark_last_busy(uport->dev);
++
+ 	uart_port_lock(uport);
+ 
+ 	m_irq_status = readl(uport->membase + SE_GENI_M_IRQ_STATUS);
+@@ -1730,17 +1772,29 @@ static int geni_serial_resource_init(struct uart_port *uport)
+ static void qcom_geni_serial_pm(struct uart_port *uport,
+ 		unsigned int new_state, unsigned int old_state)
+ {
++	struct qcom_geni_serial_port *port = to_dev_port(uport);
+ 
+ 	/* If we've never been called, treat it as off */
+ 	if (old_state == UART_PM_STATE_UNDEFINED)
+ 		old_state = UART_PM_STATE_OFF;
+ 
+-	if (new_state == UART_PM_STATE_ON && old_state == UART_PM_STATE_OFF)
++	if (new_state == UART_PM_STATE_ON && old_state == UART_PM_STATE_OFF) {
+ 		pm_runtime_resume_and_get(uport->dev);
+-	else if (new_state == UART_PM_STATE_OFF &&
+-		 old_state == UART_PM_STATE_ON)
+-		pm_runtime_put_sync(uport->dev);
+-
++		/*
++		 * Held by its serdev controller once open, not by a reference
++		 * of its own, so that the controller's client can let it power
++		 * down. Nothing asks it to idle until the controller holds it.
++		 */
++		port->serdev_owned = qcom_geni_serial_serdev_owned(uport);
++		if (port->serdev_owned)
++			pm_runtime_put_noidle(uport->dev);
++	} else if (new_state == UART_PM_STATE_OFF &&
++		   old_state == UART_PM_STATE_ON) {
++		if (port->serdev_owned)
++			pm_request_idle(uport->dev);
++		else
++			pm_runtime_put_sync(uport->dev);
++	}
+ }
+ 
+ /**
+@@ -1922,6 +1976,11 @@ static int qcom_geni_serial_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
++	if (!data->console) {
++		pm_runtime_set_autosuspend_delay(&pdev->dev,
++						 QCOM_GENI_UART_AUTOSUSPEND_MS);
++		pm_runtime_use_autosuspend(&pdev->dev);
++	}
+ 	devm_pm_runtime_enable(port->se.dev);
+ 
+ 	ret = uart_add_one_port(drv, uport);
+@@ -1954,9 +2013,23 @@ static int __maybe_unused qcom_geni_serial_runtime_suspend(struct device *dev)
+ 	struct uart_port *uport = &port->uport;
+ 	int ret = 0;
+ 
++	/*
++	 * Open, and let power down by its serdev client: no interrupt from
++	 * the port without its clocks (the wake-up interrupt resumes it).
++	 */
++	if (port->serdev_owned && tty_port_initialized(&uport->state->port)) {
++		disable_irq(uport->irq);
++		port->rpm_irq_off = true;
++	}
++
+ 	if (port->dev_data->power_state)
+ 		ret = port->dev_data->power_state(uport, false);
+ 
++	if (ret && port->rpm_irq_off) {
++		port->rpm_irq_off = false;
++		enable_irq(uport->irq);
++	}
++
+ 	return ret;
+ }
+ 
+@@ -1968,8 +2041,16 @@ static int __maybe_unused qcom_geni_serial_runtime_resume(struct device *dev)
+ 
+ 	if (port->dev_data->power_state)
+ 		ret = port->dev_data->power_state(uport, true);
++	if (ret)
++		return ret;
+ 
+-	return ret;
++	if (port->rpm_irq_off) {
++		port->rpm_irq_off = false;
++		enable_irq(uport->irq);
++	}
++	pm_runtime_mark_last_busy(dev);
++
++	return 0;
+ }
+ 
+ static int qcom_geni_serial_suspend(struct device *dev)
+@@ -1977,6 +2058,7 @@ static int qcom_geni_serial_suspend(struct device *dev)
+ 	struct qcom_geni_serial_port *port = dev_get_drvdata(dev);
+ 	struct uart_port *uport = &port->uport;
+ 	struct qcom_geni_private_data *private_data = uport->private_data;
++	int ret;
+ 
+ 	/*
+ 	 * This is done so we can hit the lowest possible state in suspend
+@@ -1985,8 +2067,26 @@ static int qcom_geni_serial_suspend(struct device *dev)
+ 	if (uart_console(uport)) {
+ 		geni_icc_set_tag(&port->se, QCOM_ICC_TAG_ACTIVE_ONLY);
+ 		geni_icc_set_bw(&port->se);
++		return uart_suspend_port(private_data->drv, uport);
+ 	}
+-	return uart_suspend_port(private_data->drv, uport);
++
++	/* An open port that its serdev client let power down */
++	if (tty_port_initialized(&uport->state->port)) {
++		ret = pm_runtime_resume(dev);
++		if (ret < 0)
++			return ret;
++	}
++
++	ret = uart_suspend_port(private_data->drv, uport);
++	if (ret || !uport->suspended)
++		return ret;
++
++	/*
++	 * Off for the system's sleep, also while a runtime PM descendant (a
++	 * serdev controller whose port stays open) keeps it up otherwise,
++	 * and without waiting for the autosuspend delay.
++	 */
++	return pm_runtime_force_suspend(dev);
+ }
+ 
+ static int qcom_geni_serial_resume(struct device *dev)
+@@ -1996,6 +2096,12 @@ static int qcom_geni_serial_resume(struct device *dev)
+ 	struct uart_port *uport = &port->uport;
+ 	struct qcom_geni_private_data *private_data = uport->private_data;
+ 
++	if (!uart_console(uport) && uport->suspended) {
++		ret = pm_runtime_force_resume(dev);
++		if (ret)
++			return ret;
++	}
++
+ 	ret = uart_resume_port(private_data->drv, uport);
+ 	if (uart_console(uport)) {
+ 		geni_icc_set_tag(&port->se, QCOM_ICC_TAG_ALWAYS);
+diff --git a/include/linux/serdev.h b/include/linux/serdev.h
+index b6c3d957ec..51a1870988 100644
+--- a/include/linux/serdev.h
++++ b/include/linux/serdev.h
+@@ -39,6 +39,7 @@ struct serdev_device_ops {
+  * @ops:	Device operations.
+  * @write_comp:	Completion used by serdev_device_write() internally
+  * @write_lock:	Lock to serialize access when writing data
++ * @pm_released: The controller let power down (serdev_device_pm_put())
+  */
+ struct serdev_device {
+ 	struct device dev;
+@@ -47,6 +48,7 @@ struct serdev_device {
+ 	const struct serdev_device_ops *ops;
+ 	struct completion write_comp;
+ 	struct mutex write_lock;
++	bool pm_released;
+ };
+ 
+ #define to_serdev_device(d) container_of_const(d, struct serdev_device, dev)
+@@ -194,6 +196,8 @@ static inline size_t serdev_controller_receive_buf(struct serdev_controller *ctr
+ int serdev_device_open(struct serdev_device *);
+ void serdev_device_close(struct serdev_device *);
+ int devm_serdev_device_open(struct device *, struct serdev_device *);
++int serdev_device_pm_get(struct serdev_device *);
++void serdev_device_pm_put(struct serdev_device *);
+ unsigned int serdev_device_set_baudrate(struct serdev_device *, unsigned int);
+ void serdev_device_set_flow_control(struct serdev_device *, bool);
+ int serdev_device_write_buf(struct serdev_device *, const u8 *, size_t);
+@@ -233,6 +237,11 @@ static inline int serdev_device_open(struct serdev_device *sdev)
+ 	return -ENODEV;
+ }
+ static inline void serdev_device_close(struct serdev_device *sdev) {}
++static inline int serdev_device_pm_get(struct serdev_device *sdev)
++{
++	return -ENODEV;
++}
++static inline void serdev_device_pm_put(struct serdev_device *sdev) {}
+ static inline unsigned int serdev_device_set_baudrate(struct serdev_device *sdev, unsigned int baudrate)
+ {
+ 	return 0;
