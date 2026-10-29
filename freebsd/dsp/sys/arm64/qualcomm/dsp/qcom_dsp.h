@@ -60,6 +60,16 @@ void	qcom_glink_register(const char *channel, qcom_glink_user_cb_t *cb,
 void	qcom_glink_unregister(const char *channel);
 struct glink_edge *qcom_glink_find(const char *label);
 
+/*
+ * RPM votes (qcom_rpm.c, over the RPM's GLINK edge Linux left open):
+ * a request for the active (0) or sleep (1) set, npairs key/value pairs;
+ * a regulator of the RPM by its node's xref, on (with its least voltage)
+ * or off, counted. 0, ENXIO/EINVAL refused, ETIMEDOUT, ...
+ */
+int	qcom_rpm_write(int state, uint32_t type, uint32_t id, const uint32_t *kv,
+	    int npairs);
+int	qcom_rpm_regulator(phandle_t xref, bool on, const char *who);
+
 /* SMMU streams without translation (qcom_smmu.c) */
 int	qcom_smmu_bypass(phandle_t smmu, uint32_t sid, uint32_t mask,
 	    const char *who);

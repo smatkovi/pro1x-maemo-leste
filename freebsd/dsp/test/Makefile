@@ -9,6 +9,9 @@ all: run
 glink_test: glink_test.c $(SRC)/glink_core.c $(SRC)/glink.h $(SRC)/glink_os.h
 	$(CC) $(CFLAGS) -o $@ glink_test.c $(SRC)/glink_core.c
 
+rpm_test: rpm_test.c $(SRC)/rpm_core.c $(SRC)/rpm.h
+	$(CC) $(CFLAGS) -o $@ rpm_test.c $(SRC)/rpm_core.c
+
 qrtr_test: qrtr_test.c $(SRC)/qrtr_core.c $(SRC)/qrtr.h $(SRC)/glink_os.h
 	$(CC) $(CFLAGS) -o $@ qrtr_test.c $(SRC)/qrtr_core.c
 
@@ -22,10 +25,11 @@ qmi_test: $(QMI_SRCS) $(SRC)/qcom_qmi.h $(SRC)/qrtr.h $(SRC)/glink_os.h
 	$(CC) $(CFLAGS) -Wno-pointer-arith -Wno-sign-compare -Ishim -I../include \
 	    -I$(ATH10K) -o $@ $(QMI_SRCS)
 
-run: glink_test qrtr_test qmi_test
+run: glink_test qrtr_test qmi_test rpm_test
 	./glink_test
 	./qrtr_test
 	./qmi_test
+	./rpm_test
 
 clean:
-	rm -f glink_test qrtr_test qmi_test
+	rm -f glink_test qrtr_test qmi_test rpm_test
