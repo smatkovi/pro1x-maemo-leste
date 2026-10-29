@@ -175,8 +175,9 @@ part meegotouch-controlpanelapplets qmake meegotouch-controlpanelapplets.pro
 part meegofeedbackd qmake meegofeedbackd.pro
 # the reaction maps: the N9's touch feedback on the touch itself (the
 # keyboard's key clicks); one source only, as meegofeedbackd plays each
-# loaded one: XRecord, which sees the touchscreen as X does
-part meegofeedback-reactionmaps qmake meegofeedback-reactionmaps.pro
+# loaded one: XRecord, which sees the touchscreen as X does (its tests
+# switch off with notests, not NOTESTS)
+part meegofeedback-reactionmaps qmake meegofeedback-reactionmaps.pro CONFIG+=notests
 rm -f /usr/lib/meegofeedbackd/sources/libmeegofeedback-reactionmap.so
 # the input method: its server (with Qt 5's platform input context for the
 # applications), the N9's keyboard and its engine interface; legacy mode as
