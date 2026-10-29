@@ -11,7 +11,9 @@
  * Written from the protocol as qcabt.c/qcafm.c's sources describe it, not
  * from qcabt.c: the parser here is its own.
  *
- *   fakechip <pty-name-file> <rampatch> <nvm> [nostations]
+ *   fakechip <pty-name-file> <rampatch> <nvm> [nostations | echo]
+ *
+ * echo: no chip, every byte back (the UART loopback test, pro1x-fmd -L).
  *
  * The baud rate cannot travel over a pty: the rate code of the baud
  * command is only checked against the NVM's.
@@ -569,6 +571,7 @@ main(int argc, char **argv)
 	FILE *f;
 	ssize_t n;
 	int timeout;
+	bool echo;
 
 	if (argc < 4) {
 		fprintf(stderr, "usage: fakechip namefile rampatch nvm "
@@ -578,6 +581,7 @@ main(int argc, char **argv)
 	c.ram = load(argv[2], &c.ram_len);
 	c.nvm = load(argv[3], &c.nvm_len);
 	c.nostations = argc > 4 && strcmp(argv[4], "nostations") == 0;
+	echo = argc > 4 && strcmp(argv[4], "echo") == 0;
 	c.freq = 87500;
 	if ((c.fd = posix_openpt(O_RDWR | O_NOCTTY)) < 0 ||
 	    grantpt(c.fd) != 0 || unlockpt(c.fd) != 0) {
@@ -600,6 +604,11 @@ main(int argc, char **argv)
 		timeout = 100;
 		if (poll(&pfd, 1, timeout) > 0) {
 			n = read(c.fd, b, sizeof(b));
+			if (n > 0 && echo) {
+				/* a loopback: everything back */
+				out(b, (size_t)n);
+				continue;
+			}
 			if (n > 0)
 				input(b, (size_t)n);
 		}
@@ -617,6 +626,8 @@ main(int argc, char **argv)
 			c.chip_awake = false;
 		}
 	}
+	if (echo)
+		return (0);
 	say("report: pulses %s, rampatch %s, NVM %s, frames %u, FM commands "
 	    "%u, violations %u", c.pulse_off && c.pulse_on ? "ok" : "MISSING",
 	    c.ram_ok ? "ok" : "BAD", c.nvm_ok ? "ok" : "BAD", c.frames,

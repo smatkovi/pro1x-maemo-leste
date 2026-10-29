@@ -3,6 +3,7 @@
 # report on the console, which the RAM console keeps for Linux, and go back
 # to the boot menu.
 # pro1x.test=dsp: only the DSP stack (pro1x-dsptest), then back
+# pro1x.test=fm: the FM radio (pro1x-fmtest, pro1x.fm=uart|bt|radio|audio)
 # pro1x.test=panel: the DCS commands of qcom_dpu (patches/0022), each step
 # with its time on the console: brightness 100/10/50 %, the low power mode
 # (idle mode), partial mode (one half of the panel), the panel off and on,
@@ -39,6 +40,11 @@ elif [ "$(kenv -q pro1x.test)" = dsp ]; then
 	/usr/local/libexec/pro1x-dsptest 2>&1
 	echo "=== test done, rebooting in 20 s"
 	(sleep 20; shutdown -r now "pro1x dsp test done") > /dev/null 2>&1 &
+elif [ "$(kenv -q pro1x.test)" = fm ]; then
+	echo "=== FreeBSD multi-user: FM test ==="
+	/usr/local/libexec/pro1x-fmtest 2>&1
+	echo "=== test done, rebooting in 20 s"
+	(sleep 20; shutdown -r now "pro1x fm test done") > /dev/null 2>&1 &
 elif [ -n "$(kenv -q pro1x.test)" ]; then
 	echo "=== FreeBSD multi-user: test report ==="
 	uname -a

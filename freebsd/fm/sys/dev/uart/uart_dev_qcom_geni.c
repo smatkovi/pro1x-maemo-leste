@@ -155,6 +155,7 @@
 
 /* UART (drivers/tty/serial/qcom_geni_serial.c) */
 #define	SE_UART_LOOPBACK_CFG	0x22c
+#define	 RX_TX_CTS_RTS_SORTED	0x3u	/* TX to RX, RTS to CTS inside */
 #define	SE_UART_TX_TRANS_CFG	0x25c
 #define	 UART_TX_PAR_EN		(1u << 0)
 #define	 UART_CTS_MASK		(1u << 1)
@@ -215,6 +216,7 @@ struct geni_softc {
 	uint32_t	rate;			/* the engine's clock */
 	u_int		clk_index, clk_div;
 	bool		iflow, oflow, rts;
+	int		loopback;
 	uint32_t	m_irq_en;
 	u_long		rx_bytes, tx_bytes, overruns, parity, breaks, illegal;
 	char		pins[96];		/* the pins' CTL, as found */
@@ -616,6 +618,25 @@ geni_bus_probe(struct uart_softc *sc)
 	return (0);
 }
 
+/* dev.uart.N.loopback: TX into RX and RTS into CTS inside the engine */
+static int
+geni_loopback_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct geni_softc *gsc = arg1;
+	struct uart_softc *sc = &gsc->base;
+	int error, v = gsc->loopback;
+
+	error = sysctl_handle_int(oidp, &v, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	uart_lock(sc->sc_hwmtx);
+	gsc->loopback = v != 0;
+	uart_setreg(&sc->sc_bas, SE_UART_LOOPBACK_CFG, gsc->loopback ?
+	    RX_TX_CTS_RTS_SORTED : 0);
+	uart_unlock(sc->sc_hwmtx);
+	return (0);
+}
+
 static int
 geni_bus_attach(struct uart_softc *sc)
 {
@@ -717,6 +738,10 @@ geni_bus_attach(struct uart_softc *sc)
 	    &gsc->illegal, "Illegal command interrupts");
 	SYSCTL_ADD_STRING(ctx, kids, OID_AUTO, "pins", CTLFLAG_RD, gsc->pins,
 	    0, "The pins' TLMM CTL before>after");
+	SYSCTL_ADD_PROC(ctx, kids, OID_AUTO, "loopback",
+	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, gsc, 0,
+	    geni_loopback_sysctl, "I", "Internal loopback (TX to RX, RTS to "
+	    "CTS), for a test without the chip");
 	return (0);
 }
 

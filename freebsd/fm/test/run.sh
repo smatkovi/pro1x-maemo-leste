@@ -106,5 +106,16 @@ expect "ok 103800" tune 103.8
 expect "ok" off
 stop stations
 
+echo "--- the UART loopback test (pro1x-fmd -L) against an echo"
+rm -f "$OUT/pty"
+"$OUT/fakechip" "$OUT/pty" "$OUT/fw/qca/cmbtfw12.tlv" "$OUT/fw/qca/cmnv12.bin" echo \
+    2> /dev/null &
+chip=$!
+i=0
+while [ ! -s "$OUT/pty" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+if "$OUT/pro1x-fmd" -L 115200,3000000 -d "$(cat "$OUT/pty")" 2>&1 | sed 's/^/  /'; then :; fi
+"$OUT/pro1x-fmd" -L 115200 -d "$(cat "$OUT/pty")" 2> /dev/null || { echo "FAIL: loopback"; fail=1; }
+kill -TERM $chip; wait $chip
+
 if [ $fail -eq 0 ]; then echo "run.sh: ok"; else echo "run.sh: FAILED (logs in $OUT)"; fi
 exit $fail

@@ -27,6 +27,10 @@
  *
  *   pro1x-fmd [-F] [-d tty] [-s speed] [-f fwdir:...] [-r l9,l16,...|none]
  *             [-S socket] [-v]
+ *   pro1x-fmd -L 115200,3000000 [-d tty]
+ *             a test of the UART alone, without the chip: bytes through
+ *             its internal loopback (dev.uart.0.loopback=1 first), with
+ *             flow control, at each speed
  */
 
 #include <sys/types.h>
@@ -724,6 +728,63 @@ client_input(struct client *c)
 		c->len = 0;		/* a line too long: dropped */
 }
 
+/* -L: a pattern out and back through the UART's internal loopback */
+static int
+loop_test(const char *speeds)
+{
+	static uint8_t out[4096], in[sizeof(out)];
+	char list[128], *sp, *save;
+	struct pollfd pfd;
+	size_t sent, got, i, bad;
+	uint64_t t0, t;
+	ssize_t n;
+	int rc = 0;
+	unsigned int baud;
+
+	if (tty_open() != 0)
+		return (1);
+	for (i = 0; i < sizeof(out); i++)
+		out[i] = (uint8_t)(i * 7 + (i >> 8));
+	snprintf(list, sizeof(list), "%s", speeds);
+	for (sp = strtok_r(list, ",", &save); sp != NULL;
+	    sp = strtok_r(NULL, ",", &save)) {
+		baud = (unsigned)strtoul(sp, NULL, 10);
+		if (o_set_speed(NULL, baud) != 0 || o_set_flow(NULL, true) != 0) {
+			logmsg("loopback %u baud: cannot set the tty", baud);
+			rc = 1;
+			continue;
+		}
+		o_flush_input(NULL);
+		memset(in, 0, sizeof(in));
+		sent = got = 0;
+		t0 = mono_ms();
+		while (got < sizeof(in) && (t = mono_ms()) - t0 < 3000) {
+			if (sent < sizeof(out)) {
+				n = write(d.fd, out + sent, sizeof(out) - sent);
+				if (n > 0)
+					sent += (size_t)n;
+			}
+			pfd = (struct pollfd){ .fd = d.fd, .events = POLLIN };
+			if (poll(&pfd, 1, 20) > 0) {
+				n = read(d.fd, in + got, sizeof(in) - got);
+				if (n > 0)
+					got += (size_t)n;
+			}
+		}
+		t = mono_ms() - t0;
+		for (i = bad = 0; i < got; i++)
+			bad += in[i] != out[i];
+		logmsg("loopback %u baud: %zu of %zu bytes sent, %zu back, %zu "
+		    "differ, %u ms%s", baud, sent, sizeof(out), got, bad,
+		    (unsigned)t, got == sizeof(in) && bad == 0 ? ": ok" :
+		    ": FAILED");
+		if (got != sizeof(in) || bad != 0)
+			rc = 1;
+	}
+	tty_close();
+	return (rc);
+}
+
 static void
 on_signal(int sig)
 {
@@ -735,7 +796,8 @@ static void
 usage(void)
 {
 	fprintf(stderr, "usage: pro1x-fmd [-Fv] [-d tty] [-s speed] "
-	    "[-f fwdir:...] [-r rail,...|none] [-S socket]\n");
+	    "[-f fwdir:...] [-r rail,...|none] [-S socket]\n"
+	    "       pro1x-fmd -L speed,... [-d tty]\n");
 	exit(2);
 }
 
@@ -744,11 +806,14 @@ main(int argc, char **argv)
 {
 	struct pollfd pfd[2 + MAX_CLIENTS];
 	int ch, ls, i, n, timeout, fd, verbose = 0;
+	const char *loop = NULL;
 
 	d.t0 = mono_ms();
-	while ((ch = getopt(argc, argv, "Fd:f:r:s:S:v")) != -1) {
+
+	while ((ch = getopt(argc, argv, "Fd:f:L:r:s:S:v")) != -1) {
 		switch (ch) {
 		case 'F':	d.foreground = true; break;
+		case 'L':	loop = optarg; break;
 		case 'd':	d.tty = optarg; break;
 		case 'f':	d.fwdirs = optarg; break;
 		case 'r':	d.rails = optarg; break;
@@ -758,6 +823,8 @@ main(int argc, char **argv)
 		default:	usage();
 		}
 	}
+	if (loop != NULL)
+		return (loop_test(loop));
 	if (d.speed != 115200 && d.speed != 3000000 && d.speed != 921600)
 		usage();
 	qbt_init(&bt, &ops, NULL, d.speed);

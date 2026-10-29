@@ -1,0 +1,134 @@
+#!/bin/sh
+# pro1x-fmtest [STEP]: the FM radio's test runs of freebsd/fm/README.md,
+# each layer after the one below it, up to STEP (kernel environment
+# pro1x.fm, set in the boot menu's freebsd/cmdline with pro1x.test=fm):
+#   uart   qcom_geni_uart.ko: the serial engine's clock, its pins, the QUP
+#          version, /dev/cuau0; the UART alone through its internal
+#          loopback at 115200 and 3000000 baud (no chip involved)
+#   bt     uart, then the WCN3950: its rails at the RPM (qcom_dsp),
+#          pro1x-fmd brings it up (power pulses, version, baud rate,
+#          rampatch and NVM download, HCI_RESET, in-band sleep)
+#   radio  bt, then the FM receiver: on, tune (pro1x.fm_freq, default
+#          99.9 MHz), signal and stereo, RDS for 15 s, three seeks, off
+#          (headphones plugged in: their cable is the antenna)
+#   audio  radio's receiver left on, then the ADSP and its APR and SLIMbus
+#          services (pro1x-q6, freebsd/dsp): what FreeBSD can ask of the
+#          audio path so far
+# pro1x.fm_debug=1: every frame on the UART in the log; pro1x.fm_speed=
+# 115200: the chip left at its boot rate throughout.
+# Everything goes to the console, which the RAM console keeps for Linux
+# after the next boot. From userdata (next to the kernel) first: a newer
+# copy of this script in freebsd/fm/, pro1x-fmd, pro1x-fmctl and
+# pro1x-q6 there, the modules in freebsd/modules, the chip's firmware
+# (linux-firmware's qca/cmbtfw12.tlv, qca/cmnv12.bin) in
+# freebsd/firmware/qca.
+step=${1:-$(kenv -q pro1x.fm)}
+step=${step:-uart}
+host=/dev/pro1x-host/freebsd
+if [ -f $host/fm/pro1x-fmtest ] && [ "${PRO1X_FMTEST_HOST:-}" != 1 ]; then
+	echo "=== the newer pro1x-fmtest from $host/fm"
+	PRO1X_FMTEST_HOST=1 exec sh $host/fm/pro1x-fmtest "$step"
+fi
+[ -d $host/fm ] && PATH=$host/fm:$PATH
+export PATH
+echo "=== FM test up to: $step"
+if [ -d $host/modules ]; then
+	kldconfig -i $host/modules
+	echo "modules from $host/modules first"
+fi
+tty=/dev/cuau0
+freq=$(kenv -q pro1x.fm_freq)
+freq=${freq:-99.9}
+speed=$(kenv -q pro1x.fm_speed)
+speed=${speed:-3000000}
+v=
+[ "$(kenv -q pro1x.fm_debug)" = 1 ] && v=-v
+log=/tmp/pro1x-fmd.log
+
+# SW_CTRL of the WCN3950 (the stock device tree's bt-sw-ctrl-gpio, gpio 87):
+# read only, for the record
+swctrl() {
+	echo "SW_CTRL (gpio 87, $1): $(gpioctl -f /dev/gpioc0 87 2>&1)"
+}
+
+echo "--- qcom_geni_uart"
+swctrl "before"
+kldload qcom_geni_uart && echo "qcom_geni_uart loaded"
+kldstat | grep -E "uart"
+dmesg | grep -E "^uart|qcom_geni|geni" | tail -20
+sysctl dev.uart.0 2>&1
+ls -la /dev/cuau0 /dev/ttyu0 2>&1
+if [ -c $tty ]; then
+	echo "--- the UART alone, through its internal loopback"
+	sysctl dev.uart.0.loopback=1
+	pro1x-fmd -L 115200,3000000 -d $tty 2>&1
+	sysctl dev.uart.0.loopback=0
+	sysctl dev.uart.0.rx_bytes dev.uart.0.tx_bytes dev.uart.0.overruns \
+	    dev.uart.0.clock dev.uart.0.clock_div dev.uart.0.baud 2>&1
+else
+	echo "no $tty: nothing more to test"
+	exit 0
+fi
+[ "$step" = uart ] && exit 0
+
+echo "--- the WCN3950"
+kldload qcom_dsp && echo "qcom_dsp loaded"
+sysctl hw.qcom_rpm.edge 2>&1
+ls -la $host/firmware/qca /usr/local/share/pro1x/firmware/qca 2>&1
+rm -f /var/run/pro1x-fm.sock
+pro1x-fmd -F $v -d $tty -s "$speed" \
+    -f $host/firmware:/usr/local/share/pro1x/firmware > $log 2>&1 &
+fmd=$!
+i=0
+while [ ! -S /var/run/pro1x-fm.sock ] && [ $i -lt 20 ]; do
+	sleep 0.5
+	i=$((i + 1))
+done
+step_t() { echo "$(date +%T) $*"; }
+step_t "on"
+pro1x-fmctl on
+pro1x-fmctl info
+swctrl "after the bring-up"
+sysctl hw.qcom_rpm.regulator hw.qcom_rpm.requests hw.qcom_rpm.refused \
+    hw.qcom_rpm.timeouts 2>&1
+sysctl dev.uart.0.rx_bytes dev.uart.0.tx_bytes dev.uart.0.overruns \
+    dev.uart.0.parity_errors dev.uart.0.baud 2>&1
+
+if [ "$step" != bt ]; then
+	echo "--- the FM receiver"
+	pro1x-fmctl debug 1
+	step_t "tune $freq"
+	pro1x-fmctl tune "$freq"
+	pro1x-fmctl station
+	step_t "RDS for 15 s"
+	pro1x-fmctl -t 15 watch
+	pro1x-fmctl ps
+	pro1x-fmctl rt
+	pro1x-fmctl station
+	for i in 1 2 3; do
+		step_t "seek up"
+		pro1x-fmctl seek up
+		pro1x-fmctl station
+	done
+	pro1x-fmctl mute 1
+	pro1x-fmctl mono 1
+	pro1x-fmctl station
+	pro1x-fmctl info
+fi
+if [ "$step" = audio ]; then
+	echo "--- the audio path (the receiver on, its SLIMbus port on)"
+	pro1x-fmctl status
+	if command -v pro1x-q6 > /dev/null; then
+		pro1x-q6 test 2>&1
+	else
+		echo "no pro1x-q6"
+	fi
+fi
+step_t "off"
+pro1x-fmctl off
+kill $fmd 2> /dev/null
+sleep 1
+echo "--- pro1x-fmd's log"
+cat $log
+swctrl "after off"
+sysctl hw.qcom_rpm.regulator 2>&1
