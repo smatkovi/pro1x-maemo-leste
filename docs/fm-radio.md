@@ -9,14 +9,11 @@ plan, with sources: `~/ps/pro1x-fm-research.md` (not in this repository).
 
 | Stage | What | State |
 |---|---|---|
-| 0 | Bluetooth comes up | **fixed in patch 0013, not yet booted** |
-| 1 | FM commands and events over the Bluetooth UART | patch 0014, built, untested |
-| 2 | V4L2 radio device `/dev/radio0` (tune, seek, signal, RDS) | patch 0015, built, untested |
-| 3 | Audio: SLIMbus, WCN3950 codec, q6afe `SLIMBUS_8_TX` | not written (plan below) |
-| 4 | Hildon app (`apps/pro1x-fm`) and a shell test (`tools/pro1x-fm`) | written, compile-checked |
-
-Kernel `7.1.0-pro1x.4` (0013-0015, `CONFIG_RADIO_QCA_FM=m`) is built in
-`$WORK/out-pro1x.4` and not on the phone.
+| 0 | Bluetooth comes up | patch 0013, **works** (7.1.0-pro1x.4) |
+| 1 | FM commands and events over the Bluetooth UART | patch 0014, **works** |
+| 2 | V4L2 radio device `/dev/radio0` (tune, seek, signal, RDS) | patches 0015, 0017, **tune and seek work** (no antenna yet) |
+| 3 | Audio: SLIMbus, WCN3950 codec, q6afe `SLIMBUS_8_TX` | patches 0018-0021 in 7.1.0-pro1x.6, built, not booted |
+| 4 | Hildon app (`apps/pro1x-fm`), shell tests (`tools/pro1x-fm`) | written, compile-checked |
 
 ## Stage 0: why Bluetooth failed since 7.1.0-pro1x.1
 
@@ -82,113 +79,111 @@ again at 115200. A `qcom,wcn3950-pmu` power sequencer (as on the RB2, with
   mask 0x07, `4C13` RDS processing (RT|PS|PS simple), `4C05` mute, `5401`
   tune (kHz, then a tune-status event 0x01), `FC0E` SLIMbus port on.
 
-## Test plan (needs the owner's OK and presence for the flash)
+## Tests on the phone
 
-`PHONE` is the usual root ssh to Leste (`ssh -o UserKnownHostsFile=... root@172.16.42.1`).
+**7.1.0-pro1x.4 (2026-10-29), without headphones:**
+- Bluetooth: `QCA setup on UART is completed`, hci0 UP RUNNING.
+- `pro1x-fm-test 99.9`: the receiver is on after 0.1 s, and RSSI and the
+  RDS sync flag come back.
+- Seek: with no station above the threshold, the chip goes round the band
+  in about 7 s and comes back to where it started (Search Complete, then a
+  tune status). The driver reported that as success, so `scan` ended after
+  one line. With patch 0017 it returns `ENODATA` ("no station found"); a
+  rebuilt module was tried on the phone. The chip's own seek threshold is
+  at its lowest (0 of 0-3).
+- The module parameter `debug` (`/sys/module/radio_qca_fm/parameters/debug`)
+  logs every FM command and event, because Leste has no dynamic debug.
 
-1. **Prepare.** This writes files on the phone but no partition: the
-   modules to `/host/pro1x-modules/7.1.0-pro1x.4`, the initramfs in Leste,
-   and `/host/boot_b-7.1.0-pro1x.4.img`.
+## Stage 3: the audio path (patches 0018-0021, 7.1.0-pro1x.6)
 
-       PHONE="..." WORK=$WORK OUT=$WORK/out-pro1x.4 bash scripts/65-kernel-update.sh prepare
+Downstream (msm-4.19 bengal), the receiver's audio goes this way:
+WCN3950 slave ports TX1/TX2 (`btfm_slim`) → LPASS SLIMbus NGD → AFE port
+`SLIMBUS_8_TX` (0x4011, 48 kHz, S16LE, 2 channels) → a "SLIMBUS_8
+Hostless" capture. The mainline version:
 
-2. **Flash and reboot**, with the owner at the phone:
+- **0018, q6dsp:** the AFE ports `SLIMBUS_7_RX/TX` and `SLIMBUS_8_RX/TX`
+  (IDs 149-152, AFE 0x400e-0x4011), with DAIs, DAPM and routing mixers.
+  The SLIMbus DAIs now tell TX from RX by their stream, not by the
+  parity of their ID.
+- **0019, the codec `wcn399x`** (`qcom,wcn3950-slim-audio`):
+  - FM ports 1 and 2 on channels 160/161, with the register writes of
+    downstream `btfm_slim`;
+  - a platform device that looks the chip's SLIMbus devices up only when a
+    stream starts, so the sound card never waits for SLIMbus (the NGD
+    registers its bus only once the ADSP has brought it up);
+  - the MR !99 draft did not compile, so the driver is new.
+- **0020, sm8250 machine:** SLIMbus back ends copy the codec's channel
+  map to the DSP port, as `sdm845.c` does.
+- **0021, DT:**
+  - NGD `slim-ngd@a5c0000` (`v1.5.0`; v1.5 and v2.1 have the same register
+    layout in mainline, NGD 1 at +0x1000 as downstream) and its BAM at
+    `0xa584000`, without an IOMMU stream, as downstream;
+  - the WCN3950 `ifd@0,0`/`codec@1,0` (`slim217,220`);
+  - the "FM Capture" link: SLIMBUS_8_TX → q6routing.
+- **User space:** the app sets the mixer `MultiMedia3 Mixer SLIMBUS_8_TX`.
+  It opens that front end (`hw:Pro1X,2`, which the UCM profile does not
+  use) as the PulseAudio source `fm_radio` and loops it back to the
+  default sink. The radio driver already sends `FC0E 01`, which puts the
+  receiver's audio on its SLIMbus ports.
 
-       PHONE="..." WORK=$WORK OUT=$WORK/out-pro1x.4 bash scripts/65-kernel-update.sh flash
+What can still go wrong, in the order the test will show it:
+1. The ADSP has no SLIMbus QMI service, or the NGD does not come up:
+   `qcom,slim-ngd` errors in dmesg; no `/sys/bus/slimbus/devices`.
+2. SMMU: the BAM's DMA is blocked. The kernel logs the stream ID
+   ("Unexpected global fault", "Blocked unknown Stream ID 0x..."); that
+   ID goes into `iommus` of `slimbam` and the NGD, and the next kernel
+   is built with it.
+3. The WCN3950 does not report present (no `217:220:...` device after
+   the radio is on). The chip may need SLIMbus clocking or more than
+   `FC0E` first.
+4. The stream starts but stays silent: the channel numbers or the port
+   registers.
 
-   - This saves the current boot_b (7.1.0-pro1x.3) as
-     `/host/boot_b-before-7.1.0-pro1x.4.img`, with a copy in
-     `$WORK/out-pro1x.4`.
-   - It puts slot b on trial (3 starts). It does not reboot; the owner does.
-3. **Bluetooth (stage 0):** check that `uname -r` is `7.1.0-pro1x.4`, then:
+Not done: Bluetooth SCO/A2DP over SLIMBUS_7, the NGD's missing
+`disable_stream` (an upstream patch exists; it only matters when the rate
+changes), and the DSP's own loopback (hostless), which would save power.
 
-       dmesg | grep -E 'QCA setup|reassembly|Reset failed|radio-qca-fm'
+## Test plan for 7.1.0-pro1x.6 (owner's OK for prepare and flash)
 
-   - **Pass:** `QCA setup on UART is completed`, no `-84`, and
-     `FM receiver as /dev/radio0`.
-   - Then `hciconfig hci0 up; hciconfig hci0` shows UP RUNNING with BD
-     address 02:50:31:E8:00:03. After that, `hciconfig hci0 down`.
-   - The bluetooth service is still out of the runlevel, so hci0 goes down
-     by itself 2 s after setup. That is normal.
-4. **FM control (stages 1/2):**
-   - Copy the test tool over first: `scp tools/pro1x-fm/pro1x-fm-test root@172.16.42.1:/usr/local/bin/`.
-   - Check that Bluetooth is not soft-blocked: `rfkill list` or
-     `/sys/class/rfkill/*/soft` must be 0. A block makes opening the radio
-     fail with "Bluetooth controller not up". It was 0 on 2026-10-29.
-   - Plug in headphones; the cable is the antenna.
-   - Enable the debug output (debugfs is mounted on Leste):
+Kernel: `$WORK/out-pro1x.6` = pro1x.5 (0001-0017) + 0018-0021. `PHONE` is
+the usual root ssh to Leste.
 
-         echo 'module radio_qca_fm +p' > /sys/kernel/debug/dynamic_debug/control
+1. **Prepare.** Writes files on the phone, no partition:
 
-   - Run the test tool:
+       PHONE="..." WORK=$WORK OUT=$WORK/out-pro1x.6 bash scripts/65-kernel-update.sh prepare
 
-         pro1x-fm-test -t 15 99.9     # a strong local station (Ö3 Vienna 99.9, FM4 103.8)
-         pro1x-fm-test scan
+2. **Flash**, with the owner there:
 
-   - **Pass:** signal well above 0 %, `stereo`, after a few seconds `RDS`
-     and the station name (`OE3`, ...). `dmesg` shows RSSI lines.
-   - **Failure to look for:** `command 0x4c01: -110` means the chip does not
-     answer FM commands. The likely cause is that the FM core needs a
-     power-on or vendor command first. Keep the dmesg for that case.
-   - `v4l2-ctl -d /dev/radio0 --set-freq=99.9 --get-tuner --list-ctrls` is
-     the second opinion.
-5. **App:** build and install the app with the `pro1x-fm` lines of
-   `scripts/49-apps.sh` (in Leste, as root). It then appears as
-   "FM Radio"/"UKW-Radio" in the menu. Without stage 3 it tunes and shows the
-   station, but plays no sound.
-6. **Rollback:**
+       PHONE="..." WORK=$WORK OUT=$WORK/out-pro1x.6 bash scripts/65-kernel-update.sh flash
+
+   - This saves boot_b (pro1x.5) as `/host/boot_b-before-7.1.0-pro1x.6.img`.
+   - Slot b is then on trial for 3 starts. The owner reboots.
+3. **Check that nothing else broke:**
+   - `uname -r`;
+   - `aplay -l` and a sound on the speaker;
+   - the microphone;
+   - `dmesg | grep -i -E 'smmu|fault'`.
+4. **FM sound,** with headphones plugged in (the cable is the antenna):
+   1. Copy the test over:
+
+          scp tools/pro1x-fm/pro1x-fm-audio-test root@172.16.42.1:/usr/local/bin/
+
+   2. Run it:
+
+          pro1x-fm-audio-test 99.9 10
+
+   3. **Pass:** `/sys/bus/slimbus/devices` lists the WCN3950, `arecord`
+      runs, and the recording is "sound", not "silent".
+   4. Listen with `paplay /tmp/fm.wav`, then try the app.
+5. **Rollback:**
    - From Leste:
 
-         TARGET=b IMG=/host/boot_b-before-7.1.0-pro1x.4.img VBMETA= sh scripts/60-flash-slot-b.sh flash
+         TARGET=b IMG=/host/boot_b-before-7.1.0-pro1x.6.img VBMETA= sh scripts/60-flash-slot-b.sh flash
 
-   - From fastboot:
-
-         fastboot flash boot_b $WORK/out-pro1x.4/boot_b-before-7.1.0-pro1x.4.img
-
+   - From fastboot: flash
+     `$WORK/out-pro1x.6/boot_b-before-7.1.0-pro1x.6.img` into boot_b.
    - If the new kernel does not boot at all, the trial falls back to slot a
      (Sailfish OS) after 3 failed starts.
-
-## Stage 3: the audio path (to do)
-
-The receiver's audio exists only as SLIMbus data. Downstream (msm-4.19
-bengal), the path is: WCN3950 slave ports TX1/TX2 (`btfm_slim`) → LPASS
-SLIMbus NGD → AFE port `SLIMBUS_8_TX` (0x4011, 48 kHz, S16LE, 2 channels) →
-a "SLIMBUS_8 Hostless" capture. On mainline this needs:
-
-1. **DT:**
-   - the LPASS SLIMbus NGD `slim@a5c0000` with the BAM at `0xa584000` and
-     IRQs SPI 283 (controller) and 284 (BAM);
-   - `qcom,slim-ngd-v1.5.0` or `v2.1.0` (unknown, try both);
-   - children `ifd@0,0` and `codec@1,0` with compatible `slim217,220`;
-   - the IOMMU stream ID, if one is needed (unknown).
-
-   The NGD talks to the ADSP's SLIMbus QMI service.
-2. **Codec:** a WCN399x SLIMbus codec. Start from Dylan Van Assche's
-   `sound/soc/codecs/wcn3990.c` (sdm845-mainline MR !99, GPL-2.0+). It
-   already has the FM TX ports. The WCN3950 has the same elemental address
-   (`slim217,220`).
-3. **q6dsp:** the ports `SLIMBUS_7_RX/TX` and `SLIMBUS_8_RX/TX` (AFE
-   0x400e–0x4011) need to be added in these places:
-   - `dt-bindings/sound/qcom,q6dsp-lpass-ports.h` (new IDs after 148);
-   - `q6afe.c` (port map and SLIMbus config);
-   - `q6dsp-lpass-ports.c` (DAI entries);
-   - `q6routing.c` (as capture sources).
-4. **Machine driver** (`sm8250.c`, compatible `fxtec,pro1x-sndcard`):
-   - SLIMbus backends need the codec's channel map copied to the CPU DAI, as
-     `sdm845.c` does;
-   - a DAI link `SLIMBUS_8_TX` ↔ the codec's FM TX DAI ↔ q6routing.
-5. **User space:** a UCM capture device for it. PulseAudio then has a
-   source, and the app plays it through `module-loopback` (it looks for a
-   source with "fm" in its name). The DSP's own loopback (hostless) would
-   save power, but it is not in mainline q6.
-6. After `4C01`, the chip needs `FC0E 01` (sent by the driver) to put audio
-   on its SLIMbus port.
-
-Main risks:
-- the NGD version and the ADSP firmware's SLIMbus service on SM6115;
-- the clock and power setup for SLIMbus in LPASS.
-
-BT SCO would use the same SLIMbus (`SLIMBUS_7`, 8 kHz).
 
 ## FreeBSD (notes only, nothing written)
 

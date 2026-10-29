@@ -33,6 +33,7 @@ rm -rf "$SRC/pro1x-fm"
 cp -r "$REPO/apps/pro1x-fm" "$SRC/pro1x-fm"
 make -C "$SRC/pro1x-fm" install PREFIX=/usr
 install -m 755 "$REPO/tools/pro1x-fm/pro1x-fm-test" /usr/bin/pro1x-fm-test
+install -m 755 "$REPO/tools/pro1x-fm/pro1x-fm-audio-test" /usr/bin/pro1x-fm-audio-test
 
 # Ports of Maemo 5 apps, each in its own repository with release packages
 # (Pedometer Home Widget on tools/pro1x-steps, headphoned, gPodder 4,
