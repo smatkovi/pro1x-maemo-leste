@@ -9,8 +9,13 @@ set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 export DEBIAN_FRONTEND=noninteractive
 
-apt-get install -y -q --no-install-recommends gcc libc6-dev pkg-config \
-  libgtk2.0-dev libgconf2-dev libpulse-dev
+# libgtk2.0-dev only where it is missing: after 49-hidpi.sh it is the
+# patched gtk's (+pro1xN, held), and asking apt for it again pulls the
+# archive's, which wants the archive's libgtk2.0-0 exactly
+pkgs=(gcc libc6-dev pkg-config libgconf2-dev libpulse-dev)
+dpkg-query -W -f='${Status}' libgtk2.0-dev 2> /dev/null | grep -q "ok installed" ||
+  pkgs+=(libgtk2.0-dev)
+apt-get install -y -q --no-install-recommends "${pkgs[@]}"
 # shellcheck disable=SC2046
 gcc -O2 -Wall -o /usr/local/bin/pro1x-volume-osd \
   "$REPO/tools/pro1x-volume-osd/pro1x-volume-osd.c" \
