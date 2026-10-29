@@ -165,6 +165,9 @@ APPS=(
 	"hildon-notify|"
 	"gtkhtml3|"
 	# camel-lite's iconv checks run programs: their answers for FreeBSD's
+	# the phone (calls and SMS through the modem's D-Bus services; without
+	# its Telepathy module for now)
+	"sphone|!"
 	"tinymail|--with-platform=maemo-leste --with-ssl=nss --disable-idle --disable-imap-part-fetch ac_cv_libiconv_utf8=yes --with-iconv-detect-h=$REPO/freebsd/hildon/compat/camel-iconv-detect.h"
 	"modest|"
 )
@@ -239,6 +242,7 @@ REV+=(
 	[hildon-notify]=45856cd4debe [gtkhtml3]=23130d7a988d
 	[tinymail]=b26e5f078476 [modest]=655c79292815
 	[evolution-data-server]=df4ec29950f29a76eac6fbe0f814c48d2cef7d3fdb905002a4a883dd761ce93c
+	[sphone]=45663ccd15ec
 )
 URL+=(
 	[libbaseencode]=https://github.com/paolostivanin/libbaseencode.git
@@ -1203,3 +1207,5 @@ json.dump(m, sys.stdout)' > "$PR.manifest"
 	install -m 644 src/addressbook/libebook-contacts/e-vcard.h \
 	    "$PR/usr/local/include/evolution-data-server/libebook-contacts/e-vcard.h"
 }
+
+custom_sphone() { qt_cmake; }
