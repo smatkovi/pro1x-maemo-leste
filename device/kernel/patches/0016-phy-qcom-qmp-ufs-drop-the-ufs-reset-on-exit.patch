@@ -1,4 +1,4 @@
-Subject: [PATCH] phy: qcom-qmp-ufs: drop the UFS reset on exit
+Subject: [PATCH] phy: qcom-qmp-ufs: drop the UFS reset on exit; ufs-qcom: balance the PHY init
 
 On PHYs without a PCS software reset (no_pcs_sw_reset), the first init
 takes the "ufsphy" reset, which the UFS host controller (ufs-qcom)
@@ -13,9 +13,13 @@ fails with -ENODEV from then on. Binding the host again then ends in
 and UFS stays down. The Pro1X's boot menu does this every time it starts
 FreeBSD (the host rebound with an identity IOMMU domain before kexec).
 
-Take the reset without devm and put it in a new exit callback (ufs-qcom
-calls phy_exit() before it goes away), so that the next init gets the
-reset of the host bound by then.
+- qcom-qmp-ufs: take the reset without devm and put it in a new exit
+  callback, so that the next init gets the reset of the host bound by
+  then.
+- ufs-qcom: every power-up sequence (each host reset) calls phy_init()
+  without a phy_exit() for the one before, so the PHY's init count grows
+  and the phy_exit() at removal never reaches the exit callback. End the
+  earlier init first, as the power count is already handled there.
 
 diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
 index b87314c837..0cde0e71d9 100644
@@ -56,3 +60,20 @@ index b87314c837..0cde0e71d9 100644
  	.power_on	= qmp_ufs_power_on,
  	.power_off	= qmp_ufs_power_off,
  	.calibrate	= qmp_ufs_phy_calibrate,
+diff --git a/drivers/ufs/host/ufs-qcom.c b/drivers/ufs/host/ufs-qcom.c
+index 9c0973a7ff..c4686440c1 100644
+--- a/drivers/ufs/host/ufs-qcom.c
++++ b/drivers/ufs/host/ufs-qcom.c
+@@ -511,6 +511,12 @@ static int ufs_qcom_power_up_sequence(struct ufs_hba *hba)
+ 	if (phy->power_count)
+ 		phy_power_off(phy);
+ 
++	/*
++	 * Every power-up initialises the PHY: end the init of the one before,
++	 * so that the phy_exit() at removal really exits it.
++	 */
++	if (phy->init_count)
++		phy_exit(phy);
+ 
+ 	/* phy initialization - calibrate the phy */
+ 	ret = phy_init(phy);
