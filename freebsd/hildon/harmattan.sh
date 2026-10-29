@@ -241,13 +241,16 @@ custom_harmattan_libdsme() {
 	make install DESTDIR="$PR" PREFIX=/usr/local > install.out 2>&1 || { tail -20 install.out; exit 1; }
 	usr_to_local "$PR"
 }
+# (below include/harmattan-mce: Leste's mce-dev, which Hildon builds on, has
+# names Harmattan's lacks and the other way round; build.sh puts this
+# directory first for the N9's parts)
 custom_harmattan_mce_dev() {
 	local v
 	v=$(sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' debian/changelog)
-	install -d "$PR/usr/local/include/mce" "$PR/usr/local/libdata/pkgconfig"
-	install -m 644 include/mce/*.h "$PR/usr/local/include/mce/"
-	printf 'prefix=/usr/local\nincludedir=${prefix}/include\n\nName: mce\nDescription: Mode Control Entity\nVersion: %s\nCflags: -I${includedir}\n' \
-	    "$v" > "$PR/usr/local/libdata/pkgconfig/mce.pc"
+	install -d "$PR/usr/local/include/harmattan-mce/mce" "$PR/usr/local/libdata/pkgconfig"
+	install -m 644 include/mce/*.h "$PR/usr/local/include/harmattan-mce/mce/"
+	printf 'prefix=/usr/local\nincludedir=${prefix}/include/harmattan-mce\n\nName: harmattan-mce\nDescription: Mode Control Entity (Harmattan)\nVersion: %s\nCflags: -I${includedir}\n' \
+	    "$v" > "$PR/usr/local/libdata/pkgconfig/harmattan-mce.pc"
 }
 
 # The applications: Qt Quick, one qmake project each

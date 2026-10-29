@@ -308,6 +308,10 @@ build_part() {
 	local CPPFLAGS="$CPPFLAGS"
 	PR=$H/pkgroot/$1
 	case "$2" in *"|"*) CPPFLAGS="$CPPFLAGS ${2#*|}" ;; esac
+	# Harmattan's mce names (harmattan-mce-dev) beside Leste's, first for
+	# the N9's parts
+	[ "${kind:-}" != harmattan ] ||
+	    CPPFLAGS="-I$SYSROOT/usr/local/include/harmattan-mce $CPPFLAGS"
 	log "$name"
 	rm -rf "$b" "$PR"
 	mkdir -p "$PR"
@@ -345,6 +349,11 @@ build_part() {
 	# maemo-launcher (export.map) export it too
 	find "$b" \( -name export.map -o -name '*.version' \) -exec grep -l 'local:' {} + |
 	    xargs -r sed -i 's/^\([[:space:]]*global:\)/\1\n\tenviron;\n\t__progname;/'
+	# Leste's gettext texts are below /usr/local/share/locale here; sources
+	# that name /usr/share/locale (bindtextdomain) would find none
+	grep -rl --include='*.c' --include='*.cpp' --include='*.h' --include='*.vala' \
+	    '"/usr/share/locale' "$b" 2> /dev/null |
+	    xargs -r sed -i 's|"/usr/share/locale|"/usr/local/share/locale|g' || true
 	# A part's host tools, if it needs some (pre_<name>)
 	if declare -F "pre_${name//-/_}" > /dev/null; then
 		"pre_${name//-/_}" || return 1

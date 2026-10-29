@@ -361,7 +361,7 @@ REVISION = {
     # 2026-10-27: the launcher's menu below /usr/local (it was empty), the
     # MeeGo-like pages (patches/meego, off by default); 2: the edge
     # gestures, no more crash when a thumbnail zooms in (isnanf, 0003)
-    'hildon-desktop': 2,
+    'hildon-desktop': 3,
     # 2026-10-27: the daemon too (it was libalarm only)
     'alarmd': 1,
     # 2026-10-27: Leste's hildon-libs texts, not libhildon's (EXCLUDE)
@@ -382,13 +382,21 @@ REVISION = {
     # answered with the PC's /usr/lib/qt6), sphone's modules below
     # /usr/local/lib, system-ui's D-Bus policy below /usr/local/etc and
     # its dead notification sinks dropped (harmattan-qt5 278a4b8)
-    'qt6-qpa-maemo': 1, 'qt6-style-maemo': 1, 'sphone': 1, 'harmattan-system-ui': 1,
+    'qt6-qpa-maemo': 1, 'qt6-style-maemo': 1, 'sphone': 2, 'harmattan-system-ui': 1,
     # 2026-10-29: libmeegotouch's style sheet cache read every attribute 4
     # bytes early in clang builds (nothing drew, harmattan-qt5 0bbefb4),
     # the Pro1X's 960x480 target; the pro1x theme's black wallpaper
     'harmattan-libmeegotouch': 1, 'harmattan-meegotouchtheme': 1,
     # 2026-10-29: files that other packages have too, left out (EXCLUDE)
     'modest': 1, 'libmodest-dbus-client': 1, 'harmattan-libdsme': 1,
+    # 2026-10-29: Yappari's program itself (its qmake had failed unseen:
+    # libqrencode), sphone's configuration below /usr/local/share
+    'yappari-leste': 1,
+    # 2026-10-29: its headers below include/harmattan-mce, beside Leste's
+    'harmattan-mce-dev': 1,
+    # 2026-10-29: the gettext texts below /usr/local/share/locale (the
+    # sources named /usr/share/locale: the address book showed text IDs)
+    'hildon-home': 1, 'hildon-control-panel-personalisation': 1, 'osso-calculator': 1, 'conversations': 1, 'osso-abook': 1, 'osso-addressbook': 1,
 }
 
 

@@ -20,6 +20,10 @@ if [ -f /var/db/gdk-pixbuf-loaders.cache ]; then
 fi
 
 mkdir -p /tmp/hildon-desktop /tmp/af-piddir
+# Maemo's documents folder (MyDocs, with its hidden folders for the media
+# apps), which apps find through MYDOCSDIR (GPS Recorder ends without it)
+export MYDOCSDIR=${MYDOCSDIR:-$HOME/MyDocs}
+mkdir -p "$MYDOCSDIR/.images" "$MYDOCSDIR/.sounds" "$MYDOCSDIR/.videos" "$MYDOCSDIR/.documents"
 # As Leste: no key repeat for Return and the hardware keys
 xset -r 36 -r 70 -r 72 -r 9 -r 104 2> /dev/null
 

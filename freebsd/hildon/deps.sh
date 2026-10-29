@@ -26,7 +26,8 @@ APPS_PKGS="gtk3 vte poppler-glib upower gstreamer1 gstreamer1-plugins pulseaudio
 	libaccounts-glib libglade2 mobile-broadband-provider-info iso-codes
 	qt6-base qt6-svg qt6-declarative qt6-5compat qt6-charts qt6-multimedia
 	qt6-webengine qt6-tools
-	protobuf openblas yaml-cpp pcre2 rapidjson cli11 simde sqlitecpp"
+	protobuf openblas yaml-cpp pcre2 rapidjson cli11 simde sqlitecpp
+	libqrencode"
 
 # What the N9's user interface (harmattan.sh) builds on beyond the apps'
 # libraries: tinycdb for contextkit's property cache

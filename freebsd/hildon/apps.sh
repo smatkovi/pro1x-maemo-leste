@@ -1158,7 +1158,7 @@ custom_yappari_leste() {
 	    data/*.service data/yappari.desktop
 	(cd backend && GOOS=freebsd GOARCH=arm64 CGO_ENABLED=0 go build -trimpath \
 	    -ldflags="-s -w" -o yappari-wa .) > go.out 2>&1 || { tail -20 go.out; exit 1; }
-	(cd src && qt_qmake yappari.pro VERSION_STRING=3.0.0)
+	(cd src && qt_qmake yappari.pro VERSION_STRING=3.0.0) || exit 1
 	install -D -m 755 backend/yappari-wa "$PR/usr/local/libexec/yappari/yappari-wa"
 	install -D -m 644 data/yappari.desktop "$PR/usr/local/share/applications/hildon/yappari.desktop"
 	for f in data/*.service; do
@@ -1269,9 +1269,14 @@ json.dump(m, sys.stdout)' > "$PR.manifest"
 	    "$PR/usr/local/include/evolution-data-server/libebook-contacts/e-vcard.h"
 }
 
-# its modules below /usr/local, not in the base system's /usr/lib
+# its modules and configuration below /usr/local, not in the base system's
+# /usr/lib and /usr/share
 custom_sphone() {
-	sed -i 's|^set(SPHONE_MODULE_DIR /usr/lib/sphone/modules)$|set(SPHONE_MODULE_DIR /usr/local/lib/sphone/modules)|' CMakeLists.txt
+	sed -i -e 's|^set(SPHONE_MODULE_DIR /usr/lib/sphone/modules)$|set(SPHONE_MODULE_DIR /usr/local/lib/sphone/modules)|' \
+	    -e 's|^set(SPHONE_SYSCONF_DIR /usr/share/sphone)$|set(SPHONE_SYSCONF_DIR /usr/local/share/sphone)|' \
+	    -e 's|^set(SPHONE_SYSCONF_OVR_DIR /usr/share/sphone/sphone.ini.d)$|set(SPHONE_SYSCONF_OVR_DIR /usr/local/share/sphone/sphone.ini.d)|' \
+	    CMakeLists.txt
+	sed -i 's|^ModulePath=/usr/lib/sphone/modules$|ModulePath=/usr/local/lib/sphone/modules|' config/sphone.ini
 	qt_cmake
 }
 
