@@ -27,6 +27,7 @@ OLD=${OLD:-/host/arch-ext4.img}
 SIZE=${SIZE:-16G}
 SRC=/mnt/arch-ext4
 TOP=/mnt/arch-btrfs
+ROOT=/mnt/arch-root
 OPTS=noatime,compress=zstd:1
 log() { echo ">> $*"; }
 
@@ -40,11 +41,12 @@ for t in mkfs.btrfs:btrfs-progs rsync:rsync; do
 done
 modprobe btrfs
 
-mkdir -p "$SRC" "$TOP"
+mkdir -p "$SRC" "$TOP" "$ROOT"
 cleanup() {
 	for m in dev/pts dev sys proc host var/cache/pacman/pkg var/log .snapshots home; do
-		! mountpoint -q "$TOP/@/$m" 2> /dev/null || umount "$TOP/@/$m" || umount -l "$TOP/@/$m"
+		! mountpoint -q "$ROOT/$m" 2> /dev/null || umount "$ROOT/$m" || umount -l "$ROOT/$m"
 	done
+	! mountpoint -q "$ROOT" || umount "$ROOT"
 	! mountpoint -q "$TOP" || umount "$TOP"
 	! mountpoint -q "$SRC" || umount "$SRC"
 }
@@ -83,10 +85,13 @@ cat >> "$TOP/@/etc/fstab" <<EOF
 EOF
 
 log "snapper and snap-pac"
-R=$TOP/@
-# the subvolumes from the same loop device (a second one on the same file
+# the root subvolume mounted by itself: the chroot's / is then a mount
+# point, which pacman needs for its free space check; it and the other
+# subvolumes from the same loop device (a second one on the same file
 # would show Btrfs the same file system twice)
+R=$ROOT
 dev=$(findmnt -no SOURCE "$TOP")
+mount -o "subvol=/@,$OPTS" "$dev" "$R"
 for s in home:home snapshots:.snapshots log:var/log pkg:var/cache/pacman/pkg; do
 	mount -o "subvol=/@${s%%:*},$OPTS" "$dev" "$R/${s#*:}"
 done
