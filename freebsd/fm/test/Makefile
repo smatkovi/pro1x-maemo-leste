@@ -1,4 +1,5 @@
-# Host tests of pro1x-fmd (freebsd/fm/README.md), under ASan and UBSan:
+# Host tests of pro1x-fmd and the GENI UART's arithmetic
+# (freebsd/fm/README.md), under ASan and UBSan:
 #   make -C freebsd/fm/test          the unit tests and the run against
 #                                    a simulated WCN3950 on a pty
 # The firmware: linux-firmware's qca/cmbtfw12.tlv and qca/cmnv12.bin
@@ -24,6 +25,9 @@ $(OUT)/pro1x-fmd: $(D)/pro1x-fmd.c $(D)/qcabt.c $(D)/qcafm.c $(D)/qcabt.h $(D)/q
 $(OUT)/pro1x-fmctl: ../tools/pro1x-fmctl/pro1x-fmctl.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ ../tools/pro1x-fmctl/pro1x-fmctl.c
 
+$(OUT)/test_geni: test_geni.c ../sys/dev/uart/uart_qcom_geni_calc.h | $(OUT)
+	$(CC) $(CFLAGS) -o $@ test_geni.c
+
 $(OUT)/fakechip: fakechip.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ fakechip.c
 
@@ -33,7 +37,8 @@ firmware: | $(OUT)
 		else zstd -dqf $(FW)/$$f.zst -o $(OUT)/fw/qca/$$f; fi; \
 	done
 
-test: $(OUT)/test_qcabt $(OUT)/pro1x-fmd $(OUT)/pro1x-fmctl $(OUT)/fakechip firmware
+test: $(OUT)/test_qcabt $(OUT)/test_geni $(OUT)/pro1x-fmd $(OUT)/pro1x-fmctl $(OUT)/fakechip firmware
+	$(OUT)/test_geni
 	$(OUT)/test_qcabt $(OUT)/fw/qca
 	OUT=$(OUT) sh ./run.sh
 

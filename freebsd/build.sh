@@ -80,7 +80,10 @@ sed -e "s|@MFS_IMAGE@|$OUT/mfsroot.ufs|" -e "s|@ENV_FILE@|$REPO/freebsd/pro1x.en
 cp -a "$REPO/freebsd/dsp/sys/." "$SRC/sys/"
 WIFI_MODULES="firmware usb/usb linuxkpi linuxkpi_wlan wlan wlan_wep wlan_tkip"
 WIFI_MODULES="$WIFI_MODULES wlan_ccmp wlan_gcmp athk_common ath10k_snoc"
-MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES}
+# The Bluetooth/FM chip's UART (freebsd/fm/README.md): uart(4) with the
+# GENI UART class, new files only
+cp -a "$REPO/freebsd/fm/sys/." "$SRC/sys/"
+MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
 	buildkernel)
@@ -112,6 +115,11 @@ for t in "$REPO"/freebsd/dsp/tools/*/; do
 	clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" \
 	    -fuse-ld=lld -O2 -Wall -I"$REPO/freebsd/dsp/sys/arm64/qualcomm/dsp" \
 	    -o "$OUT/dsp-tools/$t" "$REPO/freebsd/dsp/tools/$t/$t.c"
+done
+# The FM radio's daemon and its client (freebsd/fm/tools)
+for t in "$REPO"/freebsd/fm/tools/*/; do
+	clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" \
+	    -fuse-ld=lld -O2 -Wall -o "$OUT/dsp-tools/$(basename "$t")" "$t"*.c
 done
 # and the test of the QRTR sockets (freebsd/dsp/test)
 clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" -fuse-ld=lld \
