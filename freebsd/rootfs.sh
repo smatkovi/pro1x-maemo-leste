@@ -2,9 +2,8 @@
 # Builds the FreeBSD root filesystem for the Pro1X on a Linux PC: the
 # release's base system (base.txz), packages from pkg.freebsd.org (the
 # desktop: Xorg on the framebuffer, Xfce) and the Pro1X configuration
-# (rootfs/), as a UFS image. On the phone it lives at
-# /host/freebsd/root.ufs; the RAM root (mfsroot/etc/rc) mounts userdata read
-# only, attaches the image and reroots into it.
+# (rootfs/), as a UFS image: the step from which rootzfs.sh makes the ZFS
+# pool (root.zfs). The phone's root is ZFS only; root.ufs stays on the PC.
 #
 #   WORK=/path/to/freebsd-build bash freebsd/rootfs.sh   (after build.sh)
 #   PKGS="" ...                  base system only

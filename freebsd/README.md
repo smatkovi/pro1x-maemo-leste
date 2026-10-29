@@ -42,12 +42,13 @@ to the command line, e.g. `hint.ufshci.0.disabled=1`.
 
 `rootfs.sh` builds `out/root.ufs` (UFS) from the release's
 `base.txz` with the Pro1X configuration in `rootfs/` (owners and modes
-from an mtree of the tarball). On the phone it goes to
-`/host/freebsd/root.ufs`. The RAM root (`mfsroot/etc/rc`) mounts userdata
-read only at `/dev/pro1x-host`, attaches the image as `md1` and reroots
-into it (`reboot -r`; `patches/0012` keeps filesystems below `/dev` across
-the reroot, `0016` makes the mount point). The root stays read only, `/var` and `/tmp` are in memory
-(`rootfs/etc/rc.conf`): FreeBSD does not write to userdata. Login on the
+from an mtree of the tarball). It is only the step on the PC from which
+`rootzfs.sh` makes the ZFS pool: the root on the phone is ZFS only.
+The RAM root (`mfsroot/etc/rc`) mounts userdata read only at
+`/dev/pro1x-host`, imports the pool and reroots into it (`reboot -r`;
+`patches/0012` keeps filesystems below `/dev` across the reroot, `0016`
+makes the mount point). With the read-only `root.zfs`, `/var` and `/tmp`
+are in memory (`rootfs/etc/rc.conf`): FreeBSD does not write to userdata. Login on the
 console as root (no password). devd powers the phone off when the power
 key is held for 2 s; powerd scales the CPU frequency.
 
@@ -55,9 +56,10 @@ key is held for 2 s; powerd scales the CPU frequency.
 ZFS pool (`pro1x`, the root in `pro1x/ROOT/default`, zstd compressed,
 about half the size), with FreeBSD's own `zpool` and `zfs` in a FreeBSD
 machine (`vm/vm.sh`): FreeBSD's `makefs -t zfs` stops at the image's hard
-links when it runs on Linux. With `root.zfs` next to `root.ufs` on the
-phone, the RAM root imports the pool read only and reroots into it (the
-kernel has ZFS); `pro1x.rootfs=ufs` in `freebsd/cmdline` keeps UFS. Tried
+links when it runs on Linux. On the phone it is `/host/freebsd/root.zfs`;
+the RAM root imports the pool read only and reroots into it (the kernel
+has ZFS). Without a ZFS root (`root.zfs` or the writable `pool.zfs`
+below) no system starts: there is no UFS fallback any more. Tried
 in the VM (`vm/try-zfsroot.sh`): the pool from a memory disk, the reroot,
 the Pro1X's system up to its login (2026-10-26); on the phone not yet.
 
@@ -85,7 +87,7 @@ file's own blocks, never through ext4:
    provider, so ordinary nops over several ranges of one partition could
    not all be written. Only with all four ZFS labels of a pool `pro1x`
    there is the pool imported read-write, else everything is undone and
-   the read-only `root.zfs` or `root.ufs` start as before. The pool grows
+   the read-only `root.zfs` starts as before. The pool grows
    into the file (`autoexpand`).
 3. **Boot environments**: the root is `pro1x/ROOT/<name>`, the pool's
    `bootfs` unless `pro1x.be=<name>` is in `freebsd/cmdline`; at boot,
@@ -212,7 +214,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `build.sh` | builds everything on a Linux PC (clang, lld, libarchive): sources, cross toolchain, root filesystem, kernel, boot image |
 | `PRO1X` | kernel config: only what the start needs, the frameworks for the SoC drivers and the Pro1X drivers (a GENERIC-based kernel hung early; its drivers for blocks without clocks are the suspects) |
 | `pro1x.env` | static kernel environment: one CPU (PSCI under Qualcomm's hypervisor is untested), verbose boot |
-| `mfsroot/etc/rc` | shows what the kernel found, then reroots into `root.ufs` on userdata; without it, Enter within 10 s for a shell, else reboot |
+| `mfsroot/etc/rc` | shows what the kernel found, then reroots into the ZFS root on userdata (`pool.zfs` read-write, else `root.zfs` read only); without one, Enter within 10 s for a shell, else reboot |
 | `patches/0001-*` | proof of life: the green stripe and the entry marker |
 | `patches/0002-*` | building on an Arch Linux host: glibc 2.43 (two bootstrap fixes) and a clang that reports more than one "version" line |
 | `patches/0003-*` | RAM console in the splash memory; keeps the kernel config's environment when the bootloader passes bootargs |

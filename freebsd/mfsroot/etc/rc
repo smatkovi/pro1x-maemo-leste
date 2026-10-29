@@ -8,22 +8,19 @@
 # root image from it as md1, and a reroot into it: the writable ZFS pool
 # freebsd/pool.zfs (Leste's pro1x-freebsd-pool made it; through its own
 # blocks, /etc/pro1x-pool.sh), its boot environment read-write; else
-# freebsd/root.zfs (the ZFS pool "pro1x" of rootzfs.sh, imported read only)
-# when it is there and the kernel has ZFS; else freebsd/root.ufs
-# (rootfs.sh).
+# freebsd/root.zfs (the ZFS pool "pro1x" of rootzfs.sh, imported read
+# only). The root is ZFS only: without either, no system starts.
 #
 # Kernel environment (freebsd/cmdline next to the kernel):
 #   pro1x.root=ram   stay here: report (userdata and the image attached
 #                    and released again), then Enter for a shell or reboot
-#   pro1x.rootfs=ufs root.ufs even when root.zfs is there
-#   pro1x.pool=off   not the writable pool: root.zfs or root.ufs read only
+#   pro1x.pool=off   not the writable pool: root.zfs read only
 #   pro1x.be=NAME    the writable pool's boot environment NAME (else its
 #                    bootfs; b + Enter within 5 s at boot: a menu)
 #   pro1x.test=1     unattended test: the full system reports and reboots
 PATH=/rescue; export PATH
 . /etc/pro1x-pool.sh
 HOST=/dev/pro1x-host
-IMAGE=$HOST/freebsd/root.ufs
 ZIMAGE=$HOST/freebsd/root.zfs
 
 echo "=== FreeBSD on the F(x)tec Pro1X: rc ==="
@@ -79,7 +76,7 @@ if [ -e /dev/gpt/userdata ] && [ -d $HOST ] &&
 	echo "--- userdata at $HOST:"
 	df -h $HOST
 	ls -la $HOST/freebsd
-	if [ "$(kenv -q pro1x.rootfs)" != ufs ] && [ "$(kenv -q pro1x.pool)" != off ] &&
+	if [ "$(kenv -q pro1x.pool)" != off ] &&
 	    sysctl -q vfs.zfs.version.spa > /dev/null &&
 	    pool_rw $HOST /dev/gpt/userdata; then
 		zfs list -o name,used,avail,refer,compressratio
@@ -96,7 +93,7 @@ if [ -e /dev/gpt/userdata ] && [ -d $HOST ] &&
 		pool_undo
 		mount -t ext2fs -o ro /dev/gpt/userdata $HOST
 	fi
-	if [ -f $ZIMAGE ] && [ "$(kenv -q pro1x.rootfs)" != ufs ] &&
+	if [ -f $ZIMAGE ] &&
 	    sysctl -q vfs.zfs.version.spa > /dev/null &&
 	    mdconfig -a -t vnode -o readonly -f $ZIMAGE -u 1; then
 		if zpool import -f -N -o readonly=on -o cachefile=none \
@@ -111,29 +108,14 @@ if [ -e /dev/gpt/userdata ] && [ -d $HOST ] &&
 			fi
 			zpool export pro1x
 		else
-			echo "!! $ZIMAGE: no pool pro1x, going on with $IMAGE"
+			echo "!! $ZIMAGE: no pool pro1x"
 		fi
-		mdconfig -d -u 1
-	fi
-	if [ -f $IMAGE ] && mdconfig -a -t vnode -o readonly -f $IMAGE -u 1
-	then
-		if [ "$(kenv -q pro1x.root)" != ram ]; then
-			kenv vfs.root.mountfrom=ufs:/dev/md1
-			kenv vfs.root.mountfrom.options=ro
-			echo "=== rerooting into $IMAGE"
-			reboot -r
-			exit 0
-		fi
-		# Staying: the image's filesystem once, then everything back
-		mkdir -p /tmp && mount -t tmpfs tmpfs /tmp && mkdir /tmp/r &&
-		    mount -t ufs -o ro /dev/md1 /tmp/r && ls /tmp/r &&
-		    umount /tmp/r
 		mdconfig -d -u 1
 	fi
 	umount $HOST
 fi
 
-# No root image: with the keyboard (gpiokeys, pro1xkbd behind kbdmux)
+# No ZFS root (or pro1x.root=ram): with the keyboard (gpiokeys, pro1xkbd behind kbdmux)
 # Enter starts a shell on the console; otherwise back to the boot menu,
 # which also ends unattended tests.
 echo "=== rc done: Enter within 10 s for a shell, else reboot"

@@ -8,8 +8,9 @@
 #
 #   WORK=/path/to/freebsd-build VM="ssh ... root@host" bash freebsd/rootzfs.sh
 #
-# On the phone root.zfs goes next to root.ufs (/host/freebsd/); the RAM
-# root (mfsroot/etc/rc) prefers it when the kernel has ZFS.
+# On the phone root.zfs goes to /host/freebsd/ (root.ufs does not: the root
+# is ZFS only); the RAM root (mfsroot/etc/rc) imports it, or the writable
+# pool.zfs that pro1x-freebsd-pool makes from it.
 set -euo pipefail
 WORK=${WORK:?set WORK=<build directory>}
 VM=${VM:?set VM=<ssh command for a FreeBSD machine, as root>}
