@@ -1,0 +1,69 @@
+Subject: [PATCH] media: radio: qca-fm: a seek that finds nothing, a debug switch
+
+Finding no station, the receiver goes round the whole band (about 7 s
+on the WCN3950), reports Search Complete and stays where it started.
+VIDIOC_S_HW_FREQ_SEEK returned 0 for that; return -ENODATA, as the
+V4L2 API asks.
+
+The module parameter "debug" logs every FM command and event; dynamic
+debug is not always there.
+
+diff --git a/drivers/media/radio/radio-qca-fm.c b/drivers/media/radio/radio-qca-fm.c
+--- a/drivers/media/radio/radio-qca-fm.c
++++ b/drivers/media/radio/radio-qca-fm.c
+@@ -76,6 +76,10 @@
+ #define FM_SEEK_TIMEOUT		msecs_to_jiffies(30000)
+ #define FM_RSP_MAX		32
+ 
++static bool debug;
++module_param(debug, bool, 0644);
++MODULE_PARM_DESC(debug, "log every FM command and event");
++
+ struct fm_rx_conf {
+ 	u8 emphasis;
+ 	u8 spacing;
+@@ -140,6 +144,8 @@
+ 	evt = skb->data[0];
+ 	plen = skb->data[1];
+ 	p = skb->data + 2;
++	if (debug)
++		dev_info(fm->dev, "event %#04x: %*ph\n", evt, min_t(int, plen, 32), p);
+ 
+ 	switch (evt) {
+ 	case FM_EV_CMD_COMPLETE:
+@@ -273,6 +279,8 @@
+ 	reinit_completion(&fm->cmd_done);
+ 	spin_unlock_irqrestore(&fm->ev_lock, flags);
+ 
++	if (debug)
++		dev_info(fm->dev, "command %#06x: %*ph\n", opcode, plen, param);
+ 	err = qca_fm_send(fm->dev, opcode, param, plen);
+ 	if (!err && !wait_for_completion_timeout(&fm->cmd_done, FM_CMD_TIMEOUT))
+ 		err = -ETIMEDOUT;
+@@ -532,6 +540,7 @@
+ 	u8 req[3] = { FM_SEEK, 0, !seek->seek_upward };	/* mode, dwell, dir */
+ 	struct fm_station st;
+ 	u8 rsp[sizeof(st)];
++	u32 from = fm->freq;
+ 	long left;
+ 	int err;
+ 
+@@ -552,12 +561,17 @@
+ 		err = left ? left : -ENODATA;
+ 	}
+ 
+-	/* where the search stopped */
++	/*
++	 * Where the search stopped. Finding nothing, the chip goes round the
++	 * whole band (some 7 s) and back to where it started.
++	 */
+ 	if (!qca_fm_cmd(fm, FM_RX_GET_STATION, NULL, 0, rsp, sizeof(rsp))) {
+ 		memcpy(&st, rsp, sizeof(st));
+ 		if (le32_to_cpu(st.freq))
+ 			fm->freq = le32_to_cpu(st.freq);
+ 	}
++	if (!err && fm->freq == from)
++		err = -ENODATA;
+ 
+ 	return err;
+ }

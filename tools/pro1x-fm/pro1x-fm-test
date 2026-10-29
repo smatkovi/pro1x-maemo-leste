@@ -9,7 +9,7 @@ Keeps the device open (the receiver runs only while it is) and prints the
 frequency, the signal, stereo, RDS and the RDS station name and text once
 a second. Needs the kernel's radio-qca-fm (device/kernel/patches/0015).
 """
-import argparse, ctypes, fcntl, os, sys, time
+import argparse, ctypes, errno, fcntl, os, sys, time
 
 def _ioc(d, nr, size):
     return (d << 30) | (size << 16) | (ord('V') << 8) | nr
@@ -63,7 +63,15 @@ def tune(fd, mhz):
     fcntl.ioctl(fd, S_FREQUENCY, Frequency(type=TUNER_RADIO, frequency=round(mhz * 16000)))
 
 def seek(fd, up):
-    fcntl.ioctl(fd, S_HW_FREQ_SEEK, Seek(type=TUNER_RADIO, seek_upward=up, wrap_around=1))
+    """False when the receiver went round the band and found nothing"""
+    try:
+        fcntl.ioctl(fd, S_HW_FREQ_SEEK, Seek(type=TUNER_RADIO, seek_upward=up, wrap_around=1))
+    except OSError as e:
+        if e.errno != errno.ENODATA:
+            raise
+        print('no station found', flush=True)
+        return False
+    return True
 
 def rds(fd):
     ps, rt = ctypes.create_string_buffer(9), ctypes.create_string_buffer(65)
@@ -98,8 +106,7 @@ def main():
     if o.what == 'scan':
         tune(fd, 87.5)
         seen = set()
-        while True:
-            seek(fd, 1)
+        while seek(fd, 1):
             f = freq(fd)
             if f in seen:
                 break
