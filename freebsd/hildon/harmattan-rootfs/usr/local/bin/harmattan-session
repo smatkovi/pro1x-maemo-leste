@@ -28,6 +28,11 @@ eval "$(dbus-launch --sh-syntax --exit-with-x11)"
 # the N9's theme for libmeegotouch, once
 gconftool-2 -g /meegotouch/theme/name 2> /dev/null | grep -q . ||
 	gconftool-2 -s -t string /meegotouch/theme/name "$M_THEME_NAME"
+# the Pro1X's 2:1 (960x480, harmattan-qt5's libmeegotouch), once
+if [ -f /usr/local/share/meegotouch/targets/Pro1X.conf ]; then
+	gconftool-2 -g /meegotouch/target/name 2> /dev/null | grep -q . ||
+		gconftool-2 -s -t string /meegotouch/target/name Pro1X
+fi
 xset s off
 # Sounds play through PulseAudio, which starts for the session when there
 # is a sound device

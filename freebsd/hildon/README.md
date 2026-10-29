@@ -162,9 +162,13 @@ session bus of its own (`startx harmattan-session`; on the Pro1X
 `startx harmattan`, `pro1x-desktop harmattan`, "MeeGo" in Hildon's and
 Xfce's menus, N9 in the Desktop applet; "Hildon" and "Xfce" among the N9's
 applications switch back). Tried in the VM (`../vm/try-harmattan.sh`,
-Xvfb at 2160x1080): all of it starts and keeps running, the applications
-draw in the N9's look; the home shows only its black background there, not
-yet its pages. It draws with the N9's themes, which come from one's own
+Xvfb at 2160x1080): all of it runs, the home shows the applications and
+the status bar, the applications draw in the N9's look. What it took on
+FreeBSD: libmeegotouch's binary style sheet cache read every attribute 4
+bytes early in clang builds (a selector at 4 bytes past its alignment, an
+assumption clang optimises on), so no style property was set and nothing
+drew (fixed in harmattan-qt5); the Pro1X's own target, 960x480, which the
+session sets once (`/meegotouch/target/name`), fills the 2:1 panel across. It draws with the N9's themes, which come from one's own
 firmware: all of base and blanco (`extract-blanco.sh --all` of the private
 assets), copied into the image without overwriting the packages' files
 (Nokia's base names Nokia's own home view, meegotouchhome's names its own).

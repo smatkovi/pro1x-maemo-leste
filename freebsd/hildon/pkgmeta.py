@@ -374,6 +374,10 @@ REVISION = {
     # /usr/local/lib, system-ui's D-Bus policy below /usr/local/etc and
     # its dead notification sinks dropped (harmattan-qt5 278a4b8)
     'qt6-qpa-maemo': 1, 'qt6-style-maemo': 1, 'sphone': 1, 'harmattan-system-ui': 1,
+    # 2026-10-29: libmeegotouch's style sheet cache read every attribute 4
+    # bytes early in clang builds (nothing drew, harmattan-qt5 0bbefb4),
+    # the Pro1X's 960x480 target; the pro1x theme's black wallpaper
+    'harmattan-libmeegotouch': 1, 'harmattan-meegotouchtheme': 1,
 }
 
 
