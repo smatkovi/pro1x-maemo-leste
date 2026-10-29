@@ -203,7 +203,15 @@ custom_harmattan_duicontrolpanel() {
 	# its tests and their scripts
 	rm -rf "$PR/usr/local/lib/duicontrolpanel-tests" "$PR/usr/local/share/duicontrolpanel-tests"
 }
-custom_harmattan_system_ui() { hq5_qmake_part project.pro; }
+# its system bus policy where FreeBSD's dbus reads it (/usr/local/etc)
+custom_harmattan_system_ui() {
+	hq5_qmake_part project.pro
+	if [ -d "$PR/etc/dbus-1" ]; then
+		mkdir -p "$PR/usr/local/etc"
+		mv "$PR/etc/dbus-1" "$PR/usr/local/etc/"
+		rmdir "$PR/etc" 2> /dev/null || true
+	fi
+}
 custom_harmattan_statusmenu_plugins() { hq5_qmake_part statusmenu-plugins.pro; }
 # (it calls Xlib and XDamage itself)
 custom_harmattan_meegotouchhome() { hq5_qmake_part projects.pro "LIBS+=-lX11 -lXdamage"; }

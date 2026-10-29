@@ -47,28 +47,42 @@ qshot|runs (VM)
 qt-components|runs (VM, through meego-clock, with the N9's blanco theme)
 meego-clock|runs (VM: clock, alarms list, new alarm with the two-circle time picker, options, repeat, saved, banner)
 meecast|runs (VM: the start page, the eight weather sources, the countries of a source's station database; fetching untested: openweathermap.org now needs an API key, which MeeCast does not send; yr.no answers with met.no's current API)
-harmattan-libmlocale|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-libmeegotouch|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-contextkit|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-libcontentaction|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-mcompositor|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-libdsme|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
+harmattan-libmlocale|runs (VM, with libmeegotouch)
+harmattan-libmeegotouch|runs (VM: the home, the system UI, the keyboard)
+harmattan-contextkit|installs, its libraries resolve (VM); not tried in harmattan-session yet
+harmattan-libcontentaction|installs, its libraries resolve (VM); not tried in harmattan-session yet
+harmattan-mcompositor|runs in harmattan-session (VM)
+harmattan-libdsme|installs, its libraries resolve (VM); not tried in harmattan-session yet
 harmattan-mce-dev|built (headers)
-harmattan-qmsystem2|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-duicontrolpanel|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-system-ui|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-statusmenu-plugins|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-meegotouchhome|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-meegotouch-controlpanelapplets|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-meegofeedbackd|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-meegofeedback-reactionmaps|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-meego-im-framework|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-libmeegoimengine|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-meego-keyboard|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
-harmattan-meego-im-settings-applet|installs, its libraries resolve (VM); not run yet (no MeeGo session for FreeBSD)
+harmattan-qmsystem2|installs, its libraries resolve (VM); not tried in harmattan-session yet
+harmattan-duicontrolpanel|installs, its libraries resolve (VM); not tried in harmattan-session yet
+harmattan-system-ui|runs in harmattan-session (VM: sysuid, the status menu window)
+harmattan-statusmenu-plugins|installs, its libraries resolve (VM); not tried in harmattan-session yet
+harmattan-meegotouchhome|starts in harmattan-session (VM); the home shows only its black background there, not yet its pages
+harmattan-meegotouch-controlpanelapplets|installs, its libraries resolve (VM); not tried in harmattan-session yet
+harmattan-meegofeedbackd|runs in harmattan-session (VM)
+harmattan-meegofeedback-reactionmaps|installs, its libraries resolve (VM); not tried in harmattan-session yet
+harmattan-meego-im-framework|runs in harmattan-session (VM: meego-im-uiserver)
+harmattan-libmeegoimengine|installs, its libraries resolve (VM); not tried in harmattan-session yet
+harmattan-meego-keyboard|loads in harmattan-session (VM); not typed with yet
+harmattan-meego-im-settings-applet|installs, its libraries resolve (VM); not tried in harmattan-session yet
 harmattan-meegotouchtheme|built (data)
 maplibre-native-qt|runs (VM, through Pure Maps)
 mapbox-gl-qml|runs (VM, through Pure Maps)
 nemo-qml-plugin-dbus|runs (VM, through Pure Maps)
 pure-maps|runs (VM: the map)
 osmscout-server|runs (VM: Liechtenstein downloaded through its map manager, an offline route across Vaduz with Valhalla, 4 maneuvers)
+harmattan-session|runs (VM, Xvfb 2160x1080: mcompositor, sysuid, meego-im-uiserver, meegofeedbackd and meegotouchhome start and keep running)
+harmattan-meego-notes|runs (VM: the N9's look with blanco, the list, "Add note")
+harmattan-meego-calculator|starts and keeps running in harmattan-session (VM)
+harmattan-meego-contacts|starts and keeps running in harmattan-session (VM)
+harmattan-meego-calendar|starts and keeps running in harmattan-session (VM)
+maemo-translate|runs (VM: in Hildon's look, translates as one types, English to German)
+kotki|runs (VM: kotki-server, German to English and back, about 24 s a sentence there under emulation)
+marian-lite|runs (VM, under kotki)
+ruy|runs (VM, under kotki)
+sentencepiece-browsermt|runs (VM, under kotki)
+pathie-cpp|runs (VM, under kotki)
+maemo-translate-data-de|runs (VM: German to English and back)
+qt6-qpa-maemo|runs (VM, Maemo Translate's windows)
+qt6-style-maemo|runs (VM, Maemo Translate)

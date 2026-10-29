@@ -141,13 +141,33 @@ theme. The FreeBSD changes are in harmattan-qt5 itself (libc++ has neither
 `std::tr1` nor `auto_ptr`; the POSIX headers glibc brings in by the way;
 `LOCAL_PEERCRED` for libdsme; no `-Wl` rpath trick), the cross build's
 in `harmattan.sh`: the host's `mgen`, `mmoc` and `m-servicefwgen`, and the
-installed qmake features and `.pri` files pointed at the sysroot. They are
-built and packaged, and their libraries resolve when installed in the VM,
-but they have not run on FreeBSD yet (no MeeGo session for it yet; when
-there is one, system-ui's D-Bus policy has to move from /etc/dbus-1 to
-/usr/local/etc/dbus-1, which FreeBSD's dbus reads). The blanco theme and the
-N9's fonts and sounds are Nokia's and not in them.
+installed qmake features and `.pri` files pointed at the sysroot;
+system-ui's D-Bus policy goes to /usr/local/etc/dbus-1, which FreeBSD's
+dbus reads. The blanco theme and the N9's fonts and sounds are Nokia's and
+not in them.
 `build.sh harmattan` builds them all, `build.sh harmattan-<directory>` one.
+
+The applications in the N9's look (harmattan-qt5's `apps/`, new ones in
+QML with com.nokia.meego): calendar, music, phone, messages, mail,
+contacts, gallery, video, notes, calculator, camera, browser and maps, as
+`harmattan-meego-<name>`, with what they load at run time (SQLite,
+GStreamer's plugins, QtWebEngine, QtPositioning). Phone and messages need
+ModemManager, which FreeBSD does not have: they say "No modem"; the camera
+finds no camera (FreeBSD has neither libcamera nor V4L2).
+
+`harmattan-session` (package of the same name, `harmattan-rootfs/`) is the
+N9's user interface as an X11 session, as on Arch: mcompositor, sysuid,
+meegofeedbackd, the keyboard's input method server and the home, with a
+session bus of its own (`startx harmattan-session`; on the Pro1X
+`startx harmattan`, `pro1x-desktop harmattan`, "MeeGo" in Hildon's and
+Xfce's menus, N9 in the Desktop applet; "Hildon" and "Xfce" among the N9's
+applications switch back). Tried in the VM (`../vm/try-harmattan.sh`,
+Xvfb at 2160x1080): all of it starts and keeps running, the applications
+draw in the N9's look; the home shows only its black background there, not
+yet its pages. It draws with the N9's themes, which come from one's own
+firmware: all of base and blanco (`extract-blanco.sh --all` of the private
+assets), copied into the image without overwriting the packages' files
+(Nokia's base names Nokia's own home view, meegotouchhome's names its own).
 
 ### Maps
 
@@ -188,6 +208,31 @@ Release tarballs are parts too: a URL ending in `.tar.*` with its SHA-256
 as the pinned revision. Together they add about 250 MB to `hildon-meta`.
 Pages in scripts FreeBSD has no fonts for by default (CJK) need a font
 package such as `noto` (all of Noto) or `noto-jp`, `noto-kr`, `noto-sc`.
+
+### Translation
+
+Maemo Translate translates on the phone, without the network, with
+Mozilla's Bergamot models: kotki (Bergamot's translator) on marian-lite
+(Marian's CPU part), with ruy for the matrix products on ARM,
+sentencepiece (browsermt's) and pathie, as Leste builds them for arm64.
+`maemo-translate-data-de` is the German models (German to English and
+back, 44 MB), which Leste installs with it; the other 25 languages are in
+the same repository (850 MB), which build.sh clones sparsely (`SPARSE`:
+only the part's directories are downloaded). kotki finds the models below
+`/usr/local/share/kotki` (`patches/kotki`), the word completer uses the
+base system's `/usr/share/dict/words`.
+
+What FreeBSD needed (`apps.sh`, `patches/`): sentencepiece and Marian
+carry small copies of abseil, which clash with the real abseil that
+FreeBSD's protobuf (29) brings, so they build on protobuf-lite 3.21 as on
+Leste (Debian's), static, with its `protoc` built for the PC
+(`protobuf3_build`, as for Valhalla), below `/usr/local/protobuf3-lite` in
+the sysroot for the build only; Marian keeps that protobuf's code to
+itself (`--exclude-libs`). cpuinfo has no FreeBSD/arm64 port: ruy does
+without it there and takes the dot product instructions (ARMv8.2) from the
+kernel's HWCAP bits. kroket.io's CMake files tell ARM by the build
+machine's processor and take SSE2 for granted on all but Linux
+(`kroket_cmake`, `-DSSE2_FOUND=OFF`).
 
 ## Packages
 

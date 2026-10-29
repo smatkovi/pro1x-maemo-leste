@@ -1269,15 +1269,32 @@ json.dump(m, sys.stdout)' > "$PR.manifest"
 	    "$PR/usr/local/include/evolution-data-server/libebook-contacts/e-vcard.h"
 }
 
-custom_sphone() { qt_cmake; }
+# its modules below /usr/local, not in the base system's /usr/lib
+custom_sphone() {
+	sed -i 's|^set(SPHONE_MODULE_DIR /usr/lib/sphone/modules)$|set(SPHONE_MODULE_DIR /usr/local/lib/sphone/modules)|' CMakeLists.txt
+	qt_cmake
+}
 
 # --- Qt 6 ----------------------------------------------------------------
 # cmake for Qt 6 [arguments...], as qt_cmake: FreeBSD's Qt 6 in the sysroot,
 # the PC's Qt 6 tools (moc, rcc, uic) through QT_HOST_PATH; the PC's is
-# newer than FreeBSD's 6.11, with the same moc output revision
+# newer than FreeBSD's 6.11, with the same moc output revision. Leste's
+# CMake files ask qmake6 where plugins and QML modules go: a qmake6 first
+# in PATH that answers with FreeBSD's directories (the PC's for the rest).
 qt6_cmake() {
 	qt_host
-	cmake -S . -B _build -DCMAKE_TOOLCHAIN_FILE="$H/qt5host/toolchain.cmake" \
+	mkdir -p "$H/qt6host/bin"
+	cat > "$H/qt6host/bin/qmake6" <<-'QMAKE6'
+	#!/bin/sh
+	# qmake6 -query for FreeBSD's Qt 6 (freebsd/hildon/apps.sh qt6_cmake)
+	case "$1 ${2:-}" in
+	"-query QT_INSTALL_PLUGINS") echo /usr/local/lib/qt6/plugins ;;
+	"-query QT_INSTALL_QML") echo /usr/local/lib/qt6/qml ;;
+	*) exec /usr/bin/qmake6 "$@" ;;
+	esac
+	QMAKE6
+	chmod 755 "$H/qt6host/bin/qmake6"
+	PATH=$H/qt6host/bin:$PATH cmake -S . -B _build -DCMAKE_TOOLCHAIN_FILE="$H/qt5host/toolchain.cmake" \
 	    -DQT_HOST_PATH=/usr -DQT_HOST_PATH_CMAKE_DIR=/usr/lib/cmake \
 	    -DQT_NO_PACKAGE_VERSION_CHECK=TRUE -DQT_NO_PACKAGE_VERSION_INCOMPATIBLE_WARNING=TRUE \
 	    -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release \

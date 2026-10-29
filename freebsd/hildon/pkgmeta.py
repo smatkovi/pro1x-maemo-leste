@@ -199,6 +199,12 @@ RUNTIME = {
                                  'gstreamer1-plugins-ogg', 'gstreamer1-plugins-vorbis',
                                  'gstreamer1-plugins-mpg123'],
     'statusbar-alarm': ['alarmd'],
+    # Leste's Qt 6 apps ask for its platform plugin (QT_QPA_PLATFORM=maemo)
+    # and style themselves; Maemo Translate comes with the German models,
+    # as on Leste
+    'maemo-translate': ['qt6-qpa-maemo', 'qt6-style-maemo', 'maemo-translate-data-de'],
+    'conversations': ['qt6-qpa-maemo', 'qt6-style-maemo'],
+    'nomweather': ['qt6-qpa-maemo', 'qt6-style-maemo'],
     # QML on the MeeGo components; its alarms are alarmd's
     'meego-clock': ['qt-components', 'alarmd', 'clockd'],
     # the N9's applications: QML on the MeeGo components; SQLite (calendar,
@@ -363,6 +369,11 @@ REVISION = {
     'hildon-plugins-notify-sv': 1,
     # 2026-10-28: offline routing (Valhalla), no Mapnik data downloads
     'osmscout-server': 1,
+    # 2026-10-29: Qt 6's plugins below /usr/local/lib/qt6 (qmake6 -query
+    # answered with the PC's /usr/lib/qt6), sphone's modules below
+    # /usr/local/lib, system-ui's D-Bus policy below /usr/local/etc and
+    # its dead notification sinks dropped (harmattan-qt5 278a4b8)
+    'qt6-qpa-maemo': 1, 'qt6-style-maemo': 1, 'sphone': 1, 'harmattan-system-ui': 1,
 }
 
 

@@ -124,12 +124,15 @@ for s in m.get("scripts", {}).values():
 			cp "$HARMATTAN"/fonts/*.ttf "$R/usr/local/share/fonts/nokia/"
 			log "Nokia's stand-by icons and font from $HARMATTAN"
 		fi
-		# The N9's meegotouch theme (blanco) and the Nokia Pure fonts,
-		# which com.nokia.meego (qt-components) and meego-clock draw with
-		# (themes/, fonts/nokia-pure/: tools/extract-blanco.sh there)
+		# The N9's meegotouch themes (base, blanco) and the Nokia Pure
+		# fonts, which com.nokia.meego (qt-components), meego-clock and
+		# the N9's own user interface draw with (themes/, fonts/nokia-pure/:
+		# tools/extract-blanco.sh there). Without overwriting: the
+		# packages' own files stay (Nokia's base names Nokia's home
+		# view, meegotouchhome's names its own)
 		if [ -d "$HARMATTAN/themes/blanco" ]; then
 			mkdir -p "$R/usr/local/share/themes" "$R/usr/local/share/fonts/nokia"
-			cp -R "$HARMATTAN"/themes/base "$HARMATTAN"/themes/blanco \
+			cp -Rn "$HARMATTAN"/themes/base "$HARMATTAN"/themes/blanco \
 			    "$R/usr/local/share/themes/"
 			cp "$HARMATTAN"/fonts/nokia-pure/*.ttf "$R/usr/local/share/fonts/nokia/"
 			log "the N9's blanco theme and Nokia Pure from $HARMATTAN"
