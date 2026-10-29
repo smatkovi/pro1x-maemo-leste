@@ -367,8 +367,9 @@ REVISION = {
     'mihphoto': 1, 'osso-mahjong': 1, 'qshot': 1,
     # 2026-10-27: the launcher's menu below /usr/local (it was empty), the
     # MeeGo-like pages (patches/meego, off by default); 2: the edge
-    # gestures, no more crash when a thumbnail zooms in (isnanf, 0003)
-    'hildon-desktop': 3,
+    # gestures, no more crash when a thumbnail zooms in (isnanf, 0003);
+    # 4: no dependency on Nokia's sounds (PRIVATE)
+    'hildon-desktop': 4,
     # 2026-10-27: the daemon too (it was libalarm only)
     'alarmd': 1,
     # 2026-10-27: Leste's hildon-libs texts, not libhildon's (EXCLUDE)
@@ -406,7 +407,19 @@ REVISION = {
     # 2026-10-29: the gettext texts below /usr/local/share/locale (the
     # sources named /usr/share/locale: the address book showed text IDs)
     'hildon-home': 1, 'hildon-control-panel-personalisation': 1, 'osso-calculator': 1, 'conversations': 1, 'osso-abook': 1, 'osso-addressbook': 1,
+    # 2026-10-29: no dependency on Nokia's sounds (PRIVATE)
+    'osso-chess-ui': 1, 'maemo-input-sounds': 1, 'osso-systemui-alarm': 1,
 }
+
+# Maemo 5's sounds as Leste's archive has them: Nokia's (debian/copyright:
+# all rights reserved) and the ringtones, which name no licence. They are
+# not made into packages for the public releases, and nothing depends on
+# them (the click sounds, alarms and chess are silent without them); the
+# phone gets them from the private assets repository (maemo5-sounds/), and
+# the root image from the stage as before. PRO1X_PRIVATE=1 makes their
+# packages too, for that repository.
+PRIVATE = {'osso-sounds-ui', 'osso-sounds-rtc', 'osso-sounds-game-chess', 'maemo-ringtones-mr0'}
+WITH_PRIVATE = os.environ.get('PRO1X_PRIVATE') == '1'
 
 
 def version_of(text):
@@ -532,6 +545,8 @@ parts = sorted(p for p in os.listdir(ROOTS)
                if os.path.isdir(os.path.join(ROOTS, p)))
 meta = {}
 for part in parts:
+    if part in PRIVATE and not WITH_PRIVATE:
+        continue
     root = os.path.join(ROOTS, part)
     meta_extra = {}
     name = RENAME.get(part, part)
@@ -715,6 +730,8 @@ for part, m in meta.items():
         else:
             unresolved.setdefault(m['name'], []).append(so)
     for r_ in RUNTIME.get(part, []):
+        if r_ in PRIVATE and not WITH_PRIVATE:
+            continue
         o = next((x for x in meta.values() if x['name'] == r_), None)
         if o is not None:
             deps[r_] = {'origin': o.get('origin', 'maemo-leste/' + r_), 'version': o['version']}
