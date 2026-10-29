@@ -35,7 +35,8 @@
 # pick the next system from the running one, then reboot.
 #
 # Internal, for the initramfs: entries, snapshots, take-next, get-default, get-timeout,
-# set-current.
+# set-current. The initramfs logs each start's choice (the one-shot choice it
+# read, the entries, the preselection, what it started) to $CONF/last-boot.
 set -eu
 
 if [ -n "${PRO1X_BOOT_HOST:-}" ]; then HOST=$PRO1X_BOOT_HOST
