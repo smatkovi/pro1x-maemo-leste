@@ -1,0 +1,28 @@
+FreeBSD: the completer's English words from the base system's list
+(Debian's wamerican is not there)
+
+--- a/src/translateinwidget.cpp
++++ b/src/translateinwidget.cpp
+@@ -25,13 +25,19 @@ TranslateInWidget::TranslateInWidget(QWidget *parent) :
+ }
+ 
+ void TranslateInWidget::setupCompleter() {
+-  auto exists = QFile::exists("/usr/share/dict/american-english");
++#ifdef __FreeBSD__
++  // the base system's English word list (Webster's)
++  const QString dict = "/usr/share/dict/words";
++#else
++  const QString dict = "/usr/share/dict/american-english";
++#endif
++  auto exists = QFile::exists(dict);
+   if(!exists) {
+-    qWarning() << "could not find /usr/share/dict/american-english so the completer is disabled, you need: 'apt install -y wamerican'";
++    qWarning() << "could not find" << dict << "so the completer is disabled, you need: 'apt install -y wamerican'";
+     return;
+   }
+ 
+-  QFile inputFile("/usr/share/dict/american-english");
++  QFile inputFile(dict);
+   inputFile.open(QIODevice::ReadOnly);
+   if (!inputFile.isOpen())
+     return;

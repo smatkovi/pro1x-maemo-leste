@@ -1,0 +1,14 @@
+factored_vocab.h uses std::map, which libc++ does not bring along with
+the other headers
+
+--- a/src/data/factored_vocab.h
++++ b/src/data/factored_vocab.h
+@@ -5,6 +5,8 @@
+ 
+ #pragma once
+ 
++#include <map>
++
+ #include "marian-lite/common/definitions.h"
+ #include "marian-lite/data/types.h"
+ #include "marian-lite/data/vocab_base.h"

@@ -1,0 +1,41 @@
+FreeBSD: _POSIX_C_SOURCE hides what pathie uses beyond POSIX (futimes,
+and libc++'s <locale> needs isascii); iconv is GNU libiconv's (FreeBSD's
+packages' iconv.h), with POSIX's char ** and its own library
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 38d9fc4..b9ff742 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -68,7 +68,9 @@ elseif(APPLE)
+   add_definitions("-D_PATHIE_UNIX=1")
+ elseif(UNIX)
+   add_definitions("-D_PATHIE_UNIX=1")
+-  add_definitions("-D_POSIX_C_SOURCE=200112L")
++  if(NOT CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
++    add_definitions("-D_POSIX_C_SOURCE=200112L")
++  endif()
+ endif()
+ 
+ add_definitions("-DPATHIE_VERSION_MAJOR=${CMAKE_PROJECT_VERSION_MAJOR}")
+@@ -113,7 +115,7 @@ set_target_properties(pathie PROPERTIES
+         SOVERSION "${PATHIE_VERSION_MAJOR}"
+         OUTPUT_NAME pathie-cpp
+         )
+-if(APPLE)
++if(APPLE OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+   target_link_libraries(pathie iconv)
+ endif()
+ 
+diff --git a/src/pathie.cpp b/src/pathie.cpp
+index 8b62173..bc3d18b 100644
+--- a/src/pathie.cpp
++++ b/src/pathie.cpp
+@@ -143,7 +143,7 @@ std::string Pathie::convert_encodings(const char* from_encoding, const char* to_
+     errno  = 0;
+     errsav = 0;
+ 
+-#if defined(BSD) && ! defined(__APPLE__) //Since MacOS evolved from BSD, it is captured here
++#if defined(BSD) && ! defined(__APPLE__) && ! defined(__FreeBSD__) //Since MacOS evolved from BSD, it is captured here
+     // What the heck. FreeBSD violates POSIX.1-2008: it declares iconv()
+     // differently than mandated by POSIX: http://pubs.opengroup.org/onlinepubs/9699919799/functions/iconv.html
+     // (it declares a `const' where it must not be).

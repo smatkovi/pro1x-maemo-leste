@@ -1,0 +1,15 @@
+The trainer's "any script" is ScriptType -1, which today's clang allows in
+a constant expression only with a fixed underlying type
+
+
+--- a/src/unicode_script.h
++++ b/src/unicode_script.h
+@@ -19,7 +19,7 @@
+ 
+ namespace sentencepiece {
+ namespace unicode_script {
+-enum ScriptType {
++enum ScriptType : int {
+   U_Adlam,
+   U_Ahom,
+   U_Anatolian_Hieroglyphs,

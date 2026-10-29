@@ -1,0 +1,55 @@
+FreeBSD: the socket's bind is the system's, not std::bind (the header
+brings <functional> along); kotki-server's threads need libthr (glibc
+has them in libc); the packages' models are below /usr/local
+
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -116,7 +116,8 @@ install(FILES
+ 
+ 
+ add_executable(kotki-server kotki/server_main.cpp kotki/server.cpp)
+-target_link_libraries(kotki-server PRIVATE kotki-lib-SHARED)
++find_package(Threads REQUIRED)
++target_link_libraries(kotki-server PRIVATE kotki-lib-SHARED Threads::Threads)
+ target_include_directories(kotki-server PRIVATE
+         ${CMAKE_CURRENT_LIST_DIR}
+         ${CMAKE_CURRENT_SOURCE_DIR}
+--- a/src/kotki/kotki.cpp
++++ b/src/kotki/kotki.cpp
+@@ -98,9 +98,14 @@ map<string, map<string, string>> Kotki::listModels() {
+ 
+ // Recursively search for 'registry.json'
+ // - ~/.config/kotki/models/
+-// - /usr/share/kotki/
++// - /usr/share/kotki/ (FreeBSD: /usr/local/share/kotki/)
++#ifdef __FreeBSD__
++#define KOTKI_USR_DIR "/usr/local/share/kotki/"
++#else
++#define KOTKI_USR_DIR "/usr/share/kotki/"
++#endif
+ int Kotki::scan() {
+-  string kotkiUsrDir = "/usr/share/kotki/";
++  string kotkiUsrDir = KOTKI_USR_DIR;
+   vector<filesystem::path> paths;
+   vector<filesystem::path> cfgPaths;
+   vector<filesystem::path> usrPaths;
+@@ -122,7 +127,7 @@ int Kotki::scan() {
+   if(paths.empty()) {
+     string msg = "Could not auto-find models. Search directories:\n";
+     msg += "- " + kotkiCfgModelDir.string() + "\n";
+-    msg += "- /usr/share/kotki/\n";
++    msg += "- " KOTKI_USR_DIR "\n";
+     msg += "More info: https://github.com/kroketio/kotki/releases/";
+     throw std::runtime_error(msg);
+   }
+--- a/src/kotki/server.cpp
++++ b/src/kotki/server.cpp
+@@ -154,7 +154,7 @@ void _serverLoop(const std::string &socketPath) {
+   addr.sun_family = AF_UNIX;
+   strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
+ 
+-  if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
++  if (::bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+     perror("bind");
+     close(server_fd);
+     return;

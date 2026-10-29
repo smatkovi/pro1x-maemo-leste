@@ -156,8 +156,9 @@ PARTS=(
 	"hildon-desktop|--enable-static-mb2=yes MB2_STATIC_LIB=$SYSROOT/usr/local/lib/libmatchbox2-0.1.a|-DG_DEBUG_DISABLE -DG_DISABLE_CHECKS"
 )
 
-# The revisions built (fetch_src); URL where a part is not maemo-leste's
-declare -A URL REV=(
+# The revisions built (fetch_src); URL where a part is not maemo-leste's,
+# SPARSE where it is some directories of a big repository
+declare -A URL SPARSE REV=(
 	[clutter-0.8]=ead56341b457 [mce-dev]=d3260521eaf1 [gtk]=bf9a7dfb8f69
 	[sapwood]=6849cd690ae2 [libmatchbox2]=208c59d7a3ba [libhildon]=78c268e51200
 	[libosso]=ebd2f1804c29 [iphbd]=bad0de1ff36d [libhildondesktop]=d05587180c24
@@ -275,6 +276,12 @@ fetch_src() {
 		fi
 		return ;;
 	esac
+	# a part of a big repository: only its directories (SPARSE), the
+	# others' files not even downloaded
+	if [ ! -d "$SRC/$name/.git" ] && [ -n "${SPARSE[$1]:-}" ]; then
+		git clone -q --filter=blob:none --no-checkout "$url" "$SRC/$name" &&
+		    git -C "$SRC/$name" sparse-checkout set ${SPARSE[$1]} || return 1
+	fi
 	[ -d "$SRC/$name/.git" ] || git clone -q "$url" "$SRC/$name"
 	git -C "$SRC/$name" cat-file -e "$rev^{commit}" 2> /dev/null ||
 	    git -C "$SRC/$name" fetch -q origin

@@ -210,6 +210,8 @@ LICENSES = {
     'osso-systemui-dbus-dev': ['LGPL21'],
     'libplayback': ['LGPL21'],
     'osso-systemui-alarm': ['LGPL21'],
+    # Mozilla's Bergamot models (firefox-translations-models), MPL 2.0
+    'maemo-translate-data-de': ['MPL20'],
     # Harmattan's (harmattan-qt5): LGPL 2.1 in LICENSE.LGPL or the sources'
     # headers, not in debian/copyright; statusmenu-plugins as the rest
     **{'harmattan-' + p: ['LGPL21'] for p in (

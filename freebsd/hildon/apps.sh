@@ -189,6 +189,17 @@ APPS=(
 	"conversations|!"
 	"tinymail|--with-platform=maemo-leste --with-ssl=nss --disable-idle --disable-imap-part-fetch ac_cv_libiconv_utf8=yes --with-iconv-detect-h=$REPO/freebsd/hildon/compat/camel-iconv-detect.h"
 	"modest|"
+	# Maemo Translate: translation on the phone (Bergamot's Marian, kotki)
+	# with its libraries: pathie, ruy (matrix products on ARM), sentencepiece
+	"pathie-cpp|!"
+	"ruy|!"
+	"sentencepiece-browsermt|!"
+	"marian-lite|!"
+	"kotki|!"
+	"maemo-translate|!"
+	# its German models (de to en and back, as Leste installs with it), of
+	# the repository of all 26 languages (850 MB)
+	"maemo-translate-data-de|!"
 )
 
 REV+=(
@@ -269,6 +280,10 @@ REV+=(
 	[qt6csv]=bca1fd34ad102058cc9c8a793bcb1e211abbdb851d4ba5219bd6346e0d9a58d4
 	[nomweather]=b25d2ab69fc1 [conversations]=f4ccce53bb08
 	[telepathy-qt6]=619a87e18e8b0a575316a8a5215ce487cb391c3d30c958ff94d396022ae2aa11
+	[pathie-cpp]=7cc567310534 [ruy]=5c98b80b5d58
+	[sentencepiece-browsermt]=1ae781bcc764 [marian-lite]=73322e4b4b5a
+	[kotki]=cbcc6583cd2b [maemo-translate]=6fecb54027dc
+	[maemo-translate-data-de]=ac14e412baf0
 )
 URL+=(
 	[libbaseencode]=https://github.com/paolostivanin/libbaseencode.git
@@ -289,7 +304,13 @@ URL+=(
 	[nomweather]=$GH_EXTRAS/nomweather.git
 	[photolightmeter]=$GH_EXTRAS/photolightmeter.git [comics-daily]=$GH_EXTRAS/comics-daily.git
 	[telepathy-qt6]=https://maedevu.maemo.org/leste/pool/main/t/telepathy-qt6/telepathy-qt6_0.9.10.orig.tar.gz
+	[pathie-cpp]=$GH_EXTRAS/pathie-cpp.git [ruy]=$GH_EXTRAS/ruy.git
+	[sentencepiece-browsermt]=$GH_EXTRAS/sentencepiece-browsermt.git
+	[marian-lite]=$GH_EXTRAS/marian-lite.git [kotki]=$GH_EXTRAS/kotki.git
+	[maemo-translate]=$GH_EXTRAS/maemo-translate.git
+	[maemo-translate-data-de]=$GH_EXTRAS/maemo-translate-data.git
 )
+SPARSE+=([maemo-translate-data-de]=model/de)
 URL+=(
 	[maepad]=$GM_EXTRAS/maepad.git
 	[mstardict]=$GH_EXTRAS/mstardict.git [osso-mahjong]=$GH_EXTRAS/osso-mahjong.git
@@ -1007,14 +1028,11 @@ REV+=([valhalla]=cbabe7cfbad2
 URL+=([valhalla]=https://github.com/valhalla/valhalla.git
 	[protobuf3]=https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protobuf-cpp-3.21.12.tar.gz)
 VL=/usr/local/valhalla-lite
-osmscout_valhalla() {
-	local b=$BUILD/osmscout-valhalla d=$SYSROOT$VL stamp
-	stamp="${REV[valhalla]} ${REV[protobuf3]}"
-	[ "$(cat "$d/.stamp" 2> /dev/null)" = "$stamp" ] && return 0
-	fetch_src protobuf3 && fetch_src valhalla || return 1
-	rm -rf "$b" "$d"
-	mkdir -p "$b"
-	log "  protoc 3.21 for the PC, protobuf-lite 3.21 and Valhalla for FreeBSD"
+# protobuf3_build DIR PREFIX: protoc 3.21 for the PC (DIR/protoc/protoc),
+# protobuf-lite 3.21 static for FreeBSD below PREFIX in the sysroot
+protobuf3_build() {
+	local b=$1 prefix=$2
+	fetch_src protobuf3 || return 1
 	# (the PC's compiler: CC, CXX and the flags here are FreeBSD's)
 	env -u CC -u CXX -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS \
 	    cmake -S "$SRC/protobuf3" -B "$b/protoc" -DCMAKE_BUILD_TYPE=Release \
@@ -1024,13 +1042,23 @@ osmscout_valhalla() {
 	    cmake --build "$b/protoc" -j"$JOBS" --target protoc >> "$b/protoc.log" 2>&1 ||
 	    { grep -m20 -E "error:|Error" "$b/protoc.log"; return 1; }
 	cmake -S "$SRC/protobuf3" -B "$b/protobuf" -DCMAKE_TOOLCHAIN_FILE="$H/qt5host/toolchain.cmake" \
-	    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$VL \
+	    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
 	    -DCMAKE_POSITION_INDEPENDENT_CODE=ON -Dprotobuf_BUILD_TESTS=OFF \
 	    -Dprotobuf_BUILD_PROTOC_BINARIES=OFF -Dprotobuf_BUILD_SHARED_LIBS=OFF \
 	    -Dprotobuf_WITH_ZLIB=OFF > "$b/protobuf.log" 2>&1 &&
 	    cmake --build "$b/protobuf" -j"$JOBS" >> "$b/protobuf.log" 2>&1 &&
 	    DESTDIR=$SYSROOT cmake --install "$b/protobuf" >> "$b/protobuf.log" 2>&1 ||
 	    { grep -m20 -E "error:|Error" "$b/protobuf.log"; return 1; }
+}
+osmscout_valhalla() {
+	local b=$BUILD/osmscout-valhalla d=$SYSROOT$VL stamp
+	stamp="${REV[valhalla]} ${REV[protobuf3]}"
+	[ "$(cat "$d/.stamp" 2> /dev/null)" = "$stamp" ] && return 0
+	fetch_src valhalla || return 1
+	rm -rf "$b" "$d"
+	mkdir -p "$b"
+	log "  protoc 3.21 for the PC, protobuf-lite 3.21 and Valhalla for FreeBSD"
+	protobuf3_build "$b" $VL || return 1
 	cp -a "$SRC/valhalla" "$b/valhalla-src"
 	local q
 	for q in "$REPO/freebsd/hildon/patches/valhalla"/*.patch; do
@@ -1312,6 +1340,75 @@ custom_telepathy_qt6() {
 	done
 }
 custom_conversations() { qt6_no_cachegen; qt6_cmake; }
+
+# --- Maemo Translate ------------------------------------------------------
+# kroket.io's CMake files (marian-lite, kotki, ruy, Maemo Translate) tell
+# ARM by the build machine's processor, and all ask pkg-config for
+# cpuinfo, which has no FreeBSD/arm64 port: the target's processor, and an
+# empty cpuinfo::cpuinfo (ruy, the only one using it, does without it on
+# FreeBSD: patches/ruy)
+kroket_cmake() {
+	local f
+	grep -rl --include=CMakeLists.txt -e CMAKE_HOST_SYSTEM_PROCESSOR -e libcpuinfo . |
+	while read -r f; do
+		sed -i -e 's/\${CMAKE_HOST_SYSTEM_PROCESSOR} MATCHES "arm\*"/CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64)"/' \
+		    -e '/pkg_check_modules(CPUINFO /d' \
+		    -e '/^ *target_[a-z_]*(cpuinfo::cpuinfo /d' "$f"
+	done
+}
+# sentencepiece's code (and Marian's, with its headers) has a small
+# abseil of its own, which clashes with the real one FreeBSD's protobuf
+# (29) brings along: protobuf 3.21 as on Leste (Debian's), static, with
+# its protoc for the PC, below $PL in the sysroot for the build only (not
+# packaged). Its headers go first, the protobuf found is this one.
+PL=/usr/local/protobuf3-lite
+PB3=()
+translate_protobuf() {
+	local b=$BUILD/protobuf3-lite d=$SYSROOT$PL
+	PB3=(-DProtobuf_PROTOC_EXECUTABLE="$b/protoc/protoc" -DProtobuf_INCLUDE_DIR="$d/include"
+	    -DProtobuf_LIBRARY="$d/lib/libprotobuf-lite.a" -DProtobuf_LITE_LIBRARY="$d/lib/libprotobuf-lite.a")
+	CXXFLAGS="-I$d/include $CXXFLAGS"
+	[ "$(cat "$d/.stamp" 2> /dev/null)" = "${REV[protobuf3]}" ] && [ -x "$b/protoc/protoc" ] && return 0
+	rm -rf "$b" "$d"
+	mkdir -p "$b"
+	log "  protoc 3.21 for the PC, protobuf-lite 3.21 for FreeBSD"
+	protobuf3_build "$b" $PL || exit 1
+	echo "${REV[protobuf3]}" > "$d/.stamp"
+}
+custom_pathie_cpp() { qt6_cmake; }
+custom_ruy() {
+	kroket_cmake
+	qt6_cmake -DRUY_MINIMAL_BUILD=ON
+}
+# The library only: its programs (spm_train ...) are not Leste's either
+custom_sentencepiece_browsermt() {
+	translate_protobuf
+	qt6_cmake "${PB3[@]}" -DSPM_BUILD_LIBRARY_ONLY=ON -DSPM_ENABLE_TCMALLOC=OFF
+}
+# protobuf's code in the library stays its own (not exported); its
+# FindSSE takes SSE2 for granted on all but Linux (-msse2); -C (gcc keeps
+# the comments for ccache) is for the preprocessor alone to clang
+custom_marian_lite() {
+	translate_protobuf
+	kroket_cmake
+	sed -i '/^set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -C")$/d' cmake/CompilerStuff.cmake
+	LDFLAGS="$LDFLAGS -Wl,--exclude-libs,libprotobuf-lite.a" \
+	    qt6_cmake "${PB3[@]}" -DCOMPILE_CPU=ON -DSTATIC=OFF -DSHARED=ON -DSSE2_FOUND=OFF
+}
+custom_kotki() {
+	translate_protobuf
+	kroket_cmake
+	qt6_cmake "${PB3[@]}" -DSTATIC=OFF -DSHARED=ON
+}
+custom_maemo_translate() {
+	kroket_cmake
+	qt6_cmake
+}
+# kotki finds the models below /usr/local/share/kotki (patches/kotki)
+custom_maemo_translate_data_de() {
+	install -d "$PR/usr/local/share/kotki"
+	cp -a model/de "$PR/usr/local/share/kotki/"
+}
 
 # --- Lazarus apps, in the FreeBSD machine ----------------------------------
 # vm_lazbuild PROJECT PROGRAM: the source to $VM (a FreeBSD/arm64 machine
