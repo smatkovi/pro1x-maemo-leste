@@ -1,0 +1,223 @@
+From 5fbbb3f527f3e62f1488cdb99b7f2e8ef49c09db Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 29 Oct 2026 06:10:39 +0100
+Subject: [PATCH] irqchip/qcom-mpm: the RPM told from CPU PM, with the next
+ wake-up (notify_rpm)
+
+Without #power-domain-cells (the SM6115's two CPU clusters have no common
+domain to put the MPM below, and with the clusters below the MPM
+psci-cpuidle gave up before the MPM probed), the vMPM is handed to the RPM
+when the last online CPU goes down, from CPU PM notifications as in
+rpmh-rsc, and the vMPM's TIMER0/TIMER1 get the earliest timer of the
+online CPUs as an arch timer count, so that the RPM wakes the SoC for it
+(Qualcomm's series "Register MPM under CPU cluster power domain" does the
+same from a cluster domain). Off until notify_rpm is set, at run time.
+sm6115.dtsi: the MPM without power-domain cells.
+---
+ arch/arm64/boot/dts/qcom/sm6115.dtsi |   2 +-
+ drivers/irqchip/irq-qcom-mpm.c       | 124 +++++++++++++++++++++++----
+ 2 files changed, 109 insertions(+), 17 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6115.dtsi b/arch/arm64/boot/dts/qcom/sm6115.dtsi
+index ea0638cc62..dca9a89fc2 100644
+--- a/arch/arm64/boot/dts/qcom/sm6115.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm6115.dtsi
+@@ -442,7 +442,7 @@ mpm: interrupt-controller {
+ 		mboxes = <&apcs_glb 1>;
+ 		interrupt-controller;
+ 		#interrupt-cells = <2>;
+-		#power-domain-cells = <0>;
++		/* no power domain of its own: the RPM is told from CPU PM */
+ 		interrupt-parent = <&intc>;
+ 		qcom,mpm-pin-count = <96>;
+ 		qcom,mpm-pin-map = <5 296>,  /* Soundwire master_irq */
+diff --git a/drivers/irqchip/irq-qcom-mpm.c b/drivers/irqchip/irq-qcom-mpm.c
+index 181320528a..a50fde7f8c 100644
+--- a/drivers/irqchip/irq-qcom-mpm.c
++++ b/drivers/irqchip/irq-qcom-mpm.c
+@@ -4,6 +4,9 @@
+  * Copyright (c) 2010-2020, The Linux Foundation. All rights reserved.
+  */
+ 
++#include <clocksource/arm_arch_timer.h>
++#include <linux/cpu_pm.h>
++#include <linux/cpuidle.h>
+ #include <linux/delay.h>
+ #include <linux/err.h>
+ #include <linux/init.h>
+@@ -11,6 +14,8 @@
+ #include <linux/io.h>
+ #include <linux/irqchip.h>
+ #include <linux/irqdomain.h>
++#include <linux/ktime.h>
++#include <linux/math64.h>
+ #include <linux/mailbox_client.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+@@ -75,6 +80,19 @@ struct mpm_gic_map {
+ 	irq_hw_number_t hwirq;
+ };
+ 
++/*
++ * Without a power domain of its own (no #power-domain-cells: the SM6115's
++ * two CPU clusters have no common domain to put it below), the RPM is told
++ * when the last online CPU goes down, from CPU PM notifications, as
++ * rpmh-rsc does, together with the next wake-up: Qualcomm's own series
++ * "Register MPM under CPU cluster power domain" (2026) does the same from
++ * a cluster domain. notify_rpm switches that on (off by default, and on a
++ * reboot): with it, the SoC can reach its sleep states (vlow, vmin).
++ */
++static bool notify_rpm;
++module_param(notify_rpm, bool, 0644);
++MODULE_PARM_DESC(notify_rpm, "Hand the vMPM to the RPM when the last CPU goes down (no power domain of its own)");
++
+ struct qcom_mpm_priv {
+ 	void __iomem *base;
+ 	raw_spinlock_t lock;
+@@ -85,6 +103,8 @@ struct qcom_mpm_priv {
+ 	unsigned int reg_stride;
+ 	struct irq_domain *domain;
+ 	struct generic_pm_domain genpd;
++	struct notifier_block cpu_pm_nb;
++	atomic_t cpus_in_pm;
+ };
+ 
+ static u32 qcom_mpm_read(struct qcom_mpm_priv *priv, unsigned int reg,
+@@ -292,6 +312,63 @@ static irqreturn_t qcom_mpm_handler(int irq, void *dev_id)
+ 	return ret;
+ }
+ 
++/*
++ * The vMPM's TIMER0/TIMER1 (the two words before the pin banks): when the
++ * RPM wakes the SoC from its sleep, as an arch timer count. The earliest
++ * timer of the online CPUs (cpuidle_enter() stores each one's before it
++ * goes down), or never (~0) without one.
++ */
++static void mpm_write_next_wakeup(struct qcom_mpm_priv *priv)
++{
++	ktime_t next = KTIME_MAX, now = ktime_get(), t;
++	u64 cycles = ~0ULL;
++	int cpu;
++
++	for_each_online_cpu(cpu) {
++		struct cpuidle_device *dev = per_cpu(cpuidle_devices, cpu);
++
++		t = dev ? READ_ONCE(dev->next_hrtimer) : 0;
++		if (t && ktime_before(t, next))
++			next = t;
++	}
++	if (next != KTIME_MAX) {
++		s64 ns = ktime_to_ns(ktime_sub(next, now));
++
++		cycles = arch_timer_read_counter() +
++			 mul_u64_u32_div(max_t(s64, ns, 0), arch_timer_get_rate(), NSEC_PER_SEC);
++	}
++	writel_relaxed(lower_32_bits(cycles), priv->base);
++	writel_relaxed(upper_32_bits(cycles), priv->base + 4);
++}
++
++static int mpm_cpu_pm_callback(struct notifier_block *nb, unsigned long action, void *v)
++{
++	struct qcom_mpm_priv *priv = container_of(nb, struct qcom_mpm_priv, cpu_pm_nb);
++	int i;
++
++	switch (action) {
++	case CPU_PM_ENTER:
++		/* the last online CPU going down (as in rpmh-rsc) */
++		if (atomic_inc_return(&priv->cpus_in_pm) < num_online_cpus() || !notify_rpm)
++			return NOTIFY_OK;
++		break;
++	case CPU_PM_ENTER_FAILED:
++	case CPU_PM_EXIT:
++		atomic_dec(&priv->cpus_in_pm);
++		return NOTIFY_OK;
++	default:
++		return NOTIFY_DONE;
++	}
++
++	mpm_write_next_wakeup(priv);
++	for (i = 0; i < priv->reg_stride; i++)
++		qcom_mpm_write(priv, MPM_REG_STATUS, i, 0);
++	/* Notify RPM to write vMPM into HW */
++	if (mbox_send_message(priv->mbox_chan, NULL) >= 0)
++		mbox_client_txdone(priv->mbox_chan, 0);
++	return NOTIFY_OK;
++}
++
+ static int mpm_pd_power_off(struct generic_pm_domain *genpd)
+ {
+ 	struct qcom_mpm_priv *priv = container_of(genpd, struct qcom_mpm_priv,
+@@ -415,24 +492,28 @@ static int qcom_mpm_probe(struct platform_device *pdev, struct device_node *pare
+ 	if (irq < 0)
+ 		return irq;
+ 
+-	genpd = &priv->genpd;
+-	genpd->flags = GENPD_FLAG_IRQ_SAFE;
+-	genpd->power_off = mpm_pd_power_off;
++	/* a power domain of its own, or CPU PM notifications (below) */
++	genpd = NULL;
++	if (of_property_present(np, "#power-domain-cells")) {
++		genpd = &priv->genpd;
++		genpd->flags = GENPD_FLAG_IRQ_SAFE;
++		genpd->power_off = mpm_pd_power_off;
+ 
+-	genpd->name = devm_kasprintf(dev, GFP_KERNEL, "%s", dev_name(dev));
+-	if (!genpd->name)
+-		return -ENOMEM;
++		genpd->name = devm_kasprintf(dev, GFP_KERNEL, "%s", dev_name(dev));
++		if (!genpd->name)
++			return -ENOMEM;
+ 
+-	ret = pm_genpd_init(genpd, NULL, false);
+-	if (ret) {
+-		dev_err(dev, "failed to init genpd: %d\n", ret);
+-		return ret;
+-	}
++		ret = pm_genpd_init(genpd, NULL, false);
++		if (ret) {
++			dev_err(dev, "failed to init genpd: %d\n", ret);
++			return ret;
++		}
+ 
+-	ret = of_genpd_add_provider_simple(np, genpd);
+-	if (ret) {
+-		dev_err(dev, "failed to add genpd provider: %d\n", ret);
+-		goto remove_genpd;
++		ret = of_genpd_add_provider_simple(np, genpd);
++		if (ret) {
++			dev_err(dev, "failed to add genpd provider: %d\n", ret);
++			goto remove_genpd;
++		}
+ 	}
+ 
+ 	priv->mbox_client.dev = dev;
+@@ -469,6 +550,16 @@ static int qcom_mpm_probe(struct platform_device *pdev, struct device_node *pare
+ 		goto remove_domain;
+ 	}
+ 
++	if (!genpd) {
++		atomic_set(&priv->cpus_in_pm, 0);
++		priv->cpu_pm_nb.notifier_call = mpm_cpu_pm_callback;
++		ret = cpu_pm_register_notifier(&priv->cpu_pm_nb);
++		if (ret)
++			goto remove_domain;
++		dev_info(dev, "the RPM is told from CPU PM when notify_rpm is set (now %s)\n",
++			 notify_rpm ? "on" : "off");
++	}
++
+ 	return 0;
+ 
+ remove_domain:
+@@ -476,7 +567,8 @@ static int qcom_mpm_probe(struct platform_device *pdev, struct device_node *pare
+ free_mbox:
+ 	mbox_free_channel(priv->mbox_chan);
+ remove_genpd:
+-	pm_genpd_remove(genpd);
++	if (genpd)
++		pm_genpd_remove(genpd);
+ 	return ret;
+ }
+ 
+-- 
+2.56.0
+

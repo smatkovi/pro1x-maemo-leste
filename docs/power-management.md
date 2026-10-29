@@ -151,6 +151,23 @@ phone use them while it is awake: with about 170 interrupts a second the
 clusters rarely get down. They pay off together with autosuspend (s2idle,
 where all CPUs stay down until a wake-up).
 
+### On the phone (2026-10-28/29)
+
+With 0006 the CPU clusters' power domains were below the MPM, which probes
+late (it waits for its mailbox and SRAM): psci-cpuidle, which probes once,
+gave up, and the phone ran without cpuidle at all (only WFI). Patch 0009
+takes the clusters from below the MPM again. Patch 0011 hands the vMPM to
+the RPM another way: from CPU PM notifications when the last online CPU
+goes down (as rpmh-rsc does), and it writes the vMPM's TIMER0/TIMER1, the
+earliest timer of the online CPUs as an arch timer count. Mainline never
+wrote them, so the RPM had no timer to wake the SoC for; Qualcomm's series
+"Register MPM under CPU cluster power domain" (July 2026, v1, for Agatti,
+SM6375 and Shikra) does the same from a cluster domain, which the SM6115's
+two clusters do not have in common. It is off by default
+(`/sys/module/irq_qcom_mpm/parameters/notify_rpm`) and on only until the
+next boot: a SoC that does not wake up resets through the watchdog into a
+normal start.
+
 ## Changes after the first suspends (2026-10-26, untested)
 
 `pro1x-autosuspend` now does this around every suspend (also with
