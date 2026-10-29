@@ -1,0 +1,15 @@
+--- a/src/modest-utils.c
++++ b/src/modest-utils.c
+@@ -950,7 +950,12 @@
+ 	}
+ 
+ 	/* Get the territory specified for the current locale */
++#ifdef _NL_IDENTIFICATION_TERRITORY
+ 	territory = modest_utils_country_model_check_territory_exceptions (nl_langinfo (_NL_IDENTIFICATION_TERRITORY));
++#else
++	/* no territory in the locale's data (glibc's extension; FreeBSD) */
++	territory = modest_utils_country_model_check_territory_exceptions ("");
++#endif
+ 
+ 	setlocale (LC_MESSAGES, "en_GB");
+ 

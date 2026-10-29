@@ -1,0 +1,35 @@
+--- a/libtinymail-gio/tny-vfs-stream.c
++++ b/libtinymail-gio/tny-vfs-stream.c
+@@ -25,6 +25,32 @@
+ 
+ #include <tny-vfs-stream.h>
+ 
++/* Linux's errno values that FreeBSD does not have: the nearest it has */
++#ifndef EKEYREJECTED
++#define EKEYREJECTED EACCES
++#endif
++#ifndef ENOKEY
++#define ENOKEY EAUTH
++#endif
++#ifndef ENOANO
++#define ENOANO EIO
++#endif
++#ifndef ENODATA
++#define ENODATA EIO
++#endif
++#ifndef EMEDIUMTYPE
++#define EMEDIUMTYPE EFTYPE
++#endif
++#ifndef ENOMEDIUM
++#define ENOMEDIUM ENXIO
++#endif
++#ifndef EUNATCH
++#define EUNATCH ENXIO
++#endif
++#ifndef ENOTUNIQ
++#define ENOTUNIQ EEXIST
++#endif
++
+ typedef struct _TnyVfsStreamPrivate TnyVfsStreamPrivate;
+ 
+ struct _TnyVfsStreamPrivate

@@ -22,7 +22,8 @@ APPS_PKGS="gtk3 vte poppler-glib upower gstreamer1 gstreamer1-plugins pulseaudio
 	json-c protobuf-c
 	kf5-kirigami2 s2 abseil pyotherside-qt5 qt5-sensors
 	kyotocabinet marisa-trie libmicrohttpd libpostal
-	gpsd libsoup sdl_ttf"
+	gpsd libsoup sdl_ttf check telepathy-glib telepathy-mission-control
+	libaccounts-glib libglade2 mobile-broadband-provider-info iso-codes"
 
 # What the N9's user interface (harmattan.sh) builds on beyond the apps'
 # libraries: tinycdb for contextkit's property cache

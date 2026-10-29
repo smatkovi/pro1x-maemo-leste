@@ -1,0 +1,8 @@
+--- a/pkgconfig/libosso-abook-1.0.pc.in
++++ b/pkgconfig/libosso-abook-1.0.pc.in
+@@ -1,4 +1,4 @@
+-prefix=/usr
++prefix=@prefix@
+ exec_prefix=@prefix@
+ libdir=@libdir@
+ includedir=@includedir@

@@ -1,0 +1,20 @@
+--- a/src/widgets/modest-gtk-security-options-view.c
++++ b/src/widgets/modest-gtk-security-options-view.c
+@@ -465,6 +465,9 @@
+ 		return FALSE;
+ }
+ 
++/* With Hildon the Maemo view's (hildon2/) is the one: a second definition
++ * of it is an error for lld, which takes this file in too */
++#ifndef MODEST_TOOLKIT_HILDON2
+ gboolean
+ modest_security_options_view_has_missing_mandatory_data (ModestSecurityOptionsView* self)
+ {
+@@ -474,6 +477,7 @@
+ 
+ 	return priv->missing_data;
+ }
++#endif
+ 
+ static void
+ modest_gtk_security_options_view_init (ModestGtkSecurityOptionsView *obj)

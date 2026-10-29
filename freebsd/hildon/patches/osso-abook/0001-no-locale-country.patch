@@ -1,0 +1,15 @@
+--- a/lib/osso-abook-contact-field.c
++++ b/lib/osso-abook-contact-field.c
+@@ -1528,7 +1528,12 @@
+   }
+   else
+   {
++#ifdef _NL_ADDRESS_COUNTRY_NAME
+     val = g_strdup(nl_langinfo(_NL_ADDRESS_COUNTRY_NAME));
++#else
++    /* no country in the locale's data (glibc's extension; FreeBSD) */
++    val = g_strdup("");
++#endif
+     e_vcard_attribute_add_value(attr, val);
+   }
+ 

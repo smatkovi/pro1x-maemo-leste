@@ -25,6 +25,9 @@
 #define HOST_NAME_MAX 255
 #endif
 
+/* glibc's name for the comparison function of qsort(3) and bsearch(3) */
+typedef int (*__compar_fn_t)(const void *, const void *);
+
 /* Read a mapping's pages in at mmap(2) (Linux's name for FreeBSD's flag) */
 #ifndef MAP_POPULATE
 #define MAP_POPULATE MAP_PREFAULT_READ

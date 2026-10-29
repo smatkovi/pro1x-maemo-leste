@@ -1,0 +1,12 @@
+--- a/configure.ac
++++ b/configure.ac
+@@ -48,7 +48,8 @@
+ pluginlibdir="`$PKG_CONFIG --variable=pluginlibdir libaccounts`"
+ AC_SUBST(pluginlibdir)
+ 
+-dbusinterfacedir="`$PKG_CONFIG --variable=dbusinterfacedir rtcom-accounts-ui-client`"
++# read at build time: in the sysroot when cross compiling
++dbusinterfacedir="$PKG_CONFIG_SYSROOT_DIR`$PKG_CONFIG --variable=dbusinterfacedir rtcom-accounts-ui-client`"
+ AC_SUBST(dbusinterfacedir)
+ 
+ glademoduledir="`$PKG_CONFIG --variable=moduledir libglade-2.0`"

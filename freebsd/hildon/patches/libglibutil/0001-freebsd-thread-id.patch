@@ -1,0 +1,14 @@
+--- a/src/gutil_log.c
++++ b/src/gutil_log.c
+@@ -39,7 +39,10 @@
+ #pragma GCC visibility push(default)
+ #endif
+ 
+-#ifdef unix
++#if defined(__FreeBSD__)
++#  include <pthread_np.h>
++#  define gettid() ((int)pthread_getthreadid_np())
++#elif defined(unix)
+ #  include <unistd.h>
+ #  include <sys/syscall.h>
+ #  define gettid() ((int)syscall(SYS_gettid))

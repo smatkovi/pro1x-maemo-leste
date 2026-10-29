@@ -147,6 +147,26 @@ APPS=(
 	"maep|"
 	"cloudgps|!"
 	"coolkbd|!"
+	# Leste's communication apps: the event log (calls, messages) with its
+	# plugins and UI, the accounts, the address book library (Evolution
+	# Data Server, Telepathy, oFono through libgofono) and the address
+	# book; then the mail client Modest on tinymail and gtkhtml3
+	"rtcom-eventlogger|--disable-docs"
+	"rtcom-eventlogger-plugins|"
+	"rtcom-accounts-ui-client|"
+	"libglibutil|!"
+	"libgofono|!"
+	"evolution-data-server|!"
+	"osso-abook|"
+	"rtcom-eventlogger-ui|"
+	"libaccounts|"
+	"rtcom-accounts-ui|"
+	"osso-addressbook|"
+	"hildon-notify|"
+	"gtkhtml3|"
+	# camel-lite's iconv checks run programs: their answers for FreeBSD's
+	"tinymail|--with-platform=maemo-leste --with-ssl=nss --disable-idle --disable-imap-part-fetch ac_cv_libiconv_utf8=yes --with-iconv-detect-h=$REPO/freebsd/hildon/compat/camel-iconv-detect.h"
+	"modest|"
 )
 
 REV+=(
@@ -211,6 +231,14 @@ REV+=(
 	[petrovich]=7dcd0bb1a6d5 [gpsrecorder]=535088a58750
 	[maemo-recorder]=c50776e415d9 [maeotp]=b0ffa9d3fe10 [maep]=e20ae9db05a4
 	[cloudgps]=428fa7e09de5 [coolkbd]=194eb909c3b4
+	[rtcom-eventlogger]=cd9a8051d5fa [rtcom-eventlogger-plugins]=45abeb4979e1
+	[rtcom-accounts-ui-client]=d32910bbbbce [libglibutil]=fa82adf84ba3
+	[libgofono]=9afc1a7e51c3 [osso-abook]=4ae1c982a5e4
+	[rtcom-eventlogger-ui]=1a9c2e47af73 [libaccounts]=379a274eb3dd
+	[rtcom-accounts-ui]=332571d7772b [osso-addressbook]=17d62d2ca5b7
+	[hildon-notify]=45856cd4debe [gtkhtml3]=23130d7a988d
+	[tinymail]=b26e5f078476 [modest]=655c79292815
+	[evolution-data-server]=df4ec29950f29a76eac6fbe0f814c48d2cef7d3fdb905002a4a883dd761ce93c
 )
 URL+=(
 	[libbaseencode]=https://github.com/paolostivanin/libbaseencode.git
@@ -221,6 +249,9 @@ URL+=(
 	[gpsrecorder]=$GH_EXTRAS/gpsrecorder.git [maemo-recorder]=$GM_EXTRAS/maemo-recorder.git
 	[maeotp]=$GH_EXTRAS/maeotp.git [maep]=$GH_EXTRAS/maep.git
 	[cloudgps]=$GH_EXTRAS/cloudgps.git [coolkbd]=$GM_EXTRAS/coolkbd.git
+	[libglibutil]=https://github.com/sailfishos/libglibutil.git
+	[libgofono]=https://github.com/sailfishos/libgofono.git
+	[evolution-data-server]=https://download.gnome.org/sources/evolution-data-server/3.56/evolution-data-server-3.56.2.tar.xz
 )
 URL+=(
 	[maepad]=$GM_EXTRAS/maepad.git
@@ -1097,4 +1128,78 @@ custom_coolkbd() {
 		install -D -m 755 "coolkbd.$t" "$PR/usr/local/bin/coolkbd.$t"
 	done
 	ln -s coolkbd.dock "$PR/usr/local/bin/coolkbd"
+}
+
+# --- the communication apps' libraries from Sailfish OS ---------------------
+# libglibutil and libgofono (oFono's D-Bus API for GLib): their own
+# Makefiles, which take CC and install headers below /usr/include
+sfos_make() {
+	sed -i 's|/usr/include|/usr/local/include|' Makefile ./*.pc.in
+	# the cross link flags with the linker: their LDFLAGS carry -shared
+	make -j"$JOBS" CC="$CC" LD="$CC $LDFLAGS" CFLAGS="$CPPFLAGS $CFLAGS" \
+	    LIBDIR=usr/local/lib KEEP_SYMBOLS=1 release pkgconfig > make.out 2>&1 ||
+	    { grep -m20 -E "error:|Error [0-9]" make.out; tail -20 make.out; exit 1; }
+	make install-dev DESTDIR="$PR" LIBDIR=usr/local/lib > install.out 2>&1 ||
+	    { tail -20 install.out; exit 1; }
+}
+custom_libglibutil() { sfos_make; }
+custom_libgofono() { sfos_make; }
+
+# Evolution Data Server: FreeBSD's package (3.56.2_4) with its
+# libebook-contacts and e-vcard.h from the same release with Leste's EVCard
+# virtual attribute methods (patches/evolution-data-server), which
+# osso-abook's contacts override to follow their attributes; the methods
+# take the class's reserved slots, so the rest of EDS stays as FreeBSD
+# built it. Version _104: FreeBSD's _4 and this.
+custom_evolution_data_server() {
+	local pkg lib
+	pkg=$(ls "$WORK"/pkgs/cache/evolution-data-server-3.56.2_4~*.pkg 2> /dev/null | head -1)
+	[ -n "$pkg" ] || { echo "FreeBSD's evolution-data-server 3.56.2_4 is not in the package cache"; exit 1; }
+	bsdtar -xf "$pkg" -C "$PR" --exclude '+*'
+	bsdtar -xOf "$pkg" +MANIFEST | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+m["version"] = m["version"].replace("_4", "_104")
+m["comment"] += ", with Leste\x27s EVCard attribute methods"
+json.dump(m, sys.stdout)' > "$PR.manifest"
+	# the two generators the build runs, built for the PC
+	sed -i 's|COMMAND ${CMAKE_CURRENT_BINARY_DIR}/gen-western-table|COMMAND ${CMAKE_BINARY_DIR}/host-gen-western-table|' \
+	    src/addressbook/libebook-contacts/CMakeLists.txt
+	sed -i 's|COMMAND ${CMAKE_CURRENT_BINARY_DIR}/camel-gen-tables|COMMAND ${CMAKE_BINARY_DIR}/host-camel-gen-tables|' \
+	    src/camel/CMakeLists.txt
+	# only libebook-contacts is built here: not data/, whose OAuth2 keys
+	# are decoded by running a program
+	sed -i '/^add_subdirectory(data)$/d' CMakeLists.txt
+	qt_host
+	# the answers of the checks that run programs, for FreeBSD's libc
+	cmake -S . -B _build -DCMAKE_TOOLCHAIN_FILE="$H/qt5host/toolchain.cmake" \
+	    -DCMAKE_PROJECT_INCLUDE="$H/qt5host/hosttools.cmake" \
+	    -D_correct_iconv_EXITCODE=0 -D_correct_iconv_EXITCODE__TRYRUN_OUTPUT= \
+	    -DHAVE_LKSTRFTIME_EXITCODE=0 -DHAVE_LKSTRFTIME_EXITCODE__TRYRUN_OUTPUT= \
+	    -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release \
+	    -DCMAKE_C_FLAGS="$CPPFLAGS $CFLAGS" -DCMAKE_SHARED_LINKER_FLAGS="$LDFLAGS" \
+	    -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" -DENABLE_GTK=OFF -DENABLE_GTK4=OFF \
+	    -DENABLE_OAUTH2_WEBKITGTK=OFF -DENABLE_OAUTH2_WEBKITGTK4=OFF -DENABLE_GOA=OFF \
+	    -DENABLE_EXAMPLES=OFF -DENABLE_TESTS=OFF -DENABLE_INTROSPECTION=OFF \
+	    -DENABLE_VALA_BINDINGS=OFF -DENABLE_GTK_DOC=OFF -DWITH_LIBDB=OFF \
+	    -DENABLE_WEATHER=OFF -DWITH_OPENLDAP=OFF -DENABLE_CANBERRA=OFF \
+	    -DWITH_PHONENUMBER=OFF -DWITH_KRB5=OFF -DWITH_SYSTEMDUSERUNITDIR=OFF \
+	    > cmake.out 2>&1 || { tail -30 cmake.out; exit 1; }
+	# what camel's iconv-detect would write when run
+	cp "$REPO/freebsd/hildon/compat/camel-iconv-detect.h" _build/iconv-detect.h
+	local hg
+	hg=$(env -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR -u PKG_CONFIG_PATH \
+	    pkg-config --cflags --libs glib-2.0)
+	# shellcheck disable=SC2086
+	cc -I_build -o _build/host-gen-western-table \
+	    src/addressbook/libebook-contacts/gen-western-table.c $hg &&
+	cc -I_build -o _build/host-camel-gen-tables src/camel/camel-gen-tables.c ||
+	    { echo "the generators did not build for the PC"; exit 1; }
+	cmake --build _build --target ebook-contacts -j"$JOBS" > make.out 2>&1 ||
+	    { grep -m20 -E "error:|Error [0-9]" make.out; tail -20 make.out; exit 1; }
+	lib=$(find _build -name 'libebook-contacts-1.2.so.4.*' -type f | head -1)
+	[ -n "$lib" ] || { echo "no libebook-contacts built"; exit 1; }
+	install -m 755 "$lib" "$PR/usr/local/lib/libebook-contacts-1.2.so.4.0.0"
+	install -m 644 src/addressbook/libebook-contacts/e-vcard.h \
+	    "$PR/usr/local/include/evolution-data-server/libebook-contacts/e-vcard.h"
 }
