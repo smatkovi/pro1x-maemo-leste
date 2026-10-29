@@ -331,7 +331,7 @@ licence statement. The sources are the pinned revisions in the table and
 | harmattan-meegotouchhome | 1.2.20.1.0m7 | LGPL21 | [harmattan-qt5](https://github.com/smatkovi/harmattan-qt5) | `d18933a3d165` | runs in harmattan-session (VM: the launcher with the applications, the status bar, the Pro1X's 960x480 across 2160x1080) |
 | harmattan-meegotouchtheme | 0.24.13.1.0m7_1 | LGPL21 | [harmattan-qt5](https://github.com/smatkovi/harmattan-qt5) | `2b21632cc6f4` | runs (VM: base and pro1x with the N9's blanco, black wallpaper) |
 | harmattan-qmsystem2 | 1.4.3.0m7 | LGPL21 | [harmattan-qt5](https://github.com/smatkovi/harmattan-qt5) | `2b21632cc6f4` | installs, its libraries resolve (VM); not tried in harmattan-session yet |
-| harmattan-session | 1.0.260 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `cec72123f858` | runs (VM, Xvfb 2160x1080: mcompositor, sysuid, meego-im-uiserver, meegofeedbackd and the home, which shows the applications) |
+| harmattan-session | 1.0.262 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d2d0bb061bb0` | runs (VM, Xvfb 2160x1080: mcompositor, sysuid, meego-im-uiserver, meegofeedbackd and the home, which shows the applications) |
 | harmattan-statusmenu-plugins | 0 | LGPL21 | [harmattan-qt5](https://github.com/smatkovi/harmattan-qt5) | `b37ec3e97301` | installs, its libraries resolve (VM); not tried in harmattan-session yet |
 | harmattan-system-ui | 1.2.24.2.0m7_1 | LGPL21 | [harmattan-qt5](https://github.com/smatkovi/harmattan-qt5) | `278a4b8143ea` | runs in harmattan-session (VM: the status bar with battery and clock) |
 | headphoned | 2.0.0 | GPLv2+ | [headphoned](https://github.com/smatkovi/headphoned) | `d476cb4a8bf9` | builds |
@@ -345,10 +345,10 @@ licence statement. The sources are the pinned revisions in the table and
 | hildon-input-method | 2.1.61.1 | LGPL21 | [hildon-input-method](https://github.com/maemo-leste/hildon-input-method) | `0977df548b0b` | builds |
 | hildon-input-method-framework | 2.1.71.1 | LGPL21 | [hildon-input-method-framework](https://github.com/maemo-leste/hildon-input-method-framework) | `99afab2e2e78` | builds |
 | hildon-input-method-plugins | 3.9.91 | GPLv2+ | [hildon-input-method-plugins](https://github.com/maemo-leste/hildon-input-method-plugins) | `04c1d47222d0` | builds |
-| hildon-meta | 1.0.260 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `cec72123f858` | builds |
+| hildon-meta | 1.0.262 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d2d0bb061bb0` | builds |
 | hildon-notify | 0.0.2.2 | LGPL21 | [hildon-notify](https://github.com/maemo-leste/hildon-notify) | `45856cd4debe` | builds |
 | hildon-plugins-notify-sv | 0.65_1 | GPLv3 | [hildon-plugins-notify-sv](https://github.com/maemo-leste/hildon-plugins-notify-sv) | `ddfe375457f7` | runs (VM: an alarm rings through the whole chain, alarmd to the alarm dialog to the sound daemon, rising in volume as on Maemo, until Stop; the tones are decoded 90 s after the session starts, an alarm before that is silent; ringtones named without a path in the profile stay undecoded) |
-| hildon-session | 1.0.260 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `cec72123f858` | runs (VM) |
+| hildon-session | 1.0.262 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d2d0bb061bb0` | runs (VM) |
 | hildon-status-menu | 0.3.43.1 | LGPL21 | [hildon-status-menu](https://github.com/maemo-leste/hildon-status-menu) | `796dbd7ca973` | runs (VM) |
 | hildon-theme-alpha | 9.7 | GPLv3 | [maemo-leste](https://github.com/maemo-leste) |  | builds |
 | hildon-thumbnail | 3.1.4 | LGPL21 | [hildon-thumbnail](https://github.com/maemo-leste/hildon-thumbnail) | `86bd10f3f620` | builds |
@@ -432,13 +432,14 @@ licence statement. The sources are the pinned revisions in the table and
 | pd-mapper | 1.1 | BSD3CLAUSE | [pd-mapper](https://github.com/linux-msm/pd-mapper) | `5ecd2fe926ac` | builds |
 | pedometerhomewidget | 0.4.0 | GPLv3+ | [pedometerhomewidget](https://github.com/smatkovi/pedometerhomewidget) | `06d5246191fa` | builds |
 | petrovich | 0.3.0 | GPLv2+ | [petrovich](https://github.com/smatkovi/petrovich) | `7dcd0bb1a6d5` | runs (VM: the file system) |
-| photolightmeter | 1.9.7 | GPLv2 | [photolightmeter](https://github.com/maemo-leste-extras/photolightmeter) | `c707d055b76b` | runs (VM), but finds no light sensor: it reads Linux's /sys/bus/iio |
-| pro1x-gnss | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `cec72123f858` | builds; needs the Pro1X's modem (untested on the phone) |
-| pro1x-hidpi | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `cec72123f858` | builds |
-| pro1x-look | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `cec72123f858` | builds |
-| pro1x-proximity | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `cec72123f858` | builds; needs the Pro1X's ADSP (untested on the phone) |
-| pro1x-standby | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `cec72123f858` | runs (VM: time-out, dimming, double tap, power key, proximity signals; no system calls while in use) |
-| pro1x-steps | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `cec72123f858` | builds; needs the Pro1X's ADSP (untested on the phone) |
+| photolightmeter | 1.9.7_1 | GPLv2 | [photolightmeter](https://github.com/maemo-leste-extras/photolightmeter) | `c707d055b76b` | runs (VM, with a stand-in reading: the aperture from 250 lux); on the Pro1X it asks pro1x-light |
+| pro1x-gnss | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d2d0bb061bb0` | builds; needs the Pro1X's modem (untested on the phone) |
+| pro1x-hidpi | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d2d0bb061bb0` | builds |
+| pro1x-light | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d2d0bb061bb0` | builds; needs the ADSP (hexagonrpcd), so untried (the VM has none) |
+| pro1x-look | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d2d0bb061bb0` | builds |
+| pro1x-proximity | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d2d0bb061bb0` | builds; needs the Pro1X's ADSP (untested on the phone) |
+| pro1x-standby | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d2d0bb061bb0` | runs (VM: time-out, dimming, double tap, power key, proximity signals; no system calls while in use) |
+| pro1x-steps | 1.0 | UNKNOWN | [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) | `d2d0bb061bb0` | builds; needs the Pro1X's ADSP (untested on the phone) |
 | profiled | 1.0.8_1 | BSD3CLAUSE | [profiled](https://github.com/maemo-leste/profiled) | `8e16f3dc9d42` | runs (VM: the profiles' values, through maemo-input-sounds) |
 | profilesx | 1.9_2 | GPLv2+ | [profilesx](https://github.com/maemo-leste/profilesx) | `4c89c9701fdc` | builds |
 | pure-maps | 3.5.1 | GPLv3+ | [pure-maps](https://github.com/rinigus/pure-maps) | `5807c1be2de7` | runs (VM: the map) |
@@ -473,7 +474,7 @@ licence statement. The sources are the pinned revisions in the table and
 | tqftpserv | 1.3.2 | BSD3CLAUSE | [tqftpserv](https://github.com/linux-msm/tqftpserv) | `0bf5b98c2422` | builds |
 | wifi-assistant | 1.0.0 | BSD3CLAUSE | [wifi-assistant](https://github.com/smatkovi/wifi-assistant) | `604bbe98d8b5` | builds |
 | wpeditor | 3.53.1 | LGPL21+ | [wpeditor](https://github.com/maemo-leste/wpeditor) | `84a17efe3392` | builds |
-| yappari-leste | 3.0.0_1 | BSD2CLAUSE, GPLv2+ | [yappari-leste](https://github.com/smatkovi/yappari-leste) | `e1f75b39ca82` | starts (VM), but refuses to run as root, which the Pro1X image's session is |
+| yappari-leste | 3.0.0_2 | BSD2CLAUSE, GPLv2+ | [yappari-leste](https://github.com/smatkovi/yappari-leste) | `86d34e711832` | runs (VM: Link with WhatsApp, as root as the Pro1X image's session is; no account tried) |
 <!-- /packages -->
 
 Untested on the phone so far.

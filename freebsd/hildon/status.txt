@@ -93,13 +93,13 @@ sphone|runs (VM: the dialler; no modem there)
 conversations|runs (VM: the welcome page, no accounts)
 nomweather|runs (VM: Vienna's forecast from the network)
 fahrplan2|runs (VM: the backend, stations)
-yappari-leste|starts (VM), but refuses to run as root, which the Pro1X image's session is
+yappari-leste|runs (VM: Link with WhatsApp, as root as the Pro1X image's session is; no account tried)
 petrovich|runs (VM: the file system)
 gpsrecorder|runs (VM, with MYDOCSDIR; no GPS there)
 maemo-recorder|runs (VM: Ready)
 maeotp|runs (VM, no tokens yet)
 maep|runs (VM: the map, no tiles offline)
 cloudgps|runs (VM: the world map)
-photolightmeter|runs (VM), but finds no light sensor: it reads Linux's /sys/bus/iio
+photolightmeter|runs (VM, with a stand-in reading: the aperture from 250 lux); on the Pro1X it asks pro1x-light
 comics-daily|runs (VM)
-
+pro1x-light|builds; needs the ADSP (hexagonrpcd), so untried (the VM has none)
