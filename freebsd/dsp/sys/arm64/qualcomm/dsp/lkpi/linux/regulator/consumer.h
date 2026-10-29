@@ -1,8 +1,10 @@
 /*-
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * Linux's regulators: the SoC's are the RPM's, which FreeBSD has no
- * driver for; they stay as the boot loader and Linux left them (logged once)
+ * Linux's regulators for platform devices: a supply is the device tree's
+ * <name>-supply; one the device tree lacks is a dummy, as in Linux. The
+ * SoC's regulators are the RPM's: they go on and off by votes at the RPM
+ * (qcom_dsp's qcom_rpm.c), as Linux's qcom_smd-regulator sends them
  * (freebsd/dsp: Linux platform drivers with LinuxKPI, lkpi_platform.c)
  */
 
@@ -21,6 +23,7 @@ struct regulator_bulk_data {
 };
 
 int	lkpi_platform_regulators(struct device *, int, struct regulator_bulk_data *);
+int	lkpi_platform_regulator_bulk(int, struct regulator_bulk_data *, bool);
 
 static inline int
 devm_regulator_bulk_get(struct device *dev, int n,
@@ -32,13 +35,13 @@ devm_regulator_bulk_get(struct device *dev, int n,
 static inline int
 regulator_bulk_enable(int n, struct regulator_bulk_data *r)
 {
-	return (0);
+	return (lkpi_platform_regulator_bulk(n, r, true));
 }
 
 static inline int
 regulator_bulk_disable(int n, struct regulator_bulk_data *r)
 {
-	return (0);
+	return (lkpi_platform_regulator_bulk(n, r, false));
 }
 
 #endif

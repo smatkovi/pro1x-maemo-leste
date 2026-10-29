@@ -35,10 +35,17 @@ int	lkpi_pf_register(const struct lkpi_pf_ops *ops,
 	    struct lkpi_pf_driver **out);
 void	lkpi_pf_unregister(struct lkpi_pf_driver *d);
 
-/* The attached device's resources, by the device tree's reg and interrupts */
-int	lkpi_pf_mem(void *bsddev, const char *name, uint64_t *pa, uint64_t *size);
+/*
+ * The attached device's resources, by the device tree's reg (by its name
+ * in reg-names, or the index) and interrupts; mappings of memory
+ */
+int	lkpi_pf_mem(void *bsddev, const char *name, int index, uint64_t *pa,
+	    uint64_t *size);
 int	lkpi_pf_irq(void *bsddev, int index);
-void	*lkpi_pf_map(uint64_t pa, uint64_t size, bool device);
+#define	LKPI_PF_MAP_DEVICE	0
+#define	LKPI_PF_MAP_WC		1	/* normal memory, uncached */
+#define	LKPI_PF_MAP_WB		2	/* normal memory, cached */
+void	*lkpi_pf_map(uint64_t pa, uint64_t size, int kind);
 void	lkpi_pf_unmap(void *va, uint64_t size);
 /* the device goes: its interrupts are released (after the driver's remove) */
 void	lkpi_pf_device_gone(void *bsddev);
@@ -49,6 +56,7 @@ void	lkpi_pf_device_gone(void *bsddev);
  * disable/enable nest; disable waits for a running handler.
  */
 #define	LKPI_PF_IRQ_BASE	0x40000000u
+#define	LKPI_PF_MAX_IRQS	64
 int	lkpi_pf_request_irq(unsigned int irq, int (*handler)(int, void *),
 	    void *arg, const char *name, bool autoen);
 void	lkpi_pf_free_irq(unsigned int irq);
@@ -57,12 +65,22 @@ void	lkpi_pf_disable_irq(unsigned int irq);
 
 /* The device tree: nodes are phandles */
 uintptr_t lkpi_pf_node(void *bsddev);
+/* the node's name with its unit address ("wifi@c800000") */
+int	lkpi_of_name(uintptr_t node, char *buf, size_t len);
 bool	lkpi_of_has(uintptr_t node, const char *prop);
+/* a property's bytes, kept until the last driver goes: its length, or -errno */
+int	lkpi_of_getprop(uintptr_t node, const char *prop, const void **buf);
 int	lkpi_of_read_u32(uintptr_t node, const char *prop, uint32_t *val);
 int	lkpi_of_read_string(uintptr_t node, const char *prop, const char **s);
 uintptr_t lkpi_of_child(uintptr_t node, const char *name);
 int	lkpi_of_memory_region(uintptr_t node, int index, uint64_t *pa,
 	    uint64_t *size);
+
+/*
+ * A regulator by the xref of its node (a <supply>-supply), on or off: the
+ * RPM's through qcom_dsp (unless hw.lkpi_pf.regulators=0). 0 or -errno.
+ */
+int	lkpi_pf_regulator(uintptr_t xref, bool on, const char *who);
 
 /* The SoC's services (qcom_dsp), with Linux's meanings */
 int	lkpi_qcom_scm_assign_mem(uint64_t addr, size_t size, uint64_t *srcvm,

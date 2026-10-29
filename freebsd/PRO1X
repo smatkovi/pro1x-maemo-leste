@@ -85,6 +85,10 @@ device		iic
 device		evdev
 options 	EVDEV_SUPPORT
 device		uinput
+# The PCI framework, without a host bridge (the SoC has no PCIe and no node
+# matches): LinuxKPI, which the Wi-Fi's ath10k builds on (freebsd/dsp),
+# depends on it and keeps its DMA functions there
+device		pci
 
 # Basics
 device		loop

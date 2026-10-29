@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * Linux's qcom_smem_get, on qcom_dsp's
+ * Linux's qcom_smem_get, on qcom_dsp's: an ERR_PTR when the item is absent
  * (freebsd/dsp: Linux platform drivers with LinuxKPI, lkpi_platform.c)
  */
 
@@ -13,7 +13,7 @@
 
 #define	QCOM_SMEM_HOST_ANY	-1
 
-void	*lkpi_platform_smem_get(unsigned int, unsigned int, size_t *);
+void	*lkpi_platform_smem_get(int, unsigned int, size_t *);
 #define	qcom_smem_get(host, item, size)	lkpi_platform_smem_get((host), (item), (size))
 
 #endif

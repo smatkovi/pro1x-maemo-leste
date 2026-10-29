@@ -5,9 +5,13 @@
  * (lkpi_platform.h): a newbus driver per platform driver on simplebus,
  * added when the LinuxKPI half registers it (module_init, as LinuxKPI adds
  * its PCI drivers), the device's memory and interrupt resources, its device
- * tree node, and the SoC's services. Before the Linux driver probes, the
- * device's streams (iommus) are switched to bypass at the SMMU, which no
- * FreeBSD driver drives: DMA addresses are physical (qcom_smmu.c).
+ * tree node, and the SoC's services: SCM, SMEM and the RPM's regulators
+ * (qcom_dsp). Before the Linux driver probes, the device's streams
+ * (iommus) are switched to bypass at the SMMU, which no FreeBSD driver
+ * drives: DMA addresses are physical (qcom_smmu.c).
+ *
+ *   hw.lkpi_pf.regulators=0   no votes for the drivers' regulators (they
+ *                             stay as Linux and the boot loader left them)
  */
 
 #include <sys/param.h>
@@ -17,8 +21,10 @@
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
+#include <sys/queue.h>
 #include <sys/rman.h>
 #include <sys/sx.h>
+#include <sys/sysctl.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
@@ -34,6 +40,22 @@
 #include "lkpi_platform.h"
 
 static MALLOC_DEFINE(M_LKPI_PF, "lkpi_pf", "Linux platform drivers");
+
+/* the module this is built into depends on qcom_dsp and qrtr (its QMI) */
+#ifdef LKPI_PF_MODULE
+#define	PF_DEPEND(m, d)		MODULE_DEPEND(m, d, 1, 1, 1)
+PF_DEPEND(LKPI_PF_MODULE, qcom_dsp);
+PF_DEPEND(LKPI_PF_MODULE, qrtr);
+#endif
+
+static SYSCTL_NODE(_hw, OID_AUTO, lkpi_pf, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "Linux platform drivers (freebsd/dsp)");
+static bool pf_regulators = true;
+SYSCTL_BOOL(_hw_lkpi_pf, OID_AUTO, regulators, CTLFLAG_RWTUN, &pf_regulators,
+    0, "Drivers' regulators voted on and off (else left as they are)");
+
+static int pf_ndrivers;
+static void pf_props_free(void);
 
 struct lkpi_pf_driver {
 	driver_t		driver;		/* first: device_get_driver() */
@@ -149,6 +171,7 @@ lkpi_pf_register(const struct lkpi_pf_ops *ops, struct lkpi_pf_driver **out)
 		free(d, M_LKPI_PF);
 		return (-error);
 	}
+	pf_ndrivers++;
 	*out = d;
 	return (0);
 }
@@ -165,16 +188,19 @@ lkpi_pf_unregister(struct lkpi_pf_driver *d)
 		devclass_delete_driver(bus, &d->driver);
 	bus_topo_unlock();
 	free(d, M_LKPI_PF);
+	if (--pf_ndrivers == 0)
+		pf_props_free();
 }
 
 /* --- memory ------------------------------------------------------------------------- */
 
 int
-lkpi_pf_mem(void *bsddev, const char *name, uint64_t *pa, uint64_t *size)
+lkpi_pf_mem(void *bsddev, const char *name, int index, uint64_t *pa,
+    uint64_t *size)
 {
 	device_t dev = bsddev;
 	rman_res_t start, count;
-	int idx = 0;
+	int idx = index;
 
 	if (name != NULL &&
 	    ofw_bus_find_string_index(ofw_bus_get_node(dev), "reg-names", name,
@@ -188,10 +214,22 @@ lkpi_pf_mem(void *bsddev, const char *name, uint64_t *pa, uint64_t *size)
 }
 
 void *
-lkpi_pf_map(uint64_t pa, uint64_t size, bool device)
+lkpi_pf_map(uint64_t pa, uint64_t size, int kind)
 {
-	return (pmap_mapdev_attr(pa, size, device ? VM_MEMATTR_DEVICE :
-	    VM_MEMATTR_WRITE_THROUGH));
+	vm_memattr_t ma;
+
+	switch (kind) {
+	case LKPI_PF_MAP_WB:
+		ma = VM_MEMATTR_WRITE_BACK;
+		break;
+	case LKPI_PF_MAP_WC:
+		ma = VM_MEMATTR_WRITE_COMBINING;
+		break;
+	default:
+		ma = VM_MEMATTR_DEVICE;
+		break;
+	}
+	return (pmap_mapdev_attr(pa, size, ma));
 }
 
 void
@@ -213,7 +251,7 @@ struct pf_irq {
 	int		depth;		/* disabled this often */
 };
 
-#define	PF_MAX_IRQS	64
+#define	PF_MAX_IRQS	LKPI_PF_MAX_IRQS
 static struct pf_irq *pf_irqs[PF_MAX_IRQS];
 static struct sx pf_irq_lock;
 SX_SYSINIT(lkpi_pf_irq, &pf_irq_lock, "lkpi_pf irqs");
@@ -381,6 +419,16 @@ lkpi_pf_node(void *bsddev)
 	return ((uintptr_t)ofw_bus_get_node((device_t)bsddev));
 }
 
+int
+lkpi_of_name(uintptr_t node, char *buf, size_t len)
+{
+	if (node == 0 || len == 0 || OF_getprop((phandle_t)node, "name", buf,
+	    len) <= 0)
+		return (-ENOENT);
+	buf[len - 1] = '\0';
+	return (0);
+}
+
 bool
 lkpi_of_has(uintptr_t node, const char *prop)
 {
@@ -399,16 +447,77 @@ lkpi_of_read_u32(uintptr_t node, const char *prop, uint32_t *val)
 	return (0);
 }
 
-/* The string stays valid: OF_getprop_alloc's copy is kept (calls at probe) */
+/*
+ * Properties as Linux drivers see them, pointers into the device tree:
+ * copies, kept until the last platform driver goes (drivers read them at
+ * probe, a few each)
+ */
+struct pf_prop {
+	SLIST_ENTRY(pf_prop) link;
+	phandle_t	node;
+	char		name[32];
+	ssize_t		len;
+	void		*buf;
+};
+static SLIST_HEAD(, pf_prop) pf_props = SLIST_HEAD_INITIALIZER(pf_props);
+static struct sx pf_prop_lock;
+SX_SYSINIT(lkpi_pf_prop, &pf_prop_lock, "lkpi_pf props");
+
+int
+lkpi_of_getprop(uintptr_t node, const char *prop, const void **buf)
+{
+	struct pf_prop *p;
+	ssize_t len;
+	void *b;
+
+	if (node == 0 || strlen(prop) >= sizeof(p->name))
+		return (-EINVAL);
+	sx_xlock(&pf_prop_lock);
+	SLIST_FOREACH(p, &pf_props, link)
+		if (p->node == (phandle_t)node && strcmp(p->name, prop) == 0)
+			break;
+	if (p == NULL) {
+		if ((len = OF_getprop_alloc((phandle_t)node, prop, &b)) < 0) {
+			sx_xunlock(&pf_prop_lock);
+			return (-EINVAL);
+		}
+		p = malloc(sizeof(*p), M_LKPI_PF, M_WAITOK | M_ZERO);
+		p->node = (phandle_t)node;
+		strlcpy(p->name, prop, sizeof(p->name));
+		p->len = len;
+		p->buf = b;
+		SLIST_INSERT_HEAD(&pf_props, p, link);
+	}
+	*buf = p->buf;
+	len = p->len;
+	sx_xunlock(&pf_prop_lock);
+	return ((int)len);
+}
+
+static void
+pf_props_free(void)
+{
+	struct pf_prop *p;
+
+	sx_xlock(&pf_prop_lock);
+	while ((p = SLIST_FIRST(&pf_props)) != NULL) {
+		SLIST_REMOVE_HEAD(&pf_props, link);
+		OF_prop_free(p->buf);
+		free(p, M_LKPI_PF);
+	}
+	sx_xunlock(&pf_prop_lock);
+}
+
 int
 lkpi_of_read_string(uintptr_t node, const char *prop, const char **s)
 {
-	char *str;
+	const void *b;
+	int len;
 
-	if (node == 0 || OF_getprop_alloc((phandle_t)node, prop,
-	    (void **)&str) <= 0)
+	if ((len = lkpi_of_getprop(node, prop, &b)) <= 0 ||
+	    ((const char *)b)[len - 1] != '\0')
 		return (-EINVAL);
-	*s = str;
+	*s = b;
 	return (0);
 }
 
@@ -444,6 +553,17 @@ lkpi_of_memory_region(uintptr_t node, int index, uint64_t *pa, uint64_t *size)
 }
 
 /* --- the SoC ------------------------------------------------------------------------------ */
+
+int
+lkpi_pf_regulator(uintptr_t xref, bool on, const char *who)
+{
+	if (!pf_regulators) {
+		printf("lkpi_pf: %s: regulator %s: left as it is "
+		    "(hw.lkpi_pf.regulators=0)\n", who, on ? "on" : "off");
+		return (0);
+	}
+	return (-qcom_rpm_regulator((phandle_t)xref, on, who));
+}
 
 /* Only from this processor (HLOS) to others: qcom_scm_assign_mem's case */
 int

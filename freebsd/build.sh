@@ -74,9 +74,13 @@ log "kernel PRO1X"
 sed -e "s|@MFS_IMAGE@|$OUT/mfsroot.ufs|" -e "s|@ENV_FILE@|$REPO/freebsd/pro1x.env|" \
 	"$REPO/freebsd/PRO1X" > "$SRC/sys/arm64/conf/PRO1X"
 # The DSP stack's drivers (dsp/, kernel modules for the root image): only
-# these modules are built
+# these modules are built. The Wi-Fi: ath10k with its SNOC attachment, on
+# LinuxKPI and net80211 (with their dependencies firmware and usb, and the
+# ciphers wpa_supplicant's rc.d script loads)
 cp -a "$REPO/freebsd/dsp/sys/." "$SRC/sys/"
-MODULES=${MODULES:-qcom_dsp qrtr}
+WIFI_MODULES="firmware usb/usb linuxkpi linuxkpi_wlan wlan wlan_wep wlan_tkip"
+WIFI_MODULES="$WIFI_MODULES wlan_ccmp wlan_gcmp athk_common ath10k_snoc"
+MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
 	buildkernel)
@@ -90,6 +94,10 @@ for m in $MODULES; do
 	[ -f "$ko" ] || { echo "module $m not built"; exit 1; }
 	cp "$ko" "$OUT/modules/"
 done
+# their dependencies by module name (linker.hints, made by the build's
+# kldxref for the target)
+KLDXREF=$(find "$WORK/obj" -path '*/tmp/legacy/bin/kldxref' -type f | head -1)
+[ -x "$KLDXREF" ] && "$KLDXREF" "$OUT/modules"
 # Their tools (dsp/tools), against the release's headers and libraries
 BASEROOT=$WORK/base-sysroot
 if [ ! -f "$BASEROOT/.done" ]; then

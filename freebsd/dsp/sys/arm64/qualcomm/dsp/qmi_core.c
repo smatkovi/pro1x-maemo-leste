@@ -63,6 +63,9 @@ struct qmi_core {
 	struct qmi_ns_entry *lookups, *servers;
 	struct qmi_txn_state *txns;
 	uint16_t	next_txn;
+	/* the peer of a connected handle (qmi_connect) */
+	bool		connected;
+	uint32_t	peer_node, peer_port;
 };
 
 static inline struct qmi_core *
@@ -311,6 +314,7 @@ qmi_handle_init(struct qmi_handle *qmi, size_t recv_buf_size,
 	glink_cond_init(&c->cond);
 	glink_work_init(&c->rx_work, qmi_rx_work, c);
 	qmi->priv = c;
+	qmi->sock = qmi;
 	qmi->recv_buf_size = recv_buf_size;
 	if (ops != NULL)
 		qmi->ops = *ops;
@@ -545,17 +549,45 @@ qmi_send_message(struct qmi_handle *qmi, struct sockaddr_qrtr *sq,
     const struct qmi_elem_info *ei, const void *c_struct)
 {
 	struct qmi_core *c = core_of(qmi);
+	uint32_t node, port;
 	void *msg;
 	int error;
 
-	if (sq == NULL)
-		return (-EINVAL);
+	if (sq != NULL) {
+		node = sq->sq_node;
+		port = sq->sq_port;
+	} else {
+		/* a connected handle's peer, as Linux's connected socket */
+		glink_lock(&c->lock);
+		node = c->peer_node;
+		port = c->peer_port;
+		error = c->connected ? 0 : ENOTCONN;
+		glink_unlock(&c->lock);
+		if (error != 0)
+			return (-error);
+	}
 	msg = qmi_encode_message(type, msg_id, &len, txn_id, ei, c_struct);
 	if (msg == NULL)
 		return (-EINVAL);
-	error = qrtr_sendto(c->port, sq->sq_node, sq->sq_port, msg, len);
+	error = qrtr_sendto(c->port, node, port, msg, len);
 	glink_free(msg);
 	return (error != 0 ? -error : (ssize_t)len);
+}
+
+int
+qmi_connect(struct qmi_handle *qmi, const struct sockaddr_qrtr *sq, size_t len)
+{
+	struct qmi_core *c;
+
+	if (qmi == NULL || (c = core_of(qmi)) == NULL || sq == NULL ||
+	    len < sizeof(*sq))
+		return (-EINVAL);
+	glink_lock(&c->lock);
+	c->peer_node = sq->sq_node;
+	c->peer_port = sq->sq_port;
+	c->connected = true;
+	glink_unlock(&c->lock);
+	return (0);
 }
 
 ssize_t

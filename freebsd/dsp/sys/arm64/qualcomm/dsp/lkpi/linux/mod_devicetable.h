@@ -1,7 +1,8 @@
 /*-
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * Linux's of_device_id, which LinuxKPI's linux/mod_devicetable.h lacks
+ * Linux's of_device_id, which LinuxKPI's linux/mod_devicetable.h lacks, and
+ * MODULE_DEVICE_TABLE(of, ...) (no PNP information for devmatch(8) yet)
  * (freebsd/dsp: Linux platform drivers with LinuxKPI, lkpi_platform.c)
  */
 
@@ -16,5 +17,7 @@ struct of_device_id {
 	char		compatible[128];
 	const void	*data;
 };
+
+#define	MODULE_DEVICE_TABLE_BUS_of(_bus, _table)
 
 #endif

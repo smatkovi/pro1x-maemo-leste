@@ -399,6 +399,41 @@ main(void)
 	free_sent(s);
 	printf("timeout, late response dropped: ok\n");
 
+	/*
+	 * 6b. as ath10k's qmi.c: requests without an address once the
+	 * handle's socket is connected to the server (kernel_connect), none
+	 * before
+	 */
+	{
+		struct qmi_handle qmi2;
+		struct qmi_txn txn2;
+
+		assert(qmi_handle_init(&qmi2, 64, NULL, NULL) == 0);
+		assert(qmi2.sock == &qmi2);
+		assert(qmi_txn_init(&qmi2, &txn2, wlfw_cap_resp_msg_v01_ei,
+		    &cap_rx) == 0);
+		assert(qmi_send_request(&qmi2, NULL, &txn2, QMI_WLFW_CAP_REQ_V01,
+		    WLFW_CAP_REQ_MSG_V01_MAX_MSG_LEN, wlfw_cap_req_msg_v01_ei,
+		    &cap_req) == -ENOTCONN);
+		qmi_txn_cancel(&txn2);
+		qmi_handle_release(&qmi2);
+	}
+	assert(qmi_connect(qmi.sock, &server, sizeof(server)) == 0);
+	memset(&cap_rx, 0, sizeof(cap_rx));
+	assert(qmi_txn_init(&qmi, &call.txn, wlfw_cap_resp_msg_v01_ei, &cap_rx) == 0);
+	assert(qmi_send_request(&qmi, NULL, &call.txn, QMI_WLFW_CAP_REQ_V01,
+	    WLFW_CAP_REQ_MSG_V01_MAX_MSG_LEN, wlfw_cap_req_msg_v01_ei, &cap_req) >= 0);
+	s = next_data();
+	assert(s->h.dst_node == 5 && s->h.dst_port == 7);
+	qh = (struct qmi_header *)s->data;
+	reply5(client_port, QMI_RESPONSE, QMI_WLFW_CAP_REQ_V01, qh->txn_id,
+	    WLFW_CAP_RESP_MSG_V01_MAX_MSG_LEN, wlfw_cap_resp_msg_v01_ei, &cap);
+	/* as Linux: the decoded length */
+	assert(qmi_txn_wait(&call.txn, 1000) >= 0);
+	assert(cap_rx.chip_info_valid == 1);
+	free_sent(s);
+	printf("connected handle: requests without an address to 5:7: ok\n");
+
 	/* 7. node 5 says bye: its server goes */
 	ctrl5(QRTR_TYPE_BYE, 0, 0, 0, 0);
 	wait_counter(&del_servers, 1);

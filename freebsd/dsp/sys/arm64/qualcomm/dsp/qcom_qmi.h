@@ -146,11 +146,21 @@ struct qmi_handle {
 	struct qmi_ops			ops;
 	const struct qmi_msg_handler	*handlers;
 	size_t				recv_buf_size;
+	/*
+	 * Linux's socket of the handle, which a client connects to its
+	 * server (ath10k: kernel_connect(qmi->sock, ...)) to send requests
+	 * without an address; here the handle itself (qmi_connect)
+	 */
+	struct qmi_handle		*sock;
 };
 
 int	qmi_handle_init(struct qmi_handle *qmi, size_t recv_buf_size,
 	    const struct qmi_ops *ops, const struct qmi_msg_handler *handlers);
 void	qmi_handle_release(struct qmi_handle *qmi);
+
+/* requests and indications with no address (sq NULL) go to sq from now */
+int	qmi_connect(struct qmi_handle *qmi, const struct sockaddr_qrtr *sq,
+	    size_t len);
 
 int	qmi_add_lookup(struct qmi_handle *qmi, unsigned int service,
 	    unsigned int version, unsigned int instance);

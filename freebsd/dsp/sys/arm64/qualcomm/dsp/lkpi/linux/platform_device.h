@@ -10,6 +10,8 @@
 #ifndef	_LINUXKPI_LINUX_PLATFORM_DEVICE_H
 #define	_LINUXKPI_LINUX_PLATFORM_DEVICE_H
 
+#include <machine/resource.h>
+
 #include <linux/kernel.h>
 #include <linux/device.h>
 #include <linux/io.h>
@@ -17,7 +19,12 @@
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 
-struct lkpi_pf_driver;
+/* as LinuxKPI's linux/pci.h has them */
+#ifndef IORESOURCE_MEM
+#define	IORESOURCE_MEM	(1 << SYS_RES_MEMORY)
+#define	IORESOURCE_IO	(1 << SYS_RES_IOPORT)
+#define	IORESOURCE_IRQ	(1 << SYS_RES_IRQ)
+#endif
 
 struct platform_device {
 	struct device			dev;	/* first: the newbus softc */
@@ -26,7 +33,6 @@ struct platform_device {
 	bool				id_auto;
 	/* FreeBSD: the matching entry of the driver's of_match_table */
 	const struct of_device_id	*of_match;
-	struct list_head		maps;	/* devm mappings */
 };
 
 struct platform_driver {
@@ -39,7 +45,7 @@ struct platform_driver {
 		const struct dev_pm_ops		*pm;
 		bool				suppress_bind_attrs;
 	} driver;
-	struct lkpi_pf_driver	*bsddriver;
+	void			*lkpi_priv;	/* lkpi_platform.c's */
 };
 
 #define	to_platform_device(d)	container_of((d), struct platform_device, dev)
@@ -102,16 +108,22 @@ platform_device_unregister(struct platform_device *pdev)
 {
 }
 
-/* mappings that go with the device (LinuxKPI's devm_ioremap is a stub) */
-void	*lkpi_platform_devm_ioremap(struct device *, resource_size_t,
-	    resource_size_t, bool device);
-#undef	devm_ioremap
-#define	devm_ioremap(dev, offset, size)					\
-	lkpi_platform_devm_ioremap((dev), (offset), (size), true)
+/*
+ * Mappings that go with the device (LinuxKPI's devm_ioremap is a stub):
+ * device memory; memremap's write-through is device memory as on Linux's
+ * arm64 (ioremap_wt is ioremap), its write-back and write-combining are
+ * normal memory. devm_memremap returns an ERR_PTR on failure, as Linux's.
+ */
 #define	MEMREMAP_WB	(1 << 0)
 #define	MEMREMAP_WT	(1 << 1)
 #define	MEMREMAP_WC	(1 << 2)
+void	*lkpi_platform_devm_ioremap(struct device *, resource_size_t,
+	    resource_size_t, int flags);
+#undef	devm_ioremap
+#define	devm_ioremap(dev, offset, size)					\
+	lkpi_platform_devm_ioremap((dev), (offset), (size), 0)
 #define	devm_memremap(dev, offset, size, flags)				\
-	lkpi_platform_devm_ioremap((dev), (offset), (size), false)
+	({ void *__p = lkpi_platform_devm_ioremap((dev), (offset),	\
+	    (size), (flags)); __p != NULL ? __p : ERR_PTR(-ENOMEM); })
 
 #endif	/* _LINUXKPI_LINUX_PLATFORM_DEVICE_H */

@@ -1,0 +1,33 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 29 Oct 2026 20:00:00 +0100
+Subject: [PATCH] linuxkpi: struct device's of_node
+
+Linux drivers of device tree devices reach their node through
+dev->of_node (ath10k's SNOC attachment and the device tree parts of its
+core: the calibration variant, qcom,msa-fixed-perm). LinuxKPI's struct
+device has no such field; it gets one, filled by the attachment of
+Linux platform drivers in freebsd/dsp (lkpi_platform.c) and NULL for
+every other device, so that drivers that test it behave as on a machine
+without a device tree.
+---
+diff --git a/sys/compat/linuxkpi/common/include/linux/device.h b/sys/compat/linuxkpi/common/include/linux/device.h
+index 291381092..164a5c8fe 100644
+--- a/sys/compat/linuxkpi/common/include/linux/device.h
++++ b/sys/compat/linuxkpi/common/include/linux/device.h
+@@ -54,6 +54,7 @@
+ #include <sys/backlight.h>
+ 
+ struct device;
++struct device_node;
+ 
+ struct class {
+ 	const char	*name;
+@@ -125,6 +126,8 @@ struct device {
+ 	unsigned int	irq_end;
+ 	const struct attribute_group **groups;
+ 	struct fwnode_handle *fwnode;
++	/* the device tree node of a platform device (dev_of_node) */
++	struct device_node *of_node;
+ 	struct cdev	*backlight_dev;
+ 	struct backlight_device	*bd;
+ 
