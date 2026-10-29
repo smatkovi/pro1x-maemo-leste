@@ -526,6 +526,29 @@ look_applet() {
 	cp -a "$PR/." "$STAGE/"
 }
 
+# The FM radio (apps/pro1x-fm): on FreeBSD it talks to pro1x-fmd's socket
+# instead of V4L2 (freebsd/fm/README.md); the daemon itself comes with
+# the DSP tools (build.sh)
+fm_app() {
+	local b=$BUILD/pro1x-fm src=$REPO/apps/pro1x-fm
+	log "pro1x-fm"
+	mkdir -p "$b"
+	# shellcheck disable=SC2046
+	$CC $CPPFLAGS $CFLAGS $LDFLAGS -Wall -DLOCALEDIR='"/usr/local/share/locale"' \
+	    -o "$b/pro1x-fm" "$src/pro1x-fm.c" \
+	    $(pkg-config --cflags --libs hildon-1 gtk+-2.0 gthread-2.0) \
+	    > "$b/make.out" 2>&1 || { grep -m20 error "$b/make.out"; return 1; }
+	msgfmt -o "$b/de.mo" "$src/de.po"
+	PR=$H/pkgroot/pro1x-fm
+	rm -rf "$PR"
+	install -D -m 755 "$b/pro1x-fm" "$PR/usr/local/bin/pro1x-fm"
+	mkdir -p "$PR/usr/local/share/applications/hildon"
+	sed 's|^Exec=/usr/bin/|Exec=/usr/local/bin/|' "$src/pro1x-fm.desktop" \
+	    > "$PR/usr/local/share/applications/hildon/pro1x-fm.desktop"
+	install -D -m 644 "$b/de.mo" "$PR/usr/local/share/locale/de/LC_MESSAGES/pro1x-fm.mo"
+	cp -a "$PR/." "$STAGE/"
+}
+
 # This repository's small tools (tools/): the step counter and the
 # proximity sensor (libssc), the modem's GNSS for gpsd (QMI), the stand-by
 # screen, the N9's volume bar, with their files (extra/<tool>); the fourth
@@ -708,6 +731,9 @@ if [ $# -eq 0 ] || [[ " $* " == *" pro1x-hidpi "* ]]; then
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-look "* ]]; then
 	look_applet || failed+=(pro1x-look)
+fi
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-fm "* ]]; then
+	fm_app || failed+=(pro1x-fm)
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-steps "* ]]; then
 	dsp_tool pro1x-steps sbin "libssc gio-unix-2.0" || failed+=(pro1x-steps)

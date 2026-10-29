@@ -31,13 +31,22 @@ $(OUT)/test_geni: test_geni.c ../sys/dev/uart/uart_qcom_geni_calc.h | $(OUT)
 $(OUT)/fakechip: fakechip.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ fakechip.c
 
+# the app's FreeBSD backend, built on the PC (GTK 2, a stub of libhildon)
+$(OUT)/test_app: test_app.c ../../../apps/pro1x-fm/pro1x-fm.c hildon-stub/hildon/hildon.h | $(OUT)
+	$(CC) -O1 -g -Wall -Wno-deprecated-declarations -U__linux__ \
+	    -DLOCALEDIR='"/usr/share/locale"' -DFMD_SOCKET='"$(OUT)/fm.sock"' \
+	    -Ihildon-stub $$(pkg-config --cflags gtk+-2.0 gthread-2.0) -o $@ \
+	    test_app.c $$(pkg-config --libs gtk+-2.0 gthread-2.0)
+
 firmware: | $(OUT)
 	for f in cmbtfw12.tlv cmnv12.bin; do \
 		if [ -f $(FW)/$$f ]; then cp $(FW)/$$f $(OUT)/fw/qca/; \
 		else zstd -dqf $(FW)/$$f.zst -o $(OUT)/fw/qca/$$f; fi; \
 	done
 
-test: $(OUT)/test_qcabt $(OUT)/test_geni $(OUT)/pro1x-fmd $(OUT)/pro1x-fmctl $(OUT)/fakechip firmware
+APP = $(shell pkg-config --exists gtk+-2.0 && echo $(OUT)/test_app)
+
+test: $(APP) $(OUT)/test_qcabt $(OUT)/test_geni $(OUT)/pro1x-fmd $(OUT)/pro1x-fmctl $(OUT)/fakechip firmware
 	$(OUT)/test_geni
 	$(OUT)/test_qcabt $(OUT)/fw/qca
 	OUT=$(OUT) sh ./run.sh

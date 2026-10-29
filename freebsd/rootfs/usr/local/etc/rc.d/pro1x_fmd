@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_fmd
+# REQUIRE: FILESYSTEMS
+# KEYWORD: nojail shutdown
+#
+# The FM radio (freebsd/fm/README.md, runs pro1x.test=fm): pro1x-fmd owns
+# the Bluetooth UART (qcom_geni_uart.ko, /dev/cuau0) and brings the
+# WCN3950 up when the app (or pro1x-fmctl) switches the receiver on; the
+# chip's rails go through qcom_dsp's RPM votes. Its firmware is
+# linux-firmware's qca/cmbtfw12.tlv and qca/cmnv12.bin, next to the kernel
+# on userdata (freebsd/firmware/qca) or in the image. Off until the
+# device tests pass.
+#
+#   pro1x_fmd_enable="YES"
+#   pro1x_fmd_flags="-s 115200"    the chip at its boot rate throughout
+
+. /etc/rc.subr
+
+name=pro1x_fmd
+desc="FM radio daemon (WCN3950)"
+rcvar=pro1x_fmd_enable
+load_rc_config $name
+: ${pro1x_fmd_enable:=NO}
+: ${pro1x_fmd_modules:="qcom_dsp qcom_geni_uart"}
+: ${pro1x_fmd_firmware:="/dev/pro1x-host/freebsd/firmware:/usr/local/share/pro1x/firmware"}
+
+command=/usr/local/sbin/pro1x-fmd
+command_args="-f ${pro1x_fmd_firmware}"
+start_precmd=pro1x_fmd_prestart
+
+pro1x_fmd_prestart()
+{
+	kldload -n ${pro1x_fmd_modules}
+}
+
+run_rc_command "$1"

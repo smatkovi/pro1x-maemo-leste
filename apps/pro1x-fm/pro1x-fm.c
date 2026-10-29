@@ -18,6 +18,11 @@
  *
  * All ioctls run in one thread of their own: tuning waits for the chip,
  * a seek takes seconds.
+ *
+ * On FreeBSD (freebsd/fm/README.md) there is no V4L2 and no radio driver:
+ * pro1x-fmd drives the chip from user space, and the same requests go to
+ * its socket instead (radio_open() and below). There is no FM sound there
+ * yet.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -25,7 +30,14 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#ifdef __linux__
 #include <linux/videodev2.h>
+#else
+#include <stdio.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#endif
 #include <libintl.h>
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
@@ -33,7 +45,17 @@
 
 #define DOMAIN "pro1x-fm"
 #define _(s) dgettext(DOMAIN, s)
+#ifdef __linux__
 #define DEVICE "/dev/radio0"
+#else
+#ifndef FMD_SOCKET
+#define FMD_SOCKET "/var/run/pro1x-fm.sock"
+#endif
+/* what pro1x-fmd answers for a seek that finds nothing */
+#ifndef ENODATA
+#define ENODATA ENOMSG
+#endif
+#endif
 #define BAND_LOW 87500		/* kHz */
 #define BAND_HIGH 108000
 #define STEP 100
@@ -65,6 +87,20 @@ static char *conf_path;
 static void push(enum req req, unsigned arg)
 {
 	g_async_queue_push(requests, GUINT_TO_POINTER((req + 1) | arg << 4));
+}
+
+#ifdef __linux__
+static int radio_open(void)
+{
+	fd = open(DEVICE, O_RDWR);
+	return fd < 0 ? errno : 0;
+}
+
+static void radio_close(void)
+{
+	if (fd >= 0)
+		close(fd);
+	fd = -1;
 }
 
 static int set_mute(int on)
@@ -116,6 +152,118 @@ static void status(struct result *r)
 	if (ioctl(fd, VIDIOC_G_EXT_CTRLS, &cs))
 		r->ps[0] = r->rt[0] = '\0';
 }
+#else
+/* one request to pro1x-fmd: 0 and what follows its "ok", or an errno */
+static int fmd(const char *req, char *ans, size_t size)
+{
+	static const struct { const char *name; int err; } errs[] = {
+		{ "ENODATA", ENODATA }, { "ETIMEDOUT", ETIMEDOUT },
+		{ "ENETDOWN", ENETDOWN }, { "ENODEV", ENODEV },
+		{ "ENOENT", ENOENT }, { "EBUSY", EBUSY }, { "EINVAL", EINVAL },
+	};
+	struct pollfd pfd = { .fd = fd, .events = POLLIN };
+	char buf[512];
+	size_t len = 0, i;
+	ssize_t n;
+	char *nl;
+
+	if (fd < 0)
+		return ENOENT;
+	n = snprintf(buf, sizeof(buf), "%s\n", req);
+	if (write(fd, buf, (size_t)n) != n)
+		return EIO;
+	/* a seek goes round the band in some 7 s, the daemon gives it 30 */
+	while ((nl = memchr(buf, '\n', len)) == NULL) {
+		if (len == sizeof(buf) - 1 || poll(&pfd, 1, 40000) <= 0)
+			return ETIMEDOUT;
+		n = read(fd, buf + len, sizeof(buf) - 1 - len);
+		if (n <= 0)
+			return EIO;
+		len += (size_t)n;
+	}
+	*nl = '\0';
+	if (strncmp(buf, "ok", 2) == 0) {
+		if (ans)
+			g_strlcpy(ans, buf[2] == ' ' ? buf + 3 : "", size);
+		return 0;
+	}
+	for (i = 0; i < G_N_ELEMENTS(errs); i++)
+		if (strncmp(buf + 6, errs[i].name, strlen(errs[i].name)) == 0)
+			return errs[i].err;
+	return EIO;
+}
+
+static int radio_open(void)
+{
+	struct sockaddr_un sun = { .sun_family = AF_UNIX };
+
+	g_strlcpy(sun.sun_path, FMD_SOCKET, sizeof(sun.sun_path));
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0)
+		return errno;
+	if (connect(fd, (struct sockaddr *)&sun, sizeof(sun))) {
+		close(fd);
+		fd = -1;
+		return ENOENT;
+	}
+	return fmd("on", NULL, 0);
+}
+
+static void radio_close(void)
+{
+	if (fd < 0)
+		return;
+	fmd("off", NULL, 0);
+	close(fd);
+	fd = -1;
+}
+
+static int set_mute(int on)
+{
+	return fmd(on ? "mute 1" : "mute 0", NULL, 0);
+}
+
+static int set_freq(unsigned khz)
+{
+	char req[32];
+
+	g_snprintf(req, sizeof(req), "tune %u", khz);
+	return fmd(req, NULL, 0);
+}
+
+static int seek(int up)
+{
+	return fmd(up ? "seek up" : "seek down", NULL, 0);
+}
+
+/* "on=1 freq=99900 rssi=-85 signal=87 stereo=1 rds=1 ..." */
+static unsigned field(const char *s, const char *key)
+{
+	const char *p = strstr(s, key);
+
+	return p ? strtoul(p + strlen(key), NULL, 10) : 0;
+}
+
+static void status(struct result *r)
+{
+	char ans[256];
+	int err;
+
+	if ((err = fmd("status", ans, sizeof(ans)))) {
+		if (!r->err)
+			r->err = err;
+		return;
+	}
+	r->freq = field(ans, " freq=");
+	r->signal = field(ans, " signal=");
+	r->stereo = field(ans, " stereo=") != 0;
+	r->rds = field(ans, " rds=") != 0;
+	if (fmd("ps", r->ps, sizeof(r->ps)))
+		r->ps[0] = '\0';
+	if (fmd("rt", r->rt, sizeof(r->rt)))
+		r->rt[0] = '\0';
+}
+#endif
 
 static gboolean result_cb(gpointer data);
 
@@ -129,10 +277,8 @@ static gpointer radio_thread(gpointer data)
 		r->req = (v & 0xf) - 1;
 		switch (r->req) {
 		case OPEN:
-			fd = open(DEVICE, O_RDWR);
-			if (fd < 0)
-				r->err = errno;
-			else
+			r->err = radio_open();
+			if (!r->err)
 				r->err = set_freq(v >> 4);
 			break;
 		case TUNE:
@@ -149,8 +295,7 @@ static gpointer radio_thread(gpointer data)
 		case POLL:
 			break;
 		case QUIT:
-			if (fd >= 0)
-				close(fd);
+			radio_close();
 			g_free(r);
 			return NULL;
 		}
@@ -162,6 +307,7 @@ static gpointer radio_thread(gpointer data)
 
 /* ---- sound: the SLIMbus capture played back ---- */
 
+#ifdef __linux__
 /*
  * The FM receiver's stereo reaches the DSP on SLIMBUS_8_TX (the kernel's
  * "FM Capture" link, patches 0018-0021). Routed to the MultiMedia3 front
@@ -259,6 +405,15 @@ static void sound(gboolean on)
 	fm_loopback_module = run("pactl load-module module-loopback source=fm_radio "
 				 "latency_msec=100");
 }
+#else
+/* FreeBSD drives neither SLIMbus nor the ADSP's audio yet: no sound */
+static void sound(gboolean on)
+{
+	if (on)
+		gtk_label_set_text(GTK_LABEL(status_label),
+				   _("No FM sound on FreeBSD yet: the receiver tunes, the SLIMbus audio path is missing."));
+}
+#endif
 
 /* ---- settings: the last frequency, saved stations ---- */
 
@@ -285,12 +440,20 @@ static void show_freq(unsigned khz)
 static const char *strerr(int err)
 {
 	switch (err) {
+#ifdef __linux__
 	case ENOENT:
 	case ENODEV:
 		return _("No FM receiver (kernel without radio-qca-fm?)");
 	case ENETDOWN:
 	case ERFKILL:
 		return _("Bluetooth is blocked or failed: the receiver needs it powered.");
+#else
+	case ENOENT:
+		return _("The FM daemon pro1x-fmd is not running.");
+	case ENODEV:
+	case ENETDOWN:
+		return _("The Bluetooth chip did not come up (see pro1x-fmd's log).");
+#endif
 	case ETIMEDOUT:
 		return _("The receiver does not answer.");
 	case ENODATA:

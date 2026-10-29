@@ -82,6 +82,13 @@ sl=$(echo "$info" | sed -n 's/.*ibs_sleeps=\([0-9]*\)\/\([0-9]*\).*/\1 \2/p')
 set -- $sl
 [ "${1:-0}" -ge 1 ] && [ "${2:-0}" -ge 1 ] ||
     { echo "FAIL: no in-band sleep both ways ($sl)"; fail=1; }
+if [ -x "$OUT/test_app" ]; then
+	echo "--- the app's FreeBSD backend"
+	"$OUT/test_app" > "$OUT/test_app.log" 2>&1 || fail=1
+	sed 's/^/  /' "$OUT/test_app.log"
+	# it switched the receiver off on its way out
+	ctl on > /dev/null
+fi
 expect "ok" off
 expect "ok on=0 *" status
 expect "error ENETDOWN *" tune 99.9
