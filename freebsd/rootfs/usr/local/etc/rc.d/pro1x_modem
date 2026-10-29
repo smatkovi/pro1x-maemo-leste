@@ -1,0 +1,53 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_modem
+# REQUIRE: FILESYSTEMS tqftpserv pd_mapper rmtfs
+# KEYWORD: nojail shutdown
+#
+# The modem's DSP (freebsd/dsp/README.md, run dsp6): started by pro1x-dsp
+# once its servers run (tqftpserv: its files, among them the Wi-Fi's
+# firmware wlanmdsp.mbn; pd-mapper; rmtfs: its file systems), stopped on
+# the way down. The Wi-Fi (pro1x_wifi) needs it: its firmware runs there.
+#
+#   pro1x_modem_enable="YES"   (with tqftpserv_enable, pd_mapper_enable,
+#                               rmtfs_enable)
+
+. /etc/rc.subr
+
+name=pro1x_modem
+desc="The modem's DSP"
+rcvar=pro1x_modem_enable
+load_rc_config $name
+: ${pro1x_modem_enable:=NO}
+
+start_cmd=pro1x_modem_start
+stop_cmd=pro1x_modem_stop
+status_cmd=pro1x_modem_status
+extra_commands=status
+
+pro1x_modem_running()
+{
+	/usr/local/sbin/pro1x-dsp status modem 2> /dev/null | grep -q ": running"
+}
+
+pro1x_modem_start()
+{
+	kldload -n qcom_dsp qrtr || return 1
+	if pro1x_modem_running; then
+		echo "modem already running"
+		return 0
+	fi
+	/usr/local/sbin/pro1x-dsp start modem
+}
+
+pro1x_modem_stop()
+{
+	pro1x_modem_running && /usr/local/sbin/pro1x-dsp stop modem
+}
+
+pro1x_modem_status()
+{
+	/usr/local/sbin/pro1x-dsp status modem
+}
+
+run_rc_command "$1"

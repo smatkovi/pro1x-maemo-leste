@@ -1,0 +1,83 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_wifi
+# REQUIRE: pro1x_modem devd
+# KEYWORD: nojail shutdown
+#
+# The Wi-Fi (freebsd/dsp/README.md, run dsp7): ath10k on the SoC's WCN3990
+# core (ath10k_snoc, with LinuxKPI, net80211 and qcom_dsp's RPM votes for
+# its rails). The modem serves its firmware's control service (WLFW, QMI
+# 69); once ath10k has talked the firmware up, net80211 has the device
+# ath10k0, and the interfaces of rc.conf's wlans_ath10k0 are made and
+# configured as devd(8) does it for a card that attached
+# (/etc/pccard_ether ... startchildren: ifconfig_wlan0, wpa_supplicant,
+# dhclient). The device's newbus attach comes before that, so devd's own
+# attach event is too early to create wlan0.
+#
+#   pro1x_wifi_enable="YES"
+#   pro1x_wifi_wait=60         seconds to wait for ath10k0
+
+. /etc/rc.subr
+
+name=pro1x_wifi
+desc="Wi-Fi (ath10k on the WCN3990 core)"
+rcvar=pro1x_wifi_enable
+load_rc_config $name
+: ${pro1x_wifi_enable:=NO}
+: ${pro1x_wifi_wait:=60}
+: ${pro1x_wifi_modules:="firmware usb linuxkpi wlan linuxkpi_wlan athk_common qcom_dsp qrtr ath10k_snoc"}
+
+start_cmd=pro1x_wifi_start
+stop_cmd=pro1x_wifi_stop
+status_cmd=pro1x_wifi_status
+extra_commands=status
+
+pro1x_wifi_dev()
+{
+	sysctl -n net.wlan.devices 2> /dev/null | tr ' ' '\n' | grep -m 1 '^ath10k'
+}
+
+pro1x_wifi_start()
+{
+	local i dev
+
+	# in order: the root image's /boot/modules has no linker.hints
+	kldload -n ${pro1x_wifi_modules} || return 1
+	i=0
+	while [ -z "$(pro1x_wifi_dev)" ] && [ $i -lt ${pro1x_wifi_wait} ]; do
+		sleep 1
+		i=$((i + 1))
+	done
+	dev=$(pro1x_wifi_dev)
+	if [ -z "$dev" ]; then
+		warn "no ath10k device after ${pro1x_wifi_wait} s"
+		return 1
+	fi
+	echo "Wi-Fi: $dev after $i s"
+	/etc/pccard_ether "$dev" startchildren
+}
+
+pro1x_wifi_stop()
+{
+	local dev
+
+	dev=$(pro1x_wifi_dev)
+	[ -n "$dev" ] && /etc/pccard_ether "$dev" stopchildren
+	kldunload -n ath10k_snoc 2> /dev/null
+	return 0
+}
+
+pro1x_wifi_status()
+{
+	local dev
+
+	dev=$(pro1x_wifi_dev)
+	if [ -z "$dev" ]; then
+		echo "no Wi-Fi device"
+		return 1
+	fi
+	echo "Wi-Fi device $dev, interfaces: $(sysctl -n net.wlan.devices)"
+	ifconfig -g wlan 2> /dev/null
+}
+
+run_rc_command "$1"

@@ -5,14 +5,25 @@
 # ADSP started and stopped again), sensors (the ADSP left running: its
 # GLINK channels, QRTR services, FastRPC, hexagonrpcd, the sensors through
 # libssc and the step counter); modem (on the substrate, without the ADSP:
-# rmtfs, tqftpserv, pd-mapper, the modem and its QMI services).
+# rmtfs, tqftpserv, pd-mapper, the modem and its QMI services); rpm (the
+# RPM's edge, the Wi-Fi's four rails voted on and off); wifi (the modem,
+# then ath10k: WLFW, the firmware ready, ath10k0, wlan0 scanning); wpa
+# (wifi, then joining the network of wpa_supplicant.conf next to the kernel
+# on userdata, DHCP, a ping to the gateway).
 # Everything goes to the console, which the RAM console keeps for Linux
-# after the next boot.
+# after the next boot. Modules in freebsd/modules next to the kernel on
+# userdata (a build newer than the root image's) come first.
 step=${1:-$(kenv -q pro1x.dsp)}
 step=${step:-load}
 echo "=== DSP test up to: $step"
 fw=/usr/local/share/pro1x/firmware/qcom/sm6115/Fxtec/QX1050
 ls -la $fw 2>&1 | head -20
+host=/dev/pro1x-host/freebsd
+if [ -d $host/modules ]; then
+	kldconfig -i $host/modules
+	echo "modules from $host/modules first:"
+	ls $host/modules
+fi
 
 echo "--- load qcom_dsp, qrtr"
 kldload qcom_dsp && echo "qcom_dsp loaded"
@@ -32,7 +43,8 @@ wait_service() {
 	done
 }
 
-if [ "$step" = modem ]; then
+# the modem and its servers (dsp6)
+modem_up() {
 	echo "--- modem"
 	sysctl hw.qcom_rmtfs
 	dmesg | grep -E "qcom_(rmtfs|scm)" | tail -5
@@ -52,8 +64,103 @@ if [ "$step" = modem ]; then
 		echo "- $l"
 		tail -15 /var/log/$l.log
 	done
+}
+
+# The Wi-Fi's rails (the wifi node's vdd-*-supply in the device tree:
+# PM6125 L8, L16, L17, L23), voted at the RPM: on, as ath10k's power-up
+# does it, then off
+rails="l8 l16 l17 l23"
+if [ "$step" = rpm ]; then
+	echo "--- RPM"
+	sysctl hw.qcom_rpm.edge
+	for r in $rails; do
+		sysctl hw.qcom_rpm.regulator="$r 1"
+	done
+	sysctl hw.qcom_rpm
+	sleep 2
+	for r in $rails; do
+		sysctl hw.qcom_rpm.regulator="$r 0"
+	done
+	sysctl hw.qcom_rpm
+	dmesg | grep -E "qcom_rpm" | tail -20
+	exit 0
+fi
+
+if [ "$step" = modem ]; then
+	modem_up
 	node=$(sysctl -n net.qrtr.servers | awk '$1 == 2 { print $3; exit }')
 	[ -n "$node" ] && qmicli -d qrtr://"$node" --dms-get-revision 2>&1
+	exit 0
+fi
+
+if [ "$step" = wifi ] || [ "$step" = wpa ]; then
+	modem_up
+	echo "--- Wi-Fi"
+	ls -la /boot/firmware/ath10k/WCN3990/hw1.0/ 2>&1
+	# the WLAN firmware's control service (WLFW, QMI 69) on the modem
+	wait_service 69
+	sysctl net.qrtr.servers
+	sysctl hw.lkpi_pf 2>/dev/null
+	# ath10k's bring-up on the console (debug_mask: BOOT, SNOC, QMI),
+	# unless the command line sets compat.linuxkpi.debug_mask
+	[ -n "$(kenv -q compat.linuxkpi.debug_mask)" ] ||
+	    kenv compat.linuxkpi.debug_mask=0x300020 > /dev/null
+	# in order: the root image's /boot/modules has no linker.hints
+	kldload -n firmware usb linuxkpi wlan linuxkpi_wlan athk_common
+	kldload ath10k_snoc
+	echo "kldload ath10k_snoc: $?"
+	kldstat
+	i=0
+	while [ $i -lt 60 ] && ! sysctl -n net.wlan.devices | grep -q ath10k; do
+		sleep 1
+		i=$((i + 1))
+	done
+	echo "net.wlan.devices after $i s: $(sysctl -n net.wlan.devices)"
+	dmesg | grep -E "ath10k|lkpi_pf|qcom_rpm|qcom_smmu|wlan|linuxkpi" | tail -60
+	sysctl hw.qcom_rpm dev.ath10k 2>&1
+	vmstat -i | grep -E "ath10k|gic" | head -20
+	if sysctl -n net.wlan.devices | grep -q ath10k0; then
+		ifconfig wlan0 create wlandev ath10k0
+		ifconfig wlan0 up
+		sleep 2
+		for n in 1 2; do
+			echo "- scan $n"
+			ifconfig wlan0 scan 2>&1 | head -30
+			sleep 3
+		done
+		ifconfig wlan0 list scan 2>&1 | head -30
+		ifconfig wlan0
+	fi
+	if [ "$step" = wpa ]; then
+		echo "--- WPA"
+		if [ ! -f $host/wpa_supplicant.conf ]; then
+			echo "no $host/wpa_supplicant.conf: nothing to join"
+			exit 0
+		fi
+		ifconfig wlan0 down
+		/etc/rc.d/wpa_supplicant start wlan0
+		i=0
+		while [ $i -lt 30 ] &&
+		    ! ifconfig wlan0 | grep -q "status: associated"; do
+			sleep 1
+			i=$((i + 1))
+		done
+		echo "associated after $i s:"
+		ifconfig wlan0
+		wpa_cli -i wlan0 status 2>&1 | grep -vE "passphrase|psk"
+		dhclient -b wlan0 > /dev/null 2>&1
+		i=0
+		while [ $i -lt 30 ] && ! ifconfig wlan0 | grep -q "inet "; do
+			sleep 1
+			i=$((i + 1))
+		done
+		ifconfig wlan0 | grep -E "inet|status|ssid"
+		netstat -rn -f inet
+		gw=$(route -n get default 2>/dev/null | awk '/gateway:/ { print $2 }')
+		[ -n "$gw" ] && ping -c 3 "$gw"
+		cat /var/run/resolv.conf 2>&1
+		dmesg | grep -E "ath10k|wlan0" | tail -20
+	fi
 	exit 0
 fi
 
