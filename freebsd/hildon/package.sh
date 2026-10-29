@@ -23,8 +23,17 @@ log "metadata"
 python3 -I "$REPO/freebsd/hildon/pkgmeta.py" "$H" "$WORK/pkgs/site/packagesite.yaml" "$META"
 
 log "packages (pkg create in the FreeBSD machine)"
-tar -C "$META" -czf - . | $VM 'rm -rf /root/pkgbuild /root/pkgout &&
-	mkdir -p /root/pkgbuild /root/pkgout && tar -xzf - -C /root/pkgbuild'
+# (all of it or again: the TCG VM has once decompressed wrongly for a
+# while, and a part missing there is a package missing from the repository)
+want=$(find "$META" -mindepth 1 -maxdepth 1 -type d | wc -l)
+for try in 1 2 3; do
+	tar -C "$META" -czf - . | $VM 'rm -rf /root/pkgbuild /root/pkgout &&
+		mkdir -p /root/pkgbuild /root/pkgout && tar -xzf - -C /root/pkgbuild' || true
+	got=$($VM 'ls /root/pkgbuild/*/+MANIFEST | wc -l' | tr -d ' ')
+	[ "$got" = "$want" ] && break
+	log "only $got of $want parts arrived, again ($try)"
+	[ "$try" -lt 3 ] || { echo "the parts did not arrive in the FreeBSD machine"; exit 1; }
+done
 $VM 'cd /root/pkgbuild && fail=0 && for d in */; do
 		d=${d%/}
 		pkg create -M "$d/+MANIFEST" -p "$d/plist" -r "$d/root" \
