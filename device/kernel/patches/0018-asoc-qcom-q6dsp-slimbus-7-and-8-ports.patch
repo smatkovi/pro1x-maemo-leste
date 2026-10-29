@@ -41,7 +41,7 @@ index ee66628855..891a44a390 100644
  int qcom_snd_parse_of(struct snd_soc_card *card);
  int qcom_snd_wcd_jack_setup(struct snd_soc_pcm_runtime *rtd,
 diff --git a/sound/soc/qcom/qdsp6/q6afe-dai.c b/sound/soc/qcom/qdsp6/q6afe-dai.c
-index a0d21034a6..d25eb9503a 100644
+index a0d21034a6..d33b2869af 100644
 --- a/sound/soc/qcom/qdsp6/q6afe-dai.c
 +++ b/sound/soc/qcom/qdsp6/q6afe-dai.c
 @@ -406,6 +406,7 @@ static int q6afe_dai_prepare(struct snd_pcm_substream *substream,
@@ -58,7 +58,7 @@ index a0d21034a6..d25eb9503a 100644
  
 -	if (dai->id & 0x1) {
 +	/* not by the ID's parity: SLIMBUS_7 and 8 come after the others */
-+	if (snd_soc_dai_stream_valid(dai, SNDRV_PCM_STREAM_CAPTURE)) {
++	if (dai->driver->capture.channels_min) {
  		/* TX */
  		if (!tx_slot) {
  			pr_err("%s: tx slot not found\n", __func__);

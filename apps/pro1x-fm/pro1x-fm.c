@@ -8,9 +8,10 @@
  * up for it if it is off). The headphone cable is the antenna.
  *
  * The sound does not come through /dev/radio0: the chip sends it over
- * SLIMbus to the DSP, which gives a capture source. When PulseAudio has a
- * source with "fm" in its name, a loopback plays it while the radio is on
- * and not muted; without one the radio tunes and shows the station, silent.
+ * SLIMbus to the DSP, which records it (see sound() below); a PulseAudio
+ * loopback plays it while the radio is on and not muted. Without that
+ * path (a kernel before 7.1.0-pro1x.6) the radio tunes and shows the
+ * station, silent.
  *
  *   Left/Right  0.1 MHz down/up      Up/Down  seek up/down
  *   m           mute
@@ -53,7 +54,6 @@ static GAsyncQueue *requests;
 static int fd = -1;
 static unsigned freq = BAND_LOW;
 static gboolean muted, busy, opened;
-static int loopback = -1;	/* PulseAudio module */
 static GtkWidget *window, *freq_label, *ps_label, *rt_label, *signal_bar,
 		 *stereo_label, *status_label, *mute_button;
 static GKeyFile *conf;
@@ -160,54 +160,104 @@ static gpointer radio_thread(gpointer data)
 	}
 }
 
-/* ---- sound: the SLIMbus capture source played back ---- */
+/* ---- sound: the SLIMbus capture played back ---- */
 
-static char *fm_source(void)
+/*
+ * The FM receiver's stereo reaches the DSP on SLIMBUS_8_TX (the kernel's
+ * "FM Capture" link, patches 0018-0021). Routed to the MultiMedia3 front
+ * end it is an ALSA capture device, which PulseAudio's UCM profile leaves
+ * alone; here it becomes the source "fm_radio", and a loopback plays it on
+ * the default sink.
+ */
+#define FM_ROUTE "MultiMedia3 Mixer SLIMBUS_8_TX"
+#define FM_FRONT_END "MultiMedia3"
+
+static int fm_source_module = -1, fm_loopback_module = -1;
+
+/* runs a command; its first line of output as a number, or -1 */
+static int run(const char *cmd)
 {
-	char *out = NULL, **lines, *name = NULL;
-	int i;
+	char *out = NULL;
+	int n = -1, status;
 
-	if (!g_spawn_command_line_sync("pactl list short sources", &out, NULL, NULL, NULL))
-		return NULL;
-	lines = g_strsplit(out, "\n", -1);
-	for (i = 0; lines[i] && !name; i++) {
-		char **f = g_strsplit(lines[i], "\t", 3);
-		char *low = f[0] && f[1] ? g_ascii_strdown(f[1], -1) : NULL;
-
-		if (low && strstr(low, "fm") && !g_str_has_suffix(low, ".monitor"))
-			name = g_strdup(f[1]);
-		g_free(low);
-		g_strfreev(f);
-	}
-	g_strfreev(lines);
+	if (g_spawn_command_line_sync(cmd, &out, NULL, &status, NULL) &&
+	    g_spawn_check_wait_status(status, NULL))
+		n = out && g_ascii_isdigit(*out) ? atoi(out) : 0;
 	g_free(out);
-	return name;
+	return n;
+}
+
+static void unload(int *module)
+{
+	char *cmd;
+
+	if (*module < 0)
+		return;
+	cmd = g_strdup_printf("pactl unload-module %d", *module);
+	run(cmd);
+	g_free(cmd);
+	*module = -1;
+}
+
+static void route(gboolean on)
+{
+	char *cmd = g_strdup_printf("amixer -q -c Pro1X cset name='" FM_ROUTE "' %d", on);
+	int ok = run(cmd) >= 0;
+
+	g_free(cmd);
+	if (!ok && on)
+		gtk_label_set_text(GTK_LABEL(status_label),
+				   _("No FM sound yet: the receiver's SLIMbus path is missing."));
+}
+
+/* the PCM device of the front end, from /proc/asound/pcm ("00-02: MultiMedia3 ...") */
+static int front_end_pcm(void)
+{
+	char *text = NULL, **lines;
+	int i, dev = -1;
+
+	if (!g_file_get_contents("/proc/asound/pcm", &text, NULL, NULL))
+		return -1;
+	lines = g_strsplit(text, "\n", -1);
+	for (i = 0; lines[i] && dev < 0; i++)
+		if (strstr(lines[i], ": " FM_FRONT_END " ") && strlen(lines[i]) > 5)
+			dev = atoi(lines[i] + 3);
+	g_strfreev(lines);
+	g_free(text);
+	return dev;
 }
 
 static void sound(gboolean on)
 {
-	char *cmd, *out = NULL, *src;
+	char *cmd;
+	int dev;
 
-	if (!on && loopback >= 0) {
-		cmd = g_strdup_printf("pactl unload-module %d", loopback);
-		g_spawn_command_line_sync(cmd, NULL, NULL, NULL, NULL);
-		g_free(cmd);
-		loopback = -1;
-	}
-	if (!on || loopback >= 0)
-		return;
-	src = fm_source();
-	if (!src) {
-		gtk_label_set_text(GTK_LABEL(status_label),
-				   _("No FM sound yet: the receiver's SLIMbus path is missing."));
+	if (!on) {
+		unload(&fm_loopback_module);
+		unload(&fm_source_module);
+		route(FALSE);
 		return;
 	}
-	cmd = g_strdup_printf("pactl load-module module-loopback source=%s latency_msec=100", src);
-	if (g_spawn_command_line_sync(cmd, &out, NULL, NULL, NULL) && out && *out)
-		loopback = atoi(out);
-	g_free(out);
+	if (fm_loopback_module >= 0)
+		return;
+
+	route(TRUE);
+	dev = front_end_pcm();
+	if (dev < 0)
+		return;
+	cmd = g_strdup_printf("pactl load-module module-alsa-source device=hw:Pro1X,%d "
+			      "source_name=fm_radio rate=48000 channels=2 format=s16le "
+			      "tsched=0", dev);
+	fm_source_module = run(cmd);
 	g_free(cmd);
-	g_free(src);
+	if (fm_source_module < 0) {
+		gtk_label_set_text(GTK_LABEL(status_label),
+				   _("The FM sound does not start (see the kernel log)."));
+		route(FALSE);
+		return;
+	}
+	fm_loopback_module = run("pactl load-module module-loopback source=fm_radio "
+				 "latency_msec=100");
 }
 
 /* ---- settings: the last frequency, saved stations ---- */

@@ -69,3 +69,6 @@ msgstr "Noch kein UKW-Ton: der SLIMbus-Weg des Empfängers fehlt."
 
 msgid "Switching the receiver on (the headphone cable is the antenna)..."
 msgstr "Empfänger wird eingeschaltet (das Kopfhörerkabel ist die Antenne) …"
+
+msgid "The FM sound does not start (see the kernel log)."
+msgstr "Der UKW-Ton startet nicht (siehe Kernel-Protokoll)."
