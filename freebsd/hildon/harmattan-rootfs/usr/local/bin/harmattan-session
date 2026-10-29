@@ -1,0 +1,64 @@
+#!/bin/sh
+# The Nokia N9's own user interface (harmattan-qt5) as an X11 session on
+# FreeBSD, what arch/harmattan/harmattan-session is on Arch:
+#   startx harmattan     (~/.xinitrc on the Pro1X), or
+#   startx /usr/local/bin/harmattan-session
+# The compositing window manager (mcompositor, with the swipe gestures),
+# the system UI (status bar, notifications), the feedback daemon, the
+# input method (the N9's keyboard) and the home screen. The session ends
+# with the home screen and takes the others along: X may stay for the
+# next desktop (pro1x-desktop).
+#
+# The N9 drew at 854x480; the Pro1X's 2160x1080 panel is scaled for the
+# applications by QT_SCALE_FACTOR (MEEGO_SCALE, default 2.25), while
+# mcompositor composites at the panel's own size.
+SCALE=${MEEGO_SCALE:-2.25}
+# FreeBSD's login class sets C.UTF-8, which has no texts: English then
+case ${LANG:-C} in C|C.*|POSIX) LANG=en_GB.UTF-8 ;; esac
+export LANG
+# the Pro1X theme: blanco dark everywhere (harmattan-qt5 meegotouchtheme/pro1x)
+export M_THEME_NAME=${M_THEME_NAME:-pro1x}
+export QT_QPA_PLATFORMTHEME=none
+export XDG_CURRENT_DESKTOP=MeeGo
+
+# The bus ends with the X server (or at the end of this session, below);
+# --exit-with-session would end it when stdin closes
+eval "$(dbus-launch --sh-syntax --exit-with-x11)"
+
+# the N9's theme for libmeegotouch, once
+gconftool-2 -g /meegotouch/theme/name 2> /dev/null | grep -q . ||
+	gconftool-2 -s -t string /meegotouch/theme/name "$M_THEME_NAME"
+xset s off
+# Sounds play through PulseAudio, which starts for the session when there
+# is a sound device
+if command -v pulseaudio > /dev/null; then
+	pulseaudio --start --exit-idle-time=-1 2> /dev/null || true
+fi
+
+meegofeedbackd &
+feedback=$!
+# the event sounds, where ngfd is there (not built for FreeBSD yet)
+events=
+if command -v ngfd > /dev/null; then
+	ngfd &
+	events=$!
+fi
+mcompositor &
+compositor=$!
+sleep 2
+# the input method server with the N9's keyboard, before the applications:
+# Qt 5's input context connects to its socket once, when it starts
+# (a socket left by the session before would let the wait pass at once)
+rm -f /tmp/meego-im-uiserver/imserver_dbus
+QT_SCALE_FACTOR=$SCALE meego-im-uiserver &
+im=$!
+for i in 1 2 3 4 5 6 7 8 9 10; do
+	[ -S /tmp/meego-im-uiserver/imserver_dbus ] && break
+	sleep 0.5
+done
+export QT_IM_MODULE=maliit
+QT_SCALE_FACTOR=$SCALE sysuid &
+sysui=$!
+QT_SCALE_FACTOR=$SCALE meegotouchhome
+kill $sysui $im $compositor $feedback $events 2> /dev/null
+kill "$DBUS_SESSION_BUS_PID" 2> /dev/null

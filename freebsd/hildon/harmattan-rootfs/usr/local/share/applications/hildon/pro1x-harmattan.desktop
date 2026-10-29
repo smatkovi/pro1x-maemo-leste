@@ -1,0 +1,11 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Type=Application
+Name=MeeGo
+Comment=Switch to the Nokia N9's user interface
+Exec=/usr/local/bin/pro1x-desktop harmattan
+Icon=preferences-desktop
+Terminal=false
+Categories=System
+X-Osso-Type=application/x-executable

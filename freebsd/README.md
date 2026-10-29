@@ -139,11 +139,13 @@ up by a double tap or the power key; the keyboard light on with key
 presses and off 30 s after the last one, as on the N950
 (`tools/pro1x-standby`, sleeping on X's idle time alarms until something
 happens; with `pro1x.standby=off` black after 3 minutes, since scfb has
-no DPMS), `startx hildon` or
-`startx xfce`; without an argument `pro1x.desktop=hildon` in
-`freebsd/cmdline` picks Hildon. "Hildon" in Xfce's menu and "Xfce" in
-Hildon's, or Xfce in Hildon's Settings, Desktop (`apps/pro1x-look`), switch
-without leaving X (`pro1x-desktop hildon|xfce`):
+no DPMS), `startx hildon`, `startx harmattan` (the Nokia N9's own user
+interface, `harmattan-session`) or
+`startx xfce`; without an argument `pro1x.desktop=hildon` (or `harmattan`) in
+`freebsd/cmdline` picks that one. "Hildon" in Xfce's menu and among the
+N9's applications, "Xfce" in Hildon's and the N9's, "MeeGo" in Xfce's and
+Hildon's, or N9 and Xfce in Hildon's Settings, Desktop (`apps/pro1x-look`),
+switch without leaving X (`pro1x-desktop hildon|harmattan|xfce`):
 `~/.xinitrc` runs the desktops one after the other on the same server.
 A short press on the power key goes to the stand-by screen (or blanks
 the screen) or brings the desktop back, held

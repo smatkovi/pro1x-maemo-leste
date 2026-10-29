@@ -695,7 +695,11 @@ apps = sorted(x['name'] for x in meta.values()
 apps = sorted(set(apps) | {x['name'] for x in meta.values() if x['name'] in (
     'hildon-input-method-plugins', 'headphoned', 'wifi-assistant', 'hildon-status-menu',
     'osso-systemui-alarm', 'maemo-input-sounds', 'maemo-ringtones-mr0', 'osso-sounds-rtc')})
-for name, comment, desc, root, deps in (
+# the N9's own user interface (harmattan.sh), where it is built: all of
+# it but the headers
+harmattan = sorted(x['name'] for x in meta.values()
+                   if x['name'].startswith('harmattan-') and x['name'] != 'harmattan-mce-dev')
+sessions = [
         ('hildon-session', "Maemo Leste's Hildon session for FreeBSD",
          'hildon-session (startx hildon-session, or "startx hildon" on the Pro1X) '
          'starts hildon-desktop with the status menu and home, as Leste\'s X session '
@@ -705,7 +709,17 @@ for name, comment, desc, root, deps in (
         ('hildon-meta', "Maemo Leste's Hildon desktop with all its apps on FreeBSD",
          'Installs the Hildon session and every app and plugin built for FreeBSD '
          'from Maemo Leste (and its extras), see freebsd/hildon/README.md.',
-         None, ['hildon-session'] + apps)):
+         None, ['hildon-session'] + apps)]
+if harmattan:
+    sessions.append(
+        ('harmattan-session', "The Nokia N9's user interface as a session for FreeBSD",
+         'harmattan-session (startx harmattan-session, or "startx harmattan" on the Pro1X) '
+         "starts the N9's compositor, system UI, keyboard and home screen "
+         '(github.com/smatkovi/harmattan-qt5), as on Arch; MeeGo in Hildon\'s and '
+         "Xfce's menus switches to it, Hildon among its applications back.",
+         os.path.join(REPO, 'freebsd/hildon/harmattan-rootfs'),
+         harmattan + ['gconf2', 'dbus', 'xset']))
+for name, comment, desc, root, deps in sessions:
     d = os.path.join(OUT, name)
     r = os.path.join(d, 'root')
     os.makedirs(r)
@@ -724,6 +738,10 @@ for name, comment, desc, root, deps in (
         'deps': {n: dep_on(n) for n in deps},
         'annotations': {'source': repo_www, 'revision': rev},
     }
+    if name == 'harmattan-session':
+        manifest['messages'] = [{'message':
+            "The N9's user interface needs the system D-Bus: sysrc dbus_enable=YES &&\n"
+            'service dbus start. Then: startx /usr/local/bin/harmattan-session'}]
     if name == 'hildon-session':
         manifest['messages'] = [{'message':
             'Hildon needs the system D-Bus: sysrc dbus_enable=YES && service dbus start.\n'

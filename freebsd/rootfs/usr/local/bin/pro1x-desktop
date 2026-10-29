@@ -1,26 +1,33 @@
 #!/bin/sh
-# pro1x-desktop: switch between Xfce and Hildon without leaving X.
+# pro1x-desktop: switch between Xfce, Hildon and the N9's user interface
+# (MeeGo, harmattan-session) without leaving X.
 #
-#   pro1x-desktop            the desktop running now
-#   pro1x-desktop hildon     end this session, Hildon follows
-#   pro1x-desktop xfce       end this session, Xfce follows
+#   pro1x-desktop              the desktop running now
+#   pro1x-desktop hildon       end this session, Hildon follows
+#   pro1x-desktop harmattan    end this session, the N9's follows
+#   pro1x-desktop xfce         end this session, Xfce follows
 #
 # ~/.xinitrc runs the desktops one after the other on the same X server
 # and starts the one named in $NEXT when a session ends; without it, X
-# ends with the session. The first desktop: `startx hildon` or
-# `startx xfce`, else pro1x.desktop in freebsd/cmdline, else Xfce.
+# ends with the session. The first desktop: `startx hildon`,
+# `startx harmattan` or `startx xfce`, else pro1x.desktop in
+# freebsd/cmdline, else Xfce.
 NEXT=/tmp/.pro1x-desktop-next
 CUR=/tmp/.pro1x-desktop
 
 case $1 in
 "")	cat "$CUR" 2> /dev/null || echo none; exit ;;
 hildon)	[ -x /usr/local/bin/hildon-session ] || { echo "Hildon is not installed" >&2; exit 1; } ;;
+harmattan)
+	[ -x /usr/local/bin/harmattan-session ] ||
+	    { echo "The N9's user interface is not installed" >&2; exit 1; } ;;
 xfce)	;;
-*)	echo "usage: pro1x-desktop [hildon|xfce]" >&2; exit 2 ;;
+*)	echo "usage: pro1x-desktop [hildon|harmattan|xfce]" >&2; exit 2 ;;
 esac
 [ "$(cat "$CUR" 2> /dev/null)" = "$1" ] && exit 0
 echo "$1" > "$NEXT"
 case $(cat "$CUR" 2> /dev/null) in
 hildon)	pkill -x hildon-desktop ;;
+harmattan) pkill -x meegotouchhome ;;
 *)	xfce4-session-logout --logout --fast ;;
 esac

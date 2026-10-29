@@ -13,5 +13,8 @@ msgstr "Startseiten, mit dem Anwendungsmenü und den offenen Anwendungen hinter 
 msgid "The home views, the applications and the open applications as pages side by side, changed by a swipe. In an application a swipe from the left or right edge goes to the open applications, one down from the top edge closes it, as on the Nokia N9."
 msgstr "Startseiten, Anwendungen und offene Anwendungen als Seiten nebeneinander, gewechselt durch Wischen. In einer Anwendung führt Wischen vom linken oder rechten Rand zu den offenen Anwendungen, Wischen vom oberen Rand nach unten schließt sie, wie auf dem Nokia N9."
 
+msgid "Ends the Hildon session and starts the Nokia N9's own user interface (MeeGo 1.2 Harmattan); Hildon among its applications switches back."
+msgstr "Beendet die Hildon-Sitzung und startet die eigene Oberfläche des Nokia N9 (MeeGo 1.2 Harmattan); Hildon unter ihren Anwendungen wechselt zurück."
+
 msgid "Ends the Hildon session and starts Xfce; Hildon in Xfce's menu switches back."
 msgstr "Beendet die Hildon-Sitzung und startet Xfce; Hildon in Xfces Menü wechselt zurück."

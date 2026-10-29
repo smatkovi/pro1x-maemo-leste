@@ -24,9 +24,10 @@ else
 	xset s blank
 fi
 
-# Xfce or Hildon: `startx hildon` / `startx xfce`, else pro1x.desktop=hildon
-# in freebsd/cmdline, else Xfce. pro1x-desktop switches between them: it
-# names the next one and ends the session, X stays.
+# Xfce, Hildon or the N9's user interface: `startx hildon` /
+# `startx harmattan` / `startx xfce`, else pro1x.desktop=hildon (or
+# harmattan) in freebsd/cmdline, else Xfce. pro1x-desktop switches between
+# them: it names the next one and ends the session, X stays.
 NEXT=/tmp/.pro1x-desktop-next
 desktop=${1:-$(kenv -q pro1x.desktop)}
 while :; do
@@ -39,6 +40,14 @@ while :; do
 		fi
 		echo hildon > /tmp/.pro1x-desktop
 		/usr/local/bin/hildon-session
+		;;
+	harmattan)
+		if [ ! -x /usr/local/bin/harmattan-session ]; then
+			desktop=xfce
+			continue
+		fi
+		echo harmattan > /tmp/.pro1x-desktop
+		/usr/local/bin/harmattan-session
 		;;
 	*)
 		echo xfce > /tmp/.pro1x-desktop

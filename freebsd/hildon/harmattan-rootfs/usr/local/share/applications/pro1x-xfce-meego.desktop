@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Xfce
+Comment=Switch to the Xfce desktop
+Exec=/usr/local/bin/pro1x-desktop xfce
+Icon=preferences-desktop
+Terminal=false
+Categories=System;
+OnlyShowIn=MeeGo;

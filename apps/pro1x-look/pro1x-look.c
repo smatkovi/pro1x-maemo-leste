@@ -6,13 +6,16 @@
  *   MeeGo   Hildon as on the Nokia N9 (patches/meego): the home views, the
  *           launcher and the open applications as pages side by side,
  *           changed by a swipe, and the swipes from the screen's edges
+ *   N9      FreeBSD only: ends the Hildon session, the Nokia N9's own user
+ *           interface (harmattan-session) follows on the same X server
+ *           (pro1x-desktop)
  *   Xfce    FreeBSD only: ends the Hildon session, Xfce follows on the same
  *           X server (pro1x-desktop)
  *
  * Maemo and MeeGo are the GConf key /apps/osso/hildon-desktop/meego_pages,
  * which hildon-desktop follows at once. MeeGo is offered only when
- * hildon-desktop knows the key (its schema is there), Xfce only when
- * pro1x-desktop and Xfce are there.
+ * hildon-desktop knows the key (its schema is there), N9 and Xfce only when
+ * pro1x-desktop and their sessions are there.
  */
 #include <libintl.h>
 #include <gtk/gtk.h>
@@ -25,10 +28,15 @@
 #define N_(s) s
 #define KEY_MEEGO "/apps/osso/hildon-desktop/meego_pages"
 
-enum { MAEMO, MEEGO, XFCE, STYLES };
+enum { MAEMO, MEEGO, N9, XFCE, STYLES };
 
 static const char *const names[STYLES] = {
-	"Maemo", "MeeGo", "Xfce",
+	"Maemo", "MeeGo", "N9", "Xfce",
+};
+
+/* what switches to the others: pro1x-desktop's names */
+static const char *const sessions[STYLES] = {
+	NULL, NULL, "harmattan", "xfce",
 };
 
 static const char *const about[STYLES] = {
@@ -38,6 +46,8 @@ static const char *const about[STYLES] = {
 	   "side by side, changed by a swipe. In an application a swipe from the "
 	   "left or right edge goes to the open applications, one down from the "
 	   "top edge closes it, as on the Nokia N9."),
+	N_("Ends the Hildon session and starts the Nokia N9's own user interface "
+	   "(MeeGo 1.2 Harmattan); Hildon among its applications switches back."),
 	N_("Ends the Hildon session and starts Xfce; Hildon in Xfce's menu "
 	   "switches back."),
 };
@@ -56,10 +66,11 @@ static gboolean meego_known(GConfClient *gc)
 	return TRUE;
 }
 
-static gboolean xfce_there(void)
+/* pro1x-desktop and what starts the session, harmattan-session or Xfce */
+static gboolean session_there(int style)
 {
 	char *d = g_find_program_in_path("pro1x-desktop");
-	char *x = g_find_program_in_path("startxfce4");
+	char *x = g_find_program_in_path(style == N9 ? "harmattan-session" : "startxfce4");
 	gboolean there = d && x;
 
 	g_free(d);
@@ -110,7 +121,7 @@ osso_return_t execute(osso_context_t *osso, gpointer data, gboolean user_activat
 					     GTK_RESPONSE_ACCEPT, NULL);
 	row = gtk_hbox_new(TRUE, 0);
 	for (i = 0; i < STYLES; i++) {
-		if ((i == MEEGO && !meego_known(gc)) || (i == XFCE && !xfce_there())) {
+		if ((i == MEEGO && !meego_known(gc)) || (sessions[i] && !session_there(i))) {
 			buttons[i] = NULL;
 			continue;
 		}
@@ -151,9 +162,13 @@ osso_return_t execute(osso_context_t *osso, gpointer data, gboolean user_activat
 			if ((chosen() == MEEGO) != meego)
 				gconf_client_set_bool(gc, KEY_MEEGO, chosen() == MEEGO, NULL);
 			break;
-		case XFCE:
-			g_spawn_command_line_async("pro1x-desktop xfce", NULL);
+		default: {
+			char *cmd = g_strconcat("pro1x-desktop ", sessions[chosen()], NULL);
+
+			g_spawn_command_line_async(cmd, NULL);
+			g_free(cmd);
 			break;
+		}
 		}
 	}
 	gtk_widget_destroy(dialog);
