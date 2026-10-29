@@ -58,6 +58,14 @@ printf 'kexec-tools kexec-tools/load_kexec boolean false\nkexec-tools kexec-tool
   debconf-set-selections
 apt-get install -y -q --no-install-recommends kexec-tools
 grep -qx 'LOAD_KEXEC=false' /etc/default/kexec
+# Nor its init scripts: OpenRC takes kexec's "Required-Stop: reboot" for
+# "need reboot", so the reboot script starts with it at boot, and leaving
+# the default runlevel stops kexec and then reboot, whose stop is
+# "reboot -f": every reboot came before sendsigs, umountfs and umountroot,
+# with the root image still writable and dsme writing to it after the UFS
+# disk was off (journal aborted, image "clean with errors"; 2026-10-29).
+rc-update del kexec-load default 2> /dev/null || true
+rc-update del kexec default 2> /dev/null || true
 
 # --- Upgrades ----------------------------------------------------------------
 # apt upgrade / dist-upgrade must not undo the port: configuration files it

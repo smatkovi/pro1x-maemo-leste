@@ -1,0 +1,26 @@
+diff --git a/drivers/rpmsg/qcom_glink_smem.c b/drivers/rpmsg/qcom_glink_smem.c
+index c30638e08c..3b65d48eff 100644
+--- a/drivers/rpmsg/qcom_glink_smem.c
++++ b/drivers/rpmsg/qcom_glink_smem.c
+@@ -434,11 +434,19 @@ void qcom_glink_smem_unregister(struct qcom_glink_smem *smem)
+ 
+ 	disable_irq(smem->irq);
+ 
++	/*
++	 * Before the edge's children go: its wake-up source's device is one
++	 * of them, and qcom_glink_native_remove() unregisters every child;
++	 * device_init_wakeup() after it unregistered that device a second
++	 * time, freed memory (an oops whenever the modem stopped, at every
++	 * shutdown).
++	 */
++	if (smem->wakeup)
++		device_init_wakeup(&smem->dev, false);
++
+ 	qcom_glink_native_remove(glink);
+ 
+ 	mbox_free_channel(smem->mbox_chan);
+-	if (smem->wakeup)
+-		device_init_wakeup(&smem->dev, false);
+ 	device_unregister(&smem->dev);
+ }
+ EXPORT_SYMBOL_GPL(qcom_glink_smem_unregister);
