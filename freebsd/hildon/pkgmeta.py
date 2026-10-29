@@ -65,6 +65,12 @@ LOCAL = {
                       'X blanks the screen, the rest black for the AMOLED panel '
                       "(tools/pro1x-standby); Nokia's icons and font are not "
                       'included.', ['UNKNOWN']),
+    'pro1x-volume-osd': ('1.0', "The Nokia N9's volume bar for Hildon's MeeGo-like look",
+                         'pro1x-volume-osd shows the volume of PulseAudio\'s default sink '
+                         "as the N9's system UI does when it changes, while Hildon's "
+                         'MeeGo-like look is on; a tap or a drag sets it '
+                         "(tools/pro1x-volume-osd). Nokia's graphics are not included.",
+                         ['UNKNOWN']),
 }
 # The N9's applications of harmattan-qt5 (apps/; harmattan.sh), new ones
 # in QML with com.nokia.meego: what their .desktop files say of them
@@ -185,6 +191,8 @@ RUNTIME = {
     # the light meter asks the Pro1X's light sensor (pro1x-light)
     'photolightmeter': ['pro1x-light'],
     'pro1x-gnss': ['gpsd'],
+    # the volume it shows is PulseAudio's, which hildon-session starts
+    'pro1x-volume-osd': ['pulseaudio', 'hildon-desktop'],
     # the modem asks for its files and domains before its file systems
     'rmtfs': ['tqftpserv', 'pd-mapper'],
     # QtSql's SQLite driver, a package of its own on FreeBSD
@@ -792,7 +800,8 @@ apps = sorted(x['name'] for x in meta.values()
 # ringtones and call sounds the profiles and alarms choose from
 apps = sorted(set(apps) | {x['name'] for x in meta.values() if x['name'] in (
     'hildon-input-method-plugins', 'headphoned', 'wifi-assistant', 'hildon-status-menu',
-    'osso-systemui-alarm', 'maemo-input-sounds', 'maemo-ringtones-mr0', 'osso-sounds-rtc')})
+    'osso-systemui-alarm', 'maemo-input-sounds', 'maemo-ringtones-mr0', 'osso-sounds-rtc',
+    'pro1x-volume-osd')})
 # the N9's own user interface (harmattan.sh), where it is built: all of
 # it but the headers
 harmattan = sorted(x['name'] for x in meta.values()

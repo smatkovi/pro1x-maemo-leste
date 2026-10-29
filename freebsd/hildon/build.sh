@@ -528,14 +528,15 @@ look_applet() {
 
 # This repository's small tools (tools/): the step counter and the
 # proximity sensor (libssc), the modem's GNSS for gpsd (QMI), the stand-by
-# screen, with their files (extra/<tool>)
+# screen, the N9's volume bar, with their files (extra/<tool>); the fourth
+# argument: libraries besides the pkg-config ones (-lm)
 dsp_tool() {
-	local name=$1 bindir=$2 deps=$3 b=$BUILD/$1
+	local name=$1 bindir=$2 deps=$3 libs=${4:-} b=$BUILD/$1
 	log "$name"
 	mkdir -p "$b"
 	# shellcheck disable=SC2046,SC2086
 	$CC $CFLAGS $LDFLAGS -o "$b/$name" "$REPO/tools/$name/$name.c" \
-	    $(pkg-config --cflags --libs $deps) > "$b/make.out" 2>&1 ||
+	    $(pkg-config --cflags --libs $deps) $libs > "$b/make.out" 2>&1 ||
 	    { grep -m20 error "$b/make.out"; return 1; }
 	PR=$H/pkgroot/$name
 	rm -rf "$PR"
@@ -724,6 +725,11 @@ fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-standby "* ]]; then
 	dsp_tool pro1x-standby bin "x11 xext xi cairo pangocairo sqlite3 dbus-1" ||
 	    failed+=(pro1x-standby)
+fi
+# the N9's volume bar for the MeeGo-like look, on PulseAudio's default sink
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-volume-osd "* ]]; then
+	dsp_tool pro1x-volume-osd bin "gtk+-2.0 gconf-2.0 libpulse-mainloop-glib" -lm ||
+	    failed+=(pro1x-volume-osd)
 fi
 # the N9's user interface (harmattan.sh): in order, each on the ones before
 kind=harmattan

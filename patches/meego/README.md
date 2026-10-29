@@ -78,7 +78,9 @@ GConf in libhildon):
   rolling chooses the row in its middle and centres it, a tapped row rolls
   to the middle. Lists of one column stay Hildon's.
 - **The volume bar** (`tools/pro1x-volume-osd`, Leste: `scripts/49-volume-osd.sh`,
-  started from Xsession.post): on a change of the default sink's volume the
+  started from Xsession.post; FreeBSD: built by `freebsd/hildon/build.sh`,
+  started by `hildon-session` after PulseAudio, which plays FreeBSD's
+  sound through OSS): on a change of the default sink's volume the
   screen darkens and the volume rises from the bottom, the loudspeaker at
   the bottom, 1.5 s, as the N9's system UI draws it; a tap or a drag sets
   the volume. N9 graphics where blanco is installed, else drawn alike.
