@@ -105,6 +105,10 @@ if [ "$step" = wifi ] || [ "$step" = wpa ]; then
 	# unless the command line sets compat.linuxkpi.debug_mask
 	[ -n "$(kenv -q compat.linuxkpi.debug_mask)" ] ||
 	    kenv compat.linuxkpi.debug_mask=0x300020 > /dev/null
+	# the keys in the firmware, as ath10k has them on Linux (LinuxKPI's
+	# default is net80211's ciphers in software)
+	[ -n "$(kenv -q compat.linuxkpi.80211.hw_crypto)" ] ||
+	    kenv compat.linuxkpi.80211.hw_crypto=1 > /dev/null
 	# in order: the root image's /boot/modules has no linker.hints
 	kldload -n firmware usb linuxkpi wlan linuxkpi_wlan athk_common
 	kldload ath10k_snoc
@@ -120,7 +124,9 @@ if [ "$step" = wifi ] || [ "$step" = wpa ]; then
 	sysctl hw.qcom_rpm dev.ath10k 2>&1
 	vmstat -i | grep -E "ath10k|gic" | head -20
 	if sysctl -n net.wlan.devices | grep -q ath10k0; then
-		ifconfig wlan0 create wlandev ath10k0
+		# devd may have made it already (pccard_ether at the attach)
+		ifconfig wlan0 > /dev/null 2>&1 ||
+		    ifconfig wlan0 create wlandev ath10k0
 		ifconfig wlan0 up
 		sleep 2
 		for n in 1 2; do
@@ -138,7 +144,8 @@ if [ "$step" = wifi ] || [ "$step" = wpa ]; then
 			exit 0
 		fi
 		ifconfig wlan0 down
-		/etc/rc.d/wpa_supplicant start wlan0
+		/etc/rc.d/wpa_supplicant status wlan0 > /dev/null 2>&1 ||
+		    /etc/rc.d/wpa_supplicant start wlan0
 		i=0
 		while [ $i -lt 30 ] &&
 		    ! ifconfig wlan0 | grep -q "status: associated"; do

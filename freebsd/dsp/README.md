@@ -88,7 +88,7 @@ the next boot (`fbsdtest.sh`). One layer per run:
 | dsp6 | rmtfs, tqftpserv, pd-mapper, `pro1x-dsp start modem` (`pro1x.dsp=modem`, without the ADSP) | the region shared (`qcom_rmtfs: ... 0`), modem ready, its QMI services listed, `qmicli --dms-get-revision` answers |
 | dsp7a | the RPM's edge, the Wi-Fi's rails voted on and off (`pro1x.dsp=rpm`, needs nothing else) | `qcom_rpm: message RAM 0x45f0000 (28 KiB), doorbell bit 0, FIFOs ...; channel N (M of Linux's requests seen)`, then `l8 (ldoa 8) on at 400000 uV: done` and the same for l16 (1704000), l17 (1152000), l23 (3200000), then `off: done`; `hw.qcom_rpm.refused` and `timeouts` 0 |
 | dsp7b | dsp6, then ath10k (`pro1x.dsp=wifi`) | QRTR service 69 (WLFW) listed; `qcom_smmu: ath10k0: stream 0x1a0 ...`; ath10k's QMI log (MSA info, capabilities, board data, firmware ready); the rails on (as dsp7a); `ath10k0` in `net.wlan.devices` within 60 s; `wlan0` created; `ifconfig wlan0 scan` lists the networks around |
-| dsp7c | dsp7b, then the network of `/host/freebsd/wpa_supplicant.conf` (`pro1x.dsp=wpa`) | `status: associated`, a DHCP lease on `wlan0`, the gateway answers `ping` |
+| dsp7c | dsp7b, then the network of `/host/freebsd/wpa_supplicant.conf` (`pro1x.dsp=wpa`) | `status: associated`, a DHCP lease on `wlan0`, the gateway answers `ping` (keys in the firmware: `compat.linuxkpi.80211.hw_crypto=1`, which the test and `rc.d/pro1x_wifi` set) |
 
 ## The Wi-Fi (dsp7)
 
@@ -169,8 +169,15 @@ userdata (`/dev/pro1x-host/freebsd/...` under FreeBSD), written from
 Linux, never part of an image; resolvconf writes `/var/run/resolv.conf`,
 where `/etc/resolv.conf` points (the root is read only).
 
+The keys go into the firmware, as with ath10k on Linux:
+`compat.linuxkpi.80211.hw_crypto=1` (LinuxKPI's default is net80211's
+ciphers in software, which ath10k's native Wi-Fi mode does not carry),
+set by `rc.d/pro1x_wifi` and the test before `linuxkpi_wlan` loads.
+
 Test runs: `pro1x.test=dsp pro1x.dsp=rpm|wifi|wpa` in
-`/host/freebsd/cmdline`. Modules in `/host/freebsd/modules` (a copy of
+`/host/freebsd/cmdline` (wifi and wpa with ath10k's debug for BOOT,
+SNOC and QMI, `compat.linuxkpi.debug_mask=0x300020`, unless the command
+line sets it; reading `hw.qcom_rpm.edge` brings the RPM's edge up). Modules in `/host/freebsd/modules` (a copy of
 `out/modules`, matching `/host/freebsd/kernel.bin`) are found before the
 root image's (`kldconfig -i`), so a new module build needs no new root
 image.

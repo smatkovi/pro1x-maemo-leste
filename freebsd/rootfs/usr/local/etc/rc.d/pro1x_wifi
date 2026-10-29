@@ -41,6 +41,11 @@ pro1x_wifi_start()
 {
 	local i dev
 
+	# the keys in the firmware, as ath10k has them on Linux (LinuxKPI's
+	# default is net80211's ciphers in software); a tunable of
+	# linuxkpi_wlan, so before it loads
+	[ -n "$(kenv -q compat.linuxkpi.80211.hw_crypto)" ] ||
+	    kenv compat.linuxkpi.80211.hw_crypto=1 > /dev/null
 	# in order: the root image's /boot/modules has no linker.hints
 	kldload -n ${pro1x_wifi_modules} || return 1
 	i=0

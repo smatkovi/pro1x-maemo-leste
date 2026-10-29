@@ -240,10 +240,14 @@ rpm_vote(phandle_t node, bool on, const char *who)
 		kv[n++] = uv;
 	}
 	error = qcom_rpm_write(RPM_ACTIVE_STATE, type, id, kv, n / 2);
-	if (on)
+	if (on && n > 2)
 		printf("qcom_rpm: %s: %s (%s %u) on at %u uV: %s (%d)\n", who,
 		    name, type == RPM_RES_LDOA ? "ldoa" : "smpa", id, uv,
 		    error == 0 ? "done" : "failed", error);
+	else if (on)
+		printf("qcom_rpm: %s: %s (%s %u) on at the RPM's voltage: %s "
+		    "(%d)\n", who, name, type == RPM_RES_LDOA ? "ldoa" : "smpa",
+		    id, error == 0 ? "done" : "failed", error);
 	else
 		printf("qcom_rpm: %s: %s (%s %u) off: %s (%d)\n", who, name,
 		    type == RPM_RES_LDOA ? "ldoa" : "smpa", id,
