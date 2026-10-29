@@ -12,7 +12,7 @@
 # mce's radio states, Leste through the device mode: the module in
 # mce/radiostates.c translates.
 #
-# Both are built into mce by scripts/49-hidpi.sh (as 1.10.17+pro1x2, with
+# Both are built into mce by scripts/49-hidpi.sh (as 1.10.17+pro1x3, with
 # the HiDPI and low power mode changes; the package is held): one mce for
 # Leste and the MeeGo boot. This script builds it and switches the module
 # on.

@@ -32,7 +32,7 @@ PARTS=(
   "hildon-status-menu|33ba47660e7c|1"
   "hildon-home|0d34886acdc2|1"
   "hildon-desktop|1273f9eee252|2"
-  "mce|422d5f2bd618|2"
+  "mce|422d5f2bd618|3"
   # the location framework's two bugs (patches/fixes): liblocation linked
   # to its libraries, location-ui's dialogs without an answer at the start
   "liblocation|d1ae86503411|1"
@@ -149,6 +149,12 @@ CMAKE
     apt-get install -y -q "$SRC"/libcal-dev_*+pro1x1_*.deb
   fi
   (cd "$d" && mk-build-deps -i -r -t "apt-get -y -q --no-install-recommends" debian/control)
+  # mce's x11-ctrl module (DPMS and the input devices off when mce blanks
+  # the display) is built only where CMake finds Xlib; a build root without
+  # it left the module out without a word, and the panel stayed on
+  if [ "$name" = mce ]; then
+    apt-get install -y -q --no-install-recommends libx11-dev libxext-dev libxi-dev
+  fi
 done
 
 for entry in "${PARTS[@]}"; do
@@ -158,6 +164,11 @@ for entry in "${PARTS[@]}"; do
   (cd "$d" && dpkg-buildpackage -b -us -uc > "$SRC/$name.build.log" 2>&1) ||
     { tail -30 "$SRC/$name.build.log"; exit 1; }
   v=$(cd "$d" && dpkg-parsechangelog -S Version)
+  if [ "$name" = mce ] && ! dpkg-deb -c "$SRC/mce_${v#*:}_$(dpkg --print-architecture).deb" |
+      grep -q '/libx11-ctrl\.so$'; then
+    echo "mce: built without its x11-ctrl module (see $SRC/mce.build.log)"
+    exit 1
+  fi
   install_ours "$SRC"/*_"${v#*:}"_*.deb
 done
 apt-mark hold "${held[@]}"

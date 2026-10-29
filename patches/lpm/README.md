@@ -2,7 +2,7 @@
 
 `mce.patch` ports the low power mode of Harmattan's mce (1.11.20, LGPL,
 from Nokia's N9 sources) to Leste's mce (maemo/daedalus 1.10.17). It is
-built by `scripts/49-hidpi.sh` (`ONLY=mce`) as `mce 1.10.17+pro1x1`.
+built by `scripts/49-hidpi.sh` (`ONLY=mce`) as `mce 1.10.17+pro1x3`.
 
 ## How it behaves
 
