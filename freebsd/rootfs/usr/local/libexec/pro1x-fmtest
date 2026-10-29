@@ -29,6 +29,8 @@ if [ -f $host/fm/pro1x-fmtest ] && [ "${PRO1X_FMTEST_HOST:-}" != 1 ]; then
 	echo "=== the newer pro1x-fmtest from $host/fm"
 	PRO1X_FMTEST_HOST=1 exec sh $host/fm/pro1x-fmtest "$step"
 fi
+# rc's PATH has no /usr/local
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 [ -d $host/fm ] && PATH=$host/fm:$PATH
 export PATH
 echo "=== FM test up to: $step"
