@@ -105,8 +105,10 @@ part() {
 	configure)
 		./configure "$@" > configure.log 2>&1 || { tail -20 configure.log; exit 1; } ;;
 	qmake)
-		# the headers' own directories, as the stage builds on the PC have them
-		qmake -r "$@" CONFIG+=NODOCS CONFIG+=NOTESTS INCLUDEPATH+=/usr/include/meegotouch \
+		# the headers' own directories, as the stage builds on the PC have
+		# them; NOTESTS for most parts, notests for the reaction maps and
+		# the keyboard (whose tests GCC 16 fails with -Werror)
+		qmake -r "$@" CONFIG+=NODOCS CONFIG+=NOTESTS CONFIG+=notests INCLUDEPATH+=/usr/include/meegotouch \
 		    INCLUDEPATH+=/usr/include/duicontrolpanel > qmake.log 2>&1 ||
 		    { tail -20 qmake.log; exit 1; } ;;
 	autotools)
@@ -175,9 +177,8 @@ part meegotouch-controlpanelapplets qmake meegotouch-controlpanelapplets.pro
 part meegofeedbackd qmake meegofeedbackd.pro
 # the reaction maps: the N9's touch feedback on the touch itself (the
 # keyboard's key clicks); one source only, as meegofeedbackd plays each
-# loaded one: XRecord, which sees the touchscreen as X does (its tests
-# switch off with notests, not NOTESTS)
-part meegofeedback-reactionmaps qmake meegofeedback-reactionmaps.pro CONFIG+=notests
+# loaded one: XRecord, which sees the touchscreen as X does
+part meegofeedback-reactionmaps qmake meegofeedback-reactionmaps.pro
 rm -f /usr/lib/meegofeedbackd/sources/libmeegofeedback-reactionmap.so
 # the input method: its server (with Qt 5's platform input context for the
 # applications), the N9's keyboard and its engine interface; legacy mode as
