@@ -147,6 +147,11 @@ APPS=(
 	"maep|"
 	"cloudgps|!"
 	"coolkbd|!"
+	# Lazarus (Free Pascal) apps: built in a FreeBSD/arm64 machine (VM=,
+	# as for package.sh), there being no Free Pascal cross compiler for it
+	# here
+	"photolightmeter|!"
+	"comics-daily|!"
 	# Leste's communication apps: the event log (calls, messages) with its
 	# plugins and UI, the accounts, the address book library (Evolution
 	# Data Server, Telepathy, oFono through libgofono) and the address
@@ -257,6 +262,7 @@ REV+=(
 	[tinymail]=b26e5f078476 [modest]=655c79292815
 	[evolution-data-server]=df4ec29950f29a76eac6fbe0f814c48d2cef7d3fdb905002a4a883dd761ce93c
 	[sphone]=45663ccd15ec
+	[photolightmeter]=c707d055b76b [comics-daily]=54b5cd997f29
 	[qt6-style-maemo]=da82bac04cd0f650d0a0388499f4b9b44b18e0935fb4da8c75fdae8b59c92fe8
 	[qt6-qpa-maemo]=06ac140112aea01bc8d807b0a647a2352ac8d152c38307f6f086cdc384c55b48
 	[qt6-maemo]=e21dc3165a9ccb1df6aeaac8f7f5cc71ea93333b0951632585628eec0323f0a6
@@ -281,6 +287,7 @@ URL+=(
 	[qt6-maemo]=https://maedevu.maemo.org/leste/pool/main/q/qt6-maemo/qt6-maemo_0.4.5%2B5m7.tar.gz
 	[qt6csv]=https://maedevu.maemo.org/leste/pool/main/q/qt6csv/qt6csv_1.7.0.orig.tar.gz
 	[nomweather]=$GH_EXTRAS/nomweather.git
+	[photolightmeter]=$GH_EXTRAS/photolightmeter.git [comics-daily]=$GH_EXTRAS/comics-daily.git
 	[telepathy-qt6]=https://maedevu.maemo.org/leste/pool/main/t/telepathy-qt6/telepathy-qt6_0.9.10.orig.tar.gz
 )
 URL+=(
@@ -1305,3 +1312,37 @@ custom_telepathy_qt6() {
 	done
 }
 custom_conversations() { qt6_no_cachegen; qt6_cmake; }
+
+# --- Lazarus apps, in the FreeBSD machine ----------------------------------
+# vm_lazbuild PROJECT PROGRAM: the source to $VM (a FreeBSD/arm64 machine
+# with FreeBSD's lazarus-gtk2, ssh as root), lazbuild there with GTK 2,
+# the program back
+vm_lazbuild() {
+	local proj=$1 out=$2 d=/root/lazbuild/$name
+	[ -n "${VM:-}" ] || { echo "$name: VM=<ssh to a FreeBSD/arm64 machine> needed"; exit 1; }
+	tar -czf - . | $VM "rm -rf $d && mkdir -p $d && tar -xzf - -C $d && cd $d &&
+	    lazbuild --lazarusdir=\$(ls -d /usr/local/share/lazarus-* | tail -1) --ws=gtk2 \
+	    $proj > lazbuild.out 2>&1 ||
+	    { grep -m20 -i error lazbuild.out; tail -10 lazbuild.out; exit 1; }" || exit 1
+	$VM "cat $d/$out" > "$out" && [ -s "$out" ] || { echo "$name: no $out from the VM"; exit 1; }
+	$VM "rm -rf $d"
+}
+# Photo Light Meter, as Leste installs it, but below /usr/local, not /opt
+custom_photolightmeter() {
+	vm_lazbuild project1.lpi project1
+	install -D -m 755 project1 "$PR/usr/local/bin/photolightmeter"
+	install -D -m 644 lightmeter.png "$PR/usr/local/share/pixmaps/lightmeter.png"
+	sed 's|^Exec=.*|Exec=/usr/local/bin/photolightmeter|' lightmeter.desktop > lightmeter.desktop.new
+	install -D -m 644 lightmeter.desktop.new "$PR/usr/local/share/applications/hildon/lightmeter.desktop"
+}
+custom_comics_daily() {
+	local f
+	vm_lazbuild project1.lpi project1
+	install -D -m 755 project1 "$PR/usr/local/bin/comics-daily"
+	install -D -m 644 comics-daily.png "$PR/usr/local/share/pixmaps/comics-daily.png"
+	for f in comics-daily-insect.png comics-daily-insect-rf.png comics-daily-insect-lf.png; do
+		install -D -m 644 "$f" "$PR/usr/local/share/pixmaps/comics-daily/$f"
+	done
+	sed 's|^Exec=.*|Exec=/usr/local/bin/comics-daily|' comics-daily.desktop > comics-daily.desktop.new
+	install -D -m 644 comics-daily.desktop.new "$PR/usr/local/share/applications/hildon/comics-daily.desktop"
+}
