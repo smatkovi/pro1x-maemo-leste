@@ -11,6 +11,17 @@ depend() {
 
 start() {
 	ebegin "Setting the clock from the RTC"
+	# rtc-pm8xxx is a module: rtc0 comes late in the boot (about 17 s), and
+	# its registration sets the clock to the RTC's own count (hctosys).
+	# Without it the offset never went on top, and the clock stayed at the
+	# last shutdown's time. So wait for it (at most 30 s), and a moment
+	# more for that, before clockd and alarmd start.
+	i=0
+	while [ ! -e /sys/class/rtc/rtc0 ] && [ $i -lt 60 ]; do
+		sleep 0.5
+		i=$((i + 1))
+	done
+	sleep 1
 	/usr/local/sbin/pro1x-rtc-sync restore
 	eend 0
 }
