@@ -129,10 +129,11 @@ Hostless" capture. The mainline version:
 What can still go wrong, in the order the test will show it:
 1. The ADSP has no SLIMbus QMI service, or the NGD does not come up:
    `qcom,slim-ngd` errors in dmesg; no `/sys/bus/slimbus/devices`.
-2. SMMU: the BAM's DMA is blocked. The kernel logs the stream ID
-   ("Unexpected global fault", "Blocked unknown Stream ID 0x..."); that
-   ID goes into `iommus` of `slimbam` and the NGD, and the next kernel
-   is built with it.
+2. SMMU: the BAM's DMA is blocked. The kernel has
+   `CONFIG_ARM_SMMU_DISABLE_BYPASS_BY_DEFAULT=y`, so it blocks unmatched
+   streams and logs their ID: "Blocked unknown Stream ID 0x...". That ID
+   goes into `iommus` of `slimbam` and the NGD, and the next kernel is
+   built with it.
 3. The WCN3950 does not report present (no `217:220:...` device after
    the radio is on). The chip may need SLIMbus clocking or more than
    `FC0E` first.
@@ -148,6 +149,10 @@ changes), and the DSP's own loopback (hostless), which would save power.
 Kernel: `$WORK/out-pro1x.6` = pro1x.5 (0001-0017) + 0018-0021. `PHONE` is
 the usual root ssh to Leste.
 
+0. **Without a flash:** run `qrtr-lookup` on the phone. The NGD needs the
+   ADSP's SLIMbus QMI service 769 (0x301), version 1. If the ADSP does
+   not list it, pro1x.6 cannot give FM sound.
+
 1. **Prepare.** Writes files on the phone, no partition:
 
        PHONE="..." WORK=$WORK OUT=$WORK/out-pro1x.6 bash scripts/65-kernel-update.sh prepare
@@ -160,6 +165,9 @@ the usual root ssh to Leste.
    - Slot b is then on trial for 3 starts. The owner reboots.
 3. **Check that nothing else broke:**
    - `uname -r`;
+   - `cat /proc/asound/cards; lsmod | grep -E 'wcn399x|slimbus'`: the card
+     now needs the `snd-soc-wcn399x` component. If the card is missing,
+     run `modprobe snd-soc-wcn399x` first, before rolling back;
    - `aplay -l` and a sound on the speaker;
    - the microphone;
    - `dmesg | grep -i -E 'smmu|fault'`.
