@@ -193,18 +193,21 @@ the usual root ssh to Leste.
    - If the new kernel does not boot at all, the trial falls back to slot a
      (Sailfish OS) after 3 failed starts.
 
-## FreeBSD (notes only, nothing written)
+## FreeBSD
 
-- **Bluetooth:** FreeBSD on the Pro1X has no Bluetooth yet. The BT UART, the
-  WCN3950 firmware download (btqca) and the in-band sleep would come first,
-  for example as a user-space daemon on the UART (`ng_h4`, or a daemon of
-  its own).
-- **FM control:** easiest in user space there. The commands of
-  `radio-qca-fm.c` go over the same UART as 0x11/0x14 packets, from that
-  daemon. There is no V4L2, so the FreeBSD app would talk to the daemon,
-  and a Hildon app on FreeBSD would need that backend instead of
-  `/dev/radio0`.
-- **Audio:** this is the big part. FreeBSD needs these, none of which it has:
-  - a SLIMbus NGD controller driver (QMI to the ADSP over QRTR);
-  - the WCN codec's SLIMbus port setup;
-  - AFE `SLIMBUS_8_TX` in its Q6 audio stack.
+Written, built and tested on the PC, not yet on the phone:
+`freebsd/fm/README.md`.
+
+- **Bluetooth UART:** `qcom_geni_uart.ko`, the GENI UART as a uart(4)
+  class (`/dev/cuau0`), with the serial engine's clock voted and its pins
+  muxed itself, since FreeBSD has no clock or pin control driver here.
+- **The chip and FM control:** `pro1x-fmd` does in user space what
+  hci_qca/btqca (with patch 0013) and radio-qca-fm do here: power pulses,
+  download, in-band sleep, then the FM commands; the app and
+  `pro1x-fmctl` talk to it over a Unix socket instead of `/dev/radio0`.
+- **Audio:** only the first bricks: `/dev/apr` (`qcom_apr.ko`) and
+  `pro1x-q6` (the ADSP's core service, its SLIMbus QMI service). The NGD
+  (with a BAM DMA driver), the SLIMbus core, the WCN3950's ports, the AFE
+  port and any audio output are missing on FreeBSD.
+- **App:** `apps/pro1x-fm` builds for FreeBSD's Hildon (`pro1x-fm` part),
+  without sound.

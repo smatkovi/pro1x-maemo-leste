@@ -32,7 +32,8 @@ by host tests: `make -C freebsd/dsp/test` (under ASan and UBSan).
 | Remote procedure calls to the DSPs | `fastrpc` | `qcom_fastrpc.c` | sensors |
 | Linux platform drivers on the device tree | the driver core, `of`, `devres` | `lkpi_platform.c` (LinuxKPI's side), `lkpi_platform_bsd.c` (newbus), shim headers in `lkpi/`, `patches/0031` (`dev->of_node`) | ath10k |
 | Wi-Fi (WCN3990 core through the modem) | `ath10k_snoc` | module `ath10k_snoc`: FreeBSD's ath10k (LinuxKPI) with Linux's `snoc.c`, `qmi.c`, `qmi_wlfw_v01.c` | Wi-Fi |
-| Audio services on the ADSP (APR, q6afe, q6asm), LPASS, SoundWire, WCD937x | ASoC drivers | not yet | audio |
+| APR, the packets of the ADSP's audio services | `apr` | `qcom_apr.c` (module `qcom_apr`, `/dev/apr`), `tools/pro1x-q6` (q6core; the SLIMbus QMI service) | the FM radio's sound (`../fm/README.md`) |
+| Audio services on the ADSP (q6afe, q6asm), SLIMbus, LPASS, SoundWire, WCD937x | ASoC drivers, `qcom-ngd-ctrl` | not yet | audio |
 
 Userspace, from Linux (`apps.sh` parts for FreeBSD, `hildon/patches/<part>`
 for what differs): `qrtr` (library and `qrtr-lookup`), `rmtfs`, `tqftpserv`,

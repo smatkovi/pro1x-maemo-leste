@@ -203,7 +203,8 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | Hildon, Xfce | yes, switchable |
 | USB (network to the PC, host) | not yet: FreeBSD's dwc3 is host only, and Linux takes the controller down at kexec |
 | Wi-Fi, Bluetooth, modem, GPS | no: all run through the modem and ADSP firmware (remoteproc, QMI over GLINK, ath10k over SNOC), none of which FreeBSD has |
-| audio | no: the codecs sit behind the ADSP (APR, LPASS macros, SoundWire) |
+| audio | no: the codecs sit behind the ADSP (APR, LPASS macros, SoundWire); only APR as `/dev/apr` so far (`dsp/`) |
+| FM radio | built, untested on the phone: the Bluetooth UART (`qcom_geni_uart`), the chip and its receiver from user space (`pro1x-fmd`), the app; no sound (`fm/README.md`) |
 | sensors, step counter | built, untested on the phone: the DSP stack (`dsp/`), `pro1x-steps`, `pro1x-proximity` (the proximity sensor on D-Bus only while the stand-by screen watches it) |
 | cameras | no: CAMSS and the sensors' CCI, none in FreeBSD |
 
@@ -245,6 +246,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `vm/` | a FreeBSD/arm64 VM on the PC (qemu): packages, ZFS image, tries |
 | `pkgfetch.py`, `mkspec.py` | packages with dependencies, checked; the image's owners and modes |
 | `hildon/` | Leste's Hildon desktop cross-compiled for FreeBSD |
+| `fm/` | the FM radio: the Bluetooth UART, the WCN3950's receiver, its tests (`fm/README.md`) |
 
 The root filesystem is the release's `/rescue` (one static binary for sh,
 init, mount, ifconfig...) from `base.txz`, built into the kernel
