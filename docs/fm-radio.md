@@ -111,8 +111,12 @@ again at 115200. A `qcom,wcn3950-pmu` power sequencer (as on the RB2, with
    - The bluetooth service is still out of the runlevel, so hci0 goes down
      by itself 2 s after setup. That is normal.
 4. **FM control (stages 1/2):**
+   - Copy the test tool over first: `scp tools/pro1x-fm/pro1x-fm-test root@172.16.42.1:/usr/local/bin/`.
+   - Check that Bluetooth is not soft-blocked: `rfkill list` or
+     `/sys/class/rfkill/*/soft` must be 0. A block makes opening the radio
+     fail with "Bluetooth controller not up". It was 0 on 2026-10-29.
    - Plug in headphones; the cable is the antenna.
-   - Enable the debug output:
+   - Enable the debug output (debugfs is mounted on Leste):
 
          echo 'module radio_qca_fm +p' > /sys/kernel/debug/dynamic_debug/control
 
