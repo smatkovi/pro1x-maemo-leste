@@ -156,7 +156,9 @@ part libcontentaction autotools --disable-doc --disable-coverage
 part mcompositor qmake mcompositor.pro
 part libdsme make
 part mce-dev make
-part qmsystem2 qmake libqmsystem2.pro
+# Harmattan's mce names from the source tree: 40-hildon.sh installs Leste's
+# older mce headers into /usr/include/mce over them
+part qmsystem2 qmake libqmsystem2.pro INCLUDEPATH+=$S/mce-dev/include
 pacman -S --noconfirm --needed check gstreamer gst-plugins-base gst-plugins-good \
 	libcanberra > /dev/null
 upstream libngf 0.29
