@@ -280,6 +280,15 @@ EXCLUDE = {
     # libhildon's English texts lack the 12-hour times and am/pm the
     # clock and the alarm dialog show: Leste's (leste-l10n-en) instead
     'libhildon': (['usr/local/share/locale/en_GB/LC_MESSAGES/hildon-libs.mo'], ['leste-l10n-en']),
+    # Modest's English texts are Leste's too (leste-l10n-en); the client
+    # library installs Modest's NEWS as well
+    'modest': (['usr/local/share/locale/en_GB/LC_MESSAGES/modest.mo'], ['leste-l10n-en']),
+    'libmodest-dbus-client': (['usr/local/share/modest/data/NEWS'], []),
+    # Harmattan's libdsme (libdsme.so.0.2.0, which qmsystem2 links) beside
+    # Leste's (libdsme_dbus_if.so.0, alarmd's): without the development
+    # files both have, so that both install
+    'harmattan-libdsme': (['usr/local/include/dsme/dsme_dbus_if.h', 'usr/local/lib/libdsme_dbus_if.so',
+                           'usr/local/libdata/pkgconfig/dsme_dbus_if.pc'], []),
     'gtk': (['usr/local/bin/gtk-update-icon-cache', 'usr/local/share/man/man1/gtk-update-icon-cache.1*',
              'usr/local/share/gtk-doc/*', 'usr/local/lib/libgtk-x11-2.0.so.0.2400.33',
              'usr/local/lib/libgdk-x11-2.0.so.0.2400.33'], ['gtk-update-icon-cache']),
@@ -378,6 +387,8 @@ REVISION = {
     # bytes early in clang builds (nothing drew, harmattan-qt5 0bbefb4),
     # the Pro1X's 960x480 target; the pro1x theme's black wallpaper
     'harmattan-libmeegotouch': 1, 'harmattan-meegotouchtheme': 1,
+    # 2026-10-29: files that other packages have too, left out (EXCLUDE)
+    'modest': 1, 'libmodest-dbus-client': 1, 'harmattan-libdsme': 1,
 }
 
 
