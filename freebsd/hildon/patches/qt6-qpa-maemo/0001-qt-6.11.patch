@@ -1,0 +1,101 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,7 +5,7 @@
+ )
+ 
+ message(STATUS "Initiating compile using CMake ${CMAKE_VERSION}")
+-set(XCB_NATIVE_PAINTING ON)
++set(XCB_NATIVE_PAINTING OFF)
+ 
+ add_compile_definitions(
+         QT_BUILD_XCB_PLUGIN=1
+@@ -15,7 +15,7 @@
+         QT_FEATURE_maemo_regularexpression=1
+         QT_FEATURE_maemo_xcb_glx_plugin=1
+         QT_FEATURE_maemo_egl=1
+-        QT_FEATURE_maemo_xcb_native_painting=1
++        QT_FEATURE_maemo_xcb_native_painting=0
+ )
+ 
+ find_package(Qt6 REQUIRED COMPONENTS Core OpenGL DBus Gui Widgets)
+--- a/src/plugins/platforms/xcb-maemo/qxcbbackingstore.cpp
++++ b/src/plugins/platforms/xcb-maemo/qxcbbackingstore.cpp
+@@ -870,7 +870,11 @@
+                                                               const QRegion &region,
+                                                               const QPoint &offset,
+                                                               QPlatformTextureList *textures,
+-                                                              bool translucentBackground)
++                                                              bool translucentBackground
++#if QT_VERSION >= QT_VERSION_CHECK(6, 11, 0)
++                                                              , qreal sourceTransformFactor
++#endif
++                                                              )
+ {
+     if (!m_image || m_image->size().isEmpty())
+         return FlushFailed;
+@@ -878,7 +882,11 @@
+     m_image->flushScrolledRegion(true);
+ 
+     auto result = QPlatformBackingStore::rhiFlush(window, sourceDevicePixelRatio, region, offset,
+-                                                  textures, translucentBackground);
++                                                  textures, translucentBackground
++#if QT_VERSION >= QT_VERSION_CHECK(6, 11, 0)
++                                                  , sourceTransformFactor
++#endif
++                                                  );
+     if (result != FlushSuccess)
+         return result;
+     QXcbWindow *platformWindow = static_cast<QXcbWindow *>(window->handle());
+--- a/src/plugins/platforms/xcb-maemo/qxcbbackingstore.h
++++ b/src/plugins/platforms/xcb-maemo/qxcbbackingstore.h
+@@ -28,7 +28,11 @@
+                          const QRegion &region,
+                          const QPoint &offset,
+                          QPlatformTextureList *textures,
+-                         bool translucentBackground) override;
++                         bool translucentBackground
++#if QT_VERSION >= QT_VERSION_CHECK(6, 11, 0)
++                         , qreal sourceTransformFactor = 0
++#endif
++                         ) override;
+     QImage toImage() const override;
+ 
+     QPlatformGraphicsBuffer *graphicsBuffer() const override;
+--- a/src/plugins/platforms/xcb-maemo/qxcbintegration.cpp
++++ b/src/plugins/platforms/xcb-maemo/qxcbintegration.cpp
+@@ -25,7 +25,12 @@
+ #include <xcb/xcb.h>
+ 
+ #include <QtGui/private/qgenericunixfontdatabase_p.h>
++#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
++#include <QtGui/private/qdesktopunixservices_p.h>
++#define QGenericUnixServices QDesktopUnixServices
++#else
+ #include <QtGui/private/qgenericunixservices_p.h>
++#endif
+ 
+ #include <stdio.h>
+ 
+@@ -43,7 +48,11 @@
+ #endif
+ 
+ #include <qpa/qplatforminputcontextfactory_p.h>
++#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
++#include <private/qgenericunixtheme_p.h>
++#else
+ #include <private/qgenericunixthemes_p.h>
++#endif
+ #include <qpa/qplatforminputcontext.h>
+ 
+ #include <QtGui/QOpenGLContext>
+--- a/src/plugins/platforms/xcb-maemo/qxcbwindow.cpp
++++ b/src/plugins/platforms/xcb-maemo/qxcbwindow.cpp
+@@ -3,6 +3,8 @@
+ 
+ #include "qxcbwindow.h"
+ 
++#include <unistd.h>
++
+ #include <QtDebug>
+ #include <QMetaEnum>
+ #include <QScreen>

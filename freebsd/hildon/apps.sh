@@ -170,10 +170,11 @@ APPS=(
 	"sphone|!"
 	# Leste's Qt 6 platform for Maemo: the Hildon style, the platform plugin
 	# (Hildon's window properties) and the Maemo widgets
-	# (not yet the platform plugin qt6-qpa-maemo: a copy of Qt 6.8's xcb
-	# plugin, whose backing store API Qt 6.11 changed; Qt 6 apps run on
-	# FreeBSD's xcb plugin, without Hildon's window properties)
+	# (the platform plugin is a copy of Qt 6.8's xcb plugin with Hildon's
+	# window properties: patches/qt6-qpa-maemo for Qt 6.11, without its
+	# native painting, as Qt's own xcb plugin has it)
 	"qt6-style-maemo|!"
+	"qt6-qpa-maemo|!"
 	"qt6-maemo|!"
 	"qt6csv|!"
 	# Qt 6 apps: the weather forecast, then the chats and messages on
