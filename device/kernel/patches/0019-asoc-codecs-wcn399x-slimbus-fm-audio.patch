@@ -1,0 +1,421 @@
+Subject: [PATCH] ASoC: codecs: add the Qualcomm WCN399x SLIMbus audio interface
+
+The WCN399x Bluetooth/FM chips (WCN3950, WCN3990) send their audio over
+SLIMbus: an interface device (elemental address index 0) with the port
+registers, a generic device (index 1) with the ports, both "slim217,220".
+This driver does the FM receiver's part: ports 1 and 2, one stereo
+stream at 48 kHz, 16 bit, on the channels the downstream kernel uses
+(160, 161; a machine driver may set others with set_channel_map, in the
+order SCO TX, FM TX1, FM TX2).
+
+The register writes (multi-channel group, under-/overrun recovery,
+watermark and enable) follow the downstream btfm_slim driver. The chip
+is on the bus only while Bluetooth or the FM receiver keeps it powered,
+so the component registers at probe and the logical addresses are
+fetched when a stream starts.
+
+The Bluetooth SCO/A2DP ports (0, 16, 17) are left for later.
+
+diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
+index 31419fa682..75827f711f 100644
+--- a/sound/soc/codecs/Kconfig
++++ b/sound/soc/codecs/Kconfig
+@@ -300,6 +300,7 @@ config SND_SOC_ALL_CODECS
+ 	imply SND_SOC_UDA1342
+ 	imply SND_SOC_UDA1380
+ 	imply SND_SOC_WCD9335
++	imply SND_SOC_WCN399X
+ 	imply SND_SOC_WCD934X
+ 	imply SND_SOC_WCD937X_SDW
+ 	imply SND_SOC_WCD938X_SDW
+@@ -2385,6 +2386,15 @@ config SND_SOC_UDA1380
+ 	  The UDA1380 codec is used in the HTC Magician and on a number of
+ 	  Samsung reference boards, as well as the LPC32xx series.
+ 
++config SND_SOC_WCN399X
++	tristate "Qualcomm WCN399x SLIMbus audio (FM receiver)"
++	depends on SLIMBUS
++	select REGMAP_SLIMBUS
++	help
++	  The SLIMbus audio interface of the Qualcomm WCN399x Bluetooth/FM
++	  chips (WCN3950, WCN3990), as found next to Qualcomm SoCs like
++	  SM6115. It carries the FM receiver's stereo capture to the DSP.
++
+ config SND_SOC_WCD_CLASSH
+ 	tristate
+ 
+diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
+index 606733aff6..6fa4b36778 100644
+--- a/sound/soc/codecs/Makefile
++++ b/sound/soc/codecs/Makefile
+@@ -354,6 +354,7 @@ snd-soc-wcd-classh-y := wcd-clsh-v2.o
+ snd-soc-wcd-common-y := wcd-common.o
+ snd-soc-wcd-mbhc-y := wcd-mbhc-v2.o
+ snd-soc-wcd9335-y := wcd9335.o
++snd-soc-wcn399x-y := wcn399x.o
+ snd-soc-wcd934x-y := wcd934x.o
+ snd-soc-wcd937x-y := wcd937x.o
+ snd-soc-wcd937x-sdw-y := wcd937x-sdw.o
+@@ -793,6 +794,7 @@ obj-$(CONFIG_SND_SOC_WCD_COMMON)	+= snd-soc-wcd-common.o
+ obj-$(CONFIG_SND_SOC_WCD_MBHC)	+= snd-soc-wcd-mbhc.o
+ obj-$(CONFIG_SND_SOC_WCD9335)	+= snd-soc-wcd9335.o
+ obj-$(CONFIG_SND_SOC_WCD934X)	+= snd-soc-wcd934x.o
++obj-$(CONFIG_SND_SOC_WCN399X)	+= snd-soc-wcn399x.o
+ obj-$(CONFIG_SND_SOC_WCD937X)	+= snd-soc-wcd937x.o
+ ifdef CONFIG_SND_SOC_WCD937X_SDW
+ # avoid link failure by forcing sdw code built-in when needed
+diff --git a/sound/soc/codecs/wcn399x.c b/sound/soc/codecs/wcn399x.c
+new file mode 100644
+index 0000000000..9176f65661
+--- /dev/null
++++ b/sound/soc/codecs/wcn399x.c
+@@ -0,0 +1,349 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * The SLIMbus audio interface of the Qualcomm WCN399x Bluetooth/FM chips
++ * (WCN3950, WCN3990): for now the FM receiver's stereo capture.
++ *
++ * On the bus the chip is an interface device, which has the port
++ * registers, and a generic device, which has the ports. The FM receiver
++ * sends on ports 1 and 2; the channels are the ones the downstream kernel
++ * uses (159-161 for SCO TX, FM TX1, FM TX2), and the machine driver may
++ * set others. The register writes follow the downstream btfm_slim driver.
++ * The Bluetooth SCO/A2DP ports (0, 16, 17) are not done yet.
++ *
++ * The chip is on the bus only while it is powered (Bluetooth or the FM
++ * receiver on), so the component is there from the start and the logical
++ * addresses are fetched when a stream starts.
++ */
++
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/regmap.h>
++#include <linux/slimbus.h>
++#include <sound/pcm_params.h>
++#include <sound/soc.h>
++#include <sound/soc-dapm.h>
++
++#define WCN399X_HW_REV_MSB		0x001
++#define WCN399X_HW_REV_LSB		0x002
++#define WCN399X_TX_PORT_CFG(p)		(0x050 + (p))
++#define WCN399X_TX_PORT_MULTI_CHNL_0(p)	(0x100 + 4 * (p))
++#define WCN399X_TX_PORT_OR_UR_CFG(p)	(0x1f0 + (p))
++
++#define WCN399X_PORT_ENABLE		BIT(0)
++#define WCN399X_PORT_WM_L8		(0x8 << 1)
++#define WCN399X_OVERRUN_RECOVERY	BIT(1)
++#define WCN399X_UNDERRUN_RECOVERY	BIT(0)
++
++#define WCN399X_FM_TX1_PORT		1
++#define WCN399X_FM_TX2_PORT		2
++#define WCN399X_FM_PORTS		(BIT(WCN399X_FM_TX1_PORT) | \
++					 BIT(WCN399X_FM_TX2_PORT))
++#define WCN399X_FM_CHANNELS		2
++
++enum {
++	WCN399X_FM_TX,
++};
++
++struct wcn399x {
++	struct device *dev;
++	struct slim_device *sdev;	/* generic device: the ports */
++	struct slim_device *sidev;	/* interface device: the registers */
++	struct regmap *regmap;
++	struct slim_stream_runtime *sruntime;
++	struct slim_stream_config sconfig;
++	unsigned int fm_ch[WCN399X_FM_CHANNELS];
++	bool running;
++};
++
++static const struct regmap_config wcn399x_ifc_regmap_config = {
++	.reg_bits = 16,
++	.val_bits = 8,
++	.max_register = 0x1ff,
++	.cache_type = REGCACHE_NONE,
++};
++
++static int wcn399x_fm_ports(struct wcn399x *wcn, bool enable)
++{
++	unsigned long ports = WCN399X_FM_PORTS;
++	unsigned int port;
++	int ret;
++
++	for_each_set_bit(port, &ports, BITS_PER_LONG) {
++		if (enable) {
++			/* both FM ports in one multi-channel group */
++			ret = regmap_write(wcn->regmap,
++					   WCN399X_TX_PORT_MULTI_CHNL_0(port),
++					   WCN399X_FM_PORTS);
++			if (ret)
++				return ret;
++
++			ret = regmap_write(wcn->regmap,
++					   WCN399X_TX_PORT_OR_UR_CFG(port),
++					   WCN399X_OVERRUN_RECOVERY |
++					   WCN399X_UNDERRUN_RECOVERY);
++			if (ret)
++				return ret;
++		}
++
++		ret = regmap_write(wcn->regmap, WCN399X_TX_PORT_CFG(port),
++				   (enable ? WCN399X_PORT_ENABLE : 0) |
++				   WCN399X_PORT_WM_L8);
++		if (ret)
++			return ret;
++	}
++
++	return 0;
++}
++
++static int wcn399x_hw_params(struct snd_pcm_substream *substream,
++			     struct snd_pcm_hw_params *params,
++			     struct snd_soc_dai *dai)
++{
++	struct wcn399x *wcn = snd_soc_component_get_drvdata(dai->component);
++	struct slim_stream_config *cfg = &wcn->sconfig;
++	unsigned int rev;
++	int ret;
++
++	if (params_channels(params) != WCN399X_FM_CHANNELS)
++		return -EINVAL;
++
++	/* on the bus only while Bluetooth or the FM receiver has it on */
++	ret = slim_get_logical_addr(wcn->sidev);
++	if (!ret)
++		ret = slim_get_logical_addr(wcn->sdev);
++	if (ret) {
++		dev_err(wcn->dev, "not on the SLIMbus (is the FM receiver on?): %d\n",
++			ret);
++		return -ENODEV;
++	}
++
++	if (!regmap_read(wcn->regmap, WCN399X_HW_REV_MSB, &rev))
++		dev_dbg(wcn->dev, "SLIMbus slave revision %u.%u\n",
++			rev >> 4, rev & 0xf);
++
++	cfg->rate = params_rate(params);
++	cfg->bps = params_width(params);
++	cfg->ch_count = WCN399X_FM_CHANNELS;
++	cfg->chs = wcn->fm_ch;
++	cfg->port_mask = WCN399X_FM_PORTS;
++	cfg->direction = SNDRV_PCM_STREAM_CAPTURE;
++
++	return 0;
++}
++
++static int wcn399x_prepare(struct snd_pcm_substream *substream,
++			   struct snd_soc_dai *dai)
++{
++	struct wcn399x *wcn = snd_soc_component_get_drvdata(dai->component);
++	int ret;
++
++	if (wcn->running)
++		return 0;
++
++	ret = wcn399x_fm_ports(wcn, true);
++	if (ret) {
++		dev_err(wcn->dev, "cannot set up the FM ports: %d\n", ret);
++		return ret;
++	}
++
++	ret = slim_stream_prepare(wcn->sruntime, &wcn->sconfig);
++	if (ret)
++		goto ports_off;
++
++	ret = slim_stream_enable(wcn->sruntime);
++	if (ret)
++		goto unprepare;
++
++	wcn->running = true;
++	return 0;
++
++unprepare:
++	slim_stream_unprepare(wcn->sruntime);
++ports_off:
++	wcn399x_fm_ports(wcn, false);
++	dev_err(wcn->dev, "cannot start the FM stream: %d\n", ret);
++	return ret;
++}
++
++static int wcn399x_hw_free(struct snd_pcm_substream *substream,
++			   struct snd_soc_dai *dai)
++{
++	struct wcn399x *wcn = snd_soc_component_get_drvdata(dai->component);
++
++	if (!wcn->running)
++		return 0;
++
++	slim_stream_disable(wcn->sruntime);
++	slim_stream_unprepare(wcn->sruntime);
++	wcn399x_fm_ports(wcn, false);
++	wcn->running = false;
++
++	return 0;
++}
++
++/* tx_slot: SCO TX, FM TX1, FM TX2 */
++static int wcn399x_set_channel_map(struct snd_soc_dai *dai,
++				   unsigned int tx_num,
++				   const unsigned int *tx_slot,
++				   unsigned int rx_num,
++				   const unsigned int *rx_slot)
++{
++	struct wcn399x *wcn = snd_soc_component_get_drvdata(dai->component);
++
++	if (tx_num < 3 || !tx_slot)
++		return -EINVAL;
++
++	wcn->fm_ch[0] = tx_slot[1];
++	wcn->fm_ch[1] = tx_slot[2];
++
++	return 0;
++}
++
++static int wcn399x_get_channel_map(const struct snd_soc_dai *dai,
++				   unsigned int *tx_num, unsigned int *tx_slot,
++				   unsigned int *rx_num, unsigned int *rx_slot)
++{
++	struct wcn399x *wcn = snd_soc_component_get_drvdata(dai->component);
++
++	if (!tx_num || !tx_slot)
++		return -EINVAL;
++
++	tx_slot[0] = wcn->fm_ch[0];
++	tx_slot[1] = wcn->fm_ch[1];
++	*tx_num = WCN399X_FM_CHANNELS;
++	if (rx_num)
++		*rx_num = 0;
++
++	return 0;
++}
++
++static const struct snd_soc_dai_ops wcn399x_dai_ops = {
++	.hw_params = wcn399x_hw_params,
++	.prepare = wcn399x_prepare,
++	.hw_free = wcn399x_hw_free,
++	.set_channel_map = wcn399x_set_channel_map,
++	.get_channel_map = wcn399x_get_channel_map,
++};
++
++static struct snd_soc_dai_driver wcn399x_dais[] = {
++	[WCN399X_FM_TX] = {
++		.name = "wcn399x_fm_tx",
++		.id = WCN399X_FM_TX,
++		.capture = {
++			.stream_name = "FM Capture",
++			.rates = SNDRV_PCM_RATE_48000,
++			.formats = SNDRV_PCM_FMTBIT_S16_LE,
++			.rate_min = 48000,
++			.rate_max = 48000,
++			.channels_min = WCN399X_FM_CHANNELS,
++			.channels_max = WCN399X_FM_CHANNELS,
++		},
++		.ops = &wcn399x_dai_ops,
++	},
++};
++
++static const struct snd_soc_dapm_widget wcn399x_dapm_widgets[] = {
++	SND_SOC_DAPM_INPUT("FM_IN"),
++	SND_SOC_DAPM_AIF_OUT("FM_TX", "FM Capture", 0, SND_SOC_NOPM, 0, 0),
++};
++
++static const struct snd_soc_dapm_route wcn399x_dapm_routes[] = {
++	{ "FM_TX", NULL, "FM_IN" },
++};
++
++static const struct snd_soc_component_driver wcn399x_component_drv = {
++	.name = "wcn399x",
++	.dapm_widgets = wcn399x_dapm_widgets,
++	.num_dapm_widgets = ARRAY_SIZE(wcn399x_dapm_widgets),
++	.dapm_routes = wcn399x_dapm_routes,
++	.num_dapm_routes = ARRAY_SIZE(wcn399x_dapm_routes),
++	.endianness = 1,
++};
++
++static void wcn399x_put_device(void *data)
++{
++	put_device(data);
++}
++
++static void wcn399x_stream_free(void *data)
++{
++	slim_stream_free(data);
++}
++
++static int wcn399x_probe(struct slim_device *sdev)
++{
++	struct device *dev = &sdev->dev;
++	struct device_node *ifc_np;
++	struct wcn399x *wcn;
++	int ret;
++
++	wcn = devm_kzalloc(dev, sizeof(*wcn), GFP_KERNEL);
++	if (!wcn)
++		return -ENOMEM;
++
++	wcn->dev = dev;
++	wcn->sdev = sdev;
++	wcn->fm_ch[0] = 160;
++	wcn->fm_ch[1] = 161;
++
++	ifc_np = of_parse_phandle(dev->of_node, "slim-ifc-dev", 0);
++	if (!ifc_np)
++		return dev_err_probe(dev, -EINVAL, "no slim-ifc-dev\n");
++
++	wcn->sidev = of_slim_get_device(sdev->ctrl, ifc_np);
++	of_node_put(ifc_np);
++	if (!wcn->sidev)
++		return dev_err_probe(dev, -EINVAL, "no SLIMbus interface device\n");
++
++	ret = devm_add_action_or_reset(dev, wcn399x_put_device, &wcn->sidev->dev);
++	if (ret)
++		return ret;
++
++	wcn->regmap = devm_regmap_init_slimbus(wcn->sidev,
++					       &wcn399x_ifc_regmap_config);
++	if (IS_ERR(wcn->regmap))
++		return dev_err_probe(dev, PTR_ERR(wcn->regmap),
++				     "cannot make the register map\n");
++
++	wcn->sruntime = slim_stream_allocate(sdev, "WCN399x-FM");
++	if (!wcn->sruntime)
++		return -ENOMEM;
++
++	ret = devm_add_action_or_reset(dev, wcn399x_stream_free, wcn->sruntime);
++	if (ret)
++		return ret;
++
++	dev_set_drvdata(dev, wcn);
++
++	return devm_snd_soc_register_component(dev, &wcn399x_component_drv,
++					       wcn399x_dais,
++					       ARRAY_SIZE(wcn399x_dais));
++}
++
++static int wcn399x_device_status(struct slim_device *sdev,
++				 enum slim_device_status status)
++{
++	dev_dbg(&sdev->dev, "%s the SLIMbus\n",
++		status == SLIM_DEVICE_STATUS_UP ? "on" : "off");
++	return 0;
++}
++
++/* the generic device (index 1); the interface device is index 0 */
++static const struct slim_device_id wcn399x_slim_id[] = {
++	{ 0x217, 0x220, 0x1, 0x0 },
++	{ }
++};
++MODULE_DEVICE_TABLE(slim, wcn399x_slim_id);
++
++static struct slim_driver wcn399x_slim_driver = {
++	.driver = {
++		.name = "wcn399x-codec",
++	},
++	.probe = wcn399x_probe,
++	.device_status = wcn399x_device_status,
++	.id_table = wcn399x_slim_id,
++};
++module_slim_driver(wcn399x_slim_driver);
++
++MODULE_DESCRIPTION("Qualcomm WCN399x SLIMbus audio (FM receiver)");
++MODULE_LICENSE("GPL");

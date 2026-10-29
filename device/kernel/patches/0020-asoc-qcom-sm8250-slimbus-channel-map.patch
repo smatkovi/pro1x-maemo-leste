@@ -1,0 +1,81 @@
+Subject: [PATCH] ASoC: qcom: sm8250: SLIMbus back ends get the codec's channels
+
+A q6afe SLIMbus port needs the SLIMbus channel numbers of the codec at
+the other end; sdm845 copies them from the codec DAI's channel map to
+the CPU DAI in hw_params. Do the same here, so that cards on this driver
+(SM4250/SM6115) can have SLIMbus links, as the WCN399x's FM audio on
+SLIMBUS_8_TX.
+
+diff --git a/sound/soc/qcom/sm8250.c b/sound/soc/qcom/sm8250.c
+index 2c82d47113..fe82db2c04 100644
+--- a/sound/soc/qcom/sm8250.c
++++ b/sound/soc/qcom/sm8250.c
+@@ -17,6 +17,7 @@
+ #include "sdw.h"
+ 
+ #define MI2S_BCLK_RATE		1536000
++#define SLIM_MAX_CHANNELS	16
+ 
+ struct sm8250_snd_data {
+ 	bool stream_prepared[AFE_PORT_MAX];
+@@ -119,6 +120,52 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
+ 	return qcom_snd_sdw_startup(substream);
+ }
+ 
++/* SLIMbus: the DSP's port gets the channels the codec uses */
++static int sm8250_slim_hw_params(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
++	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
++	u32 rx_ch[SLIM_MAX_CHANNELS], tx_ch[SLIM_MAX_CHANNELS];
++	u32 rx_ch_cnt = 0, tx_ch_cnt = 0;
++	struct snd_soc_dai *codec_dai;
++	int ret, i;
++
++	for_each_rtd_codec_dais(rtd, i, codec_dai) {
++		ret = snd_soc_dai_get_channel_map(codec_dai, &tx_ch_cnt, tx_ch,
++						  &rx_ch_cnt, rx_ch);
++		if (ret == -ENOTSUPP)
++			continue;
++		if (ret)
++			return ret;
++
++		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++			ret = snd_soc_dai_set_channel_map(cpu_dai, 0, NULL,
++							  rx_ch_cnt, rx_ch);
++		else
++			ret = snd_soc_dai_set_channel_map(cpu_dai, tx_ch_cnt,
++							  tx_ch, 0, NULL);
++		if (ret && ret != -ENOTSUPP)
++			return ret;
++	}
++
++	return 0;
++}
++
++static int sm8250_snd_hw_params(struct snd_pcm_substream *substream,
++				struct snd_pcm_hw_params *params)
++{
++	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
++	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
++
++	switch (cpu_dai->id) {
++	case SLIMBUS_0_RX ... SLIMBUS_6_TX:
++	case SLIMBUS_7_RX ... SLIMBUS_8_TX:
++		return sm8250_slim_hw_params(substream);
++	default:
++		return 0;
++	}
++}
++
+ static int sm8250_snd_prepare(struct snd_pcm_substream *substream)
+ {
+ 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+@@ -139,6 +186,7 @@ static int sm8250_snd_hw_free(struct snd_pcm_substream *substream)
+ 
+ static const struct snd_soc_ops sm8250_be_ops = {
+ 	.startup = sm8250_snd_startup,
++	.hw_params = sm8250_snd_hw_params,
+ 	.shutdown = qcom_snd_sdw_shutdown,
+ 	.hw_free = sm8250_snd_hw_free,
+ 	.prepare = sm8250_snd_prepare,

@@ -1,0 +1,108 @@
+Subject: [PATCH] arm64: dts: qcom: sm6115: LPASS SLIMbus; pro1x: the FM audio
+
+The LPASS SLIMbus of SM6115 carries the WCN399x's Bluetooth and FM
+audio: the NGD at 0xa5c0000 (IRQ 283) with its BAM at 0xa584000 (IRQ
+284), as in the downstream kernel. No IOMMU stream is known for them;
+the downstream kernel has none.
+
+On the F(x)tec Pro1X the WCN3950's interface and generic devices sit
+on it, and the sound card gets an "FM Capture" link: WCN3950 FM TX ->
+SLIMBUS_8_TX -> q6routing (a MultiMedia front end records it).
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts b/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
+index e043b46d2c..01ad15a41a 100644
+--- a/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
++++ b/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
+@@ -509,6 +509,23 @@ cpu {
+ 			};
+ 		};
+ 
++		/* the FM receiver's stereo, from the WCN3950 over SLIMbus */
++		fm-capture-dai-link {
++			link-name = "FM Capture";
++
++			codec {
++				sound-dai = <&wcn3950_codec 0>;
++			};
++
++			cpu {
++				sound-dai = <&q6afedai SLIMBUS_8_TX>;
++			};
++
++			platform {
++				sound-dai = <&q6routing>;
++			};
++		};
++
+ 		wcd-capture-dai-link {
+ 			link-name = "WCD Capture";
+ 
+@@ -1436,6 +1453,33 @@ fm {
+ 	};
+ };
+ 
++&slimbam {
++	status = "okay";
++};
++
++&slim {
++	status = "okay";
++
++	slim@1 {
++		reg = <1>;
++		#address-cells = <2>;
++		#size-cells = <0>;
++
++		/* the WCN3950's SLIMbus interface and generic devices */
++		wcn3950_ifd: ifd@0,0 {
++			compatible = "slim217,220";
++			reg = <0 0>;
++		};
++
++		wcn3950_codec: codec@1,0 {
++			compatible = "slim217,220";
++			reg = <1 0>;
++			slim-ifc-dev = <&wcn3950_ifd>;
++			#sound-dai-cells = <1>;
++		};
++	};
++};
++
+ &wifi {
+ 	vdd-0.8-cx-mx-supply = <&pm6125_l8a>;
+ 	vdd-1.8-xo-supply = <&pm6125_l16a>;
+diff --git a/arch/arm64/boot/dts/qcom/sm6115.dtsi b/arch/arm64/boot/dts/qcom/sm6115.dtsi
+index dca9a89fc2..7f24982f5b 100644
+--- a/arch/arm64/boot/dts/qcom/sm6115.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm6115.dtsi
+@@ -2972,6 +2972,30 @@ funnel_apss1_in: endpoint {
+ 			};
+ 		};
+ 
++		/* LPASS SLIMbus, for the WCN399x's Bluetooth and FM audio */
++		slimbam: dma-controller@a584000 {
++			compatible = "qcom,bam-v1.7.0";
++			reg = <0x0 0x0a584000 0x0 0x20000>;
++			interrupts = <GIC_SPI 284 IRQ_TYPE_LEVEL_HIGH>;
++			#dma-cells = <1>;
++			qcom,controlled-remotely;
++			num-channels = <31>;
++			qcom,ee = <1>;
++			qcom,num-ees = <2>;
++			status = "disabled";
++		};
++
++		slim: slim-ngd@a5c0000 {
++			compatible = "qcom,slim-ngd-v1.5.0";
++			reg = <0x0 0x0a5c0000 0x0 0x2c000>;
++			interrupts = <GIC_SPI 283 IRQ_TYPE_LEVEL_HIGH>;
++			dmas = <&slimbam 3>, <&slimbam 4>;
++			dma-names = "rx", "tx";
++			#address-cells = <1>;
++			#size-cells = <0>;
++			status = "disabled";
++		};
++
+ 		rxmacro: codec@a600000 {
+ 			compatible = "qcom,sm6115-lpass-rx-macro";
+ 			reg = <0x0 0x0a600000 0x0 0x1000>;
