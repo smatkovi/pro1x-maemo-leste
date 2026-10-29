@@ -81,9 +81,9 @@ cp -a "$REPO/freebsd/dsp/sys/." "$SRC/sys/"
 WIFI_MODULES="firmware usb/usb linuxkpi linuxkpi_wlan wlan wlan_wep wlan_tkip"
 WIFI_MODULES="$WIFI_MODULES wlan_ccmp wlan_gcmp athk_common ath10k_snoc"
 # The Bluetooth/FM chip's UART (freebsd/fm/README.md): uart(4) with the
-# GENI UART class, new files only
+# GENI UART class, new files only; APR for the audio (qcom_apr, dsp/)
 cp -a "$REPO/freebsd/fm/sys/." "$SRC/sys/"
-MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart}
+MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
 	buildkernel)

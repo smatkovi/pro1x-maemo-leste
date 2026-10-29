@@ -118,11 +118,25 @@ fi
 if [ "$step" = audio ]; then
 	echo "--- the audio path (the receiver on, its SLIMbus port on)"
 	pro1x-fmctl status
-	if command -v pro1x-q6 > /dev/null; then
-		pro1x-q6 test 2>&1
-	else
-		echo "no pro1x-q6"
-	fi
+	# the ADSP with its APR channel (qcom_apr) and QRTR services, the
+	# protection domain mapper for its audio PD (run dsp3/dsp4 of
+	# freebsd/dsp/README.md)
+	kldload qrtr && echo "qrtr loaded"
+	kldload qcom_apr && echo "qcom_apr loaded"
+	service pd_mapper onestart
+	pro1x-dsp start adsp
+	echo "ADSP start: $?"
+	i=0
+	while [ $i -lt 30 ] && ! sysctl -n hw.qcom_apr | grep -q "^open"; do
+		sleep 1
+		i=$((i + 1))
+	done
+	echo "after $i s: hw.qcom_apr: $(sysctl -n hw.qcom_apr)"
+	sleep 3
+	sysctl net.qrtr.servers
+	pro1x-q6 test 2>&1
+	sysctl hw.qcom_apr
+	dmesg | grep -E "qcom_(apr|pas|smp2p)|glink" | tail -20
 fi
 step_t "off"
 pro1x-fmctl off
