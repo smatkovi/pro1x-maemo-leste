@@ -46,5 +46,6 @@ log "back to $OUT"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 $VM 'tar -C /root/pkgout -cf - .' | tar -C "$OUT" -xf -
-ls "$OUT" | head -50
+# (sed reads to the end: head's early close is ls's SIGPIPE under pipefail)
+ls "$OUT" | sed -n 1,50p
 log "done: $(ls "$OUT"/*.pkg | wc -l) packages in $OUT"
