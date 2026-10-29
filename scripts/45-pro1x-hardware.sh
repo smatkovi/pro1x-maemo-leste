@@ -120,7 +120,16 @@ install -m 644 "$NIXOS"/device/audio/ucm2/Pro1X/*.conf "$U/Pro1X/"
 # defined.
 ln -sfn ../Pro1X/Pro1X.conf "$U/sm4250/sm4250.conf"
 install -m 755 "$NIXOS/device/audio/pro1x-audio-init" /usr/bin/
-install -m 755 "$NIXOS/device/audio/pro1x-voice-call" /usr/bin/
+# The voice session of a call: started by the "Voice Call" UCM verb, which
+# sphone's route-pulseaudio module switches to during a call. It follows
+# the calls through ofono here (Leste has no ModemManager:
+# patches/nixos-audio), and keeps the DSP's VoiceMMode1 PCM open
+# (pro1x-voicepcm, which Leste lacked: no call audio)
+patch -s -o /usr/bin/pro1x-voice-call "$NIXOS/device/audio/pro1x-voice-call" \
+	"$REPO/patches/nixos-audio/0001-voice-call-ofono.patch"
+chmod 755 /usr/bin/pro1x-voice-call
+apt-get install -y -q --no-install-recommends gcc libc6-dev libasound2-dev
+gcc -O2 -Wall -o /usr/bin/pro1x-voicepcm "$NIXOS/device/audio/voicepcm.c" -lasound
 
 # --- Boot menu (initramfs) and pro1x-boot ----------------------------------
 # The initramfs hook copies both into the initramfs; pro1x-boot also serves

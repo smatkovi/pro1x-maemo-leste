@@ -1,0 +1,50 @@
+pro1x-voice-call: the calls from ofono where there is no ModemManager
+(Maemo Leste), so that the voice session starts with each new call as
+with mmcli, instead of at once ("always")
+
+--- a/pro1x-voice-call	2026-10-29 17:25:28.581690487 +0100
++++ b/pro1x-voice-call	2026-10-29 17:25:28.591506957 +0100
+@@ -62,10 +62,30 @@
+ # stopped when the last one is over. The codec keep-alive streams run for as long as the
+ # profile is active. PRO1X_VOICE_ALWAYS=1 (or no mmcli) starts it right away instead.
+ calls() { # object paths of the calls that are not over, on one line
++  if [ "$ofono" = 1 ]; then
++    ofono_calls
++    return
++  fi
+   mmcli -m any --voice-list-calls 2>/dev/null |
+     awk '/\((dialing|ringing-in|ringing-out|active|held|waiting)\)/ { print $1 }' | sort | tr '\n' ' '
+ }
+ 
++# ofono's calls (Maemo Leste, which has ofono rather than ModemManager):
++# VoiceCallManager.GetCalls of each modem, the paths of those not over
++ofono_modems() {
++  dbus-send --system --print-reply --dest=org.ofono / org.ofono.Manager.GetModems 2>/dev/null |
++    awk '/^ *object path/ { gsub(/"/, "", $3); print $3 }'
++}
++ofono_calls() {
++  for m in $(ofono_modems); do
++    dbus-send --system --print-reply --dest=org.ofono "$m" \
++      org.ofono.VoiceCallManager.GetCalls 2>/dev/null |
++      awk '/^ *object path/ { gsub(/"/, "", $3); p = $3 }
++        /string "State"/ { getline; gsub(/"/, "", $3)
++          if ($3 ~ /^(dialing|alerting|incoming|active|held|waiting)$/) print p }'
++  done | sort | tr '\n' ' '
++}
++
+ start_pcm() {
+   pro1x-voicepcm &
+   vp="$!"
+@@ -84,7 +104,11 @@
+ trap 'stop_keepers; stop_pcm; rm -f "$pidfile"; exit 0' TERM INT
+ 
+ always=0
+-if [ "${PRO1X_VOICE_ALWAYS:-0}" = 1 ] || ! command -v mmcli >/dev/null 2>&1; then
++ofono=0
++if ! command -v mmcli >/dev/null 2>&1 && [ -n "$(ofono_modems)" ]; then
++  ofono=1
++fi
++if [ "${PRO1X_VOICE_ALWAYS:-0}" = 1 ] || { ! command -v mmcli >/dev/null 2>&1 && [ "$ofono" = 0 ]; }; then
+   always=1
+ fi
+ 
