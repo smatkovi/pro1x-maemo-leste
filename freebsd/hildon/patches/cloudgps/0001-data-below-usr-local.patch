@@ -1,0 +1,73 @@
+--- a/src/config.c
++++ b/src/config.c
+@@ -11,8 +11,8 @@
+  * Author: Damian Waradzyn
+  */
+ #define USER_CONFIG_FILE "/home/user/.cloudgps/config.ini"
+-#define GLOBAL_CONFIG_FILE "/usr/share/cloudgps/cloudgps.ini"
+-#define PROVIDERS_CONFIG_FILE "/usr/share/cloudgps/providers.ini"
++#define GLOBAL_CONFIG_FILE "/usr/local/share/cloudgps/cloudgps.ini"
++#define PROVIDERS_CONFIG_FILE "/usr/local/share/cloudgps/providers.ini"
+ 
+ 
+ #include "file.h"
+--- a/src/uielement.c
++++ b/src/uielement.c
+@@ -181,37 +181,37 @@
+ 
+ //glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+ 
+-	loadTextureAndMask("/usr/share/cloudgps/res/font-medium.png", &fontMedium, &fontMediumMask);
++	loadTextureAndMask("/usr/local/share/cloudgps/res/font-medium.png", &fontMedium, &fontMediumMask);
+ 
+-	zoomOut = createUiElement("/usr/share/cloudgps/res/zoom-minus.png", 50, SCREEN_HEIGHT - 150, SCREEN_WIDTH - 150, SCREEN_HEIGHT - 50, &tileEngineZoomOut, &tileEngineZoomOut, TRUE);
++	zoomOut = createUiElement("/usr/local/share/cloudgps/res/zoom-minus.png", 50, SCREEN_HEIGHT - 150, SCREEN_WIDTH - 150, SCREEN_HEIGHT - 50, &tileEngineZoomOut, &tileEngineZoomOut, TRUE);
+ 
+-	zoomIn = createUiElement("/usr/share/cloudgps/res/zoom-plus.png", SCREEN_WIDTH - 50, SCREEN_HEIGHT - 150, SCREEN_WIDTH - 150, 50, &tileEngineZoomIn, &tileEngineZoomIn, TRUE);
+-	gotomypos = createUiElement("/usr/share/cloudgps/res/gotomypos.png", SCREEN_WIDTH - 50, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, 50, &tileEngineGotomypos, &tileEngineGotomypos, TRUE);
+-	position = createUiElement("/usr/share/cloudgps/res/position.png", 0, 0, 0, 0, NULL, NULL, TRUE);
+-	view2d = createUiElement("/usr/share/cloudgps/res/2d.png", 50, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, SCREEN_HEIGHT - 50, &tileEngineViewMode2D, NULL, TRUE);
++	zoomIn = createUiElement("/usr/local/share/cloudgps/res/zoom-plus.png", SCREEN_WIDTH - 50, SCREEN_HEIGHT - 150, SCREEN_WIDTH - 150, 50, &tileEngineZoomIn, &tileEngineZoomIn, TRUE);
++	gotomypos = createUiElement("/usr/local/share/cloudgps/res/gotomypos.png", SCREEN_WIDTH - 50, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, 50, &tileEngineGotomypos, &tileEngineGotomypos, TRUE);
++	position = createUiElement("/usr/local/share/cloudgps/res/position.png", 0, 0, 0, 0, NULL, NULL, TRUE);
++	view2d = createUiElement("/usr/local/share/cloudgps/res/2d.png", 50, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, SCREEN_HEIGHT - 50, &tileEngineViewMode2D, NULL, TRUE);
+ 	view2d -> status = UI_HIDDEN;
+-	view3d = createUiElement("/usr/share/cloudgps/res/3d.png", 50, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, SCREEN_HEIGHT - 50, &tileEngineViewMode3D, NULL, TRUE);
+-	crosshair = createUiElement("/usr/share/cloudgps/res/crosshair.png", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, NULL, NULL, TRUE);
+-	compass = createUiElement("/usr/share/cloudgps/res/compass.png", 150, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, SCREEN_HEIGHT - 150, &tileEngineToggle2dRotation, NULL, TRUE);
+-	search = createUiElement("/usr/share/cloudgps/res/search.png", SCREEN_WIDTH - 150, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, 150, &tileEngineToggleSearchBar, NULL, TRUE);
+-	zoomKnot = createUiElement("/usr/share/cloudgps/res/zoom-knot.png", SCREEN_WIDTH - 150, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, 150, &tileEngineZoomKnotPressed, &tileEngineZoomKnotDragged, TRUE);
++	view3d = createUiElement("/usr/local/share/cloudgps/res/3d.png", 50, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, SCREEN_HEIGHT - 50, &tileEngineViewMode3D, NULL, TRUE);
++	crosshair = createUiElement("/usr/local/share/cloudgps/res/crosshair.png", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, NULL, NULL, TRUE);
++	compass = createUiElement("/usr/local/share/cloudgps/res/compass.png", 150, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, SCREEN_HEIGHT - 150, &tileEngineToggle2dRotation, NULL, TRUE);
++	search = createUiElement("/usr/local/share/cloudgps/res/search.png", SCREEN_WIDTH - 150, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, 150, &tileEngineToggleSearchBar, NULL, TRUE);
++	zoomKnot = createUiElement("/usr/local/share/cloudgps/res/zoom-knot.png", SCREEN_WIDTH - 150, SCREEN_HEIGHT - 50, SCREEN_WIDTH - 50, 150, &tileEngineZoomKnotPressed, &tileEngineZoomKnotDragged, TRUE);
+ 	zoomKnot -> status = UI_HIDDEN;
+ 
+-//	tasks = createUiElement("/usr/share/cloudgps/res/tasks.png", 16, 0, 0, 0, &invokeTaskManager, NULL, TRUE);
++//	tasks = createUiElement("/usr/local/share/cloudgps/res/tasks.png", 16, 0, 0, 0, &invokeTaskManager, NULL, TRUE);
+ //	tasks -> status = UI_HIDDEN;
+ 
+-//	closeApp = createUiElement("/usr/share/cloudgps/res/close.png", SCREEN_WIDTH - 64, 32, 32, 32, &setQuitFlag, NULL, TRUE);
++//	closeApp = createUiElement("/usr/local/share/cloudgps/res/close.png", SCREEN_WIDTH - 64, 32, 32, 32, &setQuitFlag, NULL, TRUE);
+ //	closeApp -> status = UI_HIDDEN;
+ 
+-	busy = createUiElement("/usr/share/cloudgps/res/busy.png", SCREEN_WIDTH - 96, 32, 32, 32, NULL, NULL, TRUE);
++	busy = createUiElement("/usr/local/share/cloudgps/res/busy.png", SCREEN_WIDTH - 96, 32, 32, 32, NULL, NULL, TRUE);
+ 	busy -> status = UI_HIDDEN;
+ 
+-	loadTextureAndMask("/usr/share/cloudgps/res/searchmark.png", &searchMarkTexture, &searchMarkMask);
+-	loadTextureAndMask("/usr/share/cloudgps/res/route_start.png", &routeStartTexture, &routeStartMask);
+-	loadTextureAndMask("/usr/share/cloudgps/res/route_end.png", &routeEndTexture, &routeEndMask);
+-	loadTexture("/usr/share/cloudgps/res/shadow.png", &shadow);
+-	loadTexture("/usr/share/cloudgps/res/drag_crosshair.png", &dragCrosshair);
+-	loadTexture("/usr/share/cloudgps/res/road.png", &road);
++	loadTextureAndMask("/usr/local/share/cloudgps/res/searchmark.png", &searchMarkTexture, &searchMarkMask);
++	loadTextureAndMask("/usr/local/share/cloudgps/res/route_start.png", &routeStartTexture, &routeStartMask);
++	loadTextureAndMask("/usr/local/share/cloudgps/res/route_end.png", &routeEndTexture, &routeEndMask);
++	loadTexture("/usr/local/share/cloudgps/res/shadow.png", &shadow);
++	loadTexture("/usr/local/share/cloudgps/res/drag_crosshair.png", &dragCrosshair);
++	loadTexture("/usr/local/share/cloudgps/res/road.png", &road);
+ 
+ 	volatileUiElems = g_list_append(volatileUiElems, zoomOut);
+ 	volatileUiElems = g_list_append(volatileUiElems, view2d);

@@ -1,0 +1,32 @@
+--- a/configure.in
++++ b/configure.in
+@@ -152,7 +152,7 @@
+   # older versions used 26x26
+   if [[ "$MAJOR" == "5" ]]; then
+      ICONNAME=maep.48.png
+-     datarootdir=/opt
++     : # FreeBSD: the data below the prefix, not /opt
+   else
+      ICONNAME=maep.26.png
+   fi
+--- a/src/Makefile.in
++++ b/src/Makefile.in
+@@ -43,16 +43,8 @@
+ 	$(CC) -o $@ $(OBJS) $(LDFLAGS)
+ 
+ install:
+-	install -d $(DESTDIR)$(prefix)$(bindir)
+-	if [ "$(MAEMO_VERSION_MAJOR)" == "5" ]; then \
+-		echo "Optifying binary"; \
+-		install -d $(DESTDIR)$(datadir)/$(APP); \
+-		install $(APP) $(DESTDIR)$(datadir)/$(APP)/$(APP).bin; \
+-		ln -s $(datadir)/$(APP)/$(APP).bin $(DESTDIR)$(prefix)$(bindir)/$(APP); \
+-	else \
+-		echo "Not Optifying binary"; \
+-		install $(APP) $(DESTDIR)$(prefix)$(bindir); \
+-	fi
++	install -d $(DESTDIR)$(prefix)/bin
++	install $(APP) $(DESTDIR)$(prefix)/bin
+ 
+ clean:
+ 	rm -f maep *.o *~ \#*\#

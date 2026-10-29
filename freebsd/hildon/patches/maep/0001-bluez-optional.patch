@@ -1,0 +1,42 @@
+--- a/configure.in
++++ b/configure.in
+@@ -89,10 +89,10 @@
+ 
+ # check for bluetooth
+ PKG_CHECK_MODULES([bluez], [bluez], [
+-  CFLAGS="$CFLAGS $bluez_CFLAGS"
++  CFLAGS="$CFLAGS $bluez_CFLAGS -DHAVE_BLUEZ"
+   LIBS="$LIBS $bluez_LIBS"
+ ], [
+-    AC_MSG_ERROR([ERROR: bluetooth support missing])
++    AC_MSG_WARN([no bluez: no Zephyr HxM heart rate monitor])
+ ])
+ 
+ # check for maemo
+--- a/src/hxm.c
++++ b/src/hxm.c
+@@ -15,6 +15,7 @@
+  * along with Maep.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#ifdef HAVE_BLUEZ
+ #include <bluetooth/bluetooth.h>
+ #include <bluetooth/hci.h>
+ #include <bluetooth/hci_lib.h>
+@@ -392,3 +393,16 @@
+   hxm_destroy(hxm);
+ }
+ 
++
++#else /* !HAVE_BLUEZ */
++
++#include "hxm.h"
++
++/* No Bluetooth stack (FreeBSD has no BlueZ): no heart rate monitor, the
++ * rest of Maep as it is */
++hxm_t *hxm_init(void) { return NULL; }
++void hxm_register_callback(hxm_t *hxm, hxm_cb cb, void *data) { }
++void hxm_unregister_callback(hxm_t *hxm, hxm_cb cb) { }
++void hxm_release(hxm_t *hxm) { }
++
++#endif /* HAVE_BLUEZ */

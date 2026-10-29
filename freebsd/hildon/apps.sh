@@ -130,6 +130,23 @@ APPS=(
 	"mapbox-gl-qml|!"
 	"pure-maps|!"
 	"osmscout-server|!"
+	# More of Leste's apps and tools. First the libraries they share:
+	# liblocation (positions from gpsd through Leste's location D-Bus
+	# interface), the mail client's D-Bus client library (apps that hand
+	# a file to the mail client), Base32 for MaeOTP, SDL_gles for CloudGPS
+	"liblocation|"
+	"libmodest-dbus-client|"
+	"libbaseencode|!"
+	"sdlgles|!"
+	"fahrplan2|!"
+	"yappari-leste|!"
+	"petrovich|"
+	"gpsrecorder|!"
+	"maemo-recorder|"
+	"maeotp|"
+	"maep|"
+	"cloudgps|!"
+	"coolkbd|!"
 )
 
 REV+=(
@@ -185,6 +202,25 @@ REV+=(
 	[maplibre-native-qt]=d929c7837371 [nemo-qml-plugin-dbus]=264aa47d6e94
 	[mapbox-gl-qml]=79e0cccea572 [pure-maps]=5807c1be2de7
 	[osmscout-server]=8db9b103142f
+)
+REV+=(
+	[liblocation]=919eb1807f07 [libmodest-dbus-client]=1a7df54dd759
+	[libbaseencode]=045da9388cc7
+	[sdlgles]=4f7c489ab7e37f960220191200c4a52eff1fcba18cd45f5883c2ce03781dea1c
+	[fahrplan2]=a32593650f54 [yappari-leste]=e1f75b39ca82
+	[petrovich]=7dcd0bb1a6d5 [gpsrecorder]=535088a58750
+	[maemo-recorder]=c50776e415d9 [maeotp]=b0ffa9d3fe10 [maep]=e20ae9db05a4
+	[cloudgps]=428fa7e09de5 [coolkbd]=194eb909c3b4
+)
+URL+=(
+	[libbaseencode]=https://github.com/paolostivanin/libbaseencode.git
+	[sdlgles]=https://maedevu.maemo.org/leste/pool/main/s/sdlgles/sdlgles_1.0.1%2B4m7.tar.gz
+	[fahrplan2]=https://github.com/smatkovi/fahrplanMaemoLeste.git
+	[yappari-leste]=https://github.com/smatkovi/yappari-leste.git
+	[petrovich]=https://github.com/smatkovi/petrovich.git
+	[gpsrecorder]=$GH_EXTRAS/gpsrecorder.git [maemo-recorder]=$GM_EXTRAS/maemo-recorder.git
+	[maeotp]=$GH_EXTRAS/maeotp.git [maep]=$GH_EXTRAS/maep.git
+	[cloudgps]=$GH_EXTRAS/cloudgps.git [coolkbd]=$GM_EXTRAS/coolkbd.git
 )
 URL+=(
 	[maepad]=$GM_EXTRAS/maepad.git
@@ -978,4 +1014,87 @@ custom_osmscout_server() {
 	    CONFIG+=use_dbusactivation DBUS_SERVICE_PATH=/usr/local/share/dbus-1/services &&
 	    map_entries osmscout-server osmscout-server-gui osmscout-server-gui.desktop \
 	        "OSM Scout Server" "Offline maps, search and routing for Pure Maps" osmscout-server
+}
+
+# --- more of Leste's apps and tools -----------------------------------------
+# Base32/Base64 for MaeOTP, without its tests (they need criterion)
+custom_libbaseencode() {
+	sed -i '/add_subdirectory(tests)/d; /enable_testing()/d' CMakeLists.txt
+	qt_cmake
+}
+
+# SDL_gles (Maemo's OpenGL ES context on an SDL 1.2 window, here
+# sdl12-compat's), for CloudGPS: one file
+custom_sdlgles() {
+	# shellcheck disable=SC2046
+	$CC $CPPFLAGS $CFLAGS -fPIC -shared -Wl,-soname,libSDL_gles-1.2.so.0 \
+	    -o libSDL_gles-1.2.so.0 src/SDL_gles.c $(pkg-config --cflags --libs sdl) -lEGL \
+	    $LDFLAGS > make.out 2>&1 || { grep -m20 error make.out; exit 1; }
+	install -D -m 755 libSDL_gles-1.2.so.0 "$PR/usr/local/lib/libSDL_gles-1.2.so.0"
+	ln -s libSDL_gles-1.2.so.0 "$PR/usr/local/lib/libSDL_gles.so"
+	install -D -m 644 src/SDL_gles.h "$PR/usr/local/include/SDL/SDL_gles.h"
+}
+
+# Fahrplan2 (smatkovi's Leste port of the public transport planner): its
+# Leste variant, the QtMaemo5 widgets and liblocation for nearby stations
+custom_fahrplan2() {
+	# its translations with the PC's lrelease, not the sysroot's
+	sed -i 's|\$\$\[QT_INSTALL_BINS\]/lrelease[^ ]*|$$QMAKE_LRELEASE|' fahrplan2.pro
+	# the mkspec is a maemo5 platform (QtMaemo5): not Fremantle's Qt 4
+	# variant of Fahrplan, which that scope stands for here
+	sed -i 's/^maemo5 {/maemo5:!leste {/; s/^maemo5:QT += maemo5/maemo5:!leste:QT += maemo5/' fahrplan2.pro
+	qt_qmake fahrplan2.pro CONFIG+=leste
+}
+
+# GPS Recorder: stripped with llvm-strip (the PC's strip knows no arm64)
+custom_gpsrecorder() {
+	sed -i 's|^QMAKE_POST_LINK = strip |QMAKE_POST_LINK = llvm-strip |' gpsrecorder.pro
+	qt_qmake gpsrecorder.pro
+}
+
+# Yappari on whatsmeow (smatkovi): the Qt client and its WhatsApp daemon
+# yappari-wa, which is Go without cgo, built here for FreeBSD/arm64 with
+# the PC's Go (Debian's is too old for whatsmeow, FreeBSD's would need
+# the VM); D-Bus starts it. Paths built in below /usr/local.
+custom_yappari_leste() {
+	grep -rl '/usr/share/' src | xargs -r sed -i 's|/usr/share/|/usr/local/share/|g'
+	sed -i 's|/usr/libexec/|/usr/local/libexec/|; s|/usr/bin/|/usr/local/bin/|' \
+	    data/*.service data/yappari.desktop
+	(cd backend && GOOS=freebsd GOARCH=arm64 CGO_ENABLED=0 go build -trimpath \
+	    -ldflags="-s -w" -o yappari-wa .) > go.out 2>&1 || { tail -20 go.out; exit 1; }
+	(cd src && qt_qmake yappari.pro VERSION_STRING=3.0.0)
+	install -D -m 755 backend/yappari-wa "$PR/usr/local/libexec/yappari/yappari-wa"
+	install -D -m 644 data/yappari.desktop "$PR/usr/local/share/applications/hildon/yappari.desktop"
+	for f in data/*.service; do
+		install -D -m 644 "$f" "$PR/usr/local/share/dbus-1/services/${f##*/}"
+	done
+}
+
+# CloudGPS (maps in OpenGL ES 1 on SDL): its Makefile names gcc and stops
+# at warnings; built with the cross compiler, without -Werror
+custom_cloudgps() {
+	local pk="glib-2.0 liblocation sdl upower-glib json-c libcurl"
+	# shellcheck disable=SC2046
+	make -j"$JOBS" -f Makefile.in CC="$CC" PKGCFLAGS= \
+	    CFLAGS="-O2 -DN900 -D_GNU_SOURCE $CPPFLAGS $CFLAGS $(pkg-config --cflags $pk)" \
+	    LIBS="$LDFLAGS $(pkg-config --libs $pk) -lSDL_gles -lGLESv1_CM -lEGL -lm -lSDL_image -lSDL_ttf -lz" \
+	    > make.out 2>&1 || { grep -m20 -E "error:|Error [0-9]" make.out; exit 1; }
+	make -f Makefile.in install DESTDIR="$PR" > install.out 2>&1 || { tail -20 install.out; exit 1; }
+}
+
+# CoolKbd, an on-screen keyboard for X11: as Leste builds it (maemo/), one
+# program per position (docked, at the bottom, at the top) and the dock one
+# as coolkbd
+custom_coolkbd() {
+	local t
+	# common.h includes config.h, as build.sh makes it from the example
+	cp config.h.example config.h
+	for t in dock bottom top; do
+		# shellcheck disable=SC2046
+		$CC $CPPFLAGS $CFLAGS -O2 -DNDEBUG -Wall -include "maemo/config.$t.h" main.c \
+		    -o "coolkbd.$t" $(pkg-config --cflags --libs x11 xft xtst xrandr) -lm \
+		    $LDFLAGS >> make.out 2>&1 || { grep -m20 error make.out; exit 1; }
+		install -D -m 755 "coolkbd.$t" "$PR/usr/local/bin/coolkbd.$t"
+	done
+	ln -s coolkbd.dock "$PR/usr/local/bin/coolkbd"
 }

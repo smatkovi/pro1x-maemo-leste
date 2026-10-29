@@ -1,0 +1,41 @@
+--- a/src/Makefile.in
++++ b/src/Makefile.in
+@@ -30,16 +30,17 @@
+ OBJS = main.o menu.o gps.o misc.o icon.o about.o track.o net_io.o geonames.o graph.o hxm.o $(EXTRA_OBJS)
+ 
+ DEFS = -DVERSION=\"$(VERSION)\" -DPREFIX=\"$(prefix)\" -DDATADIR=\"$(datadir)/$(APP)/\" -DAPP=\"$(APP)\"
++CC = @CC@
+ CFLAGS = -Wall -O2 $(DEFS) @CFLAGS@
+ LDFLAGS = @LIBS@ -lm
+ 
+ all: $(APP)
+ 
+ %.o: %.c Makefile
+-	gcc $(CFLAGS) -o $@ -c $<
++	$(CC) $(CFLAGS) -o $@ -c $<
+ 
+ $(APP): $(OBJS)
+-	gcc -o $@ $(OBJS) $(LDFLAGS)
++	$(CC) -o $@ $(OBJS) $(LDFLAGS)
+ 
+ install:
+ 	install -d $(DESTDIR)$(prefix)$(bindir)
+--- a/src/misc.c
++++ b/src/misc.c
+@@ -35,6 +35,16 @@
+ #include <hildon/hildon-entry.h>
+ #include <hildon/hildon-pannable-area.h>
+ #include <mce/dbus-names.h>
++/* Fremantle's mce-dev had these; mce's own headers (FreeBSD) do not */
++#ifndef MCE_DEVICE_ORIENTATION_SIG
++#define MCE_DEVICE_ORIENTATION_SIG "sig_device_orientation_ind"
++#endif
++#ifndef MCE_ACCELEROMETER_ENABLE_REQ
++#define MCE_ACCELEROMETER_ENABLE_REQ "req_accelerometer_enable"
++#endif
++#ifndef MCE_ACCELEROMETER_DISABLE_REQ
++#define MCE_ACCELEROMETER_DISABLE_REQ "req_accelerometer_disable"
++#endif
+ #include <mce/mode-names.h>
+ #endif
+ 
