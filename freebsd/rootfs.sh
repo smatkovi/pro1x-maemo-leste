@@ -194,6 +194,8 @@ if [ -d "$OUT/modules" ]; then
 	cp "$OUT"/dsp-tools/* "$R/usr/local/sbin/"
 fi
 LESTE_IMG=${LESTE_IMG:-$WORK/../out/maemo-leste.img}
+FW_CHECKOUT=${FW_CHECKOUT:-$WORK/../build/firmware-fxtec-qx1050/lib/firmware}
+FW_ATH10K=${FW_ATH10K:-/usr/lib/firmware/ath10k/WCN3990}
 FW=usr/local/share/pro1x/firmware
 if [ -f "$LESTE_IMG" ] && command -v debugfs > /dev/null; then
 	log "DSP firmware from $LESTE_IMG"
@@ -203,8 +205,24 @@ if [ -f "$LESTE_IMG" ] && command -v debugfs > /dev/null; then
 	debugfs -R "rdump /lib/firmware/ath10k/WCN3990 $R/$FW/ath10k" \
 	    "$LESTE_IMG" > /dev/null 2>&1
 	ls "$R/$FW/qcom/sm6115/Fxtec/QX1050" | tr '\n' ' '; echo
+elif [ -d "$FW_CHECKOUT/qcom/sm6115/Fxtec/QX1050" ]; then
+	# else the device's firmware as 40-make-rootfs.sh fetches it for Leste
+	# (sm6115-mainline/firmware-fxtec-qx1050), and the Wi-Fi's from the
+	# build host's linux-firmware (ath10k/WCN3990, as Leste has it),
+	# unpacked where the host keeps it compressed
+	log "DSP firmware from $FW_CHECKOUT, Wi-Fi's from $FW_ATH10K"
+	mkdir -p "$R/$FW/qcom/sm6115/Fxtec" "$R/$FW/ath10k"
+	cp -R "$FW_CHECKOUT/qcom/sm6115/Fxtec/QX1050" "$R/$FW/qcom/sm6115/Fxtec/"
+	if [ -d "$FW_ATH10K" ]; then
+		cp -R "$FW_ATH10K" "$R/$FW/ath10k/"
+		find "$R/$FW/ath10k" -name '*.zst' -exec zstd -dq --rm {} \;
+		find "$R/$FW/ath10k" -name '*.xz' -exec xz -dq {} \;
+	else
+		log "no $FW_ATH10K: the root image has no Wi-Fi firmware"
+	fi
+	ls "$R/$FW/qcom/sm6115/Fxtec/QX1050" "$R/$FW/ath10k"/*/* | tr '\n' ' '; echo
 else
-	log "no Leste image ($LESTE_IMG): the root image has no DSP firmware"
+	log "no Leste image ($LESTE_IMG) nor firmware checkout ($FW_CHECKOUT): the root image has no DSP firmware"
 fi
 # The phone's sensor configuration and registry for hexagonrpcd, as Leste
 # installs them (scripts/46-sensor-stack.sh): from the NixOS port's checkout
@@ -228,4 +246,4 @@ rm -f "$OUT/root.ufs"
 "$LEGACY/makefs" -t ffs -B little -o version=2,label=pro1xroot -s "${size}m" \
 	-F "$WORK/spec.root" -N "$R/etc" "$OUT/root.ufs" "$R"
 ls -la "$OUT/root.ufs"
-log "done: copy to /host/freebsd/root.ufs on the phone"
+log "done: now rootzfs.sh (the phone's root is ZFS only)"
