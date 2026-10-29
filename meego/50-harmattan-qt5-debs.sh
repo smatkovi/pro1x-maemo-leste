@@ -179,6 +179,18 @@ mkdeb() {
 	    ldconfig
 }
 
+# partrev NAME: the package revision (+pro1x<N>), PKGREV but where a part
+# changed at the same upstream version, so that apt takes the new one:
+# 2026-10-29 libmeegotouch (the Pro1X's 960x480 target, the style sheet
+# cache's alignment), meegotouchtheme (the pro1x theme's black wallpaper),
+# system-ui (no proxies of notification sinks that are gone)
+partrev() {
+	case $1 in
+	libmeegotouch|meegotouchtheme|system-ui) echo $((pkgrev + 1)) ;;
+	*) echo "$pkgrev" ;;
+	esac
+}
+
 # want NAME STAMP: build it (not built at STAMP, or in ONLY)
 want() {
 	case " $only " in *" $1 "*) return 0 ;; esac
@@ -191,11 +203,12 @@ want() {
 # installed into its own root, packaged and installed (arch/30-meego.sh's
 # part(), into a root of its own instead of /)
 part() {
-	local name=$1 kind=$2 stamp v pr dir=$1
+	local name=$1 kind=$2 stamp v pr dir=$1 prev
 	shift 2
 	# (the applications are below apps/)
 	[ -d "$S/$dir" ] || dir=apps/$name
-	stamp="$(git -C $S log -1 --format=%H -- "$dir") $pkgrev"
+	prev=$(partrev "$name")
+	stamp="$(git -C $S log -1 --format=%H -- "$dir") $prev"
 	want "$name" "$stamp" || return 0
 	echo "   $name"
 	rm -rf "$B/$name"
@@ -231,7 +244,7 @@ part() {
 	[ -n "$v" ] || v=0.1
 	v=${v#*:}
 	part_fixup "$name" "$pr"
-	mkdeb "harmattan-$name" "$v+pro1x$pkgrev" "$pr" ${CONTROL:+"$CONTROL"} ||
+	mkdeb "harmattan-$name" "$v+pro1x$prev" "$pr" ${CONTROL:+"$CONTROL"} ||
 	    { failed="$failed $name(package)"; tail -5 "$B/harmattan-$name.dpkg.log" 2> /dev/null; return 1; }
 	echo "$stamp" > "$B/$name.done"
 }
