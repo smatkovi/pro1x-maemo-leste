@@ -31,7 +31,7 @@ PARTS=(
   "libhildon|e734f0d533aa|2"
   "hildon-status-menu|33ba47660e7c|2"
   "hildon-home|0d34886acdc2|1"
-  "hildon-desktop|1273f9eee252|3"
+  "hildon-desktop|1273f9eee252|4"
   "mce|422d5f2bd618|3"
   # the location framework's two bugs (patches/fixes): liblocation linked
   # to its libraries, location-ui's dialogs without an answer at the start

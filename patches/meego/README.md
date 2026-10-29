@@ -85,10 +85,21 @@ GConf in libhildon):
   the bottom, 1.5 s, as the N9's system UI draws it; a tap or a drag sets
   the volume. N9 graphics where blanco is installed, else drawn alike.
 
+- **The status bar over the launcher and the task navigator** too, as over
+  the N9's Applications and Open applications: hildon-desktop moves the
+  status area's actor above them (its front group) and leaves its place to
+  the status area's own window, so a tap opens the status menu there as on
+  Home. Hildon shows that menu over Home; when it closes, hildon-desktop
+  goes back to the launcher or the task navigator (unless a dialog came
+  meanwhile).
+
 Tried in the FreeBSD VM (`freebsd/vm/try-meego-look.sh`, with a small
 picker program as `PICKER=`): Home with the bar, the launcher's icons, an X
 Terminal without title bar, its menu as a list, the look off and on again
 with the terminal open, the time picker rolled by a drag, the date picker;
-the volume bar with a null sink and `pactl`. Untested on a phone.
+the volume bar with a null sink and `pactl`. And with
+`freebsd/vm/try-meego-events.sh`: the volume bar started by FreeBSD's
+hildon-session, the status bar over the launcher and the task navigator,
+the status menu from either and back. Untested on a phone.
 
 Next: the Events page.

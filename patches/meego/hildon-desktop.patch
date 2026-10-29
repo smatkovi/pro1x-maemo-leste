@@ -7,7 +7,8 @@ the menu. Applications without a title bar below the status area, which
 lies across the top as the N9's thin status bar; the root window's
 _HILDON_MEEGO_LOOK for the other parts (hildon-status-menu, libhildon); the
 application menu as a list below the bar; the launcher's icons in the
-N9's shape (the N9's own where its theme is installed).
+N9's shape (the N9's own where its theme is installed). The status bar
+also over the launcher and the task navigator.
 
 diff --git a/src/hildon-desktop-views.schemas b/src/hildon-desktop-views.schemas
 index 8da5ccc..a493524 100644
@@ -143,7 +144,7 @@ index f3cf6e3..b7e99b4 100644
  
  ClutterActor *hd_home_get_edit_button (HdHome *home);
 diff --git a/src/home/hd-render-manager.c b/src/home/hd-render-manager.c
-index c039af9..55e524a 100644
+index c039af9..826cb50 100644
 --- a/src/home/hd-render-manager.c
 +++ b/src/home/hd-render-manager.c
 @@ -46,6 +46,8 @@
@@ -155,7 +156,51 @@ index c039af9..55e524a 100644
  
  #include <matchbox/core/mb-wm.h>
  #include <matchbox/theme-engines/mb-wm-theme.h>
-@@ -926,7 +928,9 @@ void hd_render_manager_sync_clutter_before ()
+@@ -852,6 +854,34 @@ hd_render_manager_should_status_area_be_visible ()
+   return FALSE;
+ }
+ 
++/* The states with the status area; in the MeeGo-like look also the launcher
++ * and the task navigator, as the N9's status bar is over its Applications
++ * and Open applications (hd-meego.c) */
++static gboolean
++hd_render_manager_state_shows_status_area (HDRMStateEnum state)
++{
++  return STATE_SHOW_STATUS_AREA (state)
++         || (hd_meego_pages_enabled () && STATE_TOOLBAR_FOREGROUND (state));
++}
++
++/* The status area's actor in the title bar, but over the launcher and the
++ * task navigator (which lie above the title bar) in the front group, in the
++ * MeeGo-like look */
++static void
++hd_render_manager_place_status_area (void)
++{
++  HdRenderManagerPrivate *priv = render_manager->priv;
++  ClutterActor *parent;
++
++  if (!priv->status_area)
++    return;
++  parent = hd_meego_pages_enabled () && STATE_TOOLBAR_FOREGROUND (priv->state)
++           ? CLUTTER_ACTOR (priv->front) : CLUTTER_ACTOR (priv->title_bar);
++  if (clutter_actor_get_parent (priv->status_area) != parent)
++    clutter_actor_reparent (priv->status_area, parent);
++  clutter_actor_raise_top (priv->status_area);
++}
++
+ /* Show or hide the status area - by moving it offscreen so it can't be clicked,
+  * as well as by hiding the actor itself. */
+ static void hd_render_manager_update_status_area(gboolean has_fullscreen)
+@@ -859,7 +889,7 @@ static void hd_render_manager_update_status_area(gboolean has_fullscreen)
+   HdRenderManagerPrivate *priv = render_manager->priv;
+   MBWindowManagerClient *c = priv->status_area_client;
+ 
+-  if (has_fullscreen || !STATE_SHOW_STATUS_AREA(priv->state))
++  if (has_fullscreen || !hd_render_manager_state_shows_status_area (priv->state))
+     {
+       VISIBILITY ("SA GO AWAY");
+       if (priv->status_area)
+@@ -926,7 +956,9 @@ void hd_render_manager_sync_clutter_before ()
        case HDRM_STATE_HOME_PORTRAIT: /* Fallen truth */
        case HDRM_STATE_HOME:
          blur |=  HDRM_ZOOM_FOR_HOME;
@@ -166,7 +211,7 @@ index c039af9..55e524a 100644
            btn_state |= HDTB_VIS_BTN_LAUNCHER;
          else
            btn_state |= HDTB_VIS_BTN_SWITCHER;
-@@ -962,7 +966,8 @@ void hd_render_manager_sync_clutter_before ()
+@@ -962,7 +994,8 @@ void hd_render_manager_sync_clutter_before ()
          break;
        case HDRM_STATE_TASK_NAV:
        case HDRM_STATE_TASK_NAV_PORTRAIT:
@@ -176,7 +221,15 @@ index c039af9..55e524a 100644
          clutter_actor_show(CLUTTER_ACTOR(priv->home));
          blur |=  HDRM_BLUR_HOME |
                   HDRM_ZOOM_FOR_TASK_NAV |
-@@ -1864,6 +1869,8 @@ out:
+@@ -1007,6 +1040,7 @@ void hd_render_manager_sync_clutter_before ()
+   if (STATE_TOOLBAR_FOREGROUND(priv->state))
+     btn_state |= HDTB_VIS_FOREGROUND;
+ 
++  hd_render_manager_place_status_area ();
+   if (priv->status_menu)
+     clutter_actor_raise_top(CLUTTER_ACTOR(priv->status_menu));
+ 
+@@ -1864,6 +1898,8 @@ out:
      g_warning("Set state complete %s ",	hd_render_manager_state_str(priv->state));
  
    priv->in_set_state = FALSE;
@@ -185,7 +238,7 @@ index c039af9..55e524a 100644
  }
  
  /* Upgrade the current state to portrait. */
-@@ -2945,6 +2952,20 @@ void hd_render_manager_place_titlebar_elements (void)
+@@ -2945,6 +2981,20 @@ void hd_render_manager_place_titlebar_elements (void)
  
    x = 0;
  
@@ -206,8 +259,30 @@ index c039af9..55e524a 100644
    /* Check whether buttons are visible based on state rather than anything
     * else. As actual actor visibilities may only be set on idle. */
    if (hd_title_bar_get_state(priv->title_bar) & HDTB_VIS_BTN_LEFT_MASK)
+@@ -3316,6 +3366,21 @@ void hd_render_manager_remove_input_blocker() {
+                hd_comp_mgr_get_current_screen_height ()
+                };
+            gdk_region_union_with_rect(region, &screen);
++
++           /* The MeeGo-like look's status bar over the launcher and the
++            * task navigator: a tap on it goes to the status area itself
++            * (its menu), as on Home */
++           if (hd_meego_pages_enabled () && STATE_TOOLBAR_FOREGROUND (priv->state)
++               && priv->status_area_client
++               && priv->status_area_client->frame_geometry.y >= 0
++               && hd_render_manager_actor_is_visible (priv->status_area))
++             {
++               GdkRegion *sa = gdk_region_rectangle (
++                 (GdkRectangle*)(void*)&priv->status_area_client->frame_geometry);
++
++               gdk_region_subtract (region, sa);
++               gdk_region_destroy (sa);
++             }
+          }
+ 
+ 
 diff --git a/src/home/hd-task-navigator.c b/src/home/hd-task-navigator.c
-index b3245a5..efc0d16 100644
+index fb0c326..d719555 100644
 --- a/src/home/hd-task-navigator.c
 +++ b/src/home/hd-task-navigator.c
 @@ -61,6 +61,7 @@
@@ -325,7 +400,7 @@ index 83969c0..83f1d28 100644
   * hd_launcher_tree_populate:
   * @tree: a #HdLauncherTree
 diff --git a/src/launcher/hd-launcher-tree.h b/src/launcher/hd-launcher-tree.h
-index b829ecd..4dc6029 100644
+index cc60906..de77a33 100644
 --- a/src/launcher/hd-launcher-tree.h
 +++ b/src/launcher/hd-launcher-tree.h
 @@ -63,6 +63,7 @@ GType           hd_launcher_tree_get_type (void) G_GNUC_CONST;
@@ -383,6 +458,35 @@ index b5530e3..f1ddabc 100644
  
    /* Calculate window size from frame */
    client->window->geometry.x      = frame_geometry.x + west;
+diff --git a/src/mb/hd-comp-mgr.c b/src/mb/hd-comp-mgr.c
+index 0339f8b..9bb157e 100644
+--- a/src/mb/hd-comp-mgr.c
++++ b/src/mb/hd-comp-mgr.c
+@@ -23,6 +23,7 @@
+  */
+ 
+ #include "hd-comp-mgr.h"
++#include "hd-meego.h"
+ #include "hd-switcher.h"
+ #include "hd-task-navigator.h"
+ #include "hd-home.h"
+@@ -1380,6 +1381,7 @@ hd_comp_mgr_unregister_client (MBWMCompMgr *mgr, MBWindowManagerClient *c)
+     {
+       hd_home_remove_status_menu (HD_HOME (priv->home), actor);
+       priv->status_menu_client = NULL;
++      hd_meego_status_menu_closed ();
+     }
+   else if (HD_WM_CLIENT_CLIENT_TYPE (c) == HdWmClientTypeHomeApplet)
+     {
+@@ -2298,6 +2300,8 @@ hd_comp_mgr_map_notify (MBWMCompMgr *mgr, MBWindowManagerClient *c)
+             HDRM_STATE_LAUNCHER | HDRM_STATE_LAUNCHER_PORTRAIT |
+             HDRM_STATE_TASK_NAV | HDRM_STATE_TASK_NAV_PORTRAIT))
+         {
++          /* back there when it closes (MeeGo-like look, hd-meego.c) */
++          hd_meego_status_menu_opened (hd_render_manager_get_state ());
+           if (STATE_IS_PORTRAIT (hd_render_manager_get_state ()))
+             hd_render_manager_set_state (HDRM_STATE_HOME_PORTRAIT);
+           else
 diff --git a/src/mb/hd-status-area.c b/src/mb/hd-status-area.c
 index 8cbac5b..d1cadd5 100644
 --- a/src/mb/hd-status-area.c
@@ -480,10 +584,10 @@ index 84c1bb1..1ed349f 100644
  noinst_LTLIBRARIES = libutil.la
 diff --git a/src/util/hd-meego.c b/src/util/hd-meego.c
 new file mode 100644
-index 0000000..dea0571
+index 0000000..b21bb2a
 --- /dev/null
 +++ b/src/util/hd-meego.c
-@@ -0,0 +1,681 @@
+@@ -0,0 +1,718 @@
 +/*
 + * MeeGo-like home: the home views (Hildon's desktops, up to four), the
 + * launcher and the task navigator as pages side by side in a ring,
@@ -960,6 +1064,43 @@ index 0000000..dea0571
 +  g_idle_add (change_page, GINT_TO_POINTER (dx < 0 ? 1 : -1));
 +}
 +
++/* The status bar over the launcher and the task navigator: Hildon shows the
++ * status menu over Home, so a menu opened from them goes back there when it
++ * closes (unless something else, a dialog, came meanwhile) */
++static HDRMStateEnum menu_from = HDRM_STATE_UNDEFINED;
++
++void
++hd_meego_status_menu_opened (int state)
++{
++  menu_from = enabled ? (HDRMStateEnum) state : HDRM_STATE_UNDEFINED;
++}
++
++static gboolean
++menu_back (gpointer data)
++{
++  HDRMStateEnum to = GPOINTER_TO_INT (data), state = hd_render_manager_get_state ();
++  gboolean portrait = STATE_IS_PORTRAIT (state);
++
++  if (!enabled || !STATE_IS_HOME (state) || hd_wm_has_modal_blockers (hd_mb_wm))
++    return FALSE;
++  if (STATE_IS_LAUNCHER (to))
++    to = portrait ? HDRM_STATE_LAUNCHER_PORTRAIT : HDRM_STATE_LAUNCHER;
++  else if (STATE_IS_TASK_NAV (to) && !hd_task_navigator_is_empty ())
++    to = portrait ? HDRM_STATE_TASK_NAV_PORTRAIT : HDRM_STATE_TASK_NAV;
++  else
++    return FALSE;
++  hd_render_manager_set_state (to);
++  return FALSE;
++}
++
++void
++hd_meego_status_menu_closed (void)
++{
++  if (menu_from != HDRM_STATE_UNDEFINED)
++    g_idle_add (menu_back, GINT_TO_POINTER (menu_from));
++  menu_from = HDRM_STATE_UNDEFINED;
++}
++
 +/* The launcher's icons in the N9's shape.
 + *
 + * The N9's own icons (its theme, blanco, is Nokia's and not part of this:
@@ -1167,10 +1308,10 @@ index 0000000..dea0571
 +}
 diff --git a/src/util/hd-meego.h b/src/util/hd-meego.h
 new file mode 100644
-index 0000000..d9a9aee
+index 0000000..a402cdb
 --- /dev/null
 +++ b/src/util/hd-meego.h
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,25 @@
 +#ifndef __HD_MEEGO_H__
 +#define __HD_MEEGO_H__
 +
@@ -1190,6 +1331,8 @@ index 0000000..d9a9aee
 +void hd_meego_x_event (XEvent *xev);
 +void hd_meego_leave_home (int dir);
 +void hd_meego_state_changed (void);
++void hd_meego_status_menu_opened (int state);
++void hd_meego_status_menu_closed (void);
 +GdkPixbuf *hd_meego_launcher_icon (const gchar *icon_name, const gchar *fname,
 +                                   gint size);
 +

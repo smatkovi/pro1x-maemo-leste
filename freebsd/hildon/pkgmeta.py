@@ -376,12 +376,16 @@ REVISION = {
     # 2026-10-27: the launcher's menu below /usr/local (it was empty), the
     # MeeGo-like pages (patches/meego, off by default); 2: the edge
     # gestures, no more crash when a thumbnail zooms in (isnanf, 0003);
-    # 4: no dependency on Nokia's sounds (PRIVATE)
-    'hildon-desktop': 4,
+    # 4: no dependency on Nokia's sounds (PRIVATE); 5: the MeeGo-like look's
+    # status bar over the launcher and the task navigator, the Events page
+    'hildon-desktop': 5,
     # 2026-10-27: the daemon too (it was libalarm only)
     'alarmd': 1,
-    # 2026-10-27: Leste's hildon-libs texts, not libhildon's (EXCLUDE)
-    'libhildon': 1, 'leste-l10n-en': 1,
+    # 2026-10-27: Leste's hildon-libs texts, not libhildon's (EXCLUDE); 2:
+    # the MeeGo-like look's list menu and wheel pickers (patches/meego)
+    'libhildon': 2, 'leste-l10n-en': 1,
+    # 2026-10-29: the MeeGo-like look's thin status bar (patches/meego)
+    'hildon-status-menu': 1,
     # 2026-10-27: Qt 5.15 fixes (fonts, theme images, window size, styles,
     # dialogs and banners that took taps)
     'qt-components': 1,
