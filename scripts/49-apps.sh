@@ -54,10 +54,16 @@ for deb in \
 	rm -f "/tmp/${deb##*/}"
 done
 
-# The N900's other games and its media player's successor from Leste's
-# extras; sdl12-compat in place of SDL 1.2, so that SDL 1.2 games (Marbles)
-# are scaled to the full screen
-apt-get install -y -q osso-mahjong openmediaplayer libsdl1.2-compat-shim
+# The N900's media player's successor from Leste's extras; sdl12-compat in
+# place of SDL 1.2, so that SDL 1.2 games (Marbles) are scaled to the full
+# screen
+apt-get install -y -q openmediaplayer libsdl1.2-compat-shim
+# Mahjong on its own: it needs osso-sounds-game-mahjong | libre-mahjong-sounds
+# and osso-graphics-game-mahjong | libre-mahjong-graphics, which neither
+# daedalus nor excalibur has (2026-10-29, main, contrib, non-free and the
+# extras); in one call with the others it made apt refuse all of them
+apt-get install -y -q osso-mahjong ||
+  echo ">> osso-mahjong not installable (its sound and graphics packages are not in the archive)"
 
 # Printing: CUPS with the command line tools (lp, lpr). No recommends, so no
 # cups-browsed or avahi listening on the network; browsing stays off.
