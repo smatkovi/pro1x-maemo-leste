@@ -75,7 +75,7 @@ osmscout-server|runs (VM: Liechtenstein downloaded through its map manager, an o
 harmattan-session|runs (VM, Xvfb 2160x1080: mcompositor, sysuid, meego-im-uiserver, meegofeedbackd and the home, which shows the applications)
 harmattan-meego-notes|runs (VM: the N9's look with blanco, the list, "Add note")
 harmattan-meego-calculator|runs in harmattan-session (VM: the N9's keys, across the screen)
-harmattan-meego-contacts|starts and keeps running in harmattan-session (VM)
+harmattan-meego-contacts|runs in harmattan-session (VM: "No contacts", the N9's tool bar)
 harmattan-meego-calendar|runs in harmattan-session (VM: the month, today, "No events")
 maemo-translate|runs (VM: in Hildon's look, translates as one types, English to German)
 kotki|runs (VM: kotki-server, German to English and back, about 24 s a sentence there under emulation)
