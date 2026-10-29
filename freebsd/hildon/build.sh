@@ -718,6 +718,9 @@ if [ $# -eq 0 ] || [[ " $* " == *" pro1x-proximity "* ]]; then
 	dsp_tool pro1x-proximity sbin "libssc gio-unix-2.0" ||
 	    failed+=(pro1x-proximity)
 fi
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-light "* ]]; then
+	dsp_tool pro1x-light bin "libssc gio-unix-2.0" || failed+=(pro1x-light)
+fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-standby "* ]]; then
 	dsp_tool pro1x-standby bin "x11 xext xi cairo pangocairo sqlite3 dbus-1" ||
 	    failed+=(pro1x-standby)

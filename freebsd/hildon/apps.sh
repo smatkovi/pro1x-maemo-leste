@@ -260,7 +260,7 @@ REV+=(
 	[liblocation]=919eb1807f07 [libmodest-dbus-client]=1a7df54dd759
 	[libbaseencode]=045da9388cc7
 	[sdlgles]=4f7c489ab7e37f960220191200c4a52eff1fcba18cd45f5883c2ce03781dea1c
-	[fahrplan2]=a32593650f54 [yappari-leste]=e1f75b39ca82
+	[fahrplan2]=a32593650f54 [yappari-leste]=86d34e711832
 	[petrovich]=7dcd0bb1a6d5 [gpsrecorder]=535088a58750
 	[maemo-recorder]=c50776e415d9 [maeotp]=b0ffa9d3fe10 [maep]=e20ae9db05a4
 	[cloudgps]=428fa7e09de5 [coolkbd]=194eb909c3b4

@@ -55,6 +55,10 @@ LOCAL = {
                         'libssc while a client watches it and serves it as '
                         'org.pro1x.Proximity on the system bus (tools/pro1x-proximity), '
                         'with its rc.d script.', ['UNKNOWN']),
+    'pro1x-light': ('1.0', "One reading of the Pro1X's ambient light sensor",
+                    "pro1x-light switches the ADSP's ambient light sensor on through "
+                    'libssc, prints one reading in lux and switches it off again '
+                    '(tools/pro1x-light); the photo light meter asks it.', ['UNKNOWN']),
     'pro1x-standby': ('1.0', "The Nokia N9's stand-by screen as the X screen saver",
                       'pro1x-standby shows the time, unread notifications and the '
                       "charging state in the style of the N9's low power mode when "
@@ -177,6 +181,9 @@ RUNTIME = {
     'wifi-assistant': ['curl'],
     'pro1x-steps': ['hexagonrpc', 'dbus'],
     'pro1x-proximity': ['hexagonrpc', 'dbus'],
+    'pro1x-light': ['hexagonrpc'],
+    # the light meter asks the Pro1X's light sensor (pro1x-light)
+    'photolightmeter': ['pro1x-light'],
     'pro1x-gnss': ['gpsd'],
     # the modem asks for its files and domains before its file systems
     'rmtfs': ['tqftpserv', 'pd-mapper'],
@@ -391,7 +398,9 @@ REVISION = {
     'modest': 1, 'libmodest-dbus-client': 1, 'harmattan-libdsme': 1,
     # 2026-10-29: Yappari's program itself (its qmake had failed unseen:
     # libqrencode), sphone's configuration below /usr/local/share
-    'yappari-leste': 1,
+    'yappari-leste': 2,
+    # 2026-10-29: the light meter reads the Pro1X's light sensor (pro1x-light)
+    'photolightmeter': 1,
     # 2026-10-29: its headers below include/harmattan-mce, beside Leste's
     'harmattan-mce-dev': 1,
     # 2026-10-29: the gettext texts below /usr/local/share/locale (the

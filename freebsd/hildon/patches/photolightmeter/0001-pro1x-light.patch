@@ -1,0 +1,50 @@
+The Pro1X on FreeBSD: its light sensor is the ADSP's, read once by
+pro1x-light (libssc); Linux's sysfs paths after it, not where it is
+
+--- a/lux.pas	2026-10-29 16:51:19.004112136 +0100
++++ b/lux.pas	2026-10-29 16:51:19.014474604 +0100
+@@ -7,7 +7,7 @@
+   //Classes, SysUtils; 
+          function GetLight() : integer;
+ implementation
+-uses Dialogs, SysUtils, strutils;
++uses Dialogs, SysUtils, strutils, process;
+ 
+ function readIntFromFile(var path: string): integer;
+ var
+@@ -66,6 +66,23 @@
+   checkOld := found;
+ end;
+ 
++// the Pro1X (FreeBSD): its light sensor is the ADSP's, which
++// pro1x-light reads once (libssc)
++function checkPro1X(var lux: integer): boolean;
++const
++  tool = '/usr/local/bin/pro1x-light';
++var
++  output: string;
++begin
++  lux := 0;
++  checkPro1X := false;
++  if not SysUtils.FileExists(tool) then exit;
++  if not process.RunCommand(tool, [], output) then exit;
++  lux := SysUtils.StrToIntDef(SysUtils.Trim(output), -1);
++  checkPro1X := lux >= 0;
++  if lux < 0 then lux := 0;
++end;
++
+ function checkNew(var l: integer): boolean;
+ const
+   drvdir = '/sys/bus/iio/devices';
+@@ -148,6 +165,11 @@
+   GetLight := lux;
+   if b = false then
+   begin
++    b := checkPro1X(lux);
++    GetLight := lux;
++  end;
++  if (b = false) and not SysUtils.FileExists('/usr/local/bin/pro1x-light') then
++  begin
+     b := checkNew(lux);
+     GetLight := lux;
+   end; //if
