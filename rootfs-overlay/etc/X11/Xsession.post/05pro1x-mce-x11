@@ -1,0 +1,6 @@
+# F(x)tec Pro1X (sourced by Xsession-post): mce, which runs as root, may
+# use this X server. Its x11-ctrl module switches the display off through
+# DPMS and the input devices off with it; without the server's cookie
+# (Xorg -auth, the session user's) XOpenDisplay() failed, and the display
+# stayed on when mce had blanked it.
+xhost +si:localuser:root > /dev/null 2>&1
