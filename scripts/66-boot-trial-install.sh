@@ -46,6 +46,12 @@ with_image() {
 	m=
 	[ -z "$dev" ] || m=$(findmnt -n -o TARGET -S "$dev" | head -1)
 	if [ -n "$m" ]; then
+		# read only (e.g. an overlay's lower layer for a build): left as
+		# it is, to be done again once it is free
+		if findmnt -n -o OPTIONS -S "$dev" | head -1 | tr , '\n' | grep -qx ro; then
+			log "$1 (mounted read only on $m): left out, run this again once it is free"
+			return 0
+		fi
 		log "$1 (mounted on $m)"
 		install_into "$m" "$init"
 		return 0
