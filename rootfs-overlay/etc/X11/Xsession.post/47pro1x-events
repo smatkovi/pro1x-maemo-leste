@@ -1,0 +1,6 @@
+# F(x)tec Pro1X (sourced by Xsession-post): the Nokia N9's Events page for
+# Hildon's MeeGo-like look (tools/pro1x-events), the first home view while
+# the look is on, unseen while it is off.
+if [ -x /usr/bin/pro1x-events ]; then
+	/usr/bin/pro1x-events > /dev/null 2>&1 &
+fi

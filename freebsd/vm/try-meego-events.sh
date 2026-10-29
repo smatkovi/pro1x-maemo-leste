@@ -11,9 +11,10 @@
 #   events  the Events page (pro1x-events) on the first home view (7), its
 #           feed pulled down to update (8, while pulled; 9 after), scrolled
 #           up (10), the swipe on to the next page (11)
-# EVENTS_FIXTURE=<dir> serves <dir> at http://127.0.0.1:8000 (a Mastodon
-# home timeline as <dir>/api/v1/timelines/home) and points the Events
-# page's Mastodon account there. Then everything ends.
+# EVENTS_FIXTURE=1 makes up a Mastodon home timeline and unread calls and
+# messages (events-fixture.sh, beside this script), serves the timeline at
+# http://127.0.0.1:8000 and points the Events page's Mastodon account
+# there. Then everything ends.
 set -u
 SHOTS=/root/shots
 STEPS=${STEPS:-volume bar events}
@@ -30,7 +31,9 @@ gc() { gconftool-2 --direct --config-source=xml:readwrite:$HOME/.config/gconf "$
 gc -s -t int /apps/osso/hildon-desktop/views/current 1
 fixture=
 if [ -n "${EVENTS_FIXTURE:-}" ]; then
-	(cd "$EVENTS_FIXTURE" && exec python3.11 -m http.server 8000 --bind 127.0.0.1) \
+	rm -rf /tmp/events-fixture
+	sh "$(dirname "$0")/events-fixture.sh" /tmp/events-fixture
+	(cd /tmp/events-fixture && exec python3.11 -m http.server 8000 --bind 127.0.0.1) \
 	    > /tmp/fixture.log 2>&1 &
 	fixture=$!
 	gc -s -t string /apps/pro1x/events/mastodon_server http://127.0.0.1:8000
@@ -93,13 +96,15 @@ case " $STEPS " in *" bar "*)
 	# the left edge's swipe: to the open applications
 	drag 5 600 700 600; release; shot 3 "the task navigator with the status bar"
 	tap 1900 40;                   shot 4 "a tap on the bar's right half: the status menu"
-	tap 1080 900;                  sleep 3
+	# closed: back to the task navigator (its transition takes a while in
+	# the VM, a swipe during it is lost)
+	tap 1080 900;                  sleep 12
 	# on to the launcher (the finger to the right)
 	drag 300 600 1800 600; release; shot 5 "the launcher with the status bar"
 	tap 1900 40;                   shot 6 "the status menu over the launcher"
-	tap 1080 900;                  sleep 3
+	tap 1080 900;                  sleep 12
 	# back to the task navigator
-	drag 1800 600 300 600; release; sleep 3
+	drag 1800 600 300 600; release; sleep 8
 	;;
 esac
 
@@ -109,7 +114,7 @@ case " $STEPS " in *" events "*)
 	case " $STEPS " in *" bar "*) drag 1800 600 300 600; release ;; esac
 	shot 7 "the Events page"
 	xwininfo -root -tree | grep -i -E 'pro1x-events|Events' | head -3
-	drag 1080 300 1080 800 15;     SHOTWAIT=1 shot 8 "pulled down"
+	drag 1080 300 1080 800 15;     SHOTWAIT=5 shot 8 "pulled down"
 	release;                       shot 9 "updated"
 	drag 1080 900 1080 300 10; release; shot 10 "scrolled up"
 	drag 1800 600 300 600; release; shot 11 "swiped on"

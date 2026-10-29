@@ -65,6 +65,13 @@ LOCAL = {
                       'X blanks the screen, the rest black for the AMOLED panel '
                       "(tools/pro1x-standby); Nokia's icons and font are not "
                       'included.', ['UNKNOWN']),
+    'pro1x-events': ('1.0', "The Nokia N9's Events page for Hildon's MeeGo-like look",
+                     'pro1x-events shows on the first home view the date, the missed '
+                     'calls, messages and chats (rtcom-eventlogger), unread e-mail '
+                     "(modest) and a Mastodon account's home timeline, pulled down to "
+                     'update, while the MeeGo-like look is on; its control panel applet '
+                     'takes the account (tools/pro1x-events, apps/pro1x-events).',
+                     ['UNKNOWN']),
     'pro1x-volume-osd': ('1.0', "The Nokia N9's volume bar for Hildon's MeeGo-like look",
                          'pro1x-volume-osd shows the volume of PulseAudio\'s default sink '
                          "as the N9's system UI does when it changes, while Hildon's "
@@ -191,6 +198,10 @@ RUNTIME = {
     # the light meter asks the Pro1X's light sensor (pro1x-light)
     'photolightmeter': ['pro1x-light'],
     'pro1x-gnss': ['gpsd'],
+    # the page is a home widget of hildon-desktop's MeeGo-like look; the
+    # certificates for Mastodon's https
+    'pro1x-events': ['hildon-desktop', 'hildon-control-panel', 'rtcom-eventlogger-plugins',
+                     'ca_root_nss'],
     # the volume it shows is PulseAudio's, which hildon-session starts
     'pro1x-volume-osd': ['pulseaudio', 'hildon-desktop'],
     # the modem asks for its files and domains before its file systems

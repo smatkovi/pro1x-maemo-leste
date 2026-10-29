@@ -549,6 +549,35 @@ fm_app() {
 	cp -a "$PR/." "$STAGE/"
 }
 
+# The Events page of the MeeGo-like look (tools/pro1x-events) and its
+# control panel applet, the Mastodon account (apps/pro1x-events)
+events_page() {
+	local b=$BUILD/pro1x-events src=$REPO/apps/pro1x-events
+	local page="gtk+-2.0 gconf-2.0 gio-2.0 libcurl json-glib-1.0 rtcom-eventlogger x11"
+	local applet="hildon-1 hildon-control-panel gconf-2.0 libosso gtk+-2.0"
+	log "pro1x-events"
+	mkdir -p "$b"
+	# shellcheck disable=SC2046,SC2086
+	$CC $CPPFLAGS $CFLAGS $LDFLAGS -DLOCALEDIR='"/usr/local/share/locale"' \
+	    -o "$b/pro1x-events" "$REPO/tools/pro1x-events/pro1x-events.c" \
+	    $(pkg-config --cflags --libs $page) -lm > "$b/make.out" 2>&1 ||
+	    { grep -m20 error "$b/make.out"; return 1; }
+	# shellcheck disable=SC2046,SC2086
+	$CC $CPPFLAGS $CFLAGS $LDFLAGS -fPIC -shared -DLOCALEDIR='"/usr/local/share/locale"' \
+	    -o "$b/libpro1x-events.so" "$src/pro1x-events-settings.c" \
+	    $(pkg-config --cflags --libs $applet) >> "$b/make.out" 2>&1 ||
+	    { grep -m20 error "$b/make.out"; return 1; }
+	msgfmt -o "$b/de.mo" "$src/de.po"
+	PR=$H/pkgroot/pro1x-events
+	rm -rf "$PR"
+	install -D -m 755 "$b/pro1x-events" "$PR/usr/local/bin/pro1x-events"
+	install -D -m 644 "$b/libpro1x-events.so" "$PR/usr/local/lib/hildon-control-panel/libpro1x-events.so"
+	install -D -m 644 "$src/pro1x-events.desktop" \
+	    "$PR/usr/local/share/applications/hildon-control-panel/pro1x-events.desktop"
+	install -D -m 644 "$b/de.mo" "$PR/usr/local/share/locale/de/LC_MESSAGES/pro1x-events.mo"
+	cp -a "$PR/." "$STAGE/"
+}
+
 # This repository's small tools (tools/): the step counter and the
 # proximity sensor (libssc), the modem's GNSS for gpsd (QMI), the stand-by
 # screen, the N9's volume bar, with their files (extra/<tool>); the fourth
@@ -734,6 +763,9 @@ if [ $# -eq 0 ] || [[ " $* " == *" pro1x-look "* ]]; then
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-fm "* ]]; then
 	fm_app || failed+=(pro1x-fm)
+fi
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-events "* ]]; then
+	events_page || failed+=(pro1x-events)
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-steps "* ]]; then
 	dsp_tool pro1x-steps sbin "libssc gio-unix-2.0" || failed+=(pro1x-steps)

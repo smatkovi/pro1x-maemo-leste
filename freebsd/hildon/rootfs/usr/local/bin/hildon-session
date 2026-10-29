@@ -100,6 +100,12 @@ if [ -x /usr/local/bin/pro1x-volume-osd ]; then
 fi
 respawn /usr/local/bin/hildon-status-menu &
 menu=$!
+# The N9's Events page, the first home view while the MeeGo-like look is on
+# (Leste: Xsession.post/47pro1x-events)
+if [ -x /usr/local/bin/pro1x-events ]; then
+	respawn /usr/local/bin/pro1x-events &
+	menu="$menu $!"
+fi
 respawn /usr/local/bin/hildon-home &
 home=$!
 /usr/local/bin/hildon-desktop

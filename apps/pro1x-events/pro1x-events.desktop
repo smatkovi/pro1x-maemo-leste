@@ -1,0 +1,9 @@
+[Desktop Entry]
+Encoding=UTF-8
+Type=HildonControlPanelPlugin
+Name=Events
+Comment=The Mastodon account of the N9-like Events page
+Icon=general_rss
+X-Text-Domain=pro1x-events
+X-control-panel-plugin=libpro1x-events.so
+Categories=personalisation

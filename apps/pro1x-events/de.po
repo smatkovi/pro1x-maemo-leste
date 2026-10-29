@@ -1,0 +1,87 @@
+# German for pro1x-events (the Events page and its control panel applet)
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: de\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Yesterday"
+msgstr "Gestern"
+
+msgid "Unknown"
+msgstr "Unbekannt"
+
+msgid "Missed call"
+msgid_plural "%d missed calls"
+msgstr[0] "Verpasster Anruf"
+msgstr[1] "%d verpasste Anrufe"
+
+msgid "%d messages: %s"
+msgstr "%d Nachrichten: %s"
+
+msgid "(no subject)"
+msgstr "(kein Betreff)"
+
+msgid "E-mail"
+msgstr "E-Mail"
+
+msgid "%d unread"
+msgid_plural "%d unread"
+msgstr[0] "%d ungelesen"
+msgstr[1] "%d ungelesen"
+
+msgid "Mastodon's answer was not understood."
+msgstr "Die Antwort von Mastodon war unverständlich."
+
+msgid "boosted by %s"
+msgstr "geteilt von %s"
+
+msgid "%u attachment"
+msgid_plural "%u attachments"
+msgstr[0] "%u Anhang"
+msgstr[1] "%u Anhänge"
+
+msgid "Nothing new in the home timeline."
+msgstr "Nichts Neues in der Startseite."
+
+msgid "No connection to %s (%s)."
+msgstr "Keine Verbindung zu %s (%s)."
+
+msgid "Mastodon does not take the access token: set it anew in Settings, Events."
+msgstr "Mastodon nimmt den Zugangsschlüssel nicht an: in Einstellungen, Ereignisse neu eintragen."
+
+msgid "%s answered %ld."
+msgstr "%s antwortete %ld."
+
+msgid "Add a Mastodon account in Settings, Events, and its home timeline shows here."
+msgstr "Ein Mastodon-Konto in Einstellungen, Ereignisse eintragen, dann erscheint hier seine Startseite."
+
+msgid "Notifications"
+msgstr "Benachrichtigungen"
+
+msgid "Updating…"
+msgstr "Wird aktualisiert…"
+
+msgid "Clear"
+msgstr "Löschen"
+
+msgid "Release to update"
+msgstr "Zum Aktualisieren loslassen"
+
+msgid "Pull down to update"
+msgstr "Zum Aktualisieren nach unten ziehen"
+
+msgid "Events"
+msgstr "Ereignisse"
+
+msgid "The Events page shows the home timeline of this Mastodon account. Its access token: on the account's web page, Preferences, Development, New application, with the scope read:statuses, then \"Your access token\"."
+msgstr "Die Seite Ereignisse zeigt die Startseite dieses Mastodon-Kontos. Sein Zugangsschlüssel: auf der Webseite des Kontos unter Einstellungen, Entwicklung, Neue Anwendung, mit dem Bereich read:statuses, dann „Dein Zugriffstoken“."
+
+msgid "Mastodon server"
+msgstr "Mastodon-Server"
+
+msgid "Access token"
+msgstr "Zugangsschlüssel"
+
+msgid "Save"
+msgstr "Speichern"

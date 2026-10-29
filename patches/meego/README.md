@@ -102,4 +102,53 @@ the volume bar with a null sink and `pactl`. And with
 hildon-session, the status bar over the launcher and the task navigator,
 the status menu from either and back. Untested on a phone.
 
-Next: the Events page.
+## The Events page (`tools/pro1x-events`, `apps/pro1x-events`, `hildon-desktop.patch`)
+
+The first home view becomes the N9's Events page while the look is on:
+below the status bar the day and the date, then the notifications (the
+missed calls, SMS and chats that rtcom-eventlogger has unread, one entry
+per caller or sender; the unread e-mail of each modest account, asked over
+D-Bus only while modest runs) with Clear, which marks them read, then the
+home timeline of a Mastodon account (`GET /api/v1/timelines/home` with the
+account's access token, in a thread with libcurl, the avatars cached in
+`~/.cache/pro1x-events`). The list scrolls up and down with a flick; pulled
+down at its top it updates (as the N9's feeds, "Pull down to update",
+"Release to update"), else every 15 minutes while it is seen. A tap opens
+the post in the browser, a notification its application (through
+hildon-desktop's launcher, `LaunchApplication`), the hint without an account
+Settings, Events. Sizes and colours are those of the N9's Events view (its
+home screen's style), the N9's font and icons where they are installed (not
+part of this repository).
+
+- `pro1x-events` is a Home widget of its own (a `_HILDON_WM_WINDOW_TYPE_HOME_APPLET`
+  window, as Hildon's operator name is), started by the X session (Leste:
+  `Xsession.post/47pro1x-events`, FreeBSD: `hildon-session`), shown while
+  the root window has `_HILDON_MEEGO_LOOK`; it puts itself on the first
+  view right below the bar, as wide as the screen. Closed in Home's edit
+  mode, it comes back when the look is switched on again.
+- hildon-desktop passes Home widgets only taps (it takes their drags to pan
+  Home); a widget with `_HILDON_MEEGO_SCROLLING_APPLET` (CARDINAL 1) gets the
+  drags up and down as motion and release events, with their times, while
+  the drags across still change the page and a long press still edits
+  Home. Widgets may begin right below the bar (else below Hildon's title
+  bar).
+- Settings, Events (`apps/pro1x-events`, a control panel applet): the
+  Mastodon server and the access token (from the account's web page:
+  Preferences, Development, New application with the scope
+  `read:statuses`, then "Your access token"). Both are kept in GConf,
+  `/apps/pro1x/events/mastodon_server` and `mastodon_token`, in plain text
+  as Hildon keeps its other settings; empty fields remove the account.
+
+Leste: `scripts/49-events.sh` (after `49-hidpi.sh` with this patch). FreeBSD:
+`freebsd/hildon/build.sh pro1x-events`, package `pro1x-events`.
+
+Tried in the FreeBSD VM (`freebsd/vm/try-meego-events.sh EVENTS_FIXTURE=1`,
+with a made-up timeline served on the VM itself and made-up unread calls
+and messages, `freebsd/vm/events-fixture.sh`): the page with the
+notifications and the feed, scrolled by drags, pulled down to update, the
+swipes across to the second view, back, to the launcher and back, Clear,
+the hint without an account opening Settings, Events, a token saved there
+and the feed fetched with it. Not tried: a real Mastodon server, modest
+with unread mail, a phone. Portrait: the page follows the screen's size,
+but hildon-desktop's portrait home pans up and down, so it gets no drags
+there.
