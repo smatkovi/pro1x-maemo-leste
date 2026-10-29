@@ -182,8 +182,16 @@ SNAPS
         echo identity > "/sys/kernel/iommu_groups/${grp##*/}/type" ||
           log_warning_msg "UFS stays behind the SMMU"
         echo 4804000.ufshc > /sys/bus/platform/drivers/ufshcd-qcom/bind
-        # back once its partitions are
-        find_backing
+        # back once its partitions are. If UFS does not come back (the
+        # host did not start again), FreeBSD would set it up behind the
+        # SMMU and fault there, which leaves the phone in the
+        # bootloader's crash dump mode: the boot menu again instead.
+        if ! find_backing; then
+          log_failure_msg "UFS did not come back: not starting $key, rebooting"
+          kexec -u 2> /dev/null
+          sync
+          reboot -f
+        fi
       fi
       # FreeBSD and KolibriOS drive these on the setup Linux leaves (no
       # clock drivers): runtime-active from here on, their clocks stay on.

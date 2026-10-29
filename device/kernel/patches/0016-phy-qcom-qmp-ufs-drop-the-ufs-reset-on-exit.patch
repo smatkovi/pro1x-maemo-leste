@@ -1,0 +1,58 @@
+Subject: [PATCH] phy: qcom-qmp-ufs: drop the UFS reset on exit
+
+On PHYs without a PCS software reset (no_pcs_sw_reset), the first init
+takes the "ufsphy" reset, which the UFS host controller (ufs-qcom)
+provides as a reset controller of its own, and keeps it for good. When
+the host is unbound, its reset controller is unregistered, and since the
+reset core revokes the controls of a removed controller, the kept one
+fails with -ENODEV from then on. Binding the host again then ends in
+
+  ufshcd-qcom 4804000.ufshc: Failed to calibrate PHY: -19
+  ufshcd-qcom 4804000.ufshc: Host controller enable failed
+
+and UFS stays down. The Pro1X's boot menu does this every time it starts
+FreeBSD (the host rebound with an identity IOMMU domain before kexec).
+
+Take the reset without devm and put it in a new exit callback (ufs-qcom
+calls phy_exit() before it goes away), so that the next init gets the
+reset of the host bound by then.
+
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+index b87314c837..0cde0e71d9 100644
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+@@ -2032,7 +2032,7 @@ static int qmp_ufs_phy_init(struct phy *phy)
+ 	 */
+ 	if (!qmp->ufs_reset) {
+ 		qmp->ufs_reset =
+-			devm_reset_control_get_exclusive(qmp->dev, "ufsphy");
++			reset_control_get_exclusive(qmp->dev, "ufsphy");
+ 
+ 		if (IS_ERR(qmp->ufs_reset)) {
+ 			ret = PTR_ERR(qmp->ufs_reset);
+@@ -2045,8 +2045,25 @@ static int qmp_ufs_phy_init(struct phy *phy)
+ 	return 0;
+ }
+ 
++static int qmp_ufs_phy_exit(struct phy *phy)
++{
++	struct qmp_ufs *qmp = phy_get_drvdata(phy);
++
++	/*
++	 * The UFS reset is provided by the UFS host controller, whose reset
++	 * controller goes away when the host is unbound: a reset control
++	 * kept from then on fails with -ENODEV. Drop it, so that the next
++	 * init takes the one of the host bound by then.
++	 */
++	reset_control_put(qmp->ufs_reset);
++	qmp->ufs_reset = NULL;
++
++	return 0;
++}
++
+ static const struct phy_ops qcom_qmp_ufs_phy_ops = {
+ 	.init		= qmp_ufs_phy_init,
++	.exit		= qmp_ufs_phy_exit,
+ 	.power_on	= qmp_ufs_power_on,
+ 	.power_off	= qmp_ufs_power_off,
+ 	.calibrate	= qmp_ufs_phy_calibrate,
