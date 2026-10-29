@@ -7,6 +7,10 @@
 # FreeBSD's makefs -t zfs, run on Linux, stops at the image's hard links.
 #
 #   WORK=/path/to/freebsd-build VM="ssh ... root@host" bash freebsd/rootzfs.sh
+#   VMDISKS=1 ...  the test VM (vm/vm.sh) has both images as disks of its
+#                  own: nothing is copied (the VM's disk may not hold them),
+#                  the pool is written straight into out/root.zfs.new. The
+#                  first run makes that file and says how to start the VM.
 #
 # On the phone root.zfs goes to /host/freebsd/ (root.ufs does not: the root
 # is ZFS only); the RAM root (mfsroot/etc/rc) imports it, or the writable
@@ -17,6 +21,17 @@ VM=${VM:?set VM=<ssh command for a FreeBSD machine, as root>}
 OUT=$WORK/out
 log() { echo ">> $*"; }
 
+SIZE=${SIZE:-3g}
+if [ -n "${VMDISKS:-}" ]; then
+	[ -f "$OUT/root.zfs.new" ] || truncate -s "$SIZE" "$OUT/root.zfs.new"
+	if ! $VM 'test -e /dev/diskid/DISK-pro1xufs && test -e /dev/diskid/DISK-pro1xzfs'; then
+		echo "the VM has not got the images as disks: stop it (shutdown -p now) and start it with"
+		echo "  DISKS=\"pro1xufs=$OUT/root.ufs,ro pro1xzfs=$OUT/root.zfs.new\" VMDIR=... bash freebsd/vm/vm.sh run"
+		exit 1
+	fi
+	$VM 'rm -rf /root/rootzfs && mkdir -p /root/rootzfs'
+	u=diskid/DISK-pro1xufs z=diskid/DISK-pro1xzfs
+else
 log "root.ufs to the FreeBSD machine"
 $VM 'rm -rf /root/rootzfs && mkdir -p /root/rootzfs'
 # sparse in the VM: the image's free space takes no room there; dd skips
@@ -31,16 +46,24 @@ for try in 1 2 3; do
 	log "transfer $try failed"
 	[ "$try" = 3 ] && exit 1
 done
+u= z=
+fi
 
 log "pool from the UFS image"
 # lz4 packs less than zstd did (2 GB then): 3 GB of pool
-$VM "SIZE=${SIZE:-3g} sh -s" <<'REMOTE'
+$VM "SIZE=$SIZE U=$u Z=$z sh -s" <<'REMOTE'
 set -e
 set -o pipefail
 cd /root/rootzfs
-u=$(mdconfig -a -t vnode -o readonly -f root.ufs)
-truncate -s "$SIZE" root.zfs
-z=$(mdconfig -a -t vnode -f root.zfs)
+if [ -n "$U" ]; then
+	u=$U z=$Z
+	# a pool from an earlier try in the file: gone
+	zpool labelclear -f /dev/$z 2> /dev/null || true
+else
+	u=$(mdconfig -a -t vnode -o readonly -f root.ufs)
+	truncate -s "$SIZE" root.zfs
+	z=$(mdconfig -a -t vnode -f root.zfs)
+fi
 mkdir -p ufs zfs
 mount -t ufs -o ro /dev/$u ufs
 zpool create -f -o ashift=12 -o cachefile=none -o autoexpand=on -O compression=lz4 \
@@ -57,9 +80,20 @@ used=$(zfs get -Hpo value used pro1x/ROOT/default)
 [ "$used" -gt 536870912 ] || { echo "only $used bytes in the pool"; exit 1; }
 umount ufs
 zpool export pro1x
-mdconfig -d -u "${z#md}"
-mdconfig -d -u "${u#md}"
+if [ -z "$U" ]; then
+	mdconfig -d -u "${z#md}"
+	mdconfig -d -u "${u#md}"
+fi
 REMOTE
+
+if [ -n "${VMDISKS:-}" ]; then
+	sync
+	mv "$OUT/root.zfs.new" "$OUT/root.zfs"
+	$VM 'rm -rf /root/rootzfs'
+	ls -las "$OUT/root.zfs"
+	log "done: restart the VM without DISKS; root.zfs to /host/freebsd/ on the phone"
+	exit 0
+fi
 
 log "back"
 # checked and up to three tries, as on the way in; the old image goes

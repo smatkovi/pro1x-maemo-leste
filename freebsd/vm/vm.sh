@@ -11,6 +11,11 @@
 #                                                    $VMDIR/vm-audio.wav, which
 #                                                    grows while the VM runs;
 #                                                    in the VM: kldload snd_hda)
+#                                                    DISKS="name=file[,ro] ...":
+#                                                    raw images as disks of
+#                                                    their own, in the VM
+#                                                    /dev/diskid/DISK-<name>
+#                                                    (rootzfs.sh VMDISKS=1)
 #   VMDIR=~/freebsd-vm bash freebsd/vm/vm.sh ssh [command]
 #
 # Needs qemu-system-aarch64 and edk2-aarch64 (Arch: pacman), genisoimage.
@@ -59,7 +64,15 @@ run)
 	audio=()
 	[ "${AUDIO:-}" != wav ] || audio=(-audiodev wav,id=snd0,path=vm-audio.wav
 	    -device intel-hda -device hda-output,audiodev=snd0)
-	exec qemu-system-aarch64 "${audio[@]}" -M virt -cpu max -smp 4 -m 6144 \
+	disks=()
+	for d in ${DISKS:-}; do
+		name=${d%%=*} f=${d#*=} ro=
+		case $f in *,ro) f=${f%,ro} ro=,readonly=on ;; esac
+		[ -f "$f" ] || { echo "vm.sh: no $f"; exit 1; }
+		disks+=(-drive "if=none,id=$name,format=raw,file=$f$ro"
+		    -device "virtio-blk-pci,drive=$name,serial=$name")
+	done
+	exec qemu-system-aarch64 "${audio[@]}" "${disks[@]}" -M virt -cpu max -smp 4 -m 6144 \
 	    -accel tcg,thread=multi \
 	    -drive if=pflash,format=raw,readonly=on,file="$FW/QEMU_EFI.fd" \
 	    -drive if=pflash,format=raw,file=vars.fd \
