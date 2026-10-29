@@ -55,6 +55,11 @@ mount -t ext4 -o rw,noatime "$dev" /host \
 # default; after the countdown the preselected entry starts by itself.
 if [ -x /sbin/pro1x-bootmenu ] && [ -x /sbin/pro1x-boot ]; then
   export PRO1X_BOOT_HOST=/host
+  # What this start chose and why, for a look from the running system
+  # (a start that went elsewhere than asked, from the PC)
+  BOOTLOG=/host/pro1x-boot/last-boot
+  bootlog() { echo "$(cut -d' ' -f1 /proc/uptime) $*" >> $BOOTLOG 2>/dev/null; }
+  : > $BOOTLOG 2>/dev/null
   # A trial of a new kernel (pro1x-boot trial, 65-kernel-update.sh): over
   # if a start of it was confirmed (slot b successful again), dropped if
   # another kernel runs, else this start is one of its tries
@@ -66,6 +71,7 @@ if [ -x /sbin/pro1x-bootmenu ] && [ -x /sbin/pro1x-boot ]; then
   oneshot=${want:+1}
   [ -n "$want" ] || want=$(pro1x-boot get-default)
   timeout=$(pro1x-boot get-timeout)
+  bootlog "want=[$want] oneshot=$oneshot trial=$trial timeout=$timeout"
   count=0
   default=0
   set --
@@ -86,6 +92,8 @@ EOF
   line=$(echo "$entries" | sed -n "$((choice + 1))p")
   key=${line%%|*}
   image=${line##*|}
+  bootlog "entries: $(echo "$entries" | cut -d'|' -f1 | tr '\n' ' ')"
+  bootlog "default=$default count=$count choice=$choice key=$key image=$image"
   # A system's snapshots (Btrfs): a second menu, newest first, 8 to a page
   # and "More" for the next. A snapshot chosen with "pro1x-boot next
   # system@number" starts after the countdown (at once without a menu);
@@ -207,6 +215,8 @@ SNAPS
   fi
   # The running system reads this (MeeGo may boot the Leste image).
   pro1x-boot set-current "$key"
+  bootlog "starting $key: IMAGE=$IMAGE SUBVOL=${SUBVOL:-}"
+  sync
   # On trial, and for a one-shot choice: the SoC's watchdog runs from here
   # on (the APSS watchdog, 0x0f017000, as for FreeBSD above). qcom_wdt
   # finds it running and the kernel feeds it until the system takes it
