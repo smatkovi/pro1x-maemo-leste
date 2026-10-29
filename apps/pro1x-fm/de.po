@@ -1,0 +1,71 @@
+# German for pro1x-fm
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: de\n"
+
+msgid "FM Radio"
+msgstr "UKW-Radio"
+
+msgid "Seek down"
+msgstr "Suchen ◀"
+
+msgid "Seek up"
+msgstr "Suchen ▶"
+
+msgid "Mute"
+msgstr "Stumm"
+
+msgid "Stereo"
+msgstr "Stereo"
+
+msgid "Mono"
+msgstr "Mono"
+
+msgid "Stereo  RDS"
+msgstr "Stereo  RDS"
+
+msgid "Mono  RDS"
+msgstr "Mono  RDS"
+
+msgid "Stations"
+msgstr "Sender"
+
+msgid "Save station"
+msgstr "Sender speichern"
+
+msgid "Remove station"
+msgstr "Sender entfernen"
+
+msgid "Station saved"
+msgstr "Sender gespeichert"
+
+msgid "Station removed"
+msgstr "Sender entfernt"
+
+msgid "No saved stations"
+msgstr "Keine gespeicherten Sender"
+
+msgid "Searching..."
+msgstr "Suche läuft …"
+
+msgid "No station found."
+msgstr "Kein Sender gefunden."
+
+msgid "The receiver is busy."
+msgstr "Der Empfänger ist beschäftigt."
+
+msgid "The receiver does not answer."
+msgstr "Der Empfänger antwortet nicht."
+
+msgid "No FM receiver (kernel without radio-qca-fm?)"
+msgstr "Kein UKW-Empfänger (Kernel ohne radio-qca-fm?)"
+
+msgid "Bluetooth is blocked or failed: the receiver needs it powered."
+msgstr "Bluetooth ist gesperrt oder ausgefallen: der Empfänger braucht es eingeschaltet."
+
+msgid "No FM sound yet: the receiver's SLIMbus path is missing."
+msgstr "Noch kein UKW-Ton: der SLIMbus-Weg des Empfängers fehlt."
+
+msgid "Switching the receiver on (the headphone cable is the antenna)..."
+msgstr "Empfänger wird eingeschaltet (das Kopfhörerkabel ist die Antenne) …"

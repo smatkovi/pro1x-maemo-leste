@@ -1,0 +1,121 @@
+#!/usr/bin/python3
+"""pro1x-fm-test -- the Pro1X's FM receiver (/dev/radio0) from a shell.
+
+  pro1x-fm-test [-d DEV] [-t SECONDS] MHZ      tune, then report
+  pro1x-fm-test [-d DEV] [-t SECONDS] up|down  seek, then report
+  pro1x-fm-test [-d DEV] scan                  seek up through the band
+
+Keeps the device open (the receiver runs only while it is) and prints the
+frequency, the signal, stereo, RDS and the RDS station name and text once
+a second. Needs the kernel's radio-qca-fm (device/kernel/patches/0015).
+"""
+import argparse, ctypes, fcntl, os, sys, time
+
+def _ioc(d, nr, size):
+    return (d << 30) | (size << 16) | (ord('V') << 8) | nr
+
+class Frequency(ctypes.Structure):
+    _fields_ = [('tuner', ctypes.c_uint32), ('type', ctypes.c_uint32),
+                ('frequency', ctypes.c_uint32), ('reserved', ctypes.c_uint32 * 8)]
+
+class Tuner(ctypes.Structure):
+    _fields_ = [('index', ctypes.c_uint32), ('name', ctypes.c_char * 32),
+                ('type', ctypes.c_uint32), ('capability', ctypes.c_uint32),
+                ('rangelow', ctypes.c_uint32), ('rangehigh', ctypes.c_uint32),
+                ('rxsubchans', ctypes.c_uint32), ('audmode', ctypes.c_uint32),
+                ('signal', ctypes.c_int32), ('afc', ctypes.c_int32),
+                ('reserved', ctypes.c_uint32 * 4)]
+
+class Seek(ctypes.Structure):
+    _fields_ = [('tuner', ctypes.c_uint32), ('type', ctypes.c_uint32),
+                ('seek_upward', ctypes.c_uint32), ('wrap_around', ctypes.c_uint32),
+                ('spacing', ctypes.c_uint32), ('rangelow', ctypes.c_uint32),
+                ('rangehigh', ctypes.c_uint32), ('reserved', ctypes.c_uint32 * 5)]
+
+class ExtControl(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [('id', ctypes.c_uint32), ('size', ctypes.c_uint32),
+                ('reserved2', ctypes.c_uint32), ('string', ctypes.c_void_p)]
+
+class ExtControls(ctypes.Structure):
+    _fields_ = [('which', ctypes.c_uint32), ('count', ctypes.c_uint32),
+                ('error_idx', ctypes.c_uint32), ('request_fd', ctypes.c_int32),
+                ('reserved', ctypes.c_uint32), ('controls', ctypes.c_void_p)]
+
+RW, W = 3, 1
+G_TUNER = _ioc(RW, 29, ctypes.sizeof(Tuner))
+G_FREQUENCY = _ioc(RW, 56, ctypes.sizeof(Frequency))
+S_FREQUENCY = _ioc(W, 57, ctypes.sizeof(Frequency))
+G_EXT_CTRLS = _ioc(RW, 71, ctypes.sizeof(ExtControls))
+S_HW_FREQ_SEEK = _ioc(W, 82, ctypes.sizeof(Seek))
+TUNER_RADIO = 1
+SUB_STEREO, SUB_RDS = 0x2, 0x10
+WHICH_CUR_VAL = 0
+# V4L2_CID_FM_RX_CLASS_BASE (0x00a10900) + 4 and + 5
+CID_RDS_PS, CID_RDS_RT = 0x00a10904, 0x00a10905
+
+def freq(fd):
+    f = Frequency(type=TUNER_RADIO)
+    fcntl.ioctl(fd, G_FREQUENCY, f, True)
+    return f.frequency / 16000
+
+def tune(fd, mhz):
+    fcntl.ioctl(fd, S_FREQUENCY, Frequency(type=TUNER_RADIO, frequency=round(mhz * 16000)))
+
+def seek(fd, up):
+    fcntl.ioctl(fd, S_HW_FREQ_SEEK, Seek(type=TUNER_RADIO, seek_upward=up, wrap_around=1))
+
+def rds(fd):
+    ps, rt = ctypes.create_string_buffer(9), ctypes.create_string_buffer(65)
+    c = (ExtControl * 2)(ExtControl(id=CID_RDS_PS, size=9, string=ctypes.addressof(ps)),
+                         ExtControl(id=CID_RDS_RT, size=65, string=ctypes.addressof(rt)))
+    cs = ExtControls(which=WHICH_CUR_VAL, count=2, controls=ctypes.addressof(c))
+    try:
+        fcntl.ioctl(fd, G_EXT_CTRLS, cs, True)
+    except OSError:
+        return '', ''
+    return (ps.value.decode('latin-1').strip(), rt.value.decode('latin-1').strip())
+
+def report(fd):
+    t = Tuner()
+    fcntl.ioctl(fd, G_TUNER, t, True)
+    ps, rt = rds(fd)
+    print('%6.1f MHz  signal %3d%%  %s%s  %-8s  %s' % (
+        freq(fd), t.signal * 100 // 65535,
+        'stereo' if t.rxsubchans & SUB_STEREO else 'mono  ',
+        ' RDS' if t.rxsubchans & SUB_RDS else '    ', ps, rt), flush=True)
+    return t.signal
+
+def main():
+    a = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    a.add_argument('-d', default='/dev/radio0')
+    a.add_argument('-t', type=int, default=10, help='seconds to report')
+    a.add_argument('what', help='MHz, up, down or scan')
+    o = a.parse_args()
+    t0 = time.monotonic()
+    fd = os.open(o.d, os.O_RDWR)
+    print('receiver on after %.1f s' % (time.monotonic() - t0), flush=True)
+    if o.what == 'scan':
+        tune(fd, 87.5)
+        seen = set()
+        while True:
+            seek(fd, 1)
+            f = freq(fd)
+            if f in seen:
+                break
+            seen.add(f)
+            report(fd)
+        return
+    if o.what in ('up', 'down'):
+        seek(fd, o.what == 'up')
+    else:
+        tune(fd, float(o.what))
+    for _ in range(o.t):
+        report(fd)
+        time.sleep(1)
+
+if __name__ == '__main__':
+    try:
+        main()
+    except OSError as e:
+        sys.exit('pro1x-fm-test: %s' % e)

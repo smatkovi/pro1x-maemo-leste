@@ -1,7 +1,7 @@
 #!/bin/bash
-# Builds and installs the Pro1X camera app and the control panel's Desktop
-# applet (apps/), installs the Maemo 5 ports from their repositories'
-# releases, and printing (CUPS).
+# Builds and installs the Pro1X camera app, the FM radio and the control
+# panel's Desktop applet (apps/), installs the Maemo 5 ports from their
+# repositories' releases, and printing (CUPS).
 #
 # Runs as root INSIDE the target (chroot or the running phone), after
 # 48-camera-stack.sh. Needs network for the build dependencies.
@@ -27,6 +27,12 @@ make install
 rm -rf "$SRC/pro1x-look"
 cp -r "$REPO/apps/pro1x-look" "$SRC/pro1x-look"
 make -C "$SRC/pro1x-look" install PREFIX=/usr
+
+# FM radio: the WCN3950's receiver (kernel patches 0014/0015, docs/fm-radio.md)
+rm -rf "$SRC/pro1x-fm"
+cp -r "$REPO/apps/pro1x-fm" "$SRC/pro1x-fm"
+make -C "$SRC/pro1x-fm" install PREFIX=/usr
+install -m 755 "$REPO/tools/pro1x-fm/pro1x-fm-test" /usr/bin/pro1x-fm-test
 
 # Ports of Maemo 5 apps, each in its own repository with release packages
 # (Pedometer Home Widget on tools/pro1x-steps, headphoned, gPodder 4,

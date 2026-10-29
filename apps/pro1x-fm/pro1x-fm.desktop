@@ -1,0 +1,12 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Type=Application
+Name=FM Radio
+Name[de]=UKW-Radio
+Comment=The FM receiver in the Pro1X's Bluetooth chip
+Comment[de]=Der UKW-Empfänger im Bluetooth-Chip des Pro1X
+Exec=/usr/bin/pro1x-fm
+Icon=general_fm_transmitter
+X-Window-Icon=general_fm_transmitter
+X-HildonDesk-ShowInToolbar=true

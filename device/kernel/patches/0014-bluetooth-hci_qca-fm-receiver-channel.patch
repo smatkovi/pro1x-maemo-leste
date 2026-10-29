@@ -1,0 +1,341 @@
+Subject: [PATCH] Bluetooth: hci_qca: carry the WCN399x FM receiver's packets
+
+The WCN399x has an FM receiver that takes its commands over the same UART
+as Bluetooth, as H4 packets of their own type: 0x11 for commands, 0x14
+for events, both with an HCI event's header (opcode or event code, then
+a one-byte length). Android's FM HAL writes them to the UART next to the
+Bluetooth traffic. The H4 parser here knows neither, and an FM event
+makes it drop the rest of the buffer with "Frame reassembly failed (-84)".
+
+Accept FM events and hand them to an FM driver attached through
+include/media/drv-intf/qca-fm.h, never to the Bluetooth core; drop them
+when no FM driver is there. The FM driver is a child node of the
+Bluetooth one (populated here), and it gets:
+
+  qca_fm_attach()/qca_fm_detach()  its event handler
+  qca_fm_get()/qca_fm_put()        the controller up while the radio
+                                   runs (hci_dev_open() if Bluetooth has
+                                   it down, hci_dev_close() again after)
+  qca_fm_send()                    one command, queued like an HCI frame
+                                   (in-band sleep included)
+
+hci_dev_open() and hci_dev_close() are exported for that.
+
+diff --git a/drivers/bluetooth/hci_qca.c b/drivers/bluetooth/hci_qca.c
+index 34500137df..cfbe99e00b 100644
+--- a/drivers/bluetooth/hci_qca.c
++++ b/drivers/bluetooth/hci_qca.c
+@@ -26,6 +26,7 @@
+ #include <linux/mod_devicetable.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/of_platform.h>
+ #include <linux/acpi.h>
+ #include <linux/platform_device.h>
+ #include <linux/pwrseq/consumer.h>
+@@ -37,6 +38,7 @@
+ 
+ #include <net/bluetooth/bluetooth.h>
+ #include <net/bluetooth/hci_core.h>
++#include <media/drv-intf/qca-fm.h>
+ 
+ #include "hci_uart.h"
+ #include "btqca.h"
+@@ -47,6 +49,10 @@
+ #define HCI_IBS_WAKE_ACK	0xFC
+ #define HCI_MAX_IBS_SIZE	10
+ 
++/* The FM receiver of the WCN399x shares the UART with Bluetooth */
++#define QCA_FM_CMD_PKT		0x11
++#define QCA_FM_EVT_PKT		0x14
++
+ #define IBS_WAKE_RETRANS_TIMEOUT_MS	100
+ #define IBS_BTSOC_TX_IDLE_TIMEOUT	msecs_to_jiffies(200)
+ #define IBS_HOST_TX_IDLE_TIMEOUT_MS	2000
+@@ -231,6 +237,11 @@ struct qca_serdev {
+ 	bool bdaddr_property_broken;
+ 	bool support_hfp_hw_offload;
+ 	const char *firmware_name[2];
++
++	spinlock_t fm_lock;		/* fm_dev, fm_recv */
++	struct device *fm_dev;
++	qca_fm_recv_t fm_recv;
++	bool fm_opened_hdev;
+ };
+ 
+ static int qca_regulator_enable(struct qca_serdev *qcadev);
+@@ -1264,6 +1275,37 @@ static int qca_recv_event(struct hci_dev *hdev, struct sk_buff *skb)
+ 	.lsize = 0, \
+ 	.maxlen = HCI_MAX_IBS_SIZE
+ 
++#define QCA_FM_EVENT \
++	.type = QCA_FM_EVT_PKT, \
++	.hlen = 2, \
++	.loff = 1, \
++	.lsize = 1, \
++	.maxlen = HCI_MAX_EVENT_SIZE
++
++/* An FM event goes to the FM driver if one is attached, never to the
++ * Bluetooth core: its header is that of an HCI event, its codes are not.
++ */
++static int qca_recv_fm_event(struct hci_dev *hdev, struct sk_buff *skb)
++{
++	struct hci_uart *hu = hci_get_drvdata(hdev);
++	struct qca_serdev *qcadev;
++	unsigned long flags;
++
++	if (hu->serdev) {
++		qcadev = serdev_device_get_drvdata(hu->serdev);
++
++		spin_lock_irqsave(&qcadev->fm_lock, flags);
++		if (qcadev->fm_recv) {
++			qcadev->fm_recv(qcadev->fm_dev, skb);
++			skb = NULL;
++		}
++		spin_unlock_irqrestore(&qcadev->fm_lock, flags);
++	}
++
++	kfree_skb(skb);
++	return 0;
++}
++
+ static const struct h4_recv_pkt qca_recv_pkts[] = {
+ 	{ H4_RECV_ACL,             .recv = qca_recv_acl_data },
+ 	{ H4_RECV_SCO,             .recv = hci_recv_frame    },
+@@ -1272,6 +1314,7 @@ static const struct h4_recv_pkt qca_recv_pkts[] = {
+ 	{ QCA_IBS_WAKE_IND_EVENT,  .recv = qca_ibs_wake_ind  },
+ 	{ QCA_IBS_WAKE_ACK_EVENT,  .recv = qca_ibs_wake_ack  },
+ 	{ QCA_IBS_SLEEP_IND_EVENT, .recv = qca_ibs_sleep_ind },
++	{ QCA_FM_EVENT,            .recv = qca_recv_fm_event },
+ };
+ 
+ static int qca_recv(struct hci_uart *hu, const void *data, int count)
+@@ -2533,6 +2576,8 @@ static int qca_serdev_probe(struct serdev_device *serdev)
+ 		}
+ 	}
+ 	
++	spin_lock_init(&qcadev->fm_lock);
++
+ 	err = hci_uart_register_device(&qcadev->serdev_hu, &qca_proto);
+ 	if (err) {
+ 		BT_ERR("serdev registration failed");
+@@ -2541,6 +2586,14 @@ static int qca_serdev_probe(struct serdev_device *serdev)
+ 
+ 	hdev = qcadev->serdev_hu.hdev;
+ 
++	/* The FM receiver, if the node has it */
++	if (dev_of_node(&serdev->dev)) {
++		err = of_platform_populate(serdev->dev.of_node, NULL, NULL,
++					   &serdev->dev);
++		if (err)
++			dev_warn(&serdev->dev, "no FM receiver: %d\n", err);
++	}
++
+ 	if (power_ctrl_enabled) {
+ 		hci_set_quirk(hdev, HCI_QUIRK_NON_PERSISTENT_SETUP);
+ 		hdev->shutdown = qca_hci_shutdown;
+@@ -2569,6 +2622,9 @@ static void qca_serdev_remove(struct serdev_device *serdev)
+ 	struct qca_serdev *qcadev = serdev_device_get_drvdata(serdev);
+ 	struct qca_power *power = qcadev->bt_power;
+ 
++	if (dev_of_node(&serdev->dev))
++		of_platform_depopulate(&serdev->dev);
++
+ 	switch (qcadev->btsoc_type) {
+ 	case QCA_WCN3988:
+ 	case QCA_WCN3990:
+@@ -2824,6 +2880,141 @@ static struct serdev_device_driver qca_serdev_driver = {
+ 	},
+ };
+ 
++/* The FM receiver (drivers/media/radio/radio-qca-fm.c), a child node of
++ * the Bluetooth one: it sends its commands and gets its events through
++ * the Bluetooth driver, and needs the controller up, its firmware loaded.
++ */
++static struct qca_serdev *qca_fm_serdev(struct device *fm)
++{
++	struct device *parent = fm->parent;
++
++	if (!parent || parent->driver != &qca_serdev_driver.driver)
++		return NULL;
++
++	return dev_get_drvdata(parent);
++}
++
++int qca_fm_attach(struct device *fm, qca_fm_recv_t recv)
++{
++	struct qca_serdev *qcadev = qca_fm_serdev(fm);
++	unsigned long flags;
++	int err = 0;
++
++	if (!qcadev)
++		return -ENODEV;
++
++	spin_lock_irqsave(&qcadev->fm_lock, flags);
++	if (qcadev->fm_recv) {
++		err = -EBUSY;
++	} else {
++		qcadev->fm_dev = fm;
++		qcadev->fm_recv = recv;
++	}
++	spin_unlock_irqrestore(&qcadev->fm_lock, flags);
++
++	return err;
++}
++EXPORT_SYMBOL_GPL(qca_fm_attach);
++
++void qca_fm_detach(struct device *fm)
++{
++	struct qca_serdev *qcadev = qca_fm_serdev(fm);
++	unsigned long flags;
++
++	if (!qcadev)
++		return;
++
++	spin_lock_irqsave(&qcadev->fm_lock, flags);
++	if (qcadev->fm_dev == fm) {
++		qcadev->fm_recv = NULL;
++		qcadev->fm_dev = NULL;
++	}
++	spin_unlock_irqrestore(&qcadev->fm_lock, flags);
++}
++EXPORT_SYMBOL_GPL(qca_fm_detach);
++
++/* Brings the controller up for the FM receiver if Bluetooth has it down,
++ * and qca_fm_put() takes it down again then. Not to be called from more
++ * than one place at a time (the FM driver's lock).
++ */
++int qca_fm_get(struct device *fm)
++{
++	struct qca_serdev *qcadev = qca_fm_serdev(fm);
++	struct hci_dev *hdev;
++	int err;
++
++	if (!qcadev)
++		return -ENODEV;
++
++	hdev = qcadev->serdev_hu.hdev;
++	if (test_bit(HCI_UP, &hdev->flags))
++		return 0;
++
++	err = hci_dev_open(hdev->id);
++	if (err == -EALREADY)
++		return 0;
++	if (!err)
++		qcadev->fm_opened_hdev = true;
++
++	return err;
++}
++EXPORT_SYMBOL_GPL(qca_fm_get);
++
++void qca_fm_put(struct device *fm)
++{
++	struct qca_serdev *qcadev = qca_fm_serdev(fm);
++
++	if (!qcadev || !qcadev->fm_opened_hdev)
++		return;
++
++	qcadev->fm_opened_hdev = false;
++	hci_dev_close(qcadev->serdev_hu.hdev->id);
++}
++EXPORT_SYMBOL_GPL(qca_fm_put);
++
++/* One FM command: opcode, parameter length, parameters */
++int qca_fm_send(struct device *fm, u16 opcode, const void *param, u8 plen)
++{
++	struct qca_serdev *qcadev = qca_fm_serdev(fm);
++	struct hci_uart *hu;
++	struct hci_dev *hdev;
++	struct sk_buff *skb;
++	int err = 0;
++
++	if (!qcadev)
++		return -ENODEV;
++
++	hu = &qcadev->serdev_hu;
++	hdev = hu->hdev;
++
++	skb = bt_skb_alloc(3 + plen, GFP_KERNEL);
++	if (!skb)
++		return -ENOMEM;
++
++	put_unaligned_le16(opcode, skb_put(skb, 2));
++	skb_put_u8(skb, plen);
++	skb_put_data(skb, param, plen);
++	hci_skb_pkt_type(skb) = QCA_FM_CMD_PKT;
++
++	/* Opening and closing the controller hold the request lock: with
++	 * it, the controller stays up while the command is queued.
++	 */
++	hci_req_sync_lock(hdev);
++	if (!test_bit(HCI_UP, &hdev->flags) ||
++	    !test_bit(HCI_UART_PROTO_READY, &hu->flags)) {
++		err = -ENETDOWN;
++	} else {
++		qca_enqueue(hu, skb);
++		skb = NULL;
++		hci_uart_tx_wakeup(hu);
++	}
++	hci_req_sync_unlock(hdev);
++
++	kfree_skb(skb);
++	return err;
++}
++EXPORT_SYMBOL_GPL(qca_fm_send);
++
+ int __init qca_init(void)
+ {
+ 	serdev_device_driver_register(&qca_serdev_driver);
+diff --git a/include/media/drv-intf/qca-fm.h b/include/media/drv-intf/qca-fm.h
+new file mode 100644
+index 0000000000..052305fbce
+--- /dev/null
++++ b/include/media/drv-intf/qca-fm.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * The FM receiver of the Qualcomm WCN399x: its commands and events travel
++ * over the Bluetooth UART, as packets of their own type (0x11 and 0x14),
++ * through the Bluetooth driver (hci_qca).
++ */
++#ifndef _MEDIA_DRV_INTF_QCA_FM_H
++#define _MEDIA_DRV_INTF_QCA_FM_H
++
++#include <linux/types.h>
++
++struct device;
++struct sk_buff;
++
++/*
++ * Gets every FM event (event code, parameter length, parameters) and owns
++ * the skb. Called in atomic context.
++ */
++typedef void (*qca_fm_recv_t)(struct device *fm, struct sk_buff *skb);
++
++int qca_fm_attach(struct device *fm, qca_fm_recv_t recv);
++void qca_fm_detach(struct device *fm);
++int qca_fm_get(struct device *fm);
++void qca_fm_put(struct device *fm);
++int qca_fm_send(struct device *fm, u16 opcode, const void *param, u8 plen);
++
++#endif
+diff --git a/net/bluetooth/hci_core.c b/net/bluetooth/hci_core.c
+index 28d7929dc5..1ad69df39d 100644
+--- a/net/bluetooth/hci_core.c
++++ b/net/bluetooth/hci_core.c
+@@ -490,6 +490,7 @@ int hci_dev_open(__u16 dev)
+ 	hci_dev_put(hdev);
+ 	return err;
+ }
++EXPORT_SYMBOL_GPL(hci_dev_open);
+ 
+ int hci_dev_do_close(struct hci_dev *hdev)
+ {
+@@ -530,6 +531,7 @@ int hci_dev_close(__u16 dev)
+ 	hci_dev_put(hdev);
+ 	return err;
+ }
++EXPORT_SYMBOL_GPL(hci_dev_close);
+ 
+ static int hci_dev_do_reset(struct hci_dev *hdev)
+ {

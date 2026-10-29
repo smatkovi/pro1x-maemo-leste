@@ -30,3 +30,9 @@ CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
 # pattern itself, as the N9's LP5523 engines did, instead of mce toggling
 # it from a timer)
 CONFIG_LEDS_TRIGGER_PATTERN=y
+
+# FM radio: the WCN3950's FM receiver as /dev/radio0, controlled over the
+# Bluetooth UART (patches 0014, 0015)
+CONFIG_MEDIA_RADIO_SUPPORT=y
+CONFIG_RADIO_ADAPTERS=m
+CONFIG_RADIO_QCA_FM=m

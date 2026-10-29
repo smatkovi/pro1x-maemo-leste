@@ -1,0 +1,46 @@
+Subject: [PATCH] Bluetooth: btqca: patch the WCN3950's NVM baud rate in the right byte
+
+qca_tlv_check_data() writes the UART rate the host asks for into the
+NVM's HCI transport tag (17): into its second byte for the WCN3991 and
+later, into its third byte for the older chips. The WCN3950 sits before
+the WCN3991 in enum qca_btsoc_type, so it gets the third byte, but its
+NVM files have the WCN3991's layout of that tag:
+
+  cmnv12.bin, cmnv13*.bin, crnv32*.bin:  15 11 22 00 2e 00
+  crnv21.bin, apnv10.bin:                82 01 11 08 04 0a 28 00 15
+
+The byte that holds the rate (0x11 = QCA_BAUDRATE_3200000 by default)
+stays as it is, and the one after it is overwritten. With max-speed =
+<3200000> the two agree by chance. With any other speed the controller
+takes over 3.2 Mbaud from the NVM when the host resets it after the
+download, while the host stays at max-speed, and setup fails every time:
+
+  Bluetooth: hci0: QCA Downloading qca/cmnv12.bin
+  Bluetooth: hci0: Frame reassembly failed (-84)
+  Bluetooth: hci0: command 0x0c03 tx timeout
+  Bluetooth: hci0: QCA Reset failed (-110)
+
+Seen on the F(x)tec Pro1X (WCN3950, SoC version 0x40070120, ROM 0x0102)
+with max-speed = <3000000>; 3.2 Mbaud worked before.
+
+Write the rate into the second byte for the WCN3950 as well.
+
+diff --git a/drivers/bluetooth/btqca.c b/drivers/bluetooth/btqca.c
+index dda7636572..c0cb901060 100644
+--- a/drivers/bluetooth/btqca.c
++++ b/drivers/bluetooth/btqca.c
+@@ -442,8 +442,12 @@ static int qca_tlv_check_data(struct hci_dev *hdev,
+ 				 */
+ 				tlv_nvm->data[0] |= 0x80;
+ 
+-				/* UART Baud Rate */
+-				if (soc_type >= QCA_WCN3991)
++				/* UART Baud Rate. The WCN3950's NVM files
++				 * (cmnv*.bin) have the 6-byte layout of this
++				 * tag that the WCN3991 uses, with the rate in
++				 * its second byte.
++				 */
++				if (soc_type == QCA_WCN3950 || soc_type >= QCA_WCN3991)
+ 					tlv_nvm->data[1] = nvm_baud_rate;
+ 				else
+ 					tlv_nvm->data[2] = nvm_baud_rate;

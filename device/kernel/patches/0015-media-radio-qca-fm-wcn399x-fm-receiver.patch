@@ -1,0 +1,807 @@
+Subject: [PATCH] media: radio: add the Qualcomm WCN399x FM receiver
+
+A V4L2 radio device for the FM receiver of the WCN399x, which hci_qca
+carries over the Bluetooth UART (include/media/drv-intf/qca-fm.h). The
+commands are Qualcomm's FM HCI set, the one radio-iris drives on WCNSS
+parts: enable, receiver configuration (87.5-108 MHz, 100 kHz steps, RDS,
+de-emphasis 50 or 75 us), stereo/mono, mute, tune (kHz), station
+parameters (RSSI, stereo, RDS sync), seek, and the chip's own RDS
+decoding of the programme service name and radio text, which become the
+RDS controls. Commands go one at a time, each finished by a Command
+Complete or Command Status event.
+
+The receiver is switched on with the first open and off with the last
+close; it brings the Bluetooth controller up for that if it is down.
+The audio is not on this path: the chip sends it over SLIMbus
+(FM_ENABLE_SLIMBUS), to the DSP.
+
+Hooked up in the F(x)tec Pro1X device tree (WCN3950).
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts b/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
+index 07106fd57f..e043b46d2c 100644
+--- a/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
++++ b/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
+@@ -1428,6 +1428,11 @@ bluetooth {
+ 		 * 02:50:31:e8:00:03, written least significant byte first.
+ 		 */
+ 		local-bd-address = [03 00 e8 31 50 02];
++
++		/* The chip's FM receiver, driven over the same UART */
++		fm {
++			compatible = "qcom,wcn3950-fm";
++		};
+ 	};
+ };
+ 
+diff --git a/drivers/media/radio/Kconfig b/drivers/media/radio/Kconfig
+index bbbdd054ba..65f45506fd 100644
+--- a/drivers/media/radio/Kconfig
++++ b/drivers/media/radio/Kconfig
+@@ -76,6 +76,18 @@ config RADIO_SHARK2
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called radio-shark2.
+ 
++config RADIO_QCA_FM
++	tristate "Qualcomm WCN399x FM receiver"
++	depends on BT_HCIUART && BT_HCIUART_QCA && OF
++	help
++	  Choose Y here for the FM receiver in Qualcomm's WCN399x Bluetooth
++	  chips (the WCN3950 of the F(x)tec Pro1X), which is controlled over
++	  the Bluetooth UART. It tunes, seeks and reports the signal and RDS
++	  station name and text; the audio comes from the chip over SLIMbus.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called radio-qca-fm.
++
+ config RADIO_SI4713
+ 	tristate "Silicon Labs Si4713 FM Radio with RDS Transmitter support"
+ 
+diff --git a/drivers/media/radio/Makefile b/drivers/media/radio/Makefile
+index f54693ebdb..fb5742b39c 100644
+--- a/drivers/media/radio/Makefile
++++ b/drivers/media/radio/Makefile
+@@ -13,6 +13,7 @@ obj-$(CONFIG_RADIO_GEMTEK) += radio-gemtek.o
+ obj-$(CONFIG_RADIO_ISA) += radio-isa.o
+ obj-$(CONFIG_RADIO_MAXIRADIO) += radio-maxiradio.o
+ obj-$(CONFIG_RADIO_MIROPCM20) += radio-miropcm20.o
++obj-$(CONFIG_RADIO_QCA_FM) += radio-qca-fm.o
+ obj-$(CONFIG_RADIO_RTRACK2) += radio-rtrack2.o
+ obj-$(CONFIG_RADIO_RTRACK) += radio-aimslab.o
+ obj-$(CONFIG_RADIO_SAA7706H) += saa7706h.o
+diff --git a/drivers/media/radio/radio-qca-fm.c b/drivers/media/radio/radio-qca-fm.c
+new file mode 100644
+index 0000000000..d17b8d8817
+--- /dev/null
++++ b/drivers/media/radio/radio-qca-fm.c
+@@ -0,0 +1,731 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * The FM receiver of the Qualcomm WCN399x (the WCN3950 of the F(x)tec
++ * Pro1X), as a V4L2 radio device.
++ *
++ * The receiver is part of the Bluetooth chip. It takes Qualcomm's FM HCI
++ * commands (those of the older Iris receivers) over the Bluetooth UART,
++ * through the Bluetooth driver (hci_qca, include/media/drv-intf/qca-fm.h),
++ * which keeps the controller up while the radio is open. The chip decodes
++ * the RDS station name and radio text itself; here they become the RDS
++ * controls. The audio does not come this way: the chip sends it over
++ * SLIMbus to the DSP.
++ */
++
++#include <linux/completion.h>
++#include <linux/module.h>
++#include <linux/mod_devicetable.h>
++#include <linux/mutex.h>
++#include <linux/platform_device.h>
++#include <linux/skbuff.h>
++#include <linux/unaligned.h>
++#include <linux/workqueue.h>
++#include <media/drv-intf/qca-fm.h>
++#include <media/v4l2-ctrls.h>
++#include <media/v4l2-device.h>
++#include <media/v4l2-event.h>
++#include <media/v4l2-ioctl.h>
++
++#define FM_OP(ogf, ocf)		(((ogf) << 10) | (ocf))
++#define FM_RX(ocf)		FM_OP(0x13, ocf)
++#define FM_COMMON(ocf)		FM_OP(0x15, ocf)
++#define FM_DIAG(ocf)		FM_OP(0x3f, ocf)
++
++#define FM_RX_ENABLE		FM_RX(0x01)
++#define FM_RX_DISABLE		FM_RX(0x02)
++#define FM_RX_SET_CONF		FM_RX(0x04)
++#define FM_RX_SET_MUTE		FM_RX(0x05)
++#define FM_RX_SET_STEREO	FM_RX(0x06)
++#define FM_RX_GET_STATION	FM_RX(0x0a)
++#define FM_RX_SEARCH		FM_RX(0x0e)
++#define FM_RX_CANCEL_SEARCH	FM_RX(0x11)
++#define FM_RX_RDS_PROCESS	FM_RX(0x13)
++#define FM_RX_EVENT_MASK	FM_RX(0x16)
++#define FM_TUNE			FM_COMMON(0x01)
++#define FM_ENABLE_SLIMBUS	FM_DIAG(0x0e)
++
++#define FM_EV_TUNE_STATUS	0x01
++#define FM_EV_PS		0x09
++#define FM_EV_RT		0x0a
++#define FM_EV_CMD_COMPLETE	0x0f
++#define FM_EV_CMD_STATUS	0x10
++#define FM_EV_SEARCH_COMPLETE	0x12
++#define FM_EV_SEARCH_RDS_COMPLETE 0x13
++
++/* event mask: signal level, RDS sync, audio (stereo) changes */
++#define FM_EVENTS		0x07
++/* the chip's RDS processing: radio text, station names, simple name */
++#define FM_RDS_RT		BIT(0)
++#define FM_RDS_PS		BIT(1)
++#define FM_RDS_PS_SIMPLE	BIT(2)
++
++#define FM_EMPHASIS_75		0
++#define FM_EMPHASIS_50		1
++#define FM_SPACING_100		1
++#define FM_RDS_STD_RDS		1
++#define FM_SEEK			0
++#define FM_HARD_MUTE_BOTH	3
++
++#define FM_BAND_LOW		87500	/* kHz */
++#define FM_BAND_HIGH		108000
++#define FM_KHZ_TO_V4L2(f)	((f) * 16)	/* in units of 62.5 Hz */
++#define FM_V4L2_TO_KHZ(f)	((f) / 16)
++
++#define FM_CMD_TIMEOUT		msecs_to_jiffies(2000)
++#define FM_TUNE_TIMEOUT		msecs_to_jiffies(2000)
++#define FM_SEEK_TIMEOUT		msecs_to_jiffies(30000)
++#define FM_RSP_MAX		32
++
++struct fm_rx_conf {
++	u8 emphasis;
++	u8 spacing;
++	u8 rds_std;
++	u8 hlsi;
++	__le32 band_low;
++	__le32 band_high;
++} __packed;
++
++/* tune status event, and the answer to FM_RX_GET_STATION after its status */
++struct fm_station {
++	__le32 freq;
++	u8 service;
++	s8 rssi;
++	u8 stereo;
++	u8 rds_sync;
++	u8 mute;
++	s8 sinr;
++	u8 intf_det_th;
++} __packed;
++
++struct qca_fm {
++	struct device *dev;
++	struct v4l2_device v4l2_dev;
++	struct video_device vdev;
++	struct v4l2_ctrl_handler ctrls;
++	struct v4l2_ctrl *mute;
++	struct v4l2_ctrl *deemphasis;
++	struct v4l2_ctrl *rds_pty;
++	struct v4l2_ctrl *rds_ps;
++	struct v4l2_ctrl *rds_rt;
++	struct mutex lock;		/* the video device's */
++	struct mutex cmd_lock;		/* one command at a time */
++
++	spinlock_t ev_lock;		/* the command fields, against events */
++	u16 cmd_opcode;			/* waiting for its completion */
++	int cmd_status;
++	u8 rsp[FM_RSP_MAX];
++	u8 rsp_len;
++	struct completion cmd_done;
++	struct completion tuned;
++	struct completion seek_done;
++
++	struct sk_buff_head rdsq;	/* RDS events for the controls */
++	struct work_struct rds_work;
++
++	bool on;
++	u32 freq;			/* kHz */
++	u32 audmode;
++};
++
++static void qca_fm_recv(struct device *dev, struct sk_buff *skb)
++{
++	struct qca_fm *fm = dev_get_drvdata(dev);
++	unsigned long flags;
++	u8 evt, plen, *p;
++	u16 opcode;
++
++	if (skb->len < 2 || skb->len < 2 + skb->data[1])
++		goto drop;
++
++	evt = skb->data[0];
++	plen = skb->data[1];
++	p = skb->data + 2;
++
++	switch (evt) {
++	case FM_EV_CMD_COMPLETE:
++		/* credits, opcode, status, answer */
++		if (plen < 4)
++			break;
++		opcode = get_unaligned_le16(p + 1);
++		spin_lock_irqsave(&fm->ev_lock, flags);
++		if (opcode == fm->cmd_opcode) {
++			fm->cmd_opcode = 0;
++			fm->cmd_status = p[3];
++			fm->rsp_len = min_t(u8, plen - 4, FM_RSP_MAX);
++			memcpy(fm->rsp, p + 4, fm->rsp_len);
++			complete(&fm->cmd_done);
++		}
++		spin_unlock_irqrestore(&fm->ev_lock, flags);
++		break;
++
++	case FM_EV_CMD_STATUS:
++		/* status, credits, opcode */
++		if (plen < 4)
++			break;
++		opcode = get_unaligned_le16(p + 2);
++		spin_lock_irqsave(&fm->ev_lock, flags);
++		if (opcode == fm->cmd_opcode) {
++			fm->cmd_opcode = 0;
++			fm->cmd_status = p[0];
++			fm->rsp_len = 0;
++			complete(&fm->cmd_done);
++		}
++		spin_unlock_irqrestore(&fm->ev_lock, flags);
++		break;
++
++	case FM_EV_TUNE_STATUS:
++		/* a sub-event byte, then the station (struct fm_station) */
++		complete(&fm->tuned);
++		/* a new station: its RDS starts again */
++		goto rds;
++
++	case FM_EV_SEARCH_COMPLETE:
++	case FM_EV_SEARCH_RDS_COMPLETE:
++		complete(&fm->seek_done);
++		break;
++
++	case FM_EV_PS:
++	case FM_EV_RT:
++		goto rds;
++
++	default:
++		dev_dbg(fm->dev, "event %#04x, %u bytes\n", evt, plen);
++		break;
++	}
++
++drop:
++	kfree_skb(skb);
++	return;
++
++rds:
++	skb_queue_tail(&fm->rdsq, skb);
++	schedule_work(&fm->rds_work);
++}
++
++/* RDS text as the controls want it: printable, padded */
++static void qca_fm_rds_text(char *dst, const u8 *src, int len, int size)
++{
++	int i;
++
++	for (i = 0; i < size; i++) {
++		u8 c = i < len ? src[i] : ' ';
++
++		dst[i] = (c < 0x20 || c > 0x7e) ? ' ' : c;
++	}
++	dst[size] = '\0';
++}
++
++static void qca_fm_rds_work(struct work_struct *work)
++{
++	struct qca_fm *fm = container_of(work, struct qca_fm, rds_work);
++	struct sk_buff *skb;
++	char text[65];
++	u8 plen, *p;
++	int len;
++
++	while ((skb = skb_dequeue(&fm->rdsq))) {
++		plen = skb->data[1];
++		p = skb->data + 2;
++
++		switch (skb->data[0]) {
++		case FM_EV_TUNE_STATUS:
++			v4l2_ctrl_s_ctrl(fm->rds_pty, 0);
++			v4l2_ctrl_s_ctrl_string(fm->rds_ps, "");
++			v4l2_ctrl_s_ctrl_string(fm->rds_rt, "");
++			break;
++
++		case FM_EV_PS:
++			/* PI (2), PTY, TA/TP flags (4), names, then the names */
++			if (plen < 8 + 8 || !p[7])
++				break;
++			v4l2_ctrl_s_ctrl(fm->rds_pty, p[2] & 0x1f);
++			qca_fm_rds_text(text, p + 8, 8, 8);
++			v4l2_ctrl_s_ctrl_string(fm->rds_ps, text);
++			break;
++
++		case FM_EV_RT:
++			/* PI (2), PTY, TA/TP, A/B flag, then up to 64 chars */
++			if (plen < 5)
++				break;
++			for (len = 0; len < 64 && 5 + len < plen; len++)
++				if (p[5 + len] == 0x0d)
++					break;
++			v4l2_ctrl_s_ctrl(fm->rds_pty, p[2] & 0x1f);
++			qca_fm_rds_text(text, p + 5, len, len);
++			v4l2_ctrl_s_ctrl_string(fm->rds_rt, strim(text));
++			break;
++		}
++
++		kfree_skb(skb);
++	}
++}
++
++static int qca_fm_cmd(struct qca_fm *fm, u16 opcode, const void *param,
++		      u8 plen, void *rsp, size_t rsp_len)
++{
++	unsigned long flags;
++	int err, status;
++
++	mutex_lock(&fm->cmd_lock);
++
++	spin_lock_irqsave(&fm->ev_lock, flags);
++	fm->cmd_opcode = opcode;
++	reinit_completion(&fm->cmd_done);
++	spin_unlock_irqrestore(&fm->ev_lock, flags);
++
++	err = qca_fm_send(fm->dev, opcode, param, plen);
++	if (!err && !wait_for_completion_timeout(&fm->cmd_done, FM_CMD_TIMEOUT))
++		err = -ETIMEDOUT;
++
++	spin_lock_irqsave(&fm->ev_lock, flags);
++	fm->cmd_opcode = 0;
++	status = fm->cmd_status;
++	if (!err && rsp) {
++		if (fm->rsp_len < rsp_len)
++			err = -EPROTO;
++		else
++			memcpy(rsp, fm->rsp, rsp_len);
++	}
++	spin_unlock_irqrestore(&fm->ev_lock, flags);
++
++	mutex_unlock(&fm->cmd_lock);
++
++	if (err) {
++		dev_err(fm->dev, "command %#06x: %d\n", opcode, err);
++		return err;
++	}
++	if (status) {
++		dev_err(fm->dev, "command %#06x: status %#04x\n", opcode, status);
++		return -EIO;
++	}
++	return 0;
++}
++
++static int qca_fm_cmd_u8(struct qca_fm *fm, u16 opcode, u8 val)
++{
++	return qca_fm_cmd(fm, opcode, &val, 1, NULL, 0);
++}
++
++static int qca_fm_set_conf(struct qca_fm *fm)
++{
++	struct fm_rx_conf conf = {
++		.emphasis = fm->deemphasis->val == V4L2_DEEMPHASIS_75_uS ?
++			    FM_EMPHASIS_75 : FM_EMPHASIS_50,
++		.spacing = FM_SPACING_100,
++		.rds_std = FM_RDS_STD_RDS,
++		.band_low = cpu_to_le32(FM_BAND_LOW),
++		.band_high = cpu_to_le32(FM_BAND_HIGH),
++	};
++
++	return qca_fm_cmd(fm, FM_RX_SET_CONF, &conf, sizeof(conf), NULL, 0);
++}
++
++static int qca_fm_set_mute(struct qca_fm *fm, bool mute)
++{
++	u8 mode[2] = { mute ? FM_HARD_MUTE_BOTH : 0, 1 };	/* hard, soft */
++
++	return qca_fm_cmd(fm, FM_RX_SET_MUTE, mode, sizeof(mode), NULL, 0);
++}
++
++static int qca_fm_set_stereo(struct qca_fm *fm)
++{
++	/* mono or stereo, signal blending, interference blending, switch */
++	u8 mode[4] = { fm->audmode == V4L2_TUNER_MODE_MONO, 1, 0, 0 };
++
++	return qca_fm_cmd(fm, FM_RX_SET_STEREO, mode, sizeof(mode), NULL, 0);
++}
++
++static int qca_fm_tune(struct qca_fm *fm, u32 freq)
++{
++	__le32 khz = cpu_to_le32(freq);
++	int err;
++
++	reinit_completion(&fm->tuned);
++	err = qca_fm_cmd(fm, FM_TUNE, &khz, sizeof(khz), NULL, 0);
++	if (err)
++		return err;
++	if (!wait_for_completion_timeout(&fm->tuned, FM_TUNE_TIMEOUT))
++		dev_warn(fm->dev, "no tune status for %u kHz\n", freq);
++	fm->freq = freq;
++	return 0;
++}
++
++static int qca_fm_power_on(struct qca_fm *fm)
++{
++	u32 rds = FM_RDS_RT | FM_RDS_PS | FM_RDS_PS_SIMPLE;
++	__le32 rds_mask = cpu_to_le32(rds);
++	int err;
++
++	err = qca_fm_get(fm->dev);
++	if (err) {
++		dev_err(fm->dev, "Bluetooth controller not up: %d\n", err);
++		return err;
++	}
++
++	err = qca_fm_cmd(fm, FM_RX_ENABLE, NULL, 0, NULL, 0);
++	if (err)
++		goto put;
++	fm->on = true;
++
++	err = qca_fm_set_conf(fm);
++	if (!err)
++		err = qca_fm_set_stereo(fm);
++	if (!err)
++		err = qca_fm_cmd_u8(fm, FM_RX_EVENT_MASK, FM_EVENTS);
++	if (!err)
++		err = qca_fm_cmd(fm, FM_RX_RDS_PROCESS, &rds_mask,
++				 sizeof(rds_mask), NULL, 0);
++	if (!err)
++		err = qca_fm_set_mute(fm, fm->mute->val);
++	if (!err)
++		err = qca_fm_tune(fm, fm->freq);
++	if (err)
++		goto off;
++
++	/* the audio to the DSP; nothing to stop the radio without it */
++	if (qca_fm_cmd_u8(fm, FM_ENABLE_SLIMBUS, 1))
++		dev_warn(fm->dev, "no SLIMbus audio\n");
++
++	return 0;
++
++off:
++	qca_fm_cmd(fm, FM_RX_DISABLE, NULL, 0, NULL, 0);
++	fm->on = false;
++put:
++	qca_fm_put(fm->dev);
++	return err;
++}
++
++static void qca_fm_power_off(struct qca_fm *fm)
++{
++	qca_fm_cmd_u8(fm, FM_ENABLE_SLIMBUS, 0);
++	qca_fm_cmd(fm, FM_RX_DISABLE, NULL, 0, NULL, 0);
++	fm->on = false;
++	qca_fm_put(fm->dev);
++	cancel_work_sync(&fm->rds_work);
++	skb_queue_purge(&fm->rdsq);
++}
++
++static int qca_fm_open(struct file *file)
++{
++	struct qca_fm *fm = video_drvdata(file);
++	int err;
++
++	mutex_lock(&fm->lock);
++	err = v4l2_fh_open(file);
++	if (!err && v4l2_fh_is_singular_file(file)) {
++		err = qca_fm_power_on(fm);
++		if (err)
++			v4l2_fh_release(file);
++	}
++	mutex_unlock(&fm->lock);
++
++	return err;
++}
++
++static int qca_fm_release(struct file *file)
++{
++	struct qca_fm *fm = video_drvdata(file);
++
++	mutex_lock(&fm->lock);
++	if (v4l2_fh_is_singular_file(file) && fm->on)
++		qca_fm_power_off(fm);
++	v4l2_fh_release(file);
++	mutex_unlock(&fm->lock);
++
++	return 0;
++}
++
++static int qca_fm_querycap(struct file *file, void *priv,
++			   struct v4l2_capability *cap)
++{
++	struct qca_fm *fm = video_drvdata(file);
++
++	strscpy(cap->driver, "radio-qca-fm", sizeof(cap->driver));
++	strscpy(cap->card, "Qualcomm WCN399x FM", sizeof(cap->card));
++	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s",
++		 dev_name(fm->dev));
++	return 0;
++}
++
++static int qca_fm_g_tuner(struct file *file, void *priv,
++			  struct v4l2_tuner *t)
++{
++	struct qca_fm *fm = video_drvdata(file);
++	struct fm_station st;
++	u8 rsp[sizeof(st)];
++	int err;
++
++	if (t->index)
++		return -EINVAL;
++
++	err = qca_fm_cmd(fm, FM_RX_GET_STATION, NULL, 0, rsp, sizeof(rsp));
++	if (err)
++		return err;
++	memcpy(&st, rsp, sizeof(st));
++
++	strscpy(t->name, "FM", sizeof(t->name));
++	t->type = V4L2_TUNER_RADIO;
++	t->capability = V4L2_TUNER_CAP_LOW | V4L2_TUNER_CAP_STEREO |
++			V4L2_TUNER_CAP_RDS | V4L2_TUNER_CAP_RDS_CONTROLS |
++			V4L2_TUNER_CAP_HWSEEK_WRAP;
++	t->rangelow = FM_KHZ_TO_V4L2(FM_BAND_LOW);
++	t->rangehigh = FM_KHZ_TO_V4L2(FM_BAND_HIGH);
++	t->rxsubchans = st.stereo ? V4L2_TUNER_SUB_STEREO : V4L2_TUNER_SUB_MONO;
++	if (st.rds_sync)
++		t->rxsubchans |= V4L2_TUNER_SUB_RDS;
++	t->audmode = fm->audmode;
++	/* RSSI in dBm: -120 is nothing, -80 is a strong station */
++	t->signal = clamp(st.rssi + 120, 0, 40) * 65535 / 40;
++	t->afc = 0;
++	dev_dbg(fm->dev, "%u kHz: rssi %d dBm, sinr %d, stereo %u, rds %u\n",
++		le32_to_cpu(st.freq), st.rssi, st.sinr, st.stereo, st.rds_sync);
++	return 0;
++}
++
++static int qca_fm_s_tuner(struct file *file, void *priv,
++			  const struct v4l2_tuner *t)
++{
++	struct qca_fm *fm = video_drvdata(file);
++
++	if (t->index)
++		return -EINVAL;
++
++	fm->audmode = t->audmode == V4L2_TUNER_MODE_MONO ?
++		      V4L2_TUNER_MODE_MONO : V4L2_TUNER_MODE_STEREO;
++	return qca_fm_set_stereo(fm);
++}
++
++static int qca_fm_g_frequency(struct file *file, void *priv,
++			      struct v4l2_frequency *f)
++{
++	struct qca_fm *fm = video_drvdata(file);
++
++	if (f->tuner)
++		return -EINVAL;
++
++	f->type = V4L2_TUNER_RADIO;
++	f->frequency = FM_KHZ_TO_V4L2(fm->freq);
++	return 0;
++}
++
++static int qca_fm_s_frequency(struct file *file, void *priv,
++			      const struct v4l2_frequency *f)
++{
++	struct qca_fm *fm = video_drvdata(file);
++	u32 khz;
++
++	if (f->tuner || f->type != V4L2_TUNER_RADIO)
++		return -EINVAL;
++
++	/* on the 100 kHz grid of the band */
++	khz = clamp_t(u32, FM_V4L2_TO_KHZ(f->frequency), FM_BAND_LOW,
++		      FM_BAND_HIGH);
++	khz = FM_BAND_LOW + DIV_ROUND_CLOSEST(khz - FM_BAND_LOW, 100) * 100;
++	return qca_fm_tune(fm, khz);
++}
++
++static int qca_fm_s_hw_freq_seek(struct file *file, void *priv,
++				 const struct v4l2_hw_freq_seek *seek)
++{
++	struct qca_fm *fm = video_drvdata(file);
++	u8 req[3] = { FM_SEEK, 0, !seek->seek_upward };	/* mode, dwell, dir */
++	struct fm_station st;
++	u8 rsp[sizeof(st)];
++	long left;
++	int err;
++
++	if (seek->tuner || seek->type != V4L2_TUNER_RADIO)
++		return -EINVAL;
++	if (file->f_flags & O_NONBLOCK)
++		return -EWOULDBLOCK;
++
++	reinit_completion(&fm->seek_done);
++	err = qca_fm_cmd(fm, FM_RX_SEARCH, req, sizeof(req), NULL, 0);
++	if (err)
++		return err;
++
++	left = wait_for_completion_interruptible_timeout(&fm->seek_done,
++							 FM_SEEK_TIMEOUT);
++	if (left <= 0) {
++		qca_fm_cmd(fm, FM_RX_CANCEL_SEARCH, NULL, 0, NULL, 0);
++		err = left ? left : -ENODATA;
++	}
++
++	/* where the search stopped */
++	if (!qca_fm_cmd(fm, FM_RX_GET_STATION, NULL, 0, rsp, sizeof(rsp))) {
++		memcpy(&st, rsp, sizeof(st));
++		if (le32_to_cpu(st.freq))
++			fm->freq = le32_to_cpu(st.freq);
++	}
++
++	return err;
++}
++
++static int qca_fm_enum_freq_bands(struct file *file, void *priv,
++				  struct v4l2_frequency_band *band)
++{
++	if (band->tuner || band->index)
++		return -EINVAL;
++
++	band->type = V4L2_TUNER_RADIO;
++	band->capability = V4L2_TUNER_CAP_LOW | V4L2_TUNER_CAP_STEREO |
++			   V4L2_TUNER_CAP_RDS | V4L2_TUNER_CAP_RDS_CONTROLS |
++			   V4L2_TUNER_CAP_HWSEEK_WRAP;
++	band->rangelow = FM_KHZ_TO_V4L2(FM_BAND_LOW);
++	band->rangehigh = FM_KHZ_TO_V4L2(FM_BAND_HIGH);
++	band->modulation = V4L2_BAND_MODULATION_FM;
++	return 0;
++}
++
++static int qca_fm_s_ctrl(struct v4l2_ctrl *ctrl)
++{
++	struct qca_fm *fm = container_of(ctrl->handler, struct qca_fm, ctrls);
++
++	/* taken over when the radio is switched on */
++	if (!fm->on)
++		return 0;
++
++	switch (ctrl->id) {
++	case V4L2_CID_AUDIO_MUTE:
++		return qca_fm_set_mute(fm, ctrl->val);
++	case V4L2_CID_TUNE_DEEMPHASIS:
++		return qca_fm_set_conf(fm);
++	}
++	return -EINVAL;
++}
++
++static const struct v4l2_ctrl_ops qca_fm_ctrl_ops = {
++	.s_ctrl = qca_fm_s_ctrl,
++};
++
++static const struct v4l2_file_operations qca_fm_fops = {
++	.owner		= THIS_MODULE,
++	.open		= qca_fm_open,
++	.release	= qca_fm_release,
++	.poll		= v4l2_ctrl_poll,
++	.unlocked_ioctl	= video_ioctl2,
++};
++
++static const struct v4l2_ioctl_ops qca_fm_ioctl_ops = {
++	.vidioc_querycap	= qca_fm_querycap,
++	.vidioc_g_tuner		= qca_fm_g_tuner,
++	.vidioc_s_tuner		= qca_fm_s_tuner,
++	.vidioc_g_frequency	= qca_fm_g_frequency,
++	.vidioc_s_frequency	= qca_fm_s_frequency,
++	.vidioc_s_hw_freq_seek	= qca_fm_s_hw_freq_seek,
++	.vidioc_enum_freq_bands	= qca_fm_enum_freq_bands,
++	.vidioc_log_status	= v4l2_ctrl_log_status,
++	.vidioc_subscribe_event	= v4l2_ctrl_subscribe_event,
++	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
++};
++
++static int qca_fm_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct v4l2_ctrl_handler *hdl;
++	struct qca_fm *fm;
++	int err;
++
++	fm = devm_kzalloc(dev, sizeof(*fm), GFP_KERNEL);
++	if (!fm)
++		return -ENOMEM;
++
++	fm->dev = dev;
++	fm->freq = FM_BAND_LOW;
++	fm->audmode = V4L2_TUNER_MODE_STEREO;
++	mutex_init(&fm->lock);
++	mutex_init(&fm->cmd_lock);
++	spin_lock_init(&fm->ev_lock);
++	init_completion(&fm->cmd_done);
++	init_completion(&fm->tuned);
++	init_completion(&fm->seek_done);
++	skb_queue_head_init(&fm->rdsq);
++	INIT_WORK(&fm->rds_work, qca_fm_rds_work);
++	platform_set_drvdata(pdev, fm);
++
++	err = v4l2_device_register(dev, &fm->v4l2_dev);
++	if (err)
++		return err;
++
++	hdl = &fm->ctrls;
++	v4l2_ctrl_handler_init(hdl, 5);
++	fm->mute = v4l2_ctrl_new_std(hdl, &qca_fm_ctrl_ops,
++				     V4L2_CID_AUDIO_MUTE, 0, 1, 1, 0);
++	fm->deemphasis = v4l2_ctrl_new_std_menu(hdl, &qca_fm_ctrl_ops,
++				V4L2_CID_TUNE_DEEMPHASIS, V4L2_DEEMPHASIS_75_uS,
++				BIT(V4L2_DEEMPHASIS_DISABLED),
++				V4L2_DEEMPHASIS_50_uS);
++	fm->rds_pty = v4l2_ctrl_new_std(hdl, NULL, V4L2_CID_RDS_RX_PTY,
++					0, 0x1f, 1, 0);
++	fm->rds_ps = v4l2_ctrl_new_std(hdl, NULL, V4L2_CID_RDS_RX_PS_NAME,
++				       0, 8, 8, 0);
++	fm->rds_rt = v4l2_ctrl_new_std(hdl, NULL, V4L2_CID_RDS_RX_RADIO_TEXT,
++				       0, 64, 1, 0);
++	if (hdl->error) {
++		err = hdl->error;
++		goto free_ctrls;
++	}
++	fm->v4l2_dev.ctrl_handler = hdl;
++
++	strscpy(fm->vdev.name, "Qualcomm WCN399x FM", sizeof(fm->vdev.name));
++	fm->vdev.v4l2_dev = &fm->v4l2_dev;
++	fm->vdev.fops = &qca_fm_fops;
++	fm->vdev.ioctl_ops = &qca_fm_ioctl_ops;
++	fm->vdev.release = video_device_release_empty;
++	fm->vdev.lock = &fm->lock;
++	fm->vdev.device_caps = V4L2_CAP_TUNER | V4L2_CAP_RADIO |
++			       V4L2_CAP_HW_FREQ_SEEK;
++	video_set_drvdata(&fm->vdev, fm);
++
++	err = qca_fm_attach(dev, qca_fm_recv);
++	if (err) {
++		dev_err(dev, "cannot attach to the Bluetooth driver: %d\n", err);
++		goto free_ctrls;
++	}
++
++	err = video_register_device(&fm->vdev, VFL_TYPE_RADIO, -1);
++	if (err)
++		goto detach;
++
++	dev_info(dev, "FM receiver as %s\n", video_device_node_name(&fm->vdev));
++	return 0;
++
++detach:
++	qca_fm_detach(dev);
++free_ctrls:
++	v4l2_ctrl_handler_free(hdl);
++	v4l2_device_unregister(&fm->v4l2_dev);
++	return err;
++}
++
++static void qca_fm_remove(struct platform_device *pdev)
++{
++	struct qca_fm *fm = platform_get_drvdata(pdev);
++
++	video_unregister_device(&fm->vdev);
++	qca_fm_detach(&pdev->dev);
++	cancel_work_sync(&fm->rds_work);
++	skb_queue_purge(&fm->rdsq);
++	v4l2_ctrl_handler_free(&fm->ctrls);
++	v4l2_device_unregister(&fm->v4l2_dev);
++}
++
++static const struct of_device_id qca_fm_of_match[] = {
++	{ .compatible = "qcom,wcn3950-fm" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, qca_fm_of_match);
++
++static struct platform_driver qca_fm_driver = {
++	.probe = qca_fm_probe,
++	.remove = qca_fm_remove,
++	.driver = {
++		.name = "radio-qca-fm",
++		.of_match_table = qca_fm_of_match,
++	},
++};
++module_platform_driver(qca_fm_driver);
++
++MODULE_DESCRIPTION("Qualcomm WCN399x FM receiver");
++MODULE_LICENSE("GPL");
