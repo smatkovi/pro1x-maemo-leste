@@ -121,16 +121,18 @@ Unattended, as the other FreeBSD tests: `pro1x.test=cam pro1x.cam=id` in
 `rootfs/usr/local/libexec/pro1x-camtest`, which reports on the console
 (the RAM console keeps it) and reboots. A newer `pro1x-camtest` and
 `pro1x-cam` in `/host/freebsd/camera/` and the module in
-`/host/freebsd/modules/` are taken first. `$WORK/cam-test/` has them laid
-out like `/host/freebsd/`, with the command lines
-(`build-camera.sh` makes it):
+`/host/freebsd/modules/` are taken first: only with the read-only
+`root.zfs` (`pro1x.pool=off`), since the writable pool unmounts userdata.
+`$WORK/cam-test/` has them laid out like `/host/freebsd/`, with the
+command lines (`build-camera.sh` makes it; `modules/` there holds only
+`qcom_camss.ko`, so it can be copied next to other tests' modules):
 
 | Run | cmdline | Expected |
 | --- | --- | --- |
-| cam-id | `pro1x.test=cam pro1x.cam=id hint.qcom_wdt.0.lifetime=180` | `camss_gcc: cci: GDSC 0x58004: ... -> 0x8...` (PWR_ON), `gcc_camss_top_ahb_clk on`, `gcc_camss_cci_0_clk on ..., 37500000 Hz` (or a refused GPLL0 AUX2: then 19.2 MHz and a slower bus), `camss_tlmm: cci: gpio22 cci_i2c: CTL ... -> ...` (function 1), `qcom_cci0: CCI HW version 0x...`, two `qcom_ccim` with iicbus/iic each; `/dev/camss0`; `info` with both sensors, their rails resolved (pca9534 pins 0/4 on the keyboard bus, pm8008 ldo1/2/4/5/6/7); `rear: IMX582 chip ID 0x0582: ok`, `rear: lens ... status 0x00: ok`, `front: S5K4H7 chip ID 0x487b: ok`; `nacks 0 errors 0 timeouts 0` |
+| cam-id | `pro1x.test=cam pro1x.cam=id pro1x.pool=off hint.qcom_wdt.0.lifetime=180` | `camss_gcc: cci: GDSC 0x58004: ... -> 0x8...` (PWR_ON), `gcc_camss_top_ahb_clk on`, `gcc_camss_cci_0_clk on ..., 37500000 Hz` (or a refused GPLL0 AUX2: then 19.2 MHz and a slower bus), `camss_tlmm: cci: gpio22 cci_i2c: CTL ... -> ...` (function 1), `qcom_cci0: CCI HW version 0x...`, two `qcom_ccim` with iicbus/iic each; `/dev/camss0`; `info` with both sensors, their rails resolved (pca9534 pins 0/4 on the keyboard bus, pm8008 ldo1/2/4/5/6/7); `rear: IMX582 chip ID 0x0582: ok`, `rear: lens ... status 0x00: ok`, `front: S5K4H7 chip ID 0x487b: ok`; `nacks 0 errors 0 timeouts 0` |
 
-| cam-raw | `pro1x.test=cam pro1x.cam=raw hint.qcom_wdt.0.lifetime=300` (`pro1x.cam_sensor=rear` or `front`: one camera) | the id run, then per camera: `stream: sensor 0 CSIPHY0 4 lanes, 1920x1080 RAW10, link 286400000 Hz ...: CPHY 240000000, timer 100000000, CSID 192000000, TFE 153600000 Hz`, `camss_gcc: camss: gpll10 ... voted on` (if it was off), `qcom_smmu`-style `camss_smmu: camss: stream 0x800 ...`, `CSIPHY0 HW version`, `CSID0 ... reset done`, `TFE0 HW version`, `stream on: ...`; then `rear: frame N: means RGGB ...` for 8 frames with plausible levels (black about 64, not all 0 or 1023), `kept frame ...`, `8 frames, 0 with bus errors, 0 timeouts`; `stream off: 10 frames` |
-| cam-jpeg | `pro1x.test=cam pro1x.cam=jpeg hint.qcom_wdt.0.lifetime=480` | the raw run, then `rear: exposure N lines, gain G`, `rear: focus P (contrast C)`, `rear: frame N as /tmp/pro1x-cam/rear.jpg: 4000x3000, quality 90` (turned by 180 degrees), the same for the front camera without focus |
+| cam-raw | `pro1x.test=cam pro1x.cam=raw pro1x.pool=off hint.qcom_wdt.0.lifetime=300` (`pro1x.cam_sensor=rear` or `front`: one camera) | the id run, then per camera: `stream: sensor 0 CSIPHY0 4 lanes, 1920x1080 RAW10, link 286400000 Hz ...: CPHY 240000000, timer 100000000, CSID 192000000, TFE 153600000 Hz`, `camss_gcc: camss: gpll10 ... voted on` (if it was off), `qcom_smmu`-style `camss_smmu: camss: stream 0x800 ...`, `CSIPHY0 HW version`, `CSID0 ... reset done`, `TFE0 HW version`, `stream on: ...`; then `rear: frame N: means RGGB ...` for 8 frames with plausible levels (black about 64, not all 0 or 1023), `kept frame ...`, `8 frames, 0 with bus errors, 0 timeouts`; `stream off: 10 frames` |
+| cam-jpeg | `pro1x.test=cam pro1x.cam=jpeg pro1x.pool=off hint.qcom_wdt.0.lifetime=480` | the raw run, then `rear: exposure N lines, gain G`, `rear: focus P (contrast C)`, `rear: frame N as /tmp/pro1x-cam/rear.jpg: 4000x3000, quality 90` (turned by 180 degrees), the same for the front camera without focus |
 
 What comes back: the console (RAM console, as for every run) and, for
 raw and jpeg, `/dev/pro1xshot`: a tar archive of the smallest files that
@@ -148,11 +150,16 @@ ends at the last step, each register access being reported before it is
 made. A chip ID read that NACKs with everything clocked points at the
 rails (`pro1x-cam -v` lists each PM8008/PCA9534 access) or the MCLK.
 
-Needs: the kernel the module was built against (`build-camera.sh` says
-whether `out/kernel.bin` is it) and a root image with this `rc.local` and
-`pro1x-camtest` (the next `rootfs.sh`/`rootzfs.sh`); until then the run
-can only be started by hand from a shell (`kldload` the module from
-`/host/freebsd/modules`, `sh /dev/pro1x-host/freebsd/camera/pro1x-camtest id`).
+Needs: a PRO1X kernel of this source tree (the module uses only
+exported kernel functions, all 97 of them defined in the current kernel:
+`out/kernel.bin` does) and a root image with this `rc.local` and
+`pro1x-camtest` (the next `rootfs.sh`/`rootzfs.sh`; the image of
+2026-10-30 09:05 has no `cam` branch, `pro1x.test=cam` runs the generic
+test there); until then the run can only be started by hand from a shell
+(`kldload /dev/pro1x-host/freebsd/modules/qcom_camss.ko`,
+`sh /dev/pro1x-host/freebsd/camera/pro1x-camtest id`). The TLMM pins
+the camera uses (gpio20-30, 66) are outside `gpio-reserved-ranges`
+(0-3, 14-17); camss_tlmm refuses reserved ones anyway.
 
 ## Stage 2: raw frames
 

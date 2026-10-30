@@ -311,6 +311,36 @@ print_info(struct camss_softc *sc)
 	    sc->info.pmic_reset_active_low ? " (active low)" : "");
 }
 
+/*
+ * The /dev/iicN units, read again if one was not there yet at attach (the
+ * CCI's and the keyboard bus' iic devices attach on their own): the whole
+ * graph again, keeping which MCLKs are on.
+ */
+static void
+refresh_units(struct camss_softc *sc)
+{
+	struct camss_sensor *cs;
+	int on[CAMSS_MAX_SENSORS];
+	u_int i, j, missing = 0;
+
+	for (i = 0; i < sc->info.nsensors; i++) {
+		cs = &sc->info.sensor[i];
+		missing |= cs->iic_unit < 0;
+		for (j = 0; j < cs->nsupplies; j++)
+			missing |= cs->supply[j].type != CAMSS_SUPPLY_OTHER &&
+			    cs->supply[j].iic_unit < 0;
+	}
+	if (!missing)
+		return;
+	for (i = 0; i < CAMSS_MAX_SENSORS; i++)
+		on[i] = sc->sensor[i].mclk_on;
+	memset(sc->info.sensor, 0, sizeof(sc->info.sensor));
+	sc->info.nsensors = 0;
+	(void)read_graph(sc);
+	for (i = 0; i < CAMSS_MAX_SENSORS; i++)
+		sc->sensor[i].mclk_on = on[i];
+}
+
 /* --- the primitives ------------------------------------------------------------- */
 
 static int
@@ -406,6 +436,7 @@ camss_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
 	sx_xlock(&sc->lock);
 	switch (cmd) {
 	case CAMSS_IOC_INFO:
+		refresh_units(sc);
 		memcpy(data, &sc->info, sizeof(sc->info));
 		error = 0;
 		break;

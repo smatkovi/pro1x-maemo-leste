@@ -66,10 +66,12 @@ if [ "$WHAT" = tools ] || [ "$WHAT" = all ]; then
 	    -o "$T/camera/pro1x-cam" "$REPO"/freebsd/camera/tools/pro1x-cam/*.c -lz -lm
 	cp "$REPO/freebsd/rootfs/usr/local/libexec/pro1x-camtest" "$T/camera/"
 	# the watchdog ends a hang: id 180 s, raw 300 s, jpeg 480 s (both
-	# cameras each, one after the other)
+	# cameras each, one after the other); pro1x.pool=off: the read-only
+	# root.zfs, so that userdata stays mounted at /dev/pro1x-host and the
+	# newer module and tools there are found (the writable pool unmounts it)
 	for run in id:180 raw:300 jpeg:480; do
-		echo "pro1x.test=cam pro1x.cam=${run%:*} hint.qcom_wdt.0.lifetime=${run#*:}" \
-		    > "$T/cmdline.cam-${run%:*}"
+		echo "pro1x.test=cam pro1x.cam=${run%:*} pro1x.pool=off" \
+		    "hint.qcom_wdt.0.lifetime=${run#*:}" > "$T/cmdline.cam-${run%:*}"
 	done
 	cp "$REPO/freebsd/camera/tools/pro1x-camfetch" "$T/"
 	ls -la "$T/camera"

@@ -45,6 +45,7 @@ static struct {
 	phandle_t	node;
 	vm_paddr_t	tile[3];
 	volatile uint32_t *pin[TLMM_NPINS];	/* CTL page of each pin */
+	uint8_t		reserved[TLMM_NPINS];	/* the secure world's */
 } tlmm;
 SX_SYSINIT(camss_tlmm_lock, &tlmm.lock, "camss_tlmm");
 
@@ -87,8 +88,29 @@ tlmm_attach(void)
 		tlmm.tile[i] = pa;
 	}
 	OF_prop_free(rn);
+	/* gpio-reserved-ranges: <start count> pairs (0-3 and 14-17 on the
+	 * Pro1X), owned by the secure world: an access faults */
+	{
+		pcell_t *rr = NULL;
+		ssize_t n = OF_getencprop_alloc_multi(node,
+		    "gpio-reserved-ranges", sizeof(pcell_t), (void **)&rr);
+		ssize_t j;
+		uint32_t k;
+
+		for (j = 0; j + 1 < n; j += 2)
+			for (k = rr[j]; k < rr[j] + rr[j + 1] && k < TLMM_NPINS;
+			    k++)
+				tlmm.reserved[k] = 1;
+		OF_prop_free(rr);
+	}
 	tlmm.state = 1;
 	return (0);
+}
+
+static int
+pin_ok(u_int pin)
+{
+	return (pin < TLMM_NPINS && !tlmm.reserved[pin]);
 }
 
 static volatile uint32_t *
@@ -106,7 +128,7 @@ camss_gpio_read(u_int pin, uint32_t *c, uint32_t *io)
 	int error;
 
 	sx_xlock(&tlmm.lock);
-	if ((error = tlmm_attach()) == 0 && pin < TLMM_NPINS) {
+	if ((error = tlmm_attach()) == 0 && pin_ok(pin)) {
 		*c = ctl(pin)[0];
 		*io = ctl(pin)[1];
 	} else if (error == 0)
@@ -124,9 +146,9 @@ camss_gpio_out(u_int pin, int value, const char *who)
 	int error;
 
 	sx_xlock(&tlmm.lock);
-	if ((error = tlmm_attach()) != 0 || pin >= TLMM_NPINS) {
+	if ((error = tlmm_attach()) != 0 || !pin_ok(pin)) {
 		sx_xunlock(&tlmm.lock);
-		return (error ? error : EINVAL);
+		return (error ? error : EPERM);
 	}
 	p = ctl(pin);
 	c0 = p[0];
@@ -169,7 +191,7 @@ apply_state(phandle_t st, const char *who)
 	if (OF_getprop(st, "function", fn, sizeof(fn)) <= 0)
 		fn[0] = '\0';
 	for (off = 0; off < len; off += strlen(pins + off) + 1) {
-		if (sscanf(pins + off, "gpio%u", &pin) != 1 || pin >= TLMM_NPINS) {
+		if (sscanf(pins + off, "gpio%u", &pin) != 1 || !pin_ok(pin)) {
 			printf("camss_tlmm: %s: pin %s not handled\n", who,
 			    pins + off);
 			error = EINVAL;
@@ -266,7 +288,7 @@ camss_dt_gpio(phandle_t node, const char *prop, int *pin, int *active_low)
 	sx_xunlock(&tlmm.lock);
 	if (error != 0)
 		return (error);
-	if (OF_node_from_xref(c[0]) != tlmm.node || c[1] >= TLMM_NPINS)
+	if (OF_node_from_xref(c[0]) != tlmm.node || !pin_ok(c[1]))
 		return (ENXIO);
 	*pin = c[1];
 	*active_low = (c[2] & 1) != 0;		/* GPIO_ACTIVE_LOW */
