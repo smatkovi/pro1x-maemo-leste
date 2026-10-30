@@ -27,6 +27,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __FreeBSD__
+#include <sys/sysctl.h>
+#endif
 
 #include "modemd.h"
 #include "sms.h"
@@ -41,7 +44,7 @@
 static QmiDevice *dev;
 static QmiClient *cl_dms, *cl_uim, *cl_nas, *cl_wms, *cl_voice;
 static guint call_counter;
-static guint signal_timer;
+static guint signal_timer, concat_timer;
 static gboolean pin_busy;
 
 #define	DMS	QMI_CLIENT_DMS(cl_dms)
@@ -914,10 +917,38 @@ nas_signal_ready(QmiClientNas *c, GAsyncResult *res, gpointer data)
 		qmi_message_nas_get_signal_strength_output_unref(o);
 }
 
+/*
+ * Is anyone looking? The signal's strength is shown only with the display
+ * on: with the panel off or the stand-by screen (qcom_dpu's display and
+ * lpm, pro1x-standby) the poll asks the modem nothing. Each question wakes
+ * the modem and its answer the CPUs (its GLINK interrupt ends a suspend,
+ * pro1x-autosleep), every 30 s for nobody. Elsewhere (the tests): always.
+ */
+static gboolean
+display_watched(void)
+{
+#ifdef __FreeBSD__
+	int on = 1, lpm = 0;
+	size_t len = sizeof(on);
+
+	if (sysctlbyname("dev.qcom_dpu.0.display", &on, &len, NULL, 0) != 0)
+		return TRUE;
+	len = sizeof(lpm);
+	if (sysctlbyname("dev.qcom_dpu.0.lpm", &lpm, &len, NULL, 0) != 0)
+		lpm = 0;
+	return on != 0 && lpm == 0;
+#else
+	return TRUE;
+#endif
+}
+
 static gboolean
 nas_poll(gpointer data)
 {
-	(void)data;
+	if (data == NULL && !display_watched()) {
+		M.signal_skipped++;
+		return G_SOURCE_CONTINUE;
+	}
 	if (cl_nas != NULL && M.online)
 		qmi_client_nas_get_signal_strength(NAS, NULL, TIMEOUT, NULL,
 		    (GAsyncReadyCallback)nas_signal_ready, NULL);
@@ -937,7 +968,7 @@ nas_register_ready(QmiClientNas *c, GAsyncResult *res, gpointer data)
 		qmi_message_nas_register_indications_output_unref(o);
 	qmi_client_nas_get_serving_system(NAS, NULL, TIMEOUT, NULL,
 	    (GAsyncReadyCallback)nas_serving_ready, NULL);
-	nas_poll(NULL);
+	nas_poll(GINT_TO_POINTER(1));	/* the first reading: always */
 }
 
 static void
@@ -1013,7 +1044,11 @@ concat_expire(gpointer data)
 		if (now - k->first > CONCAT_TIMEOUT)
 			concat_emit(k);
 	}
-	return G_SOURCE_CONTINUE;
+	/* only while parts wait: no wake-up a minute for nothing */
+	if (concats != NULL)
+		return G_SOURCE_CONTINUE;
+	concat_timer = 0;
+	return G_SOURCE_REMOVE;
 }
 
 static void
@@ -1052,6 +1087,9 @@ sms_deliver(const guint8 *pdu, guint len)
 		k->tz = p.tz_minutes;
 		k->class0 = sms_class0(&p);
 		concats = g_list_append(concats, k);
+		if (concat_timer == 0)
+			concat_timer = g_timeout_add_seconds(60, concat_expire,
+			    NULL);
 	}
 	if (k->parts[p.seq - 1] == NULL) {
 		k->parts[p.seq - 1] = g_strdup(p.text);
@@ -1280,7 +1318,6 @@ wms_setup(void)
 	qmi_client_wms_set_event_report(WMS, ein, TIMEOUT, NULL,
 	    (GAsyncReadyCallback)wms_simple_ready, "event");
 	qmi_message_wms_set_event_report_input_unref(ein);
-	g_timeout_add_seconds(60, concat_expire, NULL);
 }
 
 static void
@@ -2045,6 +2082,9 @@ qmi_stop(void (*done)(void))
 	if (signal_timer)
 		g_source_remove(signal_timer);
 	signal_timer = 0;
+	if (concat_timer)
+		g_source_remove(concat_timer);
+	concat_timer = 0;
 	for (guint i = 0; i < NSVCS; i++) {
 		if (*svcs[i].slot == NULL)
 			continue;

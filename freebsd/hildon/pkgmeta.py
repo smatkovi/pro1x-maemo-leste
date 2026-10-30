@@ -56,8 +56,10 @@ LOCAL = {
                    'writes its NMEA sentences for gpsd (tools/pro1x-gnss).',
                    ['UNKNOWN']),
     # 1.1: message paths unique across restarts (telepathy-ring's tokens),
-    # sphone for calls only (the SMS are Conversations', as on Leste)
-    'pro1x-modem': ('1.1', "The Pro1X modem's calls and SMS as oFono's D-Bus API",
+    # sphone for calls only (the SMS are Conversations', as on Leste);
+    # 1.2: no signal poll of the modem while nobody looks at the display,
+    # the SMS parts' timer only while parts wait (wake-ups)
+    'pro1x-modem': ('1.2', "The Pro1X modem's calls and SMS as oFono's D-Bus API",
                     "pro1x-modemd talks QMI over QRTR to the modem (DMS, UIM, NAS, WMS, "
                     "VOICE) and offers the calls, SMS, SIM and network registration as "
                     "oFono's D-Bus API, for sphone and the other apps written for oFono; "

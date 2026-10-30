@@ -77,6 +77,7 @@ struct modem {
 	guint32		cell_id;
 	gboolean	have_lac, have_cell;
 	int		strength;	/* 0-100, -1: unknown */
+	unsigned	signal_skipped;	/* polls left out: nobody looking */
 	/* what the modem offers (its clients allocated) */
 	gboolean	have_dms, have_uim, have_nas, have_wms, have_voice;
 	/* the network's time (NAS indication), Unix; 0: none */
