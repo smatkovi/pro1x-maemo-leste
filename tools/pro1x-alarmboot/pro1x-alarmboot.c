@@ -132,8 +132,11 @@ static void power_off(void)
 	}
 }
 
+static guint close_timer;
+
 static gboolean close_dialog(gpointer dialog)
 {
+	close_timer = 0;
 	gtk_dialog_response(GTK_DIALOG(dialog), GTK_RESPONSE_CANCEL);
 	return FALSE;
 }
@@ -142,7 +145,6 @@ static gboolean close_dialog(gpointer dialog)
 static gboolean ask(gpointer unused)
 {
 	GtkWidget *note;
-	guint t;
 	gint r;
 
 	(void)unused;
@@ -155,10 +157,11 @@ static gboolean ask(gpointer unused)
 		"The phone switched itself on for the alarm.\n"
 		"Switch it off again?",
 		"Switch off", GTK_RESPONSE_OK, "Keep on", GTK_RESPONSE_CANCEL, NULL);
-	t = g_timeout_add_seconds(ASK_FOR, close_dialog, note);
+	close_timer = g_timeout_add_seconds(ASK_FOR, close_dialog, note);
 	r = gtk_dialog_run(GTK_DIALOG(note));
-	if (r != GTK_RESPONSE_CANCEL)
-		g_source_remove(t);
+	if (close_timer)
+		g_source_remove(close_timer);
+	close_timer = 0;
 	gtk_widget_destroy(note);
 	if (r == GTK_RESPONSE_OK)
 		power_off();
@@ -191,7 +194,7 @@ static gpointer tone_thread(gpointer unused)
 	while (!g_atomic_int_get(&ring_stop))
 		if (pa_simple_write(s, pattern, sizeof(pattern), &err) < 0)
 			break;
-	pa_simple_drain(s, NULL);
+	pa_simple_flush(s, NULL);
 	pa_simple_free(s);
 	return NULL;
 }
