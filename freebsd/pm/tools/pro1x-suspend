@@ -1,7 +1,8 @@
 #!/bin/sh
-# pro1x-suspend [SECONDS]: suspend to idle on the Pro1X, FreeBSD's zzz for
-# it (freebsd/pm/README.md, stage 3). The panel off (DCS), the touchscreen
-# asleep, the keyboard light off; once per boot the RPM's sleep set at 0
+# pro1x-suspend [-k] [SECONDS]: suspend to idle on the Pro1X, FreeBSD's zzz
+# for it (freebsd/pm/README.md, stage 3). The panel off (DCS), the
+# touchscreen asleep, the keyboard light off (-k: all of them left as they
+# are, for pro1x-autosleep: the panel off or the stand-by screen already); once per boot the RPM's sleep set at 0
 # (pro1x_rpmsleep.ko, if it loads) and the MPM's hand-over on; then the
 # CPUs frozen in their deepest states (hw.pro1x_pm.suspend) until a device
 # interrupt (the power key, the RTC alarm) or SECONDS (0: no limit); then
@@ -15,8 +16,13 @@
 # RTC not. An event closer than the lead and 10 s: no suspend (exit 3),
 # so that the alarm rings (alarmd's own timeout does not run while frozen).
 # No file (no alarmd): the RTC's alarm as it is.
+keep=
+if [ "${1:-}" = -k ]; then
+	keep=1
+	shift
+fi
 secs=${1:-0}
-case "$secs" in ''|*[!0-9]*) echo "usage: pro1x-suspend [SECONDS]" >&2; exit 2 ;; esac
+case "$secs" in ''|*[!0-9]*) echo "usage: pro1x-suspend [-k] [SECONDS]" >&2; exit 2 ;; esac
 sysctl -q hw.pro1x_pm.suspend > /dev/null 2>&1 ||
     { echo "pro1x-suspend: no pro1x_pm in this kernel" >&2; exit 1; }
 rtc=dev.qcom_rtc.0
@@ -56,16 +62,20 @@ if [ "$(sysctl -n hw.pro1x_rpmsleep.result 2>/dev/null)" != "" ] ||
 	esac
 fi
 sysctl -q hw.pro1x_pm.mpm=1 > /dev/null 2>&1
-bl=$(backlight -f /dev/backlight/backlight0 -q 2>/dev/null)
-sysctl -q dev.qcom_dpu.0.display=0 dev.goodix.0.sleep=1 > /dev/null 2>&1
-for l in /dev/led/*kbd* /dev/led/*keyboard*; do
-	[ -c "$l" ] && echo 0 > "$l"
-done
+if [ -z "$keep" ]; then
+	bl=$(backlight -f /dev/backlight/backlight0 -q 2>/dev/null)
+	sysctl -q dev.qcom_dpu.0.display=0 dev.goodix.0.sleep=1 > /dev/null 2>&1
+	for l in /dev/led/*kbd* /dev/led/*keyboard*; do
+		[ -c "$l" ] && echo 0 > "$l"
+	done
+fi
 sync
 sysctl -q hw.pro1x_pm.suspend="$secs" > /dev/null
 r=$?
-sysctl -q dev.goodix.0.sleep=0 dev.qcom_dpu.0.display=1 > /dev/null 2>&1
-[ -z "$bl" ] || backlight -f /dev/backlight/backlight0 "$bl" 2>/dev/null
+if [ -z "$keep" ]; then
+	sysctl -q dev.goodix.0.sleep=0 dev.qcom_dpu.0.display=1 > /dev/null 2>&1
+	[ -z "$bl" ] || backlight -f /dev/backlight/backlight0 "$bl" 2>/dev/null
+fi
 last=$(sysctl -n hw.pro1x_pm.last)
 if [ -n "$alarms" ] && [ "$(sysctl -n $rtc.alarms 2>/dev/null)" != "$alarms" ]; then
 	last="$last; the RTC alarm fired"

@@ -1,0 +1,48 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 30 Oct 2026 20:10:00 +0100
+Subject: [PATCH] pro1x: pro1x.power=on brings the power profile's kernel
+ settings
+
+One switch on the command line (freebsd/cmdline) for the power profile
+(freebsd/pm/README.md, stage 6): with pro1x.power=on, kern.smp.disabled=0
+and hw.psci_idle.enable=1 go into the environment unless the command line
+sets them itself, before the kernel config's environment (pro1x.env,
+which has kern.smp.disabled=1) is added. Both have to be in the
+environment at boot: the CPUs start at SI_SUB_SMP, and psci_idle chooses
+OS-initiated mode (the clusters' states) only when enabled then. The rest
+of the profile is user space's (rc.conf, rc.d), which reads the same
+kenv.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+--- a/sys/arm64/arm64/machdep_boot.c	2026-10-30 20:01:05.460341086 +0100
++++ b/sys/arm64/arm64/machdep_boot.c	2026-10-30 20:01:05.470287938 +0100
+@@ -167,6 +167,28 @@
+ 		cmdline_set_env(linux_command_line, CMDLINE_GUARD);
+ #ifdef PRO1X_RAMCONS
+ 		/*
++		 * Pro1X: the power profile (freebsd/pm/README.md, stage 6).
++		 * pro1x.power=on on the command line brings its kernel
++		 * settings: all CPUs, their PSCI idle states with the
++		 * clusters' (OS-initiated mode is chosen at boot). Below
++		 * what the command line says itself, above the kernel
++		 * config's environment (pro1x.env: one CPU), which follows.
++		 */
++		{
++			static const char *const power_env[] = {
++				"kern.smp.disabled",	"0",
++				"hw.psci_idle.enable",	"1",
++			};
++			char *pw = kern_getenv("pro1x.power");
++
++			if (pw != NULL && strcmp(pw, "on") == 0)
++				for (u_int i = 0; i < nitems(power_env); i += 2)
++					if (!testenv(power_env[i]))
++						kern_setenv(power_env[i],
++						    power_env[i + 1]);
++			freeenv(pw);
++		}
++		/*
+ 		 * Pro1X bring-up: keep the kernel config's static environment
+ 		 * (config(8) "env") next to the command line's, which wins:
+ 		 * the first of two equal names is the one found, so only

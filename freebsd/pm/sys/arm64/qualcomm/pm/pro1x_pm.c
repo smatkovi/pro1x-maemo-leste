@@ -35,6 +35,26 @@
  *                            46, 83 right Shift 9, 84 left Ctrl 39, 19 left
  *                            Alt 53; the keyboard's GPIOs 106, 107, 112
  *                            have none
+ *   hw.pro1x_pm.mpm_spi=1    (default) the pins of the device tree's
+ *                            qcom,mpm-pin-map (<pin SPI>: the SoundWire
+ *                            master 5/296 and wake-up 24/79, the SPMI
+ *                            arbiter 86/183, USB 12/422 and 90, 91/260)
+ *                            follow their SPIs: a pin is enabled while its
+ *                            SPI is enabled in the GIC (Linux's MPM driver
+ *                            enables a pin with its interrupt), level high
+ *                            or rising edge as the GIC has it; in addition
+ *                            to mpm_pins
+ *   hw.pro1x_pm.mpm_veto     INTIDs that wake the apps processor but are no
+ *                            MPM pin: while one of them is enabled in the
+ *                            GIC the hand-over is skipped, so that the SoC
+ *                            does not reach vlow/vmin, where only the MPM
+ *                            can wake it. Default "100 102": the modem's
+ *                            GLINK edge (SPI 68) and SMP2P (SPI 70), i.e.
+ *                            while the modem is up ("" to try without:
+ *                            pm/README.md, run 15)
+ *   hw.pro1x_pm.wake=1       user space's wake-up (devd: a cable plugged):
+ *                            a suspend in progress ends, as by a wake-up
+ *                            source's power_wakeup
  *   hw.pro1x_pm.usb_probe    stage 4's first look: the USB controller's
  *                            clocks, power domain and resets as Linux left
  *                            them, its registers if they are clocked
@@ -91,6 +111,11 @@
 #define	MPM_REG_STATUS		4
 #define	MPM_BANKS		4	/* up to 128 pins */
 #define	RPM_STATS_OFFSET	0x14
+#define	MPM_MAP_MAX		16
+#define	MPM_VETO_MAX		8
+/* the GIC distributor's set-enable and configuration registers */
+#define	GICD_ISENABLER(n)	(0x100 + 4 * ((n) / 32))
+#define	GICD_ICFGR(n)		(0xc00 + 4 * ((n) / 16))
 #define	RPM_STATS_RECORD	48
 
 static struct {
@@ -107,6 +132,18 @@ static struct {
 			pol[MPM_BANKS];
 	int		mpm_on;
 	uint64_t	handovers;
+	/* the device tree's pin map, the GIC's view of its SPIs, the veto */
+	volatile uint32_t *gicd;
+	vm_size_t	gicd_size;
+	u_int		nmap;
+	uint16_t	map_pin[MPM_MAP_MAX], map_spi[MPM_MAP_MAX];
+	int		mpm_spi;
+	u_int		nveto;
+	uint32_t	veto[MPM_VETO_MAX];
+	char		veto_str[64];
+	uint64_t	vetoed;
+	uint32_t	veto_last;
+	uint32_t	auto_seen[MPM_BANKS];	/* pins enabled by mpm_spi */
 	uint32_t	seen[MPM_BANKS];	/* pins found in the status */
 	/* the RPM's statistics */
 	volatile uint32_t *stats;
@@ -127,6 +164,8 @@ static struct {
 	 */
 	.epoch = 5,
 	.pins_str = "86:h",
+	.mpm_spi = 1,
+	.veto_str = "100 102",
 };
 
 static int pm_debug;
@@ -178,36 +217,108 @@ pm_parse_pins(const char *s)
 	return (0);
 }
 
+/* an INTID's enable bit in the GIC distributor */
+static bool
+pm_gic_enabled(uint32_t intid)
+{
+	if (pm.gicd == NULL || intid >= 1020 ||
+	    GICD_ISENABLER(intid) >= pm.gicd_size)
+		return (false);
+	return ((pm.gicd[GICD_ISENABLER(intid) / 4] >> (intid % 32)) & 1);
+}
+
+static bool
+pm_gic_edge(uint32_t intid)
+{
+	if (pm.gicd == NULL || GICD_ICFGR(intid) >= pm.gicd_size)
+		return (false);
+	return ((pm.gicd[GICD_ICFGR(intid) / 4] >> ((intid % 16) * 2 + 1)) & 1);
+}
+
+/* "100 102": the INTIDs of the veto */
+static int
+pm_parse_veto(const char *s)
+{
+	uint32_t v[MPM_VETO_MAX];
+	const char *p = s;
+	char *end;
+	u_long n;
+	u_int i = 0;
+
+	while (*p != '\0') {
+		while (*p == ' ' || *p == ',')
+			p++;
+		if (*p == '\0')
+			break;
+		n = strtoul(p, &end, 10);
+		if (end == p || n >= 1020 || i == MPM_VETO_MAX)
+			return (EINVAL);
+		v[i++] = (uint32_t)n;
+		p = end;
+	}
+	memcpy(pm.veto, v, sizeof(v[0]) * i);
+	pm.nveto = i;
+	return (0);
+}
+
 /*
  * psci_idle_soc_hook: every online CPU down, the last one into its
  * cluster's deepest state. Interrupts are off. As Linux's
  * mpm_cpu_pm_callback with notify_rpm (patch 0011): the next wake-up, the
  * wake pins (the other pins' types left alone, as KolibriOS's
- * mpm_prepare), the status cleared, then the RPM's doorbell.
+ * mpm_prepare), the status cleared, then the RPM's doorbell. Not while a
+ * vetoed interrupt (one the MPM cannot see) is enabled; the device tree's
+ * mapped pins follow their SPIs (mpm_spi).
  */
 static void
 pm_soc_hook(uint64_t wake)
 {
 	volatile uint32_t *v = pm.vmpm;
-	uint32_t st;
-	u_int b;
+	uint32_t st, en[MPM_BANKS], rise[MPM_BANKS], fall[MPM_BANKS],
+	    pol[MPM_BANKS], bit;
+	u_int b, i, pin;
 
 	if (!pm.mpm_on || v == NULL)
 		return;
+	for (i = 0; i < pm.nveto; i++)
+		if (pm_gic_enabled(pm.veto[i])) {
+			pm.vetoed++;
+			pm.veto_last = pm.veto[i];
+			return;
+		}
+	memcpy(en, pm.en, sizeof(en));
+	memcpy(rise, pm.rise, sizeof(rise));
+	memcpy(fall, pm.fall, sizeof(fall));
+	memcpy(pol, pm.pol, sizeof(pol));
+	for (i = 0; pm.mpm_spi && i < pm.nmap; i++) {
+		pin = pm.map_pin[i];
+		if (pin >= pm.pins || !pm_gic_enabled(pm.map_spi[i] + 32u))
+			continue;
+		b = pin / 32;
+		bit = 1u << (pin % 32);
+		if (en[b] & bit)
+			continue;	/* mpm_pins says how */
+		en[b] |= bit;
+		pm.auto_seen[b] |= bit;
+		if (pm_gic_edge(pm.map_spi[i] + 32u))
+			rise[b] |= bit;
+		else
+			pol[b] |= bit;
+	}
 	if (wake == 0)
 		wake = ~0ULL;
 	v[0] = (uint32_t)wake;
 	v[1] = (uint32_t)(wake >> 32);
 	for (b = 0; b < pm.banks; b++) {
 		st = v[pm_reg_index(MPM_REG_STATUS, b)];
-		pm.seen[b] |= st & pm.en[b];
+		pm.seen[b] |= st & en[b];
 		v[pm_reg_index(MPM_REG_RISING, b)] =
-		    (v[pm_reg_index(MPM_REG_RISING, b)] & ~pm.en[b]) | pm.rise[b];
+		    (v[pm_reg_index(MPM_REG_RISING, b)] & ~en[b]) | rise[b];
 		v[pm_reg_index(MPM_REG_FALLING, b)] =
-		    (v[pm_reg_index(MPM_REG_FALLING, b)] & ~pm.en[b]) | pm.fall[b];
+		    (v[pm_reg_index(MPM_REG_FALLING, b)] & ~en[b]) | fall[b];
 		v[pm_reg_index(MPM_REG_POLARITY, b)] =
-		    (v[pm_reg_index(MPM_REG_POLARITY, b)] & ~pm.en[b]) | pm.pol[b];
-		v[pm_reg_index(MPM_REG_ENABLE, b)] = pm.en[b];
+		    (v[pm_reg_index(MPM_REG_POLARITY, b)] & ~en[b]) | pol[b];
+		v[pm_reg_index(MPM_REG_ENABLE, b)] = en[b];
 		v[pm_reg_index(MPM_REG_STATUS, b)] = 0;
 	}
 	dsb(st);
@@ -273,6 +384,12 @@ pm_sysctl_rpm_stats(SYSCTL_HANDLER_ARGS)
 	sbuf_printf(&sb, "; MPM hand-overs %ju, pins seen", (uintmax_t)pm.handovers);
 	for (i = 0; i < (int)pm.banks; i++)
 		sbuf_printf(&sb, " %08x", pm.seen[i]);
+	sbuf_printf(&sb, ", pins that followed their SPIs");
+	for (i = 0; i < (int)pm.banks; i++)
+		sbuf_printf(&sb, " %08x", pm.auto_seen[i]);
+	sbuf_printf(&sb, "; vetoed %ju", (uintmax_t)pm.vetoed);
+	if (pm.vetoed != 0)
+		sbuf_printf(&sb, " (last by INTID %u)", pm.veto_last);
 	error = sbuf_finish(&sb);
 	sbuf_delete(&sb);
 	return (error);
@@ -308,6 +425,40 @@ pm_sysctl_pins(SYSCTL_HANDLER_ARGS)
 		strlcpy(pm.pins_str, buf, sizeof(pm.pins_str));
 	sx_xunlock(&pm.lock);
 	return (error);
+}
+
+static int
+pm_sysctl_veto(SYSCTL_HANDLER_ARGS)
+{
+	char buf[sizeof(pm.veto_str)];
+	int error;
+
+	strlcpy(buf, pm.veto_str, sizeof(buf));
+	error = sysctl_handle_string(oidp, buf, sizeof(buf), req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	sx_xlock(&pm.lock);
+	error = pm_parse_veto(buf);
+	if (error == 0)
+		strlcpy(pm.veto_str, buf, sizeof(pm.veto_str));
+	sx_xunlock(&pm.lock);
+	return (error);
+}
+
+static void pm_wakeup(void *arg __unused, const char *what);
+
+/* user space's wake-up (devd's actions): as a wake-up source's */
+static int
+pm_sysctl_wake(SYSCTL_HANDLER_ARGS)
+{
+	int v = 0, error;
+
+	error = sysctl_handle_int(oidp, &v, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (v != 0)
+		pm_wakeup(NULL, "user space");
+	return (0);
 }
 
 /*
@@ -534,6 +685,14 @@ SYSCTL_PROC(_hw_pro1x_pm, OID_AUTO, mpm,
 SYSCTL_PROC(_hw_pro1x_pm, OID_AUTO, mpm_pins,
     CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0, pm_sysctl_pins,
     "A", "The MPM's wake pins, pin:type (h l r f b)");
+SYSCTL_INT(_hw_pro1x_pm, OID_AUTO, mpm_spi, CTLFLAG_RWTUN, &pm.mpm_spi, 0,
+    "The MPM pins of the device tree's map follow their SPIs' enables");
+SYSCTL_PROC(_hw_pro1x_pm, OID_AUTO, mpm_veto,
+    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0, pm_sysctl_veto,
+    "A", "INTIDs no MPM pin wakes: while one is enabled, no hand-over");
+SYSCTL_PROC(_hw_pro1x_pm, OID_AUTO, wake,
+    CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_MPSAFE, NULL, 0, pm_sysctl_wake,
+    "I", "1: end a suspend in progress (user space's wake-up)");
 SYSCTL_INT(_hw_pro1x_pm, OID_AUTO, debug, CTLFLAG_RWTUN, &pm_debug, 0,
     "Each freeze on the console");
 SYSCTL_INT(_hw_pro1x_pm, OID_AUTO, epoch, CTLFLAG_RW, &pm.epoch, 0,
@@ -551,8 +710,10 @@ SYSCTL_PROC(_hw_pro1x_pm, OID_AUTO, usb_probe,
 static void
 pm_setup(void)
 {
-	phandle_t root, mpm, ram, apcs;
-	pcell_t cells[2], pins;
+	phandle_t root, mpm, ram, apcs, gic;
+	pcell_t cells[2], pins, map[2 * MPM_MAP_MAX];
+	ssize_t n;
+	u_int i;
 	bus_addr_t pa;
 	bus_size_t size;
 
@@ -589,12 +750,35 @@ pm_setup(void)
 		pm.stats_size = size;
 		pm.stats = pmap_mapdev(pa, size);
 	}
+	/* the pin map (<pin SPI> pairs) and the GIC's distributor */
+	if (mpm > 0 && (n = OF_getencprop(mpm, "qcom,mpm-pin-map", map,
+	    sizeof(map))) > 0)
+		for (i = 0; i + 1 < (u_int)n / sizeof(pcell_t) &&
+		    pm.nmap < MPM_MAP_MAX; i += 2) {
+			pm.map_pin[pm.nmap] = (uint16_t)map[i];
+			pm.map_spi[pm.nmap++] = (uint16_t)map[i + 1];
+		}
+	gic = ofw_bus_find_compatible(root, "arm,gic-v3");
+	if (gic > 0 && ofw_reg_to_paddr(gic, 0, &pa, &size, NULL) == 0 &&
+	    size >= 0x1000 && size <= 0x10000) {
+		pm.gicd_size = size;
+		pm.gicd = pmap_mapdev(pa, size);
+	}
 	pm_parse_pins(pm.pins_str);
+	TUNABLE_STR_FETCH("hw.pro1x_pm.mpm_veto", pm.veto_str,
+	    sizeof(pm.veto_str));
+	if (pm_parse_veto(pm.veto_str) != 0)
+		printf("pro1x_pm: hw.pro1x_pm.mpm_veto \"%s\" not understood\n",
+		    pm.veto_str);
 	printf("pro1x_pm: vMPM %s%#jx (%u pins), doorbell %#jx bit %u, RPM "
-	    "statistics %s; the hand-over %s, wake pins %s\n",
+	    "statistics %s; the hand-over %s, wake pins %s, %u mapped to SPIs "
+	    "(%s), vetoed by INTIDs %s\n",
 	    pm.vmpm != NULL ? "at " : "none ", (uintmax_t)pm.vmpm_pa, pm.pins,
 	    (uintmax_t)pm.ipc_pa, pm.ipc_bit, pm.stats != NULL ? "yes" : "none",
-	    pm.mpm_on ? "on" : "off (hw.pro1x_pm.mpm=1)", pm.pins_str);
+	    pm.mpm_on ? "on" : "off (hw.pro1x_pm.mpm=1)", pm.pins_str, pm.nmap,
+	    pm.gicd == NULL ? "no GIC distributor: not followed" : pm.mpm_spi ?
+	    "following them" : "not followed", pm.veto_str[0] != '\0' ?
+	    pm.veto_str : "none");
 }
 
 static int
@@ -620,6 +804,8 @@ pm_modevent(module_t mod, int what, void *arg)
 		DELAY(10000);
 		if (pm.vmpm != NULL)
 			pmap_unmapdev(__DEVOLATILE(void *, pm.vmpm), pm.vmpm_size);
+		if (pm.gicd != NULL)
+			pmap_unmapdev(__DEVOLATILE(void *, pm.gicd), pm.gicd_size);
 		sx_destroy(&pm.lock);
 		return (0);
 	default:

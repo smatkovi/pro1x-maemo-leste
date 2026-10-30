@@ -1,0 +1,70 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 30 Oct 2026 20:10:00 +0100
+Subject: [PATCH] linuxkpi 802.11: firmware power save (ifconfig wlan0
+ powersave)
+
+LinuxKPI's 802.11 left vif->cfg.ps false and IEEE80211_C_PMGT off
+("Currently PS is hard coded off!"), so a driver with firmware power
+save never got it: ath10k sets WMI_STA_PS_MODE_DISABLED as soon as its
+vdev starts, and the WCN3990 keeps its receiver on between beacons.
+
+Now, for drivers with SUPPORTS_PS, net80211 is told it can (C_PMGT), and
+its powersave flag (ifconfig wlan0 powersave, IEEE80211_F_PMGTON, which
+takes effect at the next association) becomes vif->cfg.ps with
+BSS_CHANGED_PS once associated, as mac80211 enables power save, with
+mac80211's default dynamic timeout of 100 ms; off again at the
+disassociation. net80211's software sleep (C_SWSLEEP) stays off. Nothing
+changes without the flag.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+--- a/sys/compat/linuxkpi/common/src/linux_80211.c	2026-10-30 20:01:05.461155053 +0100
++++ b/sys/compat/linuxkpi/common/src/linux_80211.c	2026-10-30 20:01:05.471103889 +0100
+@@ -2124,6 +2124,11 @@
+ 		vif->cfg.assoc = false;
+ 		vif->cfg.aid = 0;
+ 		changed |= BSS_CHANGED_ASSOC;
++		/* power save only while associated, as mac80211 */
++		if (vif->cfg.ps) {
++			vif->cfg.ps = false;
++			changed |= BSS_CHANGED_PS;
++		}
+ 		IMPROVE();
+ 
+ 		lkpi_update_mcast_filter(lhw->ic);
+@@ -2967,6 +2972,20 @@
+ 		vif->cfg.aid = IEEE80211_NODE_AID(ni);
+ 		bss_changed |= BSS_CHANGED_ASSOC;
+ 	}
++	/*
++	 * Power save as mac80211 enables it once associated: the driver's
++	 * (its firmware's) through vif->cfg.ps, when net80211's is asked
++	 * for (ifconfig wlan0 powersave: IEEE80211_F_PMGTON, which takes
++	 * effect at the next association) and the driver has it.
++	 */
++	if (ieee80211_hw_check(hw, SUPPORTS_PS) &&
++	    vif->cfg.ps != ((vap->iv_flags & IEEE80211_F_PMGTON) != 0)) {
++		vif->cfg.ps = (vap->iv_flags & IEEE80211_F_PMGTON) != 0;
++		/* mac80211's default; some firmware refuses 0 */
++		if (vif->cfg.ps && hw->conf.dynamic_ps_timeout == 0)
++			hw->conf.dynamic_ps_timeout = 100;
++		bss_changed |= BSS_CHANGED_PS;
++	}
+ 	/* We set SSID but this is not BSSID! */
+ 	vif->cfg.ssid_len = ni->ni_esslen;
+ 	memcpy(vif->cfg.ssid, ni->ni_essid, ni->ni_esslen);
+@@ -6947,6 +6966,14 @@
+ 
+ 	lkpi_enable_hw_scan(lhw);
+ 
++	/*
++	 * Power save done by the driver (its firmware): net80211's
++	 * powersave flag goes to vif->cfg.ps (lkpi_sta_assoc_to_run);
++	 * net80211's own sleep handling (IEEE80211_C_SWSLEEP) stays off.
++	 */
++	if (ieee80211_hw_check(hw, SUPPORTS_PS))
++		ic->ic_caps |= IEEE80211_C_PMGT;
++
+ 	/* Does HW support Fragmentation offload? */
+ 	if (ieee80211_hw_check(hw, SUPPORTS_TX_FRAG))
+ 		ic->ic_flags_ext |= IEEE80211_FEXT_FRAG_OFFLOAD;

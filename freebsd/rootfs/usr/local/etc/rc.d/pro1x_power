@@ -1,0 +1,60 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_power
+# REQUIRE: FILESYSTEMS
+# BEFORE: devd pro1x_audiod pro1x_autosleep LOGIN
+# KEYWORD: nojail
+#
+# The power profile's runtime part (freebsd/pm/README.md, stage 6; on with
+# pro1x.power=on in freebsd/cmdline or pro1x_power_enable="YES" in
+# rc.conf): the CPUs' idle states if the kernel environment did not
+# already turn them on (then without OS-initiated mode: the cores' states
+# only), the USB controller following the cable (pro1x-usbrole, kenv
+# pro1x.usbrole=1, unless set). The rest is rc.conf's and the other
+# scripts' (pro1x_autosleep, pro1x_audiod's jack, Wi-Fi's powersave,
+# powerd). "service pro1x_power status": what is on.
+
+. /etc/rc.subr
+
+name=pro1x_power
+desc="The power profile"
+start_cmd="pro1x_power_start"
+status_cmd="pro1x_power_status"
+stop_cmd=":"
+load_rc_config $name
+. /usr/local/share/pro1x/power.subr
+
+pro1x_power_start()
+{
+	pro1x_power_on || return 0
+	if [ "$(sysctl -n hw.psci_idle.enable 2> /dev/null)" = 0 ]; then
+		sysctl -q hw.psci_idle.enable=1 > /dev/null &&
+		    echo "pro1x_power: the CPUs' idle states on (the cores' only)"
+	fi
+	if [ -z "$(kenv -q pro1x.usbrole)" ]; then
+		kenv pro1x.usbrole=1 > /dev/null
+	fi
+	echo "pro1x_power: on ($(sysctl -n hw.ncpu) CPUs)"
+}
+
+pro1x_power_status()
+{
+	local v
+	if pro1x_power_on; then echo "profile: on"; else echo "profile: off"; fi
+	echo "CPUs: $(sysctl -n hw.ncpu); idle states: $(sysctl -n hw.psci_idle.enable 2> /dev/null || echo none) ($(sysctl -n hw.psci_idle.mode 2> /dev/null))"
+	echo "suspend: $(sysctl -n hw.pro1x_pm.last 2> /dev/null)"
+	echo "RPM: $(sysctl -n hw.pro1x_pm.rpm_stats 2> /dev/null)"
+	if [ -r /var/run/pro1x-autosleep.pid ]; then
+		echo "autosleep: running"
+		cat /var/run/pro1x-autosleep.stats 2> /dev/null
+	else
+		echo "autosleep: not running"
+	fi
+	v=$(/usr/local/sbin/pro1x-audioctl status 2> /dev/null | tr ' ' '\n' | grep '^jack')
+	echo "audio: ${v:-no pro1x-audiod}" | tr '\n' ' '; echo
+	ifconfig wlan0 2> /dev/null | grep -o 'powersavemode [A-Z]*' || echo "wlan0: none or no powersave"
+	echo "USB role switch: pro1x.usbrole=$(kenv -q pro1x.usbrole)"
+	echo "powerd: $(pgrep -lx powerd | tr '\n' ' ')"
+}
+
+run_rc_command "$1"

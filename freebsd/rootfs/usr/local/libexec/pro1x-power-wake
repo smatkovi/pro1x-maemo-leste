@@ -1,0 +1,10 @@
+#!/bin/sh
+# pro1x-power-wake typec|battery: from devd (pro1x_power.conf), ends a
+# suspend in progress (hw.pro1x_pm.wake): a cable plugged, or the battery's
+# change while on external power (a charger plugged); not for the battery's
+# other changes.
+case "$1" in
+battery) [ "$(sysctl -n hw.acpi.acline 2> /dev/null)" = 1 ] || exit 0 ;;
+esac
+sysctl -q hw.pro1x_pm.wake=1 > /dev/null 2>&1
+exit 0

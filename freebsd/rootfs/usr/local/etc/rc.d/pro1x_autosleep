@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_autosleep
+# REQUIRE: LOGIN devd
+# KEYWORD: nojail shutdown
+#
+# The suspend while nobody uses the phone (freebsd/pm/README.md, stage 6):
+# pro1x-autosleep runs pro1x-suspend -k once the display has been off (or
+# showing the stand-by screen) for a while and nothing needs the CPUs (no
+# sound, no call, no transfer, no USB network, not on external power).
+# Off until the device runs pass; on with the power profile
+# (pro1x.power=on in freebsd/cmdline, etc/rc.conf).
+#
+#   pro1x_autosleep_enable="YES"
+#   pro1x_autosleep_flags="-D 30 -a 30"   pro1x-autosleep's options:
+#       -D delay, -a stay after a wake-up source, -s after other
+#       interrupts, -L not with the stand-by screen, -P also on a charger
+#
+# Inhibit it for a while: touch /var/run/pro1x-autosleep.inhibit. What it
+# did: /var/run/pro1x-autosleep.stats (kill -USR1 also logs it).
+
+. /etc/rc.subr
+
+name=pro1x_autosleep
+desc="Suspend while the phone is not used"
+rcvar=pro1x_autosleep_enable
+load_rc_config $name
+if [ -z "${pro1x_autosleep_enable}" ] &&
+    [ -r /usr/local/share/pro1x/power.subr ] &&
+    . /usr/local/share/pro1x/power.subr && pro1x_power_on; then
+	pro1x_autosleep_enable=YES
+fi
+: ${pro1x_autosleep_enable:=NO}
+: ${pro1x_autosleep_flags:=}
+
+pidfile=/var/run/pro1x-autosleep.pid
+command=/usr/local/sbin/pro1x-autosleep
+command_args="${pro1x_autosleep_flags}"
+extra_commands="stats"
+stats_cmd="pro1x_autosleep_stats"
+
+pro1x_autosleep_stats()
+{
+	[ -r /var/run/pro1x-autosleep.stats ] && cat /var/run/pro1x-autosleep.stats
+}
+
+run_rc_command "$1"

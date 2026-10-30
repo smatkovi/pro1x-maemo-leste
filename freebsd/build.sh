@@ -90,7 +90,8 @@ cp -a "$REPO/freebsd/pm/sys/." "$SRC/sys/"
 # clocks, pins and power domain, /dev/camss (qcom_camss), new files only
 cp -a "$REPO/freebsd/camera/sys/." "$SRC/sys/"
 # The sound (freebsd/audio/README.md): sound(4) as a module (the kernel has
-# no "device sound") and its device over the ADSP, snd_pro1x
+# no "device sound") and its device over the ADSP, snd_pro1x; the
+# SoundWire masters' interrupts for the jack (qcom_swr)
 cp -a "$REPO/freebsd/audio/sys/." "$SRC/sys/"
 # Mobile data (freebsd/data/README.md): the IPA v4.2, qcom_ipa
 cp -a "$REPO/freebsd/data/sys/." "$SRC/sys/"
@@ -104,7 +105,7 @@ PM_MODULES="$PM_MODULES usb/ucom usb/umodem"
 PM_MODULES="$PM_MODULES pro1x_typec"
 # host mode on the DWC3 (pro1x_usb): xHCI, and a stick's mass storage
 PM_MODULES="$PM_MODULES usb/xhci usb/umass"
-MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss sound/sound snd_pro1x $PM_MODULES qcom_ipa}
+MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss sound/sound snd_pro1x qcom_swr $PM_MODULES qcom_ipa}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
 	buildkernel)
@@ -160,6 +161,10 @@ clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" -fuse-ld=lld \
 clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" -fuse-ld=lld \
     -O2 -Wall -o "$OUT/dsp-tools/pro1x-audioctl" \
     "$REPO/freebsd/audio/tools/pro1x-audioctl/pro1x-audioctl.c" -lm
+# The suspend while nobody uses the phone (freebsd/pm/README.md, stage 6)
+clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" -fuse-ld=lld \
+    -O2 -Wall -o "$OUT/dsp-tools/pro1x-autosleep" \
+    "$REPO"/freebsd/pm/tools/pro1x-autosleep/*.c
 # and the test of the QRTR sockets (freebsd/dsp/test)
 clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" -fuse-ld=lld \
     -O2 -Wall -I"$REPO/freebsd/dsp/sys/arm64/qualcomm/dsp" \
