@@ -43,8 +43,7 @@ struct qcom_pas_status {
 	uint32_t	smp2p_in;	/* the remote's state bits */
 	uint32_t	flags;		/* QCOM_PAS_F_* seen since the start */
 	char		crash_reason[128];
-	uint32_t	ms;		/* since the last start (or adoption) */
-	uint32_t	spare[3];
+	/* (its size is in QCOM_PAS_STATUS: older pro1x-dsp binaries) */
 };
 #define	QCOM_PAS_F_FATAL	0x01
 #define	QCOM_PAS_F_READY	0x02

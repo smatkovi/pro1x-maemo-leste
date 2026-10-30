@@ -87,6 +87,8 @@ struct remote_stats {
 	int	qmi_req, qmi_resp;
 	int	rmtfs_opened;		/* its rmtfs client got an answer */
 	int	bounced_tx;		/* sent into Linux's old intents */
+	int	ipa_changes;		/* our "ipa" value changed (or vanished) */
+	int	hello_to_me;		/* HELLOs addressed to its own node */
 	int	errors;
 	uint32_t servers_seen[16];	/* services node 1 announced */
 	int	nservers_seen;

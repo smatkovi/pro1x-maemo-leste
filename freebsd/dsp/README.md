@@ -92,9 +92,10 @@ Building and putting a run in place (`build-dsp.sh`: under
     cp $WORK/dsp-test/dsp-tools/*    /host/freebsd/dsp-tools/
     cp $WORK/dsp-test/cmdline.dsp-adsp /host/freebsd/cmdline
 
-The modules are built against the kernel in `$WORK/obj`: when the script
-says that kernel differs from `out/kernel.bin`, the `kernel.bin` of the
-same tree goes along. `pro1x-dsptest` runs a newer copy of itself from
+The modules are built against the kernel in `$WORK/obj`, which the script
+copies along as `$WORK/dsp-test/kernel.bin`; when it says that kernel
+differs from `out/kernel.bin` (other drivers' newer sources), that one goes
+to `/host/freebsd/kernel.bin` with the modules. `pro1x-dsptest` runs a newer copy of itself from
 `freebsd/dsp-tools` (as the camera test does; the root image's copy must
 be this one or later for that), and `pro1x-dsp` from there first.
 
@@ -235,7 +236,10 @@ rests on assumptions no code here can check: that a DSP answers a second
 HELLO from node 1 by telling its servers again (KolibriOS relies on the
 same; Linux's name service does that, the firmware's is not known), that
 the newest QRTR packets in the FIFOs are IPCRTR's, that the modem lives
-with rmtfs going away and coming back, and that the Leste side works: the
+with rmtfs going away and coming back (Leste's `rmtfs -r` kept the modem's
+EFS writes in its memory, which the kexec loses; FreeBSD's rmtfs serves the
+partitions as they are on disk: the modem may find its EFS older than it
+left it; KolibriOS has the same gap), and that the Leste side works: the
 kexec from a running system must rebind UFS (the controller of Leste's
 own root) with an identity mapping before the jump, which the boot menu
 only does from its initramfs. Other channels Linux had open (the ADSP's

@@ -84,8 +84,10 @@ bool	glink_channel_adopted(struct glink_channel *ch);
 struct glink_edge *glink_edge_adopt(const char *label,
 	    const struct glink_fifo_ops *ops, void *ops_arg,
 	    glink_announce_cb_t *announce, void *announce_arg);
+/* hint: what the transport found besides (QRTR: the remote's node id) */
 int	glink_adopt_channel(struct glink_edge *edge, const char *name,
-	    u_int lcid, u_int rcid, size_t bounce);
+	    u_int lcid, u_int rcid, size_t bounce, uint32_t hint);
+uint32_t glink_channel_hint(struct glink_channel *ch);
 
 /* For the test runs: the edge and its channels as they are now */
 struct glink_edge_info {

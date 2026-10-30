@@ -206,8 +206,12 @@ ipcrtr_announced(void *arg, struct glink_edge *edge, const char *label,
 	taskqueue_enqueue(ep->tq, &ep->tx_task);
 	printf("qrtr_glink: %s up%s\n", label,
 	    glink_channel_adopted(ch) ? " (Linux's channel adopted)" : "");
-	if (glink_channel_adopted(ch))
+	if (glink_channel_adopted(ch)) {
+		/* to the remote's node (found in the FIFOs), not to "any" */
+		if (glink_channel_hint(ch) != 0xffffffffu)
+			qrtr_endpoint_assign(ep->node, glink_channel_hint(ch));
 		qrtr_endpoint_hello(ep->node);
+	}
 }
 
 void

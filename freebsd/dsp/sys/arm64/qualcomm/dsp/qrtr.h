@@ -87,6 +87,8 @@ int	qrtr_endpoint_post(struct qrtr_node *n, const void *data, size_t len);
 void	qrtr_endpoint_unregister(struct qrtr_node *n);
 /* A HELLO from our name service over this endpoint (a node started again) */
 void	qrtr_endpoint_hello(struct qrtr_node *n);
+/* The node id behind the endpoint, known before its first packet */
+void	qrtr_endpoint_assign(struct qrtr_node *n, uint32_t nid);
 
 /* For the test runs: the servers the name service knows */
 typedef void qrtr_server_cb_t(void *arg, uint32_t service, uint32_t instance,

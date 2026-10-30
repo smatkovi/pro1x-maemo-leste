@@ -9,8 +9,10 @@
 #   WORK=/path/to/freebsd-build bash freebsd/dsp/build-dsp.sh [module|tools|all]
 #
 # The modules are built against the PRO1X kernel in $WORK/obj (KERNFAST:
-# the kernel itself is only relinked if its sources changed); a device run
-# needs the out/kernel.bin built from the same tree. Holds
+# the kernel itself is only relinked if its sources changed), which is
+# copied along as $WORK/dsp-test/kernel.bin: the modules and that kernel
+# go to the phone together (it may hold other drivers' newer sources than
+# out/kernel.bin; the script says whether they differ). Holds
 # $WORK/.kbuild-lock while make runs.
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}
@@ -50,11 +52,13 @@ if [ "$WHAT" = module ] || [ "$WHAT" = all ]; then
 	done
 	grep -E ": (warning|error):" "$T/build-module.log" | grep -E "qualcomm/dsp" || true
 	k=$(find "$WORK/obj" -path '*/sys/PRO1X/kernel.bin' | head -1)
+	cp "$k" "$T/kernel.bin"
 	if cmp -s "$k" "$WORK/out/kernel.bin"; then
-		echo ">> the modules fit out/kernel.bin"
+		echo ">> the modules fit out/kernel.bin (the same as $T/kernel.bin)"
 	else
 		echo ">> obj's kernel.bin differs from out/kernel.bin (newer" \
-		    "sources there): copy that kernel too, or check the symbols"
+		    "sources there): $T/kernel.bin is the one the modules were" \
+		    "built against"
 	fi
 	ls -la "$T/modules"
 fi

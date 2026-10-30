@@ -100,6 +100,7 @@ struct glink_channel {
 	int		intent_req;	/* -1 asked, 0 refused, 1 granted */
 	bool		intent_received;
 	bool		adopted;	/* Linux's, taken over */
+	uint32_t	hint;		/* adopted: glink_adopt_channel's */
 	char		*bounce;	/* adopted: data into Linux's intents */
 	size_t		bounce_size, bounce_off;
 	uint32_t	bounce_iid;
@@ -659,7 +660,7 @@ glink_edge_adopt(const char *label, const struct glink_fifo_ops *ops,
  */
 int
 glink_adopt_channel(struct glink_edge *e, const char *name, u_int lcid,
-    u_int rcid, size_t bounce)
+    u_int rcid, size_t bounce, uint32_t hint)
 {
 	struct glink_channel *ch;
 	char *buf;
@@ -680,6 +681,7 @@ glink_adopt_channel(struct glink_edge *e, const char *name, u_int lcid,
 	ch->open_acked = true;
 	ch->acked_remote = true;
 	ch->adopted = true;
+	ch->hint = hint;
 	ch->bounce = buf;
 	ch->bounce_size = bounce;
 	ch->next_liid = GLINK_ADOPT_LIID;
@@ -948,6 +950,12 @@ bool
 glink_channel_adopted(struct glink_channel *ch)
 {
 	return (ch->adopted);
+}
+
+uint32_t
+glink_channel_hint(struct glink_channel *ch)
+{
+	return (ch->hint);
 }
 
 void

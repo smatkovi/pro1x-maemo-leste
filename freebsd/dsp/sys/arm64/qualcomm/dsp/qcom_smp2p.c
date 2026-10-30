@@ -21,8 +21,10 @@
  *
  * After a kexec the items stay in SMEM. Linux zeroes its outbound item
  * when it probes; here, when the remote's item shows it running (a DSP
- * Linux started, taken over: pro1x-dsp adopt), the values of our entries
- * and the restart acknowledgement are kept, so that it sees no change.
+ * Linux started, taken over: pro1x-dsp adopt), our item is left as Linux
+ * left it (entries, values, flags, version), our entries point at its
+ * entries of their names, and nothing is kicked unless one had to be
+ * added: the remote sees no change.
  *
  *   sysctl hw.qcom_smp2p     each edge: pids, items, entries and values
  */
@@ -282,20 +284,17 @@ smp2p_in_version(struct smp2p_softc *sc)
 }
 
 /*
- * Our item. Linux's qcom_smp2p_alloc_outbound_item, but with the remote
- * up (its item there, with a version), the values Linux left in our
- * entries are kept: kept_val[] by name, *kept_flags the flags.
+ * Our item. Linux's qcom_smp2p_alloc_outbound_item; with the remote up
+ * (its item there, with a version) and ours valid, ours stays untouched
+ * (sc->kept).
  */
 static int
-smp2p_alloc_out(struct smp2p_softc *sc, char kept_name[][SMP2P_NAME_LEN],
-    uint32_t *kept_val, int *nkept, uint32_t *kept_flags)
+smp2p_alloc_out(struct smp2p_softc *sc)
 {
 	struct smp2p_item *out;
 	u_int in_version;
-	int i, error;
+	int error;
 
-	*nkept = 0;
-	*kept_flags = 0;
 	error = qcom_smem_alloc(sc->remote_pid, sc->item[1], sizeof(*out));
 	if (error != 0 && error != EEXIST)
 		return (error);
@@ -308,16 +307,14 @@ smp2p_alloc_out(struct smp2p_softc *sc, char kept_name[][SMP2P_NAME_LEN],
 		    in_version, SMP2P_VERSION);
 		return (EINVAL);
 	}
-	if (in_version != 0 && out->magic == SMP2P_MAGIC) {
-		/* the remote runs: what it reads from us stays as it was */
-		for (i = 0; i < MIN(out->valid_entries, SMP2P_MAX_ENTRY); i++) {
-			memcpy(kept_name[i], out->entries[i].name, SMP2P_NAME_LEN);
-			kept_name[i][SMP2P_NAME_LEN - 1] = '\0';
-			kept_val[i] = out->entries[i].value;
-		}
-		*nkept = i;
-		*kept_flags = out->flags;
+	if (in_version != 0 && out->magic == SMP2P_MAGIC &&
+	    ITEM_VERSION(out) != 0 && out->valid_entries <= SMP2P_MAX_ENTRY) {
+		/* the remote runs: what it reads from us stays as it is */
 		sc->kept = true;
+		sc->version = ITEM_VERSION(out);
+		sc->ssr_ack = (out->flags & SMP2P_FLAG_RESTART_ACK) != 0;
+		sc->out = out;
+		return (0);
 	}
 	memset(out, 0, sizeof(*out));
 	out->magic = SMP2P_MAGIC;
@@ -325,15 +322,32 @@ smp2p_alloc_out(struct smp2p_softc *sc, char kept_name[][SMP2P_NAME_LEN],
 	out->remote_pid = sc->remote_pid;
 	out->total_entries = SMP2P_MAX_ENTRY;
 	out->valid_entries = 0;
-	out->flags = *kept_flags;
 	/* the header before the version that validates it */
 	wmb();
 	sc->version = in_version != 0 ? in_version : SMP2P_VERSION;
 	out->version_features = sc->version | (SMP2P_FEATURE_SSR_ACK << 8);
-	sc->ssr_ack = (*kept_flags & SMP2P_FLAG_RESTART_ACK) != 0;
 	sc->out = out;
 	smp2p_kick(sc);
 	return (0);
+}
+
+/* An entry of ours: the one of its name in a kept item, else a new one */
+static volatile uint32_t *
+smp2p_out_entry(struct smp2p_softc *sc, const char *name, bool *added)
+{
+	struct smp2p_item *out = sc->out;
+	int k;
+
+	if (sc->kept)
+		for (k = 0; k < out->valid_entries; k++)
+			if (strncmp(out->entries[k].name, name,
+			    SMP2P_NAME_LEN) == 0)
+				return (&out->entries[k].value);
+	if (out->valid_entries == SMP2P_MAX_ENTRY)
+		return (NULL);
+	memcpy(out->entries[out->valid_entries].name, name, SMP2P_NAME_LEN);
+	*added = true;
+	return (&out->entries[out->valid_entries++].value);
 }
 
 static int
@@ -343,9 +357,8 @@ smp2p_attach(device_t dev)
 	struct smp2p_entry *e;
 	phandle_t node, child;
 	pcell_t items[2];
-	char kept_name[SMP2P_MAX_ENTRY][SMP2P_NAME_LEN];
-	uint32_t kept_val[SMP2P_MAX_ENTRY], kept_flags;
-	int rid, error, nkept, k;
+	bool added = false;
+	int rid, error;
 
 	sc->dev = dev;
 	node = ofw_bus_get_node(dev);
@@ -370,8 +383,7 @@ smp2p_attach(device_t dev)
 		device_printf(dev, "no SMEM: %d\n", error);
 		return (error);
 	}
-	if ((error = smp2p_alloc_out(sc, kept_name, kept_val, &nkept,
-	    &kept_flags)) != 0) {
+	if ((error = smp2p_alloc_out(sc)) != 0) {
 		device_printf(dev, "SMEM item %u: %d\n", sc->item[1], error);
 		return (error);
 	}
@@ -388,17 +400,10 @@ smp2p_attach(device_t dev)
 		e->sc = sc;
 		e->xref = OF_xref_from_node(child);
 		e->inbound = OF_hasprop(child, "interrupt-controller");
-		if (!e->inbound) {
-			memcpy(sc->out->entries[sc->out->valid_entries].name,
-			    e->name, SMP2P_NAME_LEN);
-			e->value = &sc->out->entries[sc->out->valid_entries].value;
-			for (k = 0; k < nkept; k++)
-				if (strcmp(kept_name[k], e->name) == 0) {
-					*e->value = kept_val[k];
-					kept_name[k][0] = '\0';
-					break;
-				}
-			sc->out->valid_entries++;
+		if (!e->inbound &&
+		    (e->value = smp2p_out_entry(sc, e->name, &added)) == NULL) {
+			free(e, M_SMP2P);
+			continue;
 		}
 		sc->entries[sc->nentries++] = e;
 		mtx_lock(&smp2p_list_lock);
@@ -408,7 +413,9 @@ smp2p_attach(device_t dev)
 	mtx_lock(&sc->lock);
 	smp2p_match_in(sc, true);
 	mtx_unlock(&sc->lock);
-	smp2p_kick(sc);
+	/* (a kept item unchanged: the remote has nothing to look at) */
+	if (!sc->kept || added)
+		smp2p_kick(sc);
 	mtx_lock(&smp2p_list_lock);
 	TAILQ_INSERT_TAIL(&smp2p_devs, sc, link);
 	mtx_unlock(&smp2p_list_lock);

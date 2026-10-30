@@ -110,6 +110,7 @@ struct remote {
 	uint32_t	peer_servers[16][2];	/* service, port of node 1 */
 	int		npeer;
 	bool		rmtfs_asked;
+	int64_t		ipa_last;	/* our "ipa" as it saw it, -2: never */
 	struct remote_stats st;
 };
 
@@ -134,6 +135,7 @@ remotes_init(void)
 	for (i = 0; i < sizeof(remotes) / sizeof(remotes[0]); i++) {
 		pthread_mutex_init(&remotes[i].lock, NULL);
 		pthread_cond_init(&remotes[i].cond, NULL);
+		remotes[i].ipa_last = -2;
 	}
 }
 
@@ -177,11 +179,21 @@ sim_remote_stats(struct remote *r, struct remote_stats *st)
 	pthread_mutex_unlock(&r->lock);
 }
 
+static int64_t smp2p_ours_named(struct remote *r, const char *name);
+
 static void
 kick_cb(void *arg, int bit)
 {
 	struct remote *r = arg;
+	int64_t v;
 
+	/* what our item says when we kick: the IPA bits must not flicker */
+	if (bit == r->bell_smp2p) {
+		v = smp2p_ours_named(r, "ipa");
+		if (r->ipa_last != -2 && v != r->ipa_last)
+			r->st.ipa_changes++;
+		r->ipa_last = v;
+	}
 	pthread_mutex_lock(&r->lock);
 	r->kicks++;
 	pthread_cond_signal(&r->cond);
@@ -199,6 +211,22 @@ smp2p_set(struct remote *r, uint32_t mask, uint32_t val, bool irq)
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	if (irq)
 		sim_irq_raise(r->irq_smp2p);
+}
+
+/* An entry of ours by name, -1 if it is not there */
+static int64_t
+smp2p_ours_named(struct remote *r, const char *name)
+{
+	struct smp2p_item *in;
+	int i;
+
+	in = sim_smem_get(r->host, r->item_in, NULL);
+	if (in == NULL || in->magic != SMP2P_MAGIC)
+		return (-1);
+	for (i = 0; i < in->valid_entries && i < 16; i++)
+		if (strncmp(in->entries[i].name, name, 16) == 0)
+			return (in->entries[i].value);
+	return (-1);
 }
 
 /* Our "master-kernel" entry in our item, if it is there */
@@ -585,6 +613,8 @@ q_rx(struct remote *r, const uint8_t *pkt, size_t len)
 	switch (type) {
 	case Q_HELLO:
 		r->st.hello_rx++;
+		if (h[6] == r->node)
+			r->st.hello_to_me++;
 		if (h[2] != 1)
 			break;
 		if (r->hello_wait) {
@@ -977,6 +1007,7 @@ sim_remote_boot(int pas_id)
 		sim_doorbell_listen(r->bell_smp2p, kick_cb, r);
 		sim_doorbell_listen(r->bell_glink, kick_cb, r);
 		memset(&r->st, 0, sizeof(r->st));
+		r->ipa_last = -2;
 		start_thread(r, boot);
 	}
 }
@@ -1182,6 +1213,7 @@ sim_remote_linux_left_running(struct remote *r)
 	r->npeer = 1;
 	r->rmtfs_asked = true;
 	memset(&r->st, 0, sizeof(r->st));
+	r->ipa_last = 3;
 	r->st.booted = r->st.ready = r->st.ipcrtr_open = true;
 	r->st.rmtfs_opened = 1;		/* Linux's rmtfs, before */
 	sim_doorbell_listen(r->bell_smp2p, kick_cb, r);

@@ -577,6 +577,15 @@ qrtr_endpoint_unregister(struct qrtr_node *n)
 }
 
 void
+qrtr_endpoint_assign(struct qrtr_node *n, uint32_t nid)
+{
+	glink_lock(&r.lock);
+	if (!n->gone)
+		node_assign(n, nid);
+	glink_unlock(&r.lock);
+}
+
+void
 qrtr_endpoint_hello(struct qrtr_node *n)
 {
 	struct qrtr_ctrl_pkt hello;

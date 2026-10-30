@@ -591,7 +591,6 @@ pas_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 		pas_poll_bits(sc);
 		st->state = sc->state;
 		st->flags = sc->flags;
-		st->ms = sc->t_start != 0 ? pas_ms(sc) : 0;
 		strlcpy(st->crash_reason, sc->crash_reason,
 		    sizeof(st->crash_reason));
 		mtx_unlock(&sc->mtx);

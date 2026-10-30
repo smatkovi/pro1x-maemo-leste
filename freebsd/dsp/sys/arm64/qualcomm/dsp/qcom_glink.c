@@ -562,8 +562,12 @@ edge_setup(device_t dev, phandle_t rproc, void **cookie, bool adopt)
 		e->glink = glink_edge_adopt(e->label, &smem_ops, e,
 		    edge_announce, e);
 		/* before anything is read: the pending data is IPCRTR's too */
+		/* the remote's QRTR node, from a packet of its or to it */
 		if (lcid > 0 && rcid > 0 && (error = glink_adopt_channel(e->glink,
-		    "IPCRTR", lcid, rcid, ADOPT_BOUNCE)) != 0)
+		    "IPCRTR", lcid, rcid, ADOPT_BOUNCE,
+		    strcmp(rx_how, "QRTR data") == 0 ? rx_node :
+		    strcmp(tx_how, "QRTR data") == 0 ? tx_node :
+		    0xffffffffu)) != 0)
 			device_printf(dev, "glink edge %s: IPCRTR not adopted: "
 			    "%d\n", e->label, error);
 		else if (lcid <= 0 || rcid <= 0)

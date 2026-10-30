@@ -120,12 +120,10 @@ status(const char *name)
 	if (ioctl(fd, QCOM_PAS_STATUS, &st) < 0)
 		err(1, "%s: status", name);
 	close(fd);
-	printf("%s: %s%s, PAS id %u, memory %#jx+%#jx, SMP2P %#x, %u ms, "
-	    "seen%s%s%s%s%s",
+	printf("%s: %s%s, PAS id %u, memory %#jx+%#jx, SMP2P %#x, seen%s%s%s%s%s",
 	    name, st.state < 4 ? states[st.state] : "?",
 	    st.flags & QCOM_PAS_F_ADOPTED ? " (adopted)" : "", st.pas_id,
 	    (uintmax_t)st.mem_phys, (uintmax_t)st.mem_size, st.smp2p_in,
-	    st.ms,
 	    st.flags & QCOM_PAS_F_READY ? " ready" : "",
 	    st.flags & QCOM_PAS_F_HANDOVER ? " handover" : "",
 	    st.flags & QCOM_PAS_F_FATAL ? " fatal" : "",

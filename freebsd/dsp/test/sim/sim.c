@@ -515,6 +515,11 @@ run_adopt(void)
 	    "adopt: data into Linux's intents taken (bounce), then ours");
 	check(dms_revision(), "adopt: DMS answers get-revision");
 	sim_remote_stats(r, &st);
+	check(st.ipa_changes == 0 && sysctl_has("hw.qcom_smp2p",
+	    "ipa              0x00000003"),
+	    "adopt: our IPA bits never changed under the modem (SMP2P kept)");
+	check(st.hello_to_me >= 1,
+	    "adopt: our HELLO addressed to the modem's node (from the FIFOs)");
 	check(st.errors == 0 && !st.crashed, "adopt: no protocol error");
 	show("hw.qcom_glink");
 	show("net.qrtr.nodes");
