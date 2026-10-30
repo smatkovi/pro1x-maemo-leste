@@ -92,6 +92,12 @@ if [ -x /usr/local/bin/maemo-xinput-sounds ]; then
 	respawn /usr/local/bin/maemo-xinput-sounds &
 	sounds="$sounds $!"
 fi
+# The volume keys on PulseAudio's default sink (freebsd/audio: nothing
+# else in FreeBSD's Hildon takes them)
+if [ -x /usr/local/bin/pro1x-volume-keys ]; then
+	respawn /usr/local/bin/pro1x-volume-keys &
+	sounds="$sounds $!"
+fi
 # The N9's volume bar on PulseAudio's default sink, seen while the
 # MeeGo-like look is on (Leste: Xsession.post/46pro1x-volume-osd)
 if [ -x /usr/local/bin/pro1x-volume-osd ]; then

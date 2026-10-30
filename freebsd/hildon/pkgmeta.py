@@ -85,6 +85,12 @@ LOCAL = {
                      'applet turns the sections on and off and takes the place and the '
                      'account (tools/pro1x-events, apps/pro1x-events).',
                      ['UNKNOWN']),
+    'pro1x-volume-keys': ('1.0', "The Pro1X's volume keys on PulseAudio's default sink",
+                          'pro1x-volume-keys takes the volume keys (XF86AudioRaiseVolume, '
+                          'LowerVolume, Mute) in the Hildon session and steps the volume '
+                          "of PulseAudio's default sink by 5 % up to 100 % "
+                          '(freebsd/audio/tools/pro1x-volume-keys).',
+                          ['BSD2CLAUSE']),
     'pro1x-volume-osd': ('1.0', "The Nokia N9's volume bar for Hildon's MeeGo-like look",
                          'pro1x-volume-osd shows the volume of PulseAudio\'s default sink '
                          "as the N9's system UI does when it changes, while Hildon's "
@@ -219,6 +225,8 @@ RUNTIME = {
                      'ca_root_nss'],
     # the volume it shows is PulseAudio's, which hildon-session starts
     'pro1x-volume-osd': ['pulseaudio', 'hildon-desktop'],
+    # pactl is PulseAudio's
+    'pro1x-volume-keys': ['pulseaudio'],
     # the modem asks for its files and domains before its file systems
     'rmtfs': ['tqftpserv', 'pd-mapper'],
     # QtSql's SQLite driver, a package of its own on FreeBSD
@@ -837,7 +845,7 @@ apps = sorted(x['name'] for x in meta.values()
 apps = sorted(set(apps) | {x['name'] for x in meta.values() if x['name'] in (
     'hildon-input-method-plugins', 'headphoned', 'wifi-assistant', 'hildon-status-menu',
     'osso-systemui-alarm', 'maemo-input-sounds', 'maemo-ringtones-mr0', 'osso-sounds-rtc',
-    'pro1x-volume-osd')})
+    'pro1x-volume-osd', 'pro1x-volume-keys')})
 # the N9's own user interface (harmattan.sh), where it is built: all of
 # it but the headers
 harmattan = sorted(x['name'] for x in meta.values()

@@ -628,6 +628,24 @@ modem_part() {
 	cp -a "$PR/." "$STAGE/"
 }
 
+# The volume keys (freebsd/audio/README.md, stage 4): XF86AudioRaise/
+# LowerVolume and Mute grabbed on the root window, PulseAudio's default
+# sink stepped with pactl (pro1x-volume-osd shows it)
+volume_keys_part() {
+	local b=$BUILD/pro1x-volume-keys
+	log "pro1x-volume-keys"
+	mkdir -p "$b"
+	# shellcheck disable=SC2046
+	$CC $CPPFLAGS $CFLAGS $LDFLAGS -Wall -o "$b/pro1x-volume-keys" \
+	    "$REPO/freebsd/audio/tools/pro1x-volume-keys/pro1x-volume-keys.c" \
+	    $(pkg-config --cflags --libs x11) > "$b/make.out" 2>&1 ||
+	    { grep -m20 error "$b/make.out"; return 1; }
+	PR=$H/pkgroot/pro1x-volume-keys
+	rm -rf "$PR"
+	install -D -m 755 "$b/pro1x-volume-keys" "$PR/usr/local/bin/pro1x-volume-keys"
+	cp -a "$PR/." "$STAGE/"
+}
+
 # pkg-config puts the sysroot in front of path variables, which some
 # parts install to: those files back where they belong
 unsysroot() {
@@ -815,6 +833,10 @@ fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-standby "* ]]; then
 	dsp_tool pro1x-standby bin "x11 xext xi cairo pangocairo sqlite3 dbus-1" ||
 	    failed+=(pro1x-standby)
+fi
+# the volume keys on PulseAudio's default sink (freebsd/audio, stage 4)
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-volume-keys "* ]]; then
+	volume_keys_part || failed+=(pro1x-volume-keys)
 fi
 # the N9's volume bar for the MeeGo-like look, on PulseAudio's default sink
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-volume-osd "* ]]; then
