@@ -1,0 +1,21 @@
+gpsd_shutdown() no longer cleared gpsd_running (since Leste's fb6729a,
+which started location-daemon over D-Bus). Once positioning had run,
+start_internal() returned at once: location_gpsd_control_start() after
+location_gpsd_control_stop() did nothing (no gpsd_running signal, no start
+of location-daemon), and the restart after a change of the method, the
+settings or MCE's device mode was none. The same fix is in Leste's
+liblocation (patches/fixes/liblocation.patch).
+
+--- a/src/location-gpsd-control.c
++++ b/src/location-gpsd-control.c
+@@ -141,6 +141,10 @@
+ 		g_object_unref(p->location_daemon_proxy);
+ 		p->location_daemon_proxy = NULL;
+ 	}
++	/* positioning ended: the next start_internal() starts it again (a
++	 * restart after a change of method or settings, start() after
++	 * stop(), with its gpsd_running signal) */
++	p->gpsd_running = FALSE;
+ }
+ 
+ int gpsd_start(LocationGPSDControl *control)

@@ -1,4 +1,4 @@
-Five bugs in liblocation:
+Seven bugs in liblocation:
 
 - liblocation.so.0 named none of the libraries it uses (GLib, GObject,
   GConf, libdbus, dbus-glib): programs that did not link them themselves
@@ -50,8 +50,26 @@ Five bugs in liblocation:
   in that place, true wherever nothing runs. Now it restarts, and reports
   gpsd_stopped, only where positioning was running.
 
+- gpsd_shutdown() no longer cleared gpsd_running (since Leste's fb6729a,
+  which started location-daemon over D-Bus). Once positioning had run,
+  start_internal() returned at once: location_gpsd_control_start() after
+  location_gpsd_control_stop() did nothing (no gpsd_running signal, no
+  start of location-daemon), and the restart after a change of the
+  method, the settings or MCE's device mode was none.
+- Every LocationGPSDControl took the shared lock on
+  /run/lock/location-daemon.lock in its init and kept it until it was
+  freed. location-daemon runs as long as any client holds that lock (it
+  tries an exclusive one every 15 s and exits when it gets it), so a
+  control that was created and never started, or stopped, kept the
+  daemon, and gpsd, running. The lock is now held only while positioning
+  runs: taken before location-daemon's start is called, dropped when
+  positioning ends (stop(), the control freed). Maemo 5's API: "Location
+  service is kept running as long as there is at least one application
+  using it". As the daemon removes the file when it exits, the lock is
+  taken again when it was on a file just removed.
+
 The same fixes are in FreeBSD's Hildon build
-(freebsd/hildon/patches/liblocation/0002, 0005, 0006, 0007, 0008).
+(freebsd/hildon/patches/liblocation/0002, 0005 to 0010).
 
 diff --git a/configure.ac b/configure.ac
 index 0890b4b..25ba7e6 100644
@@ -103,10 +121,97 @@ index ab936e7..2766b08 100644
  		dbus_connection_add_filter(p->bus,
  			(DBusHandleMessageFunction)on_locationdaemon_signal,
 diff --git a/src/location-gpsd-control.c b/src/location-gpsd-control.c
-index b0b9c69..75ddf59 100644
+index b0b9c69..d641a87 100644
 --- a/src/location-gpsd-control.c
 +++ b/src/location-gpsd-control.c
-@@ -167,7 +167,8 @@ void ui_proxy_close(LocationGPSDControl *control)
+@@ -17,7 +17,9 @@
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ #include <errno.h>
++#include <fcntl.h>
+ #include <sys/file.h>
++#include <sys/stat.h>
+ #include <unistd.h>
+ 
+ #include <dbus/dbus-glib.h>
+@@ -128,6 +130,56 @@ static void location_gpsd_control_class_get_property(GObject *, guint, GValue *,
+ static void location_gpsd_control_class_init(LocationGPSDControlClass *);
+ static void location_gpsd_control_init(LocationGPSDControl *);
+ 
++/*
++ * location-daemon runs while any client holds a shared lock on FLOCK_PATH:
++ * every 15 s it tries an exclusive one, and when it gets it, it removes
++ * the file and exits. A control holds it from the start of positioning
++ * (gpsd_start(), before the daemon is activated) to its end
++ * (gpsd_shutdown()), not for its whole life: a control created and never
++ * started, or stopped, kept the daemon (and gpsd) running.
++ */
++static void lock_take(LocationGPSDControlPrivate *p)
++{
++	struct stat fst, pst;
++	int fd;
++
++	if (p->lockfd >= 0)
++		return;
++
++	for (;;) {
++		fd = open(FLOCK_PATH, O_CREAT|O_RDONLY|O_CLOEXEC,
++				S_IWUSR|S_IRUSR|S_IWGRP|S_IRGRP);
++		if (fd < 0) {
++			g_critical("open() flock: %s", g_strerror(errno));
++			return;
++		}
++		if (flock(fd, LOCK_SH)) {
++			g_critical("could not shared-lock: %s", g_strerror(errno));
++			close(fd);
++			return;
++		}
++		/* A daemon that was exiting may have removed the file between
++		 * open() and flock(): the lock must be on the file the next
++		 * daemon opens */
++		if (fstat(fd, &fst) == 0 && (stat(FLOCK_PATH, &pst) ? errno == ENOENT :
++		    fst.st_dev != pst.st_dev || fst.st_ino != pst.st_ino)) {
++			close(fd);
++			continue;
++		}
++		break;
++	}
++	p->lockfd = fd;
++}
++
++static void lock_release(LocationGPSDControlPrivate *p)
++{
++	if (p->lockfd < 0)
++		return;
++	flock(p->lockfd, LOCK_UN);
++	close(p->lockfd);
++	p->lockfd = -1;
++}
++
+ void gpsd_shutdown(LocationGPSDControl *control)
+ {
+ 	LocationGPSDControlPrivate *p;
+@@ -139,6 +191,11 @@ void gpsd_shutdown(LocationGPSDControl *control)
+ 		g_object_unref(p->location_daemon_proxy);
+ 		p->location_daemon_proxy = NULL;
+ 	}
++	/* positioning ended: the next start_internal() starts it again (a
++	 * restart after a change of method or settings, start() after
++	 * stop(), with its gpsd_running signal) */
++	p->gpsd_running = FALSE;
++	lock_release(p);
+ }
+ 
+ int gpsd_start(LocationGPSDControl *control)
+@@ -149,6 +206,7 @@ int gpsd_start(LocationGPSDControl *control)
+ 		return 0;
+ 
+ 	if (!p->location_daemon_proxy) {
++		lock_take(p);
+ 		p->location_daemon_proxy = dbus_g_proxy_new_for_name(p->dbus,
+ 			LOCATION_DAEMON_SERVICE, LOCATION_DAEMON_PATH,
+ 			LOCATION_DAEMON_SERVICE);
+@@ -167,7 +225,8 @@ void ui_proxy_close(LocationGPSDControl *control)
  
  	if (p->location_ui_proxy) {
  		if (p->ui_open) {
@@ -116,7 +221,7 @@ index b0b9c69..75ddf59 100644
  			p->ui_open = FALSE;
  		}
  		g_object_unref(p->location_ui_proxy);
-@@ -180,11 +181,13 @@ int get_selected_method(LocationGPSDControl *control, int method)
+@@ -180,11 +239,13 @@ int get_selected_method(LocationGPSDControl *control, int method)
  	int acwp, gnss, agnss, result;
  	LocationGPSDControlPrivate *p = location_gpsd_control_get_instance_private(control);
  
@@ -132,7 +237,7 @@ index b0b9c69..75ddf59 100644
  		goto out;
  	}
  
-@@ -271,7 +274,7 @@ void register_dbus_signal_callback(LocationGPSDControl *control,
+@@ -271,7 +332,7 @@ void register_dbus_signal_callback(LocationGPSDControl *control,
  		dbus_g_proxy_connect_signal(p->location_ui_proxy, "response",
  				handler_func, control, NULL);
  		dbus_g_proxy_call(p->location_ui_proxy, "display",
@@ -141,7 +246,7 @@ index b0b9c69..75ddf59 100644
  
  		/* TODO: Some error is raised here */
  		if (ierr) {
-@@ -751,10 +754,16 @@ void get_location_method(LocationGPSDControl *control, const GConfValue *value)
+@@ -751,10 +812,16 @@ void get_location_method(LocationGPSDControl *control, const GConfValue *value)
  	LocationGPSDControlPrivate *p;
  	GConfValue *car_ret, *cdr_ret;
  	const gchar *cdr_str, *car_str;
@@ -159,7 +264,7 @@ index b0b9c69..75ddf59 100644
  		gpsd_shutdown(control);
  
  	if (p->device != NULL) {
-@@ -768,7 +777,7 @@ void get_location_method(LocationGPSDControl *control, const GConfValue *value)
+@@ -768,7 +835,7 @@ void get_location_method(LocationGPSDControl *control, const GConfValue *value)
  	}
  
  	if (!value) {
@@ -168,7 +273,7 @@ index b0b9c69..75ddf59 100644
  			g_signal_emit(control, signals[GPSD_STOPPED], 0);
  		return;
  	}
-@@ -779,7 +788,7 @@ void get_location_method(LocationGPSDControl *control, const GConfValue *value)
+@@ -779,7 +846,7 @@ void get_location_method(LocationGPSDControl *control, const GConfValue *value)
  	if (car_ret) {
  		if (!cdr_ret || car_ret->type != GCONF_VALUE_STRING
  				|| cdr_ret->type != GCONF_VALUE_STRING) {
@@ -177,7 +282,7 @@ index b0b9c69..75ddf59 100644
  				g_signal_emit(control, signals[GPSD_STOPPED], 0);
  		} else {
  			cdr_str = gconf_value_get_string(cdr_ret);
-@@ -789,7 +798,7 @@ void get_location_method(LocationGPSDControl *control, const GConfValue *value)
+@@ -789,7 +856,7 @@ void get_location_method(LocationGPSDControl *control, const GConfValue *value)
  			g_debug("car_str: %s", car_str);
  			p->device_car = g_strdup(car_str);
  
@@ -186,3 +291,30 @@ index b0b9c69..75ddf59 100644
  				location_gpsd_control_prestart_internal(control, TRUE);
  		}
  	}
+@@ -933,10 +1000,7 @@ void location_gpsd_control_class_dispose(GObject *object)
+ 		p->dbus = NULL;
+ 	}
+ 
+-	if (p->lockfd >= 0) {
+-		flock(p->lockfd, LOCK_UN);
+-		close(p->lockfd);
+-	}
++	lock_release(p);
+ }
+ 
+ void location_gpsd_control_class_set_property(GObject *object,
+@@ -1059,12 +1123,8 @@ void location_gpsd_control_init(LocationGPSDControl *control)
+ 
+ 	p = location_gpsd_control_get_instance_private(control);
+ 
+-	p->lockfd = open(FLOCK_PATH, O_CREAT|O_RDONLY,
+-			S_IWUSR|S_IRUSR|S_IWGRP|S_IRGRP);
+-	if (p->lockfd <  0)
+-		g_critical("open() flock: %s", g_strerror(errno));
+-	if (flock(p->lockfd, LOCK_SH))
+-		g_critical("could not shared-lock: %s", g_strerror(errno));
++	/* taken while positioning runs (lock_take()) */
++	p->lockfd = -1;
+ 
+ 	p->sel_method = LOCATION_METHOD_USER_SELECTED;
+ 	p->interval = LOCATION_INTERVAL_DEFAULT;

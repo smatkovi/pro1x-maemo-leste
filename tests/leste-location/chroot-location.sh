@@ -1,7 +1,7 @@
 #!/bin/bash
 # chroot-location.sh start|reset [off|accepted|off-accepted]|ui|basic|
-#   methods|create [SECONDS]|matchrule|closetest PATH|shot NAME|click X Y|
-#   log|stop
+#   methods|create [SECONDS]|startstop|matchrule|closetest PATH|shot NAME|
+#   click X Y|log|stop
 #
 # liblocation's dialogs against location-ui in the Leste chroot on the PC
 # (scripts/leste-chroot.sh), as root: a system bus of the chroot's own,
@@ -25,6 +25,10 @@
 #              created, start() never called; then what that did on the
 #              system bus: dialog requests, location-daemon's start,
 #              MatchRuleInvalid answers (all 0 with fixed liblocation)
+#   startstop  start-stop.c: a control created, started, stopped, started
+#              again (run it with "reset accepted"): its signals, the lock
+#              location-daemon watches after each step, location-daemon's
+#              start calls (2 with fixed liblocation)
 #   matchrule  the bus' answer to the Uncertainty match rule without and
 #              with its closing quote, and the rule in the installed
 #              liblocation.so.0
@@ -60,7 +64,7 @@ bg() {
 case "${1:-}" in
 start)
 	rm -rf "$L"
-	mkdir -p "$L" /run/dbus
+	mkdir -p "$L" /run/dbus /run/lock
 	dbus-uuidgen --ensure
 	if [ ! -S /run/dbus/system_bus_socket ] ||
 	    ! dbus-send --system --print-reply --dest=org.freedesktop.DBus / \
@@ -138,6 +142,19 @@ create)
 	echo "  location-daemon start calls: $(grep -c 'interface=org.maemo.LocationDaemon; member=start' "$L/create-monitor.log")"
 	echo "  ... received by the stand-in: $(tail -n +$((m + 1)) "$L/mce.log" | grep -c 'location-daemon: start')"
 	echo "  MatchRuleInvalid answers:    $(grep -c 'MatchRuleInvalid' "$L/create-monitor.log")"
+	;;
+startstop)
+	[ -x "$L/start-stop" ] ||
+	    gcc -Wall -o "$L/start-stop" "$T/start-stop.c" $(pkg-config --cflags --libs liblocation)
+	n=$(wc -l < "$L/monitor.log")
+	m=$(wc -l < "$L/mce.log")
+	session "$L/start-stop" 2>&1 | grep -v "DEBUG" | sed 's/^/  /'
+	sleep 1
+	tail -n +$((n + 1)) "$L/monitor.log" > "$L/startstop-monitor.log"
+	echo "on the system bus meanwhile ($L/startstop-monitor.log):"
+	echo "  location-daemon start calls: $(grep -c 'interface=org.maemo.LocationDaemon; member=start' "$L/startstop-monitor.log")"
+	echo "  ... received by the stand-in: $(tail -n +$((m + 1)) "$L/mce.log" | grep -c 'location-daemon: start')"
+	echo "  location-ui dialog requests: $(grep -c 'interface=com.nokia.Location.UI.Dialog; member=display' "$L/startstop-monitor.log")"
 	;;
 matchrule)
 	for r in "$UNCERTAINTY" "$UNCERTAINTY'"; do

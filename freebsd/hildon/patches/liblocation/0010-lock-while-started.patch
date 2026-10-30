@@ -1,0 +1,123 @@
+Every LocationGPSDControl took the shared lock on location-daemon's lock
+file in its init and kept it until it was freed. location-daemon runs as
+long as any client holds that lock (it tries an exclusive one every 15 s
+and exits when it gets it), so a control that was created and never
+started, or stopped, kept the daemon, and gpsd, running. The lock is now
+held only while positioning runs: taken before location-daemon's start is
+called, dropped when positioning ends (stop(), the control freed). Maemo
+5's API: "Location service is kept running as long as there is at least
+one application using it". As the daemon removes the file when it exits,
+the lock is taken again when it was on a file just removed. The path stays
+0003's /var/run. The same fix is in Leste's liblocation
+(patches/fixes/liblocation.patch).
+
+--- a/src/location-gpsd-control.c
++++ b/src/location-gpsd-control.c
+@@ -17,6 +17,7 @@
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ #include <errno.h>
++#include <fcntl.h>
+ #include <sys/file.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
+@@ -130,6 +131,56 @@
+ static void location_gpsd_control_class_init(LocationGPSDControlClass *);
+ static void location_gpsd_control_init(LocationGPSDControl *);
+ 
++/*
++ * location-daemon runs while any client holds a shared lock on FLOCK_PATH:
++ * every 15 s it tries an exclusive one, and when it gets it, it removes
++ * the file and exits. A control holds it from the start of positioning
++ * (gpsd_start(), before the daemon is activated) to its end
++ * (gpsd_shutdown()), not for its whole life: a control created and never
++ * started, or stopped, kept the daemon (and gpsd) running.
++ */
++static void lock_take(LocationGPSDControlPrivate *p)
++{
++	struct stat fst, pst;
++	int fd;
++
++	if (p->lockfd >= 0)
++		return;
++
++	for (;;) {
++		fd = open(FLOCK_PATH, O_CREAT|O_RDONLY|O_CLOEXEC,
++				S_IWUSR|S_IRUSR|S_IWGRP|S_IRGRP);
++		if (fd < 0) {
++			g_critical("open() flock: %s", g_strerror(errno));
++			return;
++		}
++		if (flock(fd, LOCK_SH)) {
++			g_critical("could not shared-lock: %s", g_strerror(errno));
++			close(fd);
++			return;
++		}
++		/* A daemon that was exiting may have removed the file between
++		 * open() and flock(): the lock must be on the file the next
++		 * daemon opens */
++		if (fstat(fd, &fst) == 0 && (stat(FLOCK_PATH, &pst) ? errno == ENOENT :
++		    fst.st_dev != pst.st_dev || fst.st_ino != pst.st_ino)) {
++			close(fd);
++			continue;
++		}
++		break;
++	}
++	p->lockfd = fd;
++}
++
++static void lock_release(LocationGPSDControlPrivate *p)
++{
++	if (p->lockfd < 0)
++		return;
++	flock(p->lockfd, LOCK_UN);
++	close(p->lockfd);
++	p->lockfd = -1;
++}
++
+ void gpsd_shutdown(LocationGPSDControl *control)
+ {
+ 	LocationGPSDControlPrivate *p;
+@@ -145,6 +196,7 @@
+ 	 * restart after a change of method or settings, start() after
+ 	 * stop(), with its gpsd_running signal) */
+ 	p->gpsd_running = FALSE;
++	lock_release(p);
+ }
+ 
+ int gpsd_start(LocationGPSDControl *control)
+@@ -155,6 +207,7 @@
+ 		return 0;
+ 
+ 	if (!p->location_daemon_proxy) {
++		lock_take(p);
+ 		p->location_daemon_proxy = dbus_g_proxy_new_for_name(p->dbus,
+ 			LOCATION_DAEMON_SERVICE, LOCATION_DAEMON_PATH,
+ 			LOCATION_DAEMON_SERVICE);
+@@ -969,10 +1022,7 @@
+ 		p->dbus = NULL;
+ 	}
+ 
+-	if (p->lockfd >= 0) {
+-		flock(p->lockfd, LOCK_UN);
+-		close(p->lockfd);
+-	}
++	lock_release(p);
+ }
+ 
+ void location_gpsd_control_class_set_property(GObject *object,
+@@ -1095,12 +1145,8 @@
+ 
+ 	p = location_gpsd_control_get_instance_private(control);
+ 
+-	p->lockfd = open(FLOCK_PATH, O_CREAT|O_RDONLY,
+-			S_IWUSR|S_IRUSR|S_IWGRP|S_IRGRP);
+-	if (p->lockfd <  0)
+-		g_critical("open() flock: %s", g_strerror(errno));
+-	if (flock(p->lockfd, LOCK_SH))
+-		g_critical("could not shared-lock: %s", g_strerror(errno));
++	/* taken while positioning runs (lock_take()) */
++	p->lockfd = -1;
+ 
+ 	p->sel_method = LOCATION_METHOD_USER_SELECTED;
+ 	p->interval = LOCATION_INTERVAL_DEFAULT;

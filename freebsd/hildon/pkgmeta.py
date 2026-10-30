@@ -477,8 +477,9 @@ REVISION = {
     # 2026-10-30: the lock in /var/run (0003), location-ui's dialogs asked
     # when it runs, without MCE (0004), the dialogs' answers (0005, 0006)
     # 2026-10-30: the Uncertainty match rule's quote (0007); creating a
-    # control no longer starts positioning (0008)
-    'liblocation': 2,
+    # control no longer starts positioning (0008); 3 (2026-10-30): start
+    # after stop (0009), the lock held only while started (0010)
+    'liblocation': 3,
     # 2026-10-30: asks for the headphones (their cable is the antenna) when
     # pro1x-audiod reports none plugged in
     'pro1x-fm': 1,
