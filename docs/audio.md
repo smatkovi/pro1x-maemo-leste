@@ -313,6 +313,10 @@ button, ideally three (play, volume up, volume down).
      470 Ohm; a 135 Ohm button is `KEY_VOICECOMMAND`). All buttons as
      `KEY_MEDIA`, or none: the thresholds (step 1).
    - **Out:** all 0.
+   - **A boot with headphones in** (not known: the MBHC is started with
+     the plug already there, its first switch interrupt has to come from
+     that state): after the boot "Headphone Jack" is on without touching
+     the plug.
    - Nothing at all, the controls never change: the codec's interrupt does
      not arrive (see the counts). Only while playing: the wake path from
      clock stop (SPI 79). The `jack` scenario of
