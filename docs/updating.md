@@ -93,7 +93,7 @@ The install itself:
 
 | policy | packages | installed |
 |---|---|---|
-| `always` | `pro1x-events`, `pro1x-volume-osd`, `pro1x-look` (this repository's own) | also where missing |
+| `always` | this repository's own tools (`pro1x-*`: `pro1x-events`, `pro1x-volume-osd`, `pro1x-look`, `pro1x-alarmboot`), not `pro1x-waydroid` | also where missing |
 | `installed` | the rebuilds of Leste's packages (gtk2, libhildon1, hildon-desktop, hildon-home, hildon-status-menu, mce, liblocation0, location-ui, calendar-backend, conversations); the groups `harmattan` and `waydroid`; `ofono-scripts` | where installed, as `49-hidpi.sh`'s `install_ours`: of a source's packages those the system has. `--with GROUP` installs the group's missing ones |
 | `extra` | `-dev`, `-dbgsym`, `-doc` | only where installed, also with `--with` |
 | `switch` | `ofono` | only where a `+pro1x` build is installed already. The first switch from the archive's oFono needs `--with mobile-data` |

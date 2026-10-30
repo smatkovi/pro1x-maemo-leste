@@ -230,7 +230,8 @@ PY
 group_of() { local g=${1#*-}; echo "${g%-20[0-9][0-9].*}"; }
 
 # Leste's policies (pro1x-update):
-#   always   installed where missing (this repository's own tools)
+#   always   installed where missing (this repository's own tools, pro1x-*,
+#            outside the opt-in groups)
 #   installed  only where the package is installed (as 49-hidpi.sh's
 #            install_ours: of a source's packages those the system has);
 #            --with GROUP installs the group's missing ones too
@@ -241,12 +242,11 @@ group_of() { local g=${1#*-}; echo "${g%-20[0-9][0-9].*}"; }
 # as the scripts and release notes hold them
 leste_policy() {
   local name=$1 group=$2
-  case $name in
-  pro1x-events | pro1x-volume-osd | pro1x-look) echo always; return ;;
-  ofono) echo switch; return ;;
-  esac
+  [ "$name" != ofono ] || { echo switch; return; }
+  # opt-in: pro1x-waydroid adds Waydroid's apt repository
   case $group in harmattan | waydroid) echo installed; return ;; esac
   case $name in
+  pro1x-*) echo always ;;
   *-dev | *-dbgsym | *-doc) echo extra ;;
   *) echo installed ;;
   esac
