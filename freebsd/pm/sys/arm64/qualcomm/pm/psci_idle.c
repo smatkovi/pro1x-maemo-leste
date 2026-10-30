@@ -48,6 +48,7 @@
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
+#include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
@@ -66,6 +67,8 @@
 #include <machine/cpufunc.h>
 #include <machine/machdep.h>
 #include <machine/pte.h>
+#include <machine/smp.h>
+#include <machine/vfp.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus_subr.h>
@@ -93,6 +96,8 @@ extern int (*arm64_cpu_idle_hook)(sbintime_t);
 #define	PSCI_FNID_SET_SUSPEND_MODE	0x8400000f
 #define	PSCI_MODE_PC			0
 #define	PSCI_MODE_OSI			1
+#define	CNTV_ENABLE			(1u << 0)
+#define	CNTV_IMASK			(1u << 1)
 #define	PIDLE_MAXST	4
 #define	PIDLE_MAXCL	4
 
@@ -124,7 +129,7 @@ struct pidle_cpu {
 	/* statistics: entries and time per core and cluster state */
 	uint64_t	n_wfi, n_core[PIDLE_MAXST], n_cl[PIDLE_MAXST];
 	sbintime_t	t_core[PIDLE_MAXST], t_cl[PIDLE_MAXST];
-	uint64_t	n_denied, n_failed, n_early;
+	uint64_t	n_denied, n_failed, n_soc, n_frz;
 	int		last_err;
 };
 
@@ -137,6 +142,15 @@ static uint32_t pidle_version;
 static int pidle_feat = -1;
 static uint32_t pidle_off_at_boot;	/* AFFINITY_INFO before the APs */
 static int pidle_ndt_cpus;
+
+/* stage 3 (pro1x_pm.ko): the SoC's sleep and the freeze */
+void (*psci_idle_soc_hook)(uint64_t);
+static volatile u_int pidle_all_down;	/* online CPUs in a power-down */
+static uint64_t *pidle_next_cnt;	/* per CPU: its wake-up, a CNTVCT */
+static volatile u_int pidle_freeze;	/* 1: idle CPUs stay down */
+static volatile u_int pidle_frozen;	/* CPUs in pidle_freeze_idle */
+static volatile u_int pidle_freeze_wake; /* the device interrupt that ended it */
+static u_int pidle_freeze_cpu;
 
 static int pidle_enable;
 static int pidle_depth = 99;
@@ -433,6 +447,8 @@ psci_idle_start(void *dummy __unused)
 		return;
 	pidle_cpus = malloc(sizeof(*pidle_cpus) * (mp_maxid + 1), M_DEVBUF,
 	    M_WAITOK | M_ZERO);
+	pidle_next_cnt = malloc(sizeof(*pidle_next_cnt) * (mp_maxid + 1),
+	    M_DEVBUF, M_WAITOK | M_ZERO);
 	CPU_FOREACH(cpu) {
 		pc = pcpu_find(cpu);
 		node = pidle_cpu_node(pc->pc_mpidr);
@@ -532,84 +548,130 @@ pidle_choose(struct pidle_state *st, int n, int limit, uint32_t us,
 	return (-1);
 }
 
-static int
-psci_idle_enter(sbintime_t sbt)
+/* What one idle enters */
+struct pidle_choice {
+	int		ci, cli;	/* the core's state; the cluster's, -1 */
+	uint32_t	param;
+	bool		stop, down, counted, deepest;
+};
+
+/*
+ * The state for an idle of us microseconds: the core's deepest fitting
+ * one, and the cluster's when this CPU is its last online one going down
+ * (cl->down counted, to be undone by pidle_do). false: wfi.
+ */
+static bool
+pidle_pick(struct pidle_cpu *pc, uint32_t us, struct pidle_choice *c)
 {
-	struct pidle_cpu *pc;
+	struct pidle_cluster *cl;
+	bool timer;
+
+	/* a state whose timer stops needs the broadcast frame (or QEMU) */
+	timer = arm_tmr_mem_ok() || pidle_simulate;
+	c->ci = pidle_choose(pc->st, pc->nstates, pc->nstates, us, timer);
+	if (c->ci < 0)
+		return (false);
+	c->param = pc->st[c->ci].param;
+	c->stop = pc->st[c->ci].timer_stop;
+	c->down = pc->st[c->ci].powerdown;
+	c->cli = -1;
+	c->counted = c->deepest = false;
+	cl = pc->cluster >= 0 ? &pidle_cl[pc->cluster] : NULL;
+	if (cl == NULL || cl->off || pidle_depth < 2 || !c->down ||
+	    (!pidle_osi && !pidle_pc_cluster))
+		return (true);
+	c->counted = true;
+	if (atomic_fetchadd_int(&cl->down, 1) + 1 != (u_int)cl->ncpus)
+		return (true);
+	/* the cluster's last: its state replaces the core's */
+	c->cli = pidle_choose(cl->st, cl->nstates, pidle_depth - 1, us, timer);
+	if (c->cli >= 0) {
+		c->param = cl->st[c->cli].param;
+		c->stop |= cl->st[c->cli].timer_stop;
+		c->down |= cl->st[c->cli].powerdown;
+		c->deepest = c->cli == cl->nstates - 1;
+	}
+	return (true);
+}
+
+static uint64_t
+pidle_ticks(sbintime_t sbt)
+{
+	uint64_t f = READ_SPECIALREG(cntfrq_el0);
+
+	return ((uint64_t)(sbt >> 32) * f +
+	    ((((uint64_t)sbt & 0xffffffffu) * f) >> 32));
+}
+
+/*
+ * Into the chosen state (pidle_pick), its deadline sbt from now (0: none,
+ * the freeze), back; the statistics. The PSCI result.
+ */
+static int
+pidle_do(u_int cpu, struct pidle_cpu *pc, struct pidle_choice *c,
+    sbintime_t sbt)
+{
 	struct pidle_cluster *cl;
 	struct pidle_state *s;
 	sbintime_t t0, dt;
-	uint32_t us, param;
-	u_int cpu;
-	int ci, cli, r;
-	bool timer, counted, stop, down;
+	uint64_t wake;
+	u_int n, i;
+	int r;
 
-	if (!pidle_enable || pidle_depth < 1 || sbt <= 0)
-		return (-1);
-	cpu = PCPU_GET(cpuid);
-	pc = &pidle_cpus[cpu];
-	if (pc->nstates == 0)
-		return (-1);
-	us = sbt >= SBT_1S * 4000 ? UINT32_MAX : (uint32_t)sbttous(sbt);
-	/* a state whose timer stops needs the broadcast frame (or QEMU) */
-	timer = arm_tmr_mem_ok() || pidle_simulate;
-	ci = pidle_choose(pc->st, pc->nstates, pc->nstates, us, timer);
-	if (ci < 0) {
-		pc->n_wfi++;
-		return (-1);
-	}
-	s = &pc->st[ci];
-	param = s->param;
-	stop = s->timer_stop;
-	down = s->powerdown;
-	cli = -1;
-	counted = false;
 	cl = pc->cluster >= 0 ? &pidle_cl[pc->cluster] : NULL;
-	if (cl != NULL && !cl->off && pidle_depth >= 2 && down &&
-	    (pidle_osi || pidle_pc_cluster)) {
-		counted = true;
-		if (atomic_fetchadd_int(&cl->down, 1) + 1 == (u_int)cl->ncpus) {
-			/* the cluster's last: its state replaces the core's */
-			cli = pidle_choose(cl->st, cl->nstates, pidle_depth - 1,
-			    us, timer);
-			if (cli >= 0) {
-				param = cl->st[cli].param;
-				stop |= cl->st[cli].timer_stop;
-				down |= cl->st[cli].powerdown;
-			}
-		}
-	}
-	if (stop && arm_tmr_mem_ok())
+	s = &pc->st[c->ci];
+	pidle_next_cnt[cpu] = sbt > 0 ? READ_SPECIALREG(cntvct_el0) +
+	    pidle_ticks(sbt) : 0;
+	if (c->stop && sbt > 0 && arm_tmr_mem_ok())
 		arm_tmr_mem_arm(cpu, sbt);
+	n = c->down ? atomic_fetchadd_int(&pidle_all_down, 1) + 1 : 0;
+	/*
+	 * every online CPU down and this one into its cluster's deepest
+	 * state: the SoC may sleep, the RPM is told (pro1x_pm.ko), with the
+	 * earliest wake-up of all CPUs, as Linux's MPM driver does it
+	 * (device/kernel/patches/0011)
+	 */
+	if (n == (u_int)mp_ncpus && c->deepest && psci_idle_soc_hook != NULL) {
+		wake = 0;
+		CPU_FOREACH(i)
+			if (pidle_next_cnt[i] != 0 &&
+			    (wake == 0 || pidle_next_cnt[i] < wake))
+				wake = pidle_next_cnt[i];
+		psci_idle_soc_hook(wake);
+		pc->n_soc++;
+	}
 	t0 = sbinuptime();
-	if (down) {
+	if (c->down) {
 		/* the last user of the FP registers loads them again */
 		PCPU_SET(fpcurthread, NULL);
-		r = psci_idle_suspend(PSCI_FNID_CPU_SUSPEND, param,
+		r = psci_idle_suspend(PSCI_FNID_CPU_SUSPEND, c->param,
 		    pidle_resume_pa, pc->ctx, pc->ctx_pa, pidle_hvc,
 		    pidle_simulate);
 	} else
-		r = pidle_call(PSCI_FNID_CPU_SUSPEND, param, 0, 0);
+		r = pidle_call(PSCI_FNID_CPU_SUSPEND, c->param, 0, 0);
 	dt = sbinuptime() - t0;
-	if (counted)
+	if (c->down)
+		atomic_subtract_int(&pidle_all_down, 1);
+	if (c->counted)
 		atomic_subtract_int(&cl->down, 1);
-	if (stop && arm_tmr_mem_ok())
+	if (c->stop && sbt > 0 && arm_tmr_mem_ok())
 		arm_tmr_mem_disarm(cpu);
+	pidle_next_cnt[cpu] = 0;
 
 	if (r == 0) {
-		if (cli >= 0) {
-			pc->n_cl[cli]++;
-			pc->t_cl[cli] += dt;
+		if (c->cli >= 0) {
+			pc->n_cl[c->cli]++;
+			pc->t_cl[c->cli] += dt;
 			cl->denied_row = 0;
 		} else {
-			pc->n_core[ci]++;
-			pc->t_core[ci] += dt;
+			pc->n_core[c->ci]++;
+			pc->t_core[c->ci] += dt;
 		}
 		s->fails = 0;
 		return (0);
 	}
 	pc->last_err = r;
-	if (r == PSCI_RETVAL_DENIED && cli >= 0) {
+	if (r == PSCI_RETVAL_DENIED && c->cli >= 0) {
 		/* another core of the cluster was not down after all */
 		pc->n_denied++;
 		if (++cl->denied_row >= 1000 && !cl->off) {
@@ -618,15 +680,180 @@ psci_idle_enter(sbintime_t sbt)
 			    "times in a row: the cores' states only\n",
 			    pc->cluster);
 		}
-		return (0);
+		return (r);
 	}
 	pc->n_failed++;
 	if (++s->fails >= 100 && !s->off) {
 		s->off = true;
 		printf("psci_idle: CPU %u: %s (%#x) refused 100 times (%d): "
-		    "not used\n", cpu, s->name, param, r);
+		    "not used\n", cpu, s->name, c->param, r);
 	}
-	return (-1);
+	return (r);
+}
+
+/* The highest pending interrupt of this CPU (1023: none) */
+static u_int
+pidle_pending(void)
+{
+	return ((u_int)READ_SPECIALREG(icc_hppir1_el1) & 0xffffff);
+}
+
+#define	PIDLE_NONE(intid)	((intid) >= 1020)
+#define	PIDLE_SGI(intid)	((intid) < 16)
+#define	PIDLE_PPI(intid)	((intid) >= 16 && (intid) < 32)
+
+/*
+ * The freeze (psci_idle_freeze): an idle CPU stays in its deepest state
+ * with its own timer masked, so that the callouts wait; an IPI or an
+ * interrupt ends the loop (handled as usual, then back here), a device
+ * interrupt (not the broadcast frame's) ends the freeze for all.
+ */
+static int
+pidle_freeze_idle(u_int cpu, struct pidle_cpu *pc)
+{
+	struct pidle_choice c;
+	uint64_t ctl;
+	u_int intid;
+
+	atomic_add_int(&pidle_frozen, 1);
+	ctl = READ_SPECIALREG(cntv_ctl_el0);
+	WRITE_SPECIALREG(cntv_ctl_el0, ctl | CNTV_IMASK);
+	isb();
+	while (atomic_load_int(&pidle_freeze)) {
+		if (pidle_pick(pc, UINT32_MAX, &c))
+			(void)pidle_do(cpu, pc, &c, 0);
+		else
+			__asm __volatile("dsb sy; wfi");
+		pc->n_frz++;
+		intid = pidle_pending();
+		if (PIDLE_NONE(intid))
+			continue;
+		if (!PIDLE_SGI(intid) && !PIDLE_PPI(intid) &&
+		    intid != arm_tmr_mem_intid()) {
+			if (atomic_cmpset_int(&pidle_freeze_wake, 0, intid))
+				ipi_cpu(pidle_freeze_cpu, IPI_AST);
+		}
+		break;
+	}
+	WRITE_SPECIALREG(cntv_ctl_el0, ctl);
+	isb();
+	atomic_subtract_int(&pidle_frozen, 1);
+	return (0);
+}
+
+/*
+ * Freeze the CPUs until until (sbinuptime()) or a device interrupt,
+ * from a thread bound to its CPU (pro1x_pm.ko): every other CPU stays in
+ * its deepest state with its timer masked (pidle_freeze_idle), this one
+ * too between its wake-ups, woken by its deadline (its own timer, and the
+ * broadcast frame) or an interrupt. The result: 0 the deadline, the
+ * INTID of the device interrupt that ended it, -1 an IPI to this CPU
+ * (call again), -2 not possible here.
+ */
+int
+psci_idle_freeze(sbintime_t until, struct psci_idle_freeze_info *fi)
+{
+	struct pidle_choice c;
+	struct pidle_cpu *pc;
+	sbintime_t now;
+	uint64_t ctl, cval;
+	u_int cpu, intid;
+	int reason, i;
+
+	memset(fi, 0, sizeof(*fi));
+	if (!pidle_usable)
+		return (-2);
+	cpu = PCPU_GET(cpuid);
+	pc = &pidle_cpus[cpu];
+	if (pc->nstates == 0)
+		return (-2);
+	/* this thread's FP registers into its pcb, loaded again after */
+	vfp_save_state_switch(curthread);
+	PCPU_SET(fpcurthread, NULL);
+	pidle_freeze_cpu = cpu;
+	atomic_store_int(&pidle_freeze_wake, 0);
+	atomic_store_rel_int(&pidle_freeze, 1);
+	ipi_all_but_self(IPI_AST);
+	for (i = 0; i < 1000 && atomic_load_int(&pidle_frozen) <
+	    (u_int)mp_ncpus - 1; i++)
+		DELAY(100);
+	fi->frozen = atomic_load_int(&pidle_frozen);
+	fi->wait_us = i * 100;
+
+	spinlock_enter();
+	ctl = READ_SPECIALREG(cntv_ctl_el0);
+	cval = READ_SPECIALREG(cntv_cval_el0);
+	reason = 0;
+	for (;;) {
+		now = sbinuptime();
+		if (now >= until)
+			break;
+		/* the deadline on the own timer and on the frame */
+		WRITE_SPECIALREG(cntv_cval_el0, READ_SPECIALREG(cntvct_el0) +
+		    pidle_ticks(until - now));
+		WRITE_SPECIALREG(cntv_ctl_el0, CNTV_ENABLE);
+		isb();
+		if (pidle_pick(pc, UINT32_MAX, &c)) {
+			if (pidle_do(cpu, pc, &c, until - now) == 0)
+				fi->downs++;
+		} else
+			__asm __volatile("dsb sy; wfi");
+		fi->wakes++;
+		intid = pidle_pending();
+		WRITE_SPECIALREG(cntv_ctl_el0, CNTV_IMASK);
+		isb();
+		if (PIDLE_NONE(intid) || PIDLE_PPI(intid) ||
+		    intid == arm_tmr_mem_intid()) {
+			/* the deadline (or nothing): on until it is there */
+			if (!PIDLE_NONE(intid))
+				fi->timer++;
+			continue;
+		}
+		if (PIDLE_SGI(intid)) {
+			reason = atomic_load_int(&pidle_freeze_wake);
+			if (reason == 0)
+				reason = -1;
+			break;
+		}
+		reason = intid;
+		break;
+	}
+	WRITE_SPECIALREG(cntv_cval_el0, cval);
+	WRITE_SPECIALREG(cntv_ctl_el0, ctl);
+	isb();
+	atomic_store_rel_int(&pidle_freeze, 0);
+	ipi_all_but_self(IPI_AST);
+	spinlock_exit();
+	fi->intid = reason > 0 ? reason : 0;
+	return (reason);
+}
+
+static int
+psci_idle_enter(sbintime_t sbt)
+{
+	struct pidle_choice c;
+	struct pidle_cpu *pc;
+	uint32_t us;
+	u_int cpu;
+	int r;
+
+	cpu = PCPU_GET(cpuid);
+	pc = &pidle_cpus[cpu];
+	if (pc->nstates == 0)
+		return (-1);
+	/* the freeze also with the idle states off otherwise */
+	if (atomic_load_int(&pidle_freeze))
+		return (pidle_freeze_idle(cpu, pc));
+	if (!pidle_enable || pidle_depth < 1 || sbt <= 0)
+		return (-1);
+	us = sbt >= SBT_1S * 4000 ? UINT32_MAX : (uint32_t)sbttous(sbt);
+	if (!pidle_pick(pc, us, &c)) {
+		pc->n_wfi++;
+		return (-1);
+	}
+	r = pidle_do(cpu, pc, &c, sbt);
+	/* refused as a cluster state: idled anyway; else wfi follows */
+	return (r == 0 || r == PSCI_RETVAL_DENIED ? 0 : -1);
 }
 
 static int
@@ -659,9 +886,11 @@ pidle_sysctl_stats(SYSCTL_HANDLER_ARGS)
 				    (uintmax_t)pc->n_cl[i],
 				    (uintmax_t)(pc->t_cl[i] / SBT_1MS));
 		sbuf_printf(&sb, ", denied %ju, failed %ju (last %d), "
-		    "resumed %ju", (uintmax_t)pc->n_denied,
-		    (uintmax_t)pc->n_failed, pc->last_err,
-		    (uintmax_t)(pc->ctx != NULL ? pc->ctx->resumed : 0));
+		    "resumed %ju, RPM told %ju, frozen %ju",
+		    (uintmax_t)pc->n_denied, (uintmax_t)pc->n_failed,
+		    pc->last_err,
+		    (uintmax_t)(pc->ctx != NULL ? pc->ctx->resumed : 0),
+		    (uintmax_t)pc->n_soc, (uintmax_t)pc->n_frz);
 	}
 	if (pidle_usable)
 		sbuf_printf(&sb, "\nbroadcast timer: %s, %ju interrupts",

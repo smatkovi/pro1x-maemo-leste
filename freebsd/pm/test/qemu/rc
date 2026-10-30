@@ -47,5 +47,24 @@ sleep 3
 echo "=== pm-qemu: after 3 s idle"
 sysctl -n hw.psci_idle.stats
 dmesg | sed -n '/psci_idle/p' | tail -5
+# suspend-to-idle (pro1x_pm): pm.suspend=N seconds, epochs of pm.epoch
+s=$(kenv -q pm.suspend)
+if [ -n "$s" ]; then
+	sysctl hw.pro1x_pm.epoch=$(kenv -q pm.epoch || echo 15)
+	n=0
+	while [ $n -lt "$(kenv -q pm.suspend_n || echo 1)" ]; do
+		echo "=== pm-qemu: suspend $s s at $(date +%T)"
+		sysctl hw.pro1x_pm.suspend=$s > /dev/null
+		echo "=== pm-qemu: back at $(date +%T)"
+		sysctl hw.pro1x_pm.last
+		n=$((n + 1))
+	done
+	sysctl hw.pro1x_pm.rpm_stats
+	sysctl -n hw.psci_idle.stats
+	# and the work check again afterwards
+	for w in 1 2 3 4; do worker $w & done
+	wait
+	cat /tmp/w1 /tmp/w2 /tmp/w3 /tmp/w4
+fi
 echo "=== pm-qemu: done"
 poweroff

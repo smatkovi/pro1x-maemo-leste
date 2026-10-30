@@ -1,0 +1,33 @@
+#!/bin/sh
+# pro1x-suspend [SECONDS]: suspend to idle on the Pro1X, FreeBSD's zzz for
+# it (freebsd/pm/README.md, stage 3). The panel off (DCS), the touchscreen
+# asleep, the keyboard light off; once per boot the RPM's sleep set at 0
+# (pro1x_rpmsleep.ko, if it loads) and the MPM's hand-over on; then the
+# CPUs frozen in their deepest states (hw.pro1x_pm.suspend) until a device
+# interrupt (the power key) or SECONDS (0: no limit); then everything back.
+# What ended it: hw.pro1x_pm.last, also in the system log.
+secs=${1:-0}
+case "$secs" in ''|*[!0-9]*) echo "usage: pro1x-suspend [SECONDS]" >&2; exit 2 ;; esac
+sysctl -q hw.pro1x_pm.suspend > /dev/null 2>&1 ||
+    { echo "pro1x-suspend: no pro1x_pm in this kernel" >&2; exit 1; }
+if [ "$(sysctl -n hw.pro1x_rpmsleep.result 2>/dev/null)" != "" ] ||
+    kldload -n pro1x_rpmsleep 2>/dev/null; then
+	case "$(sysctl -n hw.pro1x_rpmsleep.result 2>/dev/null)" in
+	"not voted") sysctl -q hw.pro1x_rpmsleep.set=1 > /dev/null ;;
+	esac
+fi
+sysctl -q hw.pro1x_pm.mpm=1 > /dev/null 2>&1
+bl=$(backlight -f /dev/backlight/backlight0 -q 2>/dev/null)
+sysctl -q dev.qcom_dpu.0.display=0 dev.goodix.0.sleep=1 > /dev/null 2>&1
+for l in /dev/led/*kbd* /dev/led/*keyboard*; do
+	[ -c "$l" ] && echo 0 > "$l"
+done
+sync
+sysctl -q hw.pro1x_pm.suspend="$secs" > /dev/null
+r=$?
+sysctl -q dev.goodix.0.sleep=0 dev.qcom_dpu.0.display=1 > /dev/null 2>&1
+[ -z "$bl" ] || backlight -f /dev/backlight/backlight0 "$bl" 2>/dev/null
+last=$(sysctl -n hw.pro1x_pm.last)
+logger -t pro1x-suspend "$last"
+echo "$last"
+exit $r

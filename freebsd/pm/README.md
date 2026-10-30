@@ -7,8 +7,8 @@ This directory adds, in stages:
 | --- | --- | --- |
 | 1 | SMP: all eight CPUs (PSCI CPU_ON) | FreeBSD's own code; checked against the device tree, tried in QEMU (8 CPUs); device run prepared |
 | 2 | CPU idle: the PSCI idle states of the device tree, OS-initiated mode, the core's context across a power-down, the memory-mapped timer as the wake-up | built, tried in QEMU with every power-down played (`simulate`); device runs prepared |
-| 3 | the SoC's sleep (RPM sleep set, MPM hand-over) and suspend-to-idle | see below |
-| 4 | USB device mode (CDC ethernet to the PC) | see below |
+| 3 | the SoC's sleep (RPM sleep set, MPM hand-over) and suspend-to-idle | built; the freeze tried in QEMU (no RPM there); device runs prepared |
+| 4 | USB device mode (CDC ethernet to the PC) | analysed; a read-only probe of what Linux leaves (device run prepared); the DWC3 device-mode driver is not written |
 
 Nothing here has run on the phone yet (it is unreachable until
 2026-10-31). Everything is off by default: the phone's normal start is
@@ -21,14 +21,20 @@ unchanged until the device runs below pass.
 | `sys/arm64/qualcomm/pm/psci_idle.c` | the idle states from the device tree, the choice per idle, OS-initiated mode, statistics (`hw.psci_idle.*`) |
 | `sys/arm64/qualcomm/pm/psci_idle_asm.S` | the core's context across CPU_SUSPEND, the warm boot entry `psci_idle_resume` |
 | `sys/arm64/qualcomm/pm/arm_tmr_mem.c` | `arm,armv7-timer-mem`: the frame that wakes CPUs whose own timer stops |
+| `sys/arm64/qualcomm/pm/pro1x_pm.c` | `device pro1x_pm`: the MPM's hand-over to the RPM, the RPM's counts, suspend-to-idle (`hw.pro1x_pm.*`) |
+| `sys/arm64/qualcomm/pm/pro1x_rpmsleep.c`, `sys/modules/pro1x_rpmsleep` | `pro1x_rpmsleep.ko`: the apps processor's RPM sleep set at 0, through `qcom_dsp.ko` |
+| `../patches/0033-files.arm64-pro1x_pm.patch` | the file for `device pro1x_pm` |
 | `../patches/0032-arm64-cpu_idle-hook-psci-idle.patch` | `cpu_idle()` asks `arm64_cpu_idle_hook` first; the files for `device psci_idle` |
 | `../mfsroot/etc/pro1x-pmtest.sh` | the device tests in the RAM root (`pro1x.test=smp`, `idle`), sourced by `mfsroot/etc/rc` |
 | `build.sh` | the kernels: `qemu` (PRO1XQ) and `phone` (PRO1XPM = `freebsd/PRO1X` with `device psci_idle`) into `$WORK/pm-out` |
+| `tools/pro1x-suspend` | the Pro1X's `zzz`: panel, touch and keyboard light off, the sleep set and the hand-over, suspend until the power key or N seconds, everything back (for the root image's `/usr/local/sbin`) |
 | `test/qemu/` | PRO1XQ, its device tree (`mkdtb.py`: QEMU's virt with the SM6115's idle topology), its rc, `run.sh` |
 
 `freebsd/build.sh` copies `sys/` into the sources like `dsp/` and `fm/`;
-`freebsd/PRO1X` has `device psci_idle` (inert while
-`hw.psci_idle.enable=0`).
+`freebsd/PRO1X` has `device psci_idle` and `device pro1x_pm` (inert
+while `hw.psci_idle.enable=0`, `hw.pro1x_pm.mpm=0` and no suspend is
+asked for). `pro1x_rpmsleep` is a module (it needs `qcom_dsp.ko`): for
+the root image, `MODULES` in `freebsd/build.sh` would take it.
 
 ## Stage 1: SMP
 
@@ -163,6 +169,155 @@ Not testable in QEMU: the firmware's real power-down and warm boot,
 OS-initiated mode (QEMU has none), the memory-mapped timer (QEMU's virt
 has none).
 
+## Stage 3: the SoC's sleep and suspend-to-idle
+
+The SM6115 is RPM-based: its sleep states (vlow: XO shutdown; vmin: CX
+and MX at retention too) are the RPM's to enter, when every master (the
+apps processor, the modem, the ADSP, the CDSP) sleeps and no vote in a
+sleep set holds a resource up. While the SoC sleeps the GIC is off; the
+MPM, in the always-on domain, wakes it by its timer or one of its pins
+(`docs/power-management.md`, KolibriOS's `docs/power.md` stage 3).
+
+**The sleep set** (`pro1x_rpmsleep.ko`, `sysctl hw.pro1x_rpmsleep.set=1`):
+after a kexec the apps processor's sleep set is what Linux left (its
+consumers' votes and the boot's maxima). The module sends what Linux
+sends when nothing uses a resource, 0 in the sleep set, through the RPM
+channel of `freebsd/dsp`'s `qcom_dsp.ko` (`qcom_rpm_write`); the table is
+KolibriOS's `rpmsleep.c`, from Linux 7.1's `clk-smd-rpm.c` and `rpmpd.c`:
+the XO (`clk0` 0 `Enab`), its buffers (`clka` 1-3, with `=2` also the RF
+buffers 4-5 the Wi-Fi uses; `swen`), CX and MX (`rwcx`, `rwmx` 0
+`vlvl`), the bus clocks (`clk2` 0 bimc, `clk1` 1 cnoc and 2 snoc,
+`mmxi` 0-1, `qup` 0; `KHz`). The active set stays; the votes last until
+the next boot.
+
+**The MPM's hand-over** (`pro1x_pm`, built in, `hw.pro1x_pm.mpm=1`, off by
+default as Linux's `notify_rpm`): when every online CPU is in a
+power-down state and the last one goes into its cluster's deepest state
+(`psci_idle_soc_hook`), as `device/kernel/patches/0011` does it in Linux:
+the earliest wake-up of all CPUs as an arch timer count into the vMPM's
+TIMER0/TIMER1, the wake pins' enables and types, the status cleared, the
+RPM's doorbell rung. From the device tree: the vMPM at 0x45f01b8
+(`apss_mpm`, 0x48 bytes in the RPM's message RAM at 0x45f0000), 96 pins
+in 3 banks (Linux's `irq-qcom-mpm.c`: TIMER0/1, then ENABLE,
+FALLING_EDGE, RISING_EDGE, POLARITY, STATUS, a word per bank each), the
+doorbell `mboxes = <&apcs_glb 1>`: bit 1 of the IPC register at
+0xf111000 + 8 (`qcom,msm8994-apcs-kpss-global`, Linux's
+`qcom-apcs-ipc-mailbox.c`). The wake pins: `hw.pro1x_pm.mpm_pins`,
+default `86:h`, the SPMI arbiter (power and volume keys, the PMIC's RTC)
+as the device tree routes it (`interrupts-extended = <&mpm 86
+IRQ_TYPE_LEVEL_HIGH>`, `qcom,mpm-pin-map <86 183>`: GIC SPI 183, INTID
+215). The gpio-keys have pins too (Linux's `sm6115_mpm_map`: GPIO 93
+Home 46, 83 right Shift 9, 84 left Ctrl 39, 19 left Alt 53: `"86:h 46:b
+9:b 39:b 53:b"`), the keyboard's GPIOs 106, 107 and 112 have none.
+`sysctl hw.pro1x_pm.rpm_stats`: the RPM's counts (`qcom,rpm-stats` at
+0x4690000, Linux's `qcom_stats.c`: the records' offset in the word at
+0x14, two records of 48 bytes, the accumulated time in 19.2 MHz counts),
+the hand-overs, the pins seen in the MPM's status.
+
+**Suspend-to-idle** (`sysctl hw.pro1x_pm.suspend=N`, N seconds, 0 until
+a device interrupt): FreeBSD/arm64 has no suspend at all
+(`acpi_sleep_machdep` is a stub, no `zzz` backend, no IPI_SUSPEND). This
+is the s2idle idea on top of `psci_idle`: the `power_suspend` handlers,
+then `psci_idle_freeze`: every other CPU stays in its deepest state with
+its own timer masked, so that its callouts wait (an IPI or an interrupt
+wakes it, is handled as usual, and it goes back); the calling thread,
+bound to CPU 0, does the same until its deadline (its own timer and the
+broadcast frame). A device interrupt (the power key: PON through the
+SPMI arbiter, INTID 215) ends it, on whichever CPU it comes: that CPU
+tells CPU 0 by an IPI. The suspend runs in epochs of
+`hw.pro1x_pm.epoch` seconds (15): between them the callouts run 50 ms,
+which feeds the watchdog (the boot menu arms it, `qcom_wdt` feeds it
+from a callout). With `hw.pro1x_pm.mpm=1` and the sleep set the SoC can
+reach vlow/vmin while frozen. `hw.pro1x_pm.last` says how long, what
+ended it (the deadline, or the INTID), the power-downs and wake-ups of
+CPU 0, how many CPUs froze, and the RPM's counts; `hw.pro1x_pm.debug=1`
+prints each freeze on the console. The panel, the touch
+screen and the charger input are quiesced from user space beforehand
+(`patches/0022`, `0028`, `0030`; the device test's `pm_quiet`).
+
+Not done: the PMIC's RTC alarm as a wake-up (`qcom_rtc` has no alarm:
+the alarm registers at 0x6140 and their interrupt through the arbiter,
+Linux's `rtc-pm8xxx.c`); the suspend's deadline is the timer's (the
+frame, the vMPM's timer), which wakes the same way for a test.
+`DEVICE_SUSPEND` of the device tree (no Pro1X driver has suspend
+methods). The modem, ADSP and CDSP run their own firmware: whether they
+let the SoC sleep shows in the RPM's counts.
+
+**QEMU** (2026-10-30; QEMU has no MPM or RPM, so only the freeze): `run.sh
+susp "... pm.suspend=40 pm.epoch=15"`: suspended 40.0 s in three
+freezes, 3 power-downs of CPU 0 (one per freeze), the other 7 CPUs
+frozen within 300 us, each woken once per freeze; the work check
+afterwards without a wrong result. Four suspends of 40 s in a row
+(`pm.suspend_n=4`), the same. The device test `pro1x.test=suspend` (A,
+B, D with `pro1x.power_min=2` and `5`, no MPM or RPM in QEMU): three
+runs through, 16 and 24 freezes, every one ended by its deadline with
+all 7 other CPUs frozen. One earlier run of it stopped in its fourth
+suspend (the first of D) without any message and was killed by the
+time-out 3 minutes later; not seen again in those runs, cause not
+found. On the phone such a stop ends in the watchdog's reset (it is not
+fed while frozen); `hw.pro1x_pm.debug=1` shows which freeze it was.
+
+## Stage 4: USB device mode (analysis, the first device run)
+
+Goal: the PC reaches FreeBSD over the cable as it reaches Leste (a CDC
+Ethernet device on the PC, the phone at 172.16.42.1). What is there and
+what is missing:
+
+- **FreeBSD 15.1's DWC3 driver is host only** (`dev/usb/controller/dwc3/
+  dwc3.c`: "only 'host' supported", it hands the core to `xhci`). FreeBSD's
+  USB stack has a device side with templates (`dev/usb/template/`:
+  `usb_template_cdce.c` CDC Ethernet, `usb_template_serialnet.c`
+  Ethernet plus serial, chosen by `hw.usb.template`), but only with
+  controller drivers that do device mode: `dwc_otg` (DWC2), `musb`,
+  `atmegadci`, `avr32dci`, `uss820dci`. A DWC3 device-mode controller
+  driver for that stack does not exist: it has to be written (the DWC3's
+  event buffer, EP0's control transfers, the TRB rings of the bulk and
+  interrupt endpoints CDC Ethernet needs, reset, connect-done and
+  disconnect events; Linux's `dwc3/gadget.c` and `ep0.c` as the model),
+  with the glue `dwc_otg.c` has to the stack's pipe methods.
+- **The platform around it**, from the device tree (`sm6115.dtsi`, the
+  Pro1X's dts) and Linux 7.1: the Qualcomm wrapper at 0x4ef8800 (its
+  clocks, interrupts `pwr_event` SPI 302, `qusb2_phy` 260, `hs_phy_irq`
+  254, `ss_phy_irq` 422), the DWC3 core at 0x4e00000 (SPI 255) behind the
+  apps SMMU (stream 0x120: FreeBSD gives physical addresses, so the stream
+  needs an identity mapping, as the boot menu does it for UFS), the QUSB2
+  PHY at 0x1613000 (`phy-qcom-qusb2.c`'s `sm6115_init_tbl`, its HSTX trim
+  from the fuse `qusb2_hstx_trim`; supplies L4A, L12A, L15A through the
+  RPM, which `freebsd/dsp`'s `qcom_rpm` can vote), the GCC (no FreeBSD
+  driver for the SM6115's: `gcc-sm6115.c`'s offsets: the GDSC at
+  0x1a004, the BCR 0x1a000, the master clock 0x1a010 with its RCG at
+  0x1a01c (66.67 MHz: GPLL0_OUT_AUX2 / 4.5), sleep 0x1a014, mock UTMI
+  0x1a018 (RCG 0x1a034, 19.2 MHz), the NoC clocks 0x1a080/0x1a084, the
+  reference clock 0x9f000, the PHY's AHB clock 0x1d008, its BCR
+  0x1c000). The role: device mode can be forced in the core (GCTL's
+  port capability) without the PMI632's Type-C role switch.
+- **What Linux leaves at the kexec** decides the order: the README says
+  Linux takes the controller down; how far (the GDSC, the clocks, the
+  PHY) is what the first run shows. If the boot menu could leave it
+  powered (as `device/kernel/patches/0004` does for UFS and 0005 for the
+  display) with the SMMU stream on an identity mapping, FreeBSD would
+  only need the core driver; otherwise the GCC, GDSC and PHY bring-up
+  comes first.
+
+**Done:** `hw.pro1x_pm.usb_probe` (`pro1x_pm`): the GCC's USB registers
+above (always readable), and only when the GDSC is on, the master and bus
+clocks run and the reset is released, the DWC3's GSNPSID, GCTL, DCFG,
+DCTL and DSTS (an unclocked block's read can hang the bus). Not done:
+the driver, the bring-up, the SMMU stream, the PC side. This is the
+largest of the four stages; it is not started beyond the probe.
+
+**Device run:**
+
+9. **USB probe** (`usb`), seconds, read only:
+
+       pro1x.test=usb hint.qcom_wdt.0.lifetime=120
+
+   Expected: `hw.pro1x_pm.usb_probe: USB30_PRIM_BCR ..., USB30_PRIM_GDSCR
+   ..., ...; GDSC on|off, master clock on|off, its bus clock on|off,
+   reset asserted|released` and either the DWC3's registers (GSNPSID
+   0x5533xxxx for a DWC_usb3) or `not read (not clocked)`. That is the
+   input for the next step; nothing is changed.
+
 ## Device runs (prepared, for 2026-10-31)
 
 The kernel: `WORK=... bash freebsd/pm/build.sh phone` gives
@@ -241,6 +396,54 @@ phone N seconds after the start whatever happens.
 
 5. For a comparison of the current: `pro1x.test=power` (wfi, one CPU)
    the same 10 minutes, unplugged.
+
+6. **The SoC's sleep and suspend** (`suspend`; needs 2, better 3),
+   unplugged, about 16 minutes. First, from Leste:
+   `mkdir -p /host/freebsd/pm` and `pm-out/modules/qcom_dsp.ko`,
+   `pro1x_rpmsleep.ko` into it (the RAM root loads them from userdata,
+   read only). Then:
+
+       pro1x.test=suspend hw.psci_idle.enable=1 pro1x.power_min=10 hint.qcom_wdt.0.lifetime=1500
+
+   Expected: `pro1x_pm: vMPM at 0x45f01b8 (96 pins), doorbell 0xf111008
+   bit 1, RPM statistics yes; the hand-over off (hw.pro1x_pm.mpm=1), wake
+   pins 86:h`, `hw.pro1x_pm.rpm_stats: vmin N (...), vlow N (...)`
+   (Linux's counts so far, probably 0 and 0), `qcom_dsp: ...`,
+   `qcom_rpm: message RAM 0x45f0000 ...`, `pro1x_rpmsleep: the sleep set:
+   12 of 12 resources at 0; none refused`. A (60 s idle with the
+   hand-over): `MPM hand-overs` growing, and the real question, `vlow`
+   or `vmin` counting up. B: `hw.pro1x_pm.last: suspended 60.0xx s in 3
+   epochs, ended by the deadline 0; ... at least 7 other CPUs frozen`
+   (0 with one CPU), the RPM's counts `+N`. D: ten `power:` lines with
+   the current read right after each minute's wake-up (the current
+   while frozen cannot be read; the voltage and the capacity over the
+   ten minutes are the better measure) and a `hw.pro1x_pm.last` line
+   each. Failure signs: the console ending after `B: suspend 60 s` (the
+   SoC does not wake from its sleep: no timer reached the RPM, or the
+   frame does not wake CPU 0): the watchdog resets after 25 minutes
+   (it keeps running while frozen; if it bites during B, the epochs are
+   too long for it: `hw.pro1x_pm.epoch=10`); `ended by INTID N` early in
+   B: a device interrupt that keeps coming (N - 32 is its SPI: which
+   driver's is in the device tree); `vlow +0, vmin +0` with hand-overs:
+   another master or a vote holds the SoC up, as on Leste
+   (`docs/power-management.md`); the next step is the subsystems'
+   counts and the votes in the RPM's records.
+
+7. **The power key** (with someone at the phone), as 6 plus
+   `pro1x.suspend_key=1`: at `C: suspend until the power key` press the
+   power key once. Expected: `ended by INTID 215 (a device)` (the SPMI
+   arbiter's interrupt, SPI 183), a few seconds after the press at most.
+   The press also reaches `qcom_pon` (its devctl/evdev event) as usual.
+
+8. With all eight CPUs: 6 with `kern.smp.disabled=0` (needs 1 and 4).
+
+9. The USB probe (`pro1x.test=usb`): see stage 4 above.
+
+The vMPM hand-over and the sleep set are the parts with the most
+unknowns: they are copied from Linux and KolibriOS, neither of which
+has shown vlow/vmin on this phone yet (Linux's `notify_rpm` test is on
+2026-10-31 too: `docs/power-management.md`). If Linux's test shows how
+the SoC gets there, the same settings apply here.
 
 Risks: a hang in a power-down ends in the watchdog's reset (the RAM
 console keeps what came before); the hook is set right after `Release

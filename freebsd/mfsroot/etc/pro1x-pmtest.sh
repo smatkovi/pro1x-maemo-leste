@@ -6,6 +6,12 @@
 #                       what PSCI and the kernel found, one busy loop per
 #                       CPU and each CPU's share of it, the frequency
 #                       domains, and the same work check as idle
+#   pro1x.test=suspend  the SoC's sleep (the RPM sleep set, the MPM hand-over)
+#                       and suspend-to-idle (pro1x_pm): A 60 s idle, B a
+#                       60 s suspend, C until the power key
+#                       (pro1x.suspend_key=1), D the battery over
+#                       pro1x.power_min minutes of suspend
+#   pro1x.test=usb      the USB controller as Linux left it (read only)
 #   pro1x.test=idle     the PSCI idle states (hw.psci_idle.enable=1): the
 #                       states, a work check (8 workers: xz decompression
 #                       piped into md5, against the reference) while the
@@ -118,6 +124,39 @@ pm_power() {
 	echo "=== power: done"
 }
 
+pm_bat() {
+	i=$(sysctl -n dev.pro1x_battery.0.current 2>/dev/null)
+	v=$(sysctl -n dev.pro1x_battery.0.voltage 2>/dev/null)
+	i=${i:-0}
+	v=${v:-0}
+	pm_log "battery $1: $((v / 1000)) mV, $((-i / 1000)) mA," \
+	    "$(sysctl -n dev.pro1x_battery.0.capacity 2>/dev/null) %"
+}
+
+# The RPM sleep set needs the RPM channel: qcom_dsp.ko and
+# pro1x_rpmsleep.ko from userdata's freebsd/pm/ (freebsd/pm/build.sh's
+# pm-out/modules), read only
+pm_kld() {
+	mount -t ext2fs -o ro /dev/gpt/userdata /dev/pro1x-host ||
+	    { pm_log "!! userdata not mounted"; return 1; }
+	for m in qcom_dsp pro1x_rpmsleep; do
+		kldload /dev/pro1x-host/freebsd/pm/$m.ko ||
+		    pm_log "!! $m.ko not loaded"
+	done
+	umount /dev/pro1x-host
+	kldstat
+}
+
+# Quiet: the panel off (DCS), the touchscreen asleep, the keyboard light
+# off, the charger's input suspended (on the battery with the cable in)
+pm_quiet() {
+	sysctl dev.qcom_dpu.0.display=$((1 - $1)) dev.goodix.0.sleep=$1 \
+	    dev.pro1x_battery.0.input_suspend=$1 2>&1
+	for l in /dev/led/*kbd* /dev/led/*keyboard*; do
+		[ -c "$l" ] && echo 0 > "$l"
+	done
+}
+
 pm_done() {
 	pm_log "=== test $1 done, rebooting"
 	sleep 2
@@ -145,5 +184,64 @@ idle)
 	pm_power
 	pm_stats
 	pm_done idle
+	;;
+usb)
+	# stage 4: what Linux leaves of the USB controller (read only)
+	echo "=== pm: USB probe"
+	sysctl hw.pro1x_pm.usb_probe
+	dmesg | sed -n -E '/usb|dwc|xhci/p' | head -20
+	pm_done usb
+	;;
+suspend)
+	# needs hw.psci_idle.enable=1 for A; B and C freeze the CPUs anyway
+	echo "=== pm: SoC sleep and suspend test"
+	pm_cpus
+	sysctl hw.pro1x_pm.rpm_stats
+	pm_kld && sysctl hw.pro1x_rpmsleep.set=1 hw.pro1x_rpmsleep.result
+	pm_quiet 1
+	pm_bat "before"
+	# A: the SoC's sleep from idle, the MPM handed over to the RPM
+	sysctl hw.pro1x_pm.mpm=1
+	pm_log "A: 60 s idle with the hand-over"
+	sleep 60
+	sysctl hw.pro1x_pm.rpm_stats
+	pm_stats
+	pm_bat "after A"
+	# B: suspend-to-idle for 60 s, woken by the deadline (epochs of 15 s)
+	pm_log "B: suspend 60 s"
+	sysctl hw.pro1x_pm.suspend=60 > /dev/null
+	sysctl hw.pro1x_pm.last hw.pro1x_pm.rpm_stats
+	pm_bat "after B"
+	# C: until the power key (pro1x.suspend_key=1: someone at the phone
+	# presses it within 120 s)
+	if [ "$(kenv -q pro1x.suspend_key)" = 1 ]; then
+		pm_log "C: suspend until the power key (120 s at most): press it"
+		sysctl hw.pro1x_pm.suspend=120 > /dev/null
+		sysctl hw.pro1x_pm.last
+	fi
+	# D: the battery over pro1x.power_min (10) minutes of suspend, a
+	# minute each, read right after each wake-up
+	min=$(kenv -q pro1x.power_min)
+	min=${min:-10}
+	echo "=== power: $min min suspended, the panel off, on the battery"
+	echo "power: s mA mV % status"
+	t=0
+	while [ $t -lt $((min * 60)) ]; do
+		sysctl hw.pro1x_pm.suspend=60 > /dev/null
+		t=$((t + 60))
+		i=$(sysctl -n dev.pro1x_battery.0.current)
+		v=$(sysctl -n dev.pro1x_battery.0.voltage)
+		echo "power: $t $((-i / 1000)) $((v / 1000))" \
+		    "$(sysctl -n dev.pro1x_battery.0.capacity)" \
+		    "$(sysctl -n dev.pro1x_battery.0.status)"
+		sysctl -n hw.pro1x_pm.last
+	done
+	echo "=== power: done"
+	sysctl hw.pro1x_pm.rpm_stats
+	pm_stats
+	sysctl hw.pro1x_pm.mpm=0
+	pm_quiet 0
+	pm_bat "at the end"
+	pm_done suspend
 	;;
 esac

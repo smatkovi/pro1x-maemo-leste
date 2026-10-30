@@ -71,10 +71,35 @@ void	psci_idle_resume(void);
 /* simulate: the MMU's switch off, at its physical address */
 void	psci_idle_sim_off(void);
 
+/*
+ * Stage 3 (pro1x_pm.ko): the SoC's sleep is the RPM's when every online
+ * CPU is down and the last one goes into its cluster's deepest state; the
+ * hook then gets the earliest wake-up of all CPUs as a CNTVCT value (0:
+ * none) and hands the MPM to the RPM.
+ */
+extern void (*psci_idle_soc_hook)(uint64_t);
+
+struct psci_idle_freeze_info {
+	u_int		frozen;		/* the other CPUs that froze */
+	u_int		wait_us;	/* until they did */
+	uint64_t	downs;		/* this CPU's power-downs */
+	uint64_t	wakes;		/* its wake-ups */
+	uint64_t	timer;		/* of them by its timer or the frame */
+	u_int		intid;		/* the interrupt that ended it, or 0 */
+};
+/*
+ * The CPUs in their deepest states, their timers masked, until until
+ * (sbinuptime) or a device interrupt; from a thread bound to its CPU.
+ * 0 the deadline, the INTID of the device interrupt, -1 an IPI to this
+ * CPU (call again), -2 not possible.
+ */
+int	psci_idle_freeze(sbintime_t until, struct psci_idle_freeze_info *fi);
+
 /* the broadcast timer (arm_tmr_mem.c): wake cpu at the latest after sbt */
 bool	arm_tmr_mem_ok(void);
 void	arm_tmr_mem_arm(u_int cpu, sbintime_t sbt);
 void	arm_tmr_mem_disarm(u_int cpu);
 uint64_t arm_tmr_mem_fires(void);
+u_int	arm_tmr_mem_intid(void);	/* its GIC INTID, or 0 */
 #endif
 #endif

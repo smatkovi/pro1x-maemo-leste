@@ -7,10 +7,12 @@
 #
 #   qemu    PRO1XQ: QEMU's virt, a PL011 console, test/qemu/rc as the root
 #           filesystem's /etc/rc (test/qemu/run.sh runs it)
-#   phone   PRO1XPM: freebsd/PRO1X with psci_idle, the RAM root of
+#   phone   PRO1XPM: freebsd/PRO1X (psci_idle, pro1x_pm), the RAM root of
 #           freebsd/mfsroot (its rc runs the pro1x.test=smp/idle/suspend/usb
 #           device tests of mfsroot/etc/pro1x-pmtest.sh); pm-out/kernel.bin
-#           goes to /host/freebsd/kernel.bin on the phone
+#           goes to /host/freebsd/kernel.bin on the phone, pm-out/modules
+#           (qcom_dsp.ko, pro1x_rpmsleep.ko: the RPM sleep set) to
+#           /host/freebsd/pm/
 #
 # KERNFAST=1: the kernel again without a clean build (no config: not after a
 # change to the config or the env file); NOCLEAN=1: config again, no clean
@@ -38,8 +40,10 @@ if [ ! -e "$LOCK" ]; then
 fi
 trap '[ -z "$mine" ] || rm -f "$LOCK"' EXIT
 
-# the new files, and the patches build.sh has not applied yet (0032 on)
+# the new files (and the DSP stack's, for its qcom_dsp.ko), and the
+# patches build.sh has not applied yet (0032 on)
 cp -a "$REPO/freebsd/pm/sys/." "$SRC/sys/"
+cp -a "$REPO/freebsd/dsp/sys/." "$SRC/sys/"
 for p in "$REPO"/freebsd/patches/*.patch; do
 	mark=$SRC/.pro1x-applied-$(basename "$p" .patch)
 	[ -f "$mark" ] && continue
@@ -83,12 +87,12 @@ with open(sys.argv[1], 'r+b') as f:
 EOF
 }
 
-kernel() {	# kernel CONF TEMPLATE MFS ENV OUT
-	local conf=$1 tmpl=$2 mfs=$3 env=$4 out=$5
+kernel() {	# kernel CONF TEMPLATE MFS ENV OUT [MODULES]
+	local conf=$1 tmpl=$2 mfs=$3 env=$4 out=$5 mods=${6:-}
 	sed -e "s|@MFS_IMAGE@|$mfs|" -e "s|@ENV_FILE@|$env|" "$tmpl" \
 	    > "$SRC/sys/arm64/conf/$conf"
 	log "kernel $conf"
-	(cd "$SRC" && "${MAKE[@]}" KERNCONF="$conf" MODULES_OVERRIDE= \
+	(cd "$SRC" && "${MAKE[@]}" KERNCONF="$conf" MODULES_OVERRIDE="$mods" \
 	    -DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
 	    buildkernel) \
 	    > "$PMOUT/build-$conf.log" 2>&1 ||
@@ -98,6 +102,12 @@ kernel() {	# kernel CONF TEMPLATE MFS ENV OUT
 	cp "$k" "$out"
 	fixsize "$out"
 	log "$out"
+	[ -z "$mods" ] || mkdir -p "$PMOUT/modules"
+	for m in $mods; do
+		cp "$(find "$WORK/obj" -path "*/sys/$conf/modules/*/$m.ko" | head -1)" \
+		    "$PMOUT/modules/"
+		log "$PMOUT/modules/$m.ko"
+	done
 }
 
 for t in $TARGETS; do
@@ -114,12 +124,15 @@ for t in $TARGETS; do
 	phone)
 		mkroot "$PMOUT/mfsroot.ufs" "$REPO/freebsd/mfsroot"
 		{ cat "$REPO/freebsd/PRO1X"; echo; echo "# freebsd/pm/build.sh"
-		  grep -q '^device[[:space:]]*psci_idle' "$REPO/freebsd/PRO1X" ||
-		      echo "device		psci_idle"; } |
+		  for d in psci_idle pro1x_pm; do
+			grep -q "^device[[:space:]]*$d" "$REPO/freebsd/PRO1X" ||
+			    echo "device		$d"
+		  done; } |
 		    sed -e 's/^ident[[:space:]]*PRO1X$/ident		PRO1XPM/' \
 		    > "$PMOUT/PRO1XPM.tmpl"
 		kernel PRO1XPM "$PMOUT/PRO1XPM.tmpl" "$PMOUT/mfsroot.ufs" \
-		    "$REPO/freebsd/pro1x.env" "$PMOUT/kernel.bin"
+		    "$REPO/freebsd/pro1x.env" "$PMOUT/kernel.bin" \
+		    "qcom_dsp pro1x_rpmsleep"
 		;;
 	*)	echo "unknown target $t"; exit 1 ;;
 	esac

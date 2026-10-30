@@ -70,6 +70,7 @@ struct tmem_softc {
 	void		*ih;
 	bool		virt;
 	u_int		frameno;
+	u_int		intid;		/* the frame's interrupt at the GIC */
 	uint64_t	freq;
 	struct mtx	mtx;
 	uint64_t	*deadline;	/* per CPU, in counts; 0: none */
@@ -131,6 +132,12 @@ bool
 arm_tmr_mem_ok(void)
 {
 	return (tmem_sc != NULL);
+}
+
+u_int
+arm_tmr_mem_intid(void)
+{
+	return (tmem_sc != NULL ? tmem_sc->intid : 0);
 }
 
 uint64_t
@@ -327,6 +334,9 @@ tmem_attach(device_t dev)
 		}
 		sc->virt = virt;
 		sc->frameno = fn;
+		/* GIC_SPI n: INTID 32 + n (for the freeze's wake-up reasons) */
+		if (icells == 3 && irq[idx * icells] == 0)
+			sc->intid = 32 + irq[idx * icells + 1];
 		error = 0;
 		break;
 	}

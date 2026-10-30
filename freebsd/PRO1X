@@ -54,8 +54,11 @@ device		aw86224			# the vibration motor on it (0019)
 device		cpufreq
 device		qcom_cpufreq_hw
 # CPU idle states through PSCI, the memory-mapped timer as their wake-up
-# (pm/README.md, patches/0032); off until hw.psci_idle.enable=1
+# (pm/README.md, patches/0032); off until hw.psci_idle.enable=1; the
+# SoC's sleep (MPM hand-over) and suspend-to-idle on top (0033), off until
+# hw.pro1x_pm.mpm=1 or hw.pro1x_pm.suspend=N
 device		psci_idle
+device		pro1x_pm
 
 # The PMICs over SPMI: power and volume-down keys, the RTC (0011), the
 # battery (0015), the RGB status LED (0020)

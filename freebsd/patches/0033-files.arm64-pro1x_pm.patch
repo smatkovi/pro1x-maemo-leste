@@ -1,0 +1,16 @@
+files.arm64: pro1x_pm (freebsd/pm), the Pro1X's SoC sleep and suspend-to-idle
+
+device pro1x_pm: the MPM's hand-over to the RPM, the RPM's sleep
+statistics, suspend-to-idle on top of psci_idle.
+
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -752,6 +752,7 @@ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ arm64/qualcomm/pm/psci_idle.c			optional psci_idle fdt
+ arm64/qualcomm/pm/psci_idle_asm.S		optional psci_idle fdt
+ arm64/qualcomm/pm/arm_tmr_mem.c			optional psci_idle fdt
++arm64/qualcomm/pm/pro1x_pm.c			optional pro1x_pm psci_idle fdt
+ 
+ # RockChip Drivers
+ arm64/rockchip/rk3328_codec.c			optional fdt rk3328codec soc_rockchip_rk3328
