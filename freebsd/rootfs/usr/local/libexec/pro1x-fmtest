@@ -14,8 +14,17 @@
 #   audio  radio's receiver left on, then the ADSP and its APR and SLIMbus
 #          services (pro1x-q6, freebsd/dsp): what FreeBSD can ask of the
 #          audio path so far
+#   slim   bt, the receiver on and tuned, the ADSP, then pro1x-fmaudio:
+#          the SLIMbus NGD's capability exchange, the WCN3950's logical
+#          addresses and revision (probe), its FM stream on channels
+#          160/161 for 5 s (slim)
+#   afe    slim, then the ADSP's AFE: SLIMBUS_8_TX started alone (afe -N),
+#          the output path's clock votes (clocks), then Android's play-fm
+#          (clocks, loopback, RX_CODEC_DMA_RX_0, SLIMBUS_8_TX: afe); no
+#          codec behind it yet, so nothing to hear
 # pro1x.fm_debug=1: every frame on the UART in the log; pro1x.fm_speed=
-# 115200: the chip left at its boot rate throughout.
+# 115200: the chip left at its boot rate throughout; pro1x.fm_audio_opts:
+# more options for pro1x-fmaudio (-T: every register access, -c, -p, -g).
 # Everything goes to the console, which the RAM console keeps for Linux
 # after the next boot. From userdata (next to the kernel) first: a newer
 # copy of this script in freebsd/fm/, pro1x-fmd, pro1x-fmctl and
@@ -96,7 +105,12 @@ sysctl hw.qcom_rpm.regulator hw.qcom_rpm.requests hw.qcom_rpm.refused \
 sysctl dev.uart.0.rx_bytes dev.uart.0.tx_bytes dev.uart.0.overruns \
     dev.uart.0.parity_errors dev.uart.0.baud 2>&1
 
-if [ "$step" != bt ]; then
+if [ "$step" = slim ] || [ "$step" = afe ]; then
+	echo "--- the FM receiver, tuned (its SLIMbus port on)"
+	step_t "tune $freq"
+	pro1x-fmctl tune "$freq"
+	pro1x-fmctl station
+elif [ "$step" != bt ]; then
 	echo "--- the FM receiver"
 	pro1x-fmctl debug 1
 	step_t "tune $freq"
@@ -117,7 +131,7 @@ if [ "$step" != bt ]; then
 	pro1x-fmctl station
 	pro1x-fmctl info
 fi
-if [ "$step" = audio ]; then
+if [ "$step" = audio ] || [ "$step" = slim ] || [ "$step" = afe ]; then
 	echo "--- the audio path (the receiver on, its SLIMbus port on)"
 	pro1x-fmctl status
 	# the ADSP with its APR channel (qcom_apr) and QRTR services, the
@@ -136,9 +150,42 @@ if [ "$step" = audio ]; then
 	echo "after $i s: hw.qcom_apr: $(sysctl -n hw.qcom_apr)"
 	sleep 3
 	sysctl net.qrtr.servers
-	pro1x-q6 test 2>&1
+	if [ "$step" = audio ]; then
+		pro1x-q6 test 2>&1
+	else
+		# pro1x-q6 slim would switch the bus off again: the core only
+		pro1x-q6 core 2>&1
+	fi
 	sysctl hw.qcom_apr
 	dmesg | grep -E "qcom_(apr|pas|smp2p)|glink" | tail -20
+fi
+if [ "$step" = slim ] || [ "$step" = afe ]; then
+	# pro1x-fmaudio (freebsd/fm/README.md, stage 3): /dev/qcom_lpass,
+	# QMI power before any register, every message (-v)
+	kldload qcom_lpass && echo "qcom_lpass loaded"
+	sysctl hw.qcom_lpass.windows 2>&1
+	o=$(kenv -q pro1x.fm_audio_opts)
+	pro1x-fmctl status
+	step_t "pro1x-fmaudio probe"
+	pro1x-fmaudio -v $o probe 2>&1
+	echo "probe: $?"
+	step_t "pro1x-fmaudio slim"
+	pro1x-fmaudio -v $o -t 5 slim 2>&1
+	echo "slim: $?"
+	if [ "$step" = afe ]; then
+		step_t "pro1x-fmaudio afe -N (SLIMBUS_8_TX alone)"
+		pro1x-fmaudio -v $o -N -t 5 afe 2>&1
+		echo "afe -N: $?"
+		step_t "pro1x-fmaudio clocks"
+		pro1x-fmaudio -v $o -t 3 clocks 2>&1
+		echo "clocks: $?"
+		step_t "pro1x-fmaudio afe (play-fm)"
+		pro1x-fmaudio -v $o -t 5 afe 2>&1
+		echo "afe: $?"
+	fi
+	pro1x-fmctl status
+	sysctl hw.qcom_apr hw.qcom_lpass.windows 2>&1
+	dmesg | grep -E "qcom_(apr|pas|smp2p|lpass)|glink|smmu" | tail -20
 fi
 step_t "off"
 pro1x-fmctl off

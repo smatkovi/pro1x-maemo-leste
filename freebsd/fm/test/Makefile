@@ -31,6 +31,10 @@ $(OUT)/test_geni: test_geni.c ../sys/dev/uart/uart_qcom_geni_calc.h | $(OUT)
 $(OUT)/test_q6: test_q6.c ../../dsp/tools/pro1x-q6/pro1x-q6.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ test_q6.c
 
+FMA = ../tools/pro1x-fmaudio
+$(OUT)/test_fmaudio: test_fmaudio.c $(FMA)/pro1x-fmaudio.c $(FMA)/ngd.c $(FMA)/afe.c $(FMA)/mmio.c $(FMA)/fmaudio.h ../../dsp/tools/pro1x-q6/pro1x-q6.c | $(OUT)
+	$(CC) $(CFLAGS) -I$(FMA) -o $@ test_fmaudio.c $(FMA)/ngd.c $(FMA)/afe.c $(FMA)/mmio.c
+
 $(OUT)/fakechip: fakechip.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ fakechip.c
 
@@ -49,9 +53,11 @@ firmware: | $(OUT)
 
 APP = $(shell pkg-config --exists gtk+-2.0 && echo $(OUT)/test_app)
 
-test: $(APP) $(OUT)/test_qcabt $(OUT)/test_geni $(OUT)/test_q6 $(OUT)/pro1x-fmd $(OUT)/pro1x-fmctl $(OUT)/fakechip firmware
+test: $(APP) $(OUT)/test_qcabt $(OUT)/test_geni $(OUT)/test_q6 $(OUT)/test_fmaudio $(OUT)/pro1x-fmd $(OUT)/pro1x-fmctl $(OUT)/fakechip firmware
 	$(OUT)/test_geni
 	$(OUT)/test_q6
+	$(OUT)/test_fmaudio > $(OUT)/test_fmaudio.log || { cat $(OUT)/test_fmaudio.log; exit 1; }
+	tail -1 $(OUT)/test_fmaudio.log
 	$(OUT)/test_qcabt $(OUT)/fw/qca
 	OUT=$(OUT) sh ./run.sh
 

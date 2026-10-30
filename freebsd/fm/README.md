@@ -13,11 +13,13 @@ code the Leste kernel runs:
 | --- | --- | --- | --- |
 | 1 | the Bluetooth UART, the chip's bring-up | `qcom_geni_uart.ko` (uart(4) class), `pro1x-fmd` (Linux's hci_qca/btqca in user space) | built; host tested (protocol, arithmetic); not run on the phone |
 | 2 | FM control: tune, seek, signal, stereo, RDS | `pro1x-fmd` (Linux's radio-qca-fm in user space), its socket, `pro1x-fmctl` | built; host tested against a simulated chip |
-| 3 | FM sound: SLIMbus, the ADSP's AFE | `qcom_apr.ko` (`/dev/apr`), `pro1x-q6` (in `freebsd/dsp`) | only the first bricks; see "Stage 3" |
+| 3 | FM sound: SLIMbus, the ADSP's AFE, the output | `qcom_lpass.ko` (`/dev/qcom_lpass`), `pro1x-fmaudio`; `qcom_apr.ko` (`/dev/apr`), `pro1x-q6` (in `freebsd/dsp`) | SLIMbus and AFE written, host tested, device runs prepared; the output (RX macro, SoundWire, WCD9370) not written; see "Stage 3" |
 | 4 | the app on FreeBSD's Hildon | `apps/pro1x-fm` with a pro1x-fmd backend, part `pro1x-fm` of `hildon/build.sh` | built; its backend host tested; no sound |
 
 Nothing here has run on the phone (unreachable until 2026-10-31). What
 can be checked on the PC is checked: `make -C freebsd/fm/test` (below).
+Nothing is audible yet: the last piece of the sound path (stage 3c) is
+not written.
 
 ## Stage 1: the UART and the chip
 
@@ -143,59 +145,174 @@ per request and per answer:
 
 ## Stage 3: the sound
 
-On Android the receiver's audio goes WCN3950 SLIMbus ports → LPASS
-SLIMbus → the ADSP's AFE port `SLIMBUS_8_TX` → a loopback inside the ADSP
-to the headphones (`docs/fm-radio.md`). Leste's kernel 7.1.0-pro1x.6 has
-it as patches 0018-0021, built but not booted: nobody has heard the
-Pro1X's FM receiver under Linux either yet. On FreeBSD, written now:
+The receiver's audio leaves the chip only digitally. On Android (the
+Pro1X's `mixer_paths.xml`, path `play-fm`; the vendor kernel's
+`msm-pcm-routing-v2.c`, `q6afe.c`, `btfm_slim*.c`) it goes:
 
-- **`qcom_apr.ko`** (`freebsd/dsp/sys/arm64/qualcomm/dsp/qcom_apr.c`): the
-  ADSP's APR channel (`apr_audio_svc` on its GLINK edge) as `/dev/apr`,
-  whole packets in and out, for one process; `sysctl hw.qcom_apr`. This
-  is how every audio service of the ADSP (q6core, q6afe, q6asm, q6adm) is
-  reached.
-- **`pro1x-q6`** (`freebsd/dsp/tools/pro1x-q6`): `core` asks the ADSP's
-  core service what Linux's `q6core` asks at boot (ready?, the framework
-  and service versions); `slim` asks the ADSP's SLIMbus service (QMI 769
-  over QRTR) what Linux's `qcom-ngd-ctrl` asks first: select controller
-  instance 0 with the ADSP as master, power the bus up (and down again).
-  This is the FreeBSD side of the Linux test plan's step 0 ("does the ADSP
-  offer the SLIMbus service at all?"). `send` sends any APR command.
+    WCN3950 FM ports 1, 2 --SLIMbus channels 160, 161--> LPASS SLIMbus (the ADSP is the bus's manager)
+      --> AFE port SLIMBUS_8_TX (0x4011) --AFE loopback inside the ADSP--> AFE port RX_CODEC_DMA_RX_0 (0xb030)
+      --> LPASS RX macro --SoundWire (swr1)--> WCD9370 HPHL/HPHR --> headphones (and the AW87339 amplifiers)
 
-Still missing, in the order the sound needs them:
+No PCM passes the application processor. FreeBSD does the same, in three
+steps (the task's stages 1-3):
 
-1. **The SLIMbus NGD controller** (Linux's `qcom-ngd-ctrl.c`, some 1700
-   lines): after the QMI steps above, its message queues to the ADSP's
-   bus manager run through a **BAM DMA** engine (`slimbam` at `0xa584000`,
-   channels 3 and 4), for which FreeBSD has no driver; whether that DMA
-   needs an SMMU stream is unknown (the downstream device tree has none;
-   the Linux run of pro1x.6 will log a blocked stream ID if it does).
-2. **The SLIMbus core**: the WCN3950's two devices (`ifd@0,0`,
-   `codec@1,0`, `slim217,220`) reported present, their logical addresses,
-   the stream messages (connect the ports, define and activate channels
-   160 and 161).
-3. **The WCN3950's ports**: the register writes of Leste's patch 0019
-   (from downstream `btfm_slim`) for FM ports 1 and 2.
-4. **The AFE port**: `SLIMBUS_8_TX` (0x4011) configured (48 kHz, 16 bit,
-   two channels on 160/161) and started over APR, which `/dev/apr` can now
-   carry.
-5. **An output**: FreeBSD has no sound on the Pro1X at all. Hearing the
-   radio needs either the ADSP's loopback to `RX_CODEC_DMA_RX_0` and the
-   whole headphone path behind it (the LPASS RX macro, its clocks through
-   the ADSP's AFE, the SoundWire master, the WCD937x codec on SoundWire,
-   none of which FreeBSD has), or the capture into the host (q6asm with
-   its shared memory mapped for the ADSP) and still that same output path
-   for playback.
+| Step | What | Here | State |
+| --- | --- | --- | --- |
+| 3a | the SLIMbus: the NGD as the ADSP's satellite, the WCN3950's logical addresses, its FM ports, the stream on channels 160/161 | `qcom_lpass.ko` (`/dev/qcom_lpass`), `pro1x-fmaudio` (`ngd.c`) | written; host tested against a simulated NGD, bus manager and chip; device run `fm-slim` prepared |
+| 3b | the ADSP's side: SLIMBUS_8_TX, RX_CODEC_DMA_RX_0, the AFE loopback between them, the output path's LPASS clocks | `pro1x-fmaudio` (`afe.c`) over `/dev/apr` | written; packets checked byte for byte against Linux's structures, host tested against a simulated ADSP; device run `fm-afe` prepared |
+| 3c | the output: LPASS RX macro, SoundWire master, WCD9370, AW87339 | — | not written; the plan below |
 
-That is the size of a FreeBSD audio stack for the SM6115 (Linux's is tens
-of thousands of lines of ASoC, q6dsp and SoundWire code), on hardware that
-cannot be debugged except by unattended runs. The honest state: FreeBSD
-tunes, seeks and shows RDS once stages 1 and 2 pass on the phone; FM sound
-on FreeBSD is not in reach without that stack, and the first useful
-evidence (does the ADSP answer APR and offer the SLIMbus service under
-FreeBSD?) comes from the `audio` run below. Linux is the place to get FM
-sound working first (pro1x.6); its results decide the SLIMbus details
-FreeBSD would copy.
+Nothing of it has run on the phone; nothing is audible before 3c.
+
+### Why user space
+
+`pro1x-fmaudio` is a user space programmer, not a set of kernel drivers:
+
+- every phone test is an unattended reboot, and `pro1x-fmtest` takes a
+  newer `pro1x-fmaudio` from `/host/freebsd/fm/` without a new kernel,
+  module or root image;
+- nothing on this path needs an interrupt or DMA on the application
+  processor (below): the SLIMbus messages are a few dozen words, polled;
+- the AFE is APR packets, which `/dev/apr` (`qcom_apr.ko`) already
+  carries;
+- the kernel part is one small module, `qcom_lpass.ko`: `/dev/qcom_lpass`
+  maps the LPASS register windows of the device tree (SLIMbus NGD and its
+  BAM, RX/TX/VA macros, both SoundWire masters, LPI pin control, the two
+  LPASS clock controllers' resets; `sysctl hw.qcom_lpass.windows`) as
+  device memory. `/dev/mem` cannot: arm64's `memmmap` leaves the
+  attribute at write-back. No other page can be mapped through it.
+
+When the path works, the pieces that need to stay (the stream as long as
+the radio plays) are one daemon process, started and stopped by
+pro1x-fmd (stage 4).
+
+### 3a: the SLIMbus (`ngd.c`)
+
+Linux's `qcom-ngd-ctrl.c` step by step, with the bits of Linux's SLIMbus
+core the FM stream needs (`messaging.c`, `stream.c`) and the WCN3950's
+side of Leste's patch 0019 (from the downstream `btfm_slim`):
+
+1. the ADSP's SLIMbus QMI service (769, version 1, instance 0) over
+   QRTR: select instance 0 with the ADSP as master, power request
+   ACTIVE (`qcom_slim_qmi_init`, `qcom_slim_qmi_power_request`; the
+   encoding is `pro1x-q6`'s). No NGD register is read before this has
+   succeeded; the power stays requested until the stream ends.
+2. the NGD (`slim-ngd@a5c0000`, NGD 1 at +0x1000): its version, then
+   `NGD_INT_EN` = Linux's `DEF_NGD_INT_MASK`, the RX message timeout,
+   `NGD_CFG` = ENABLE; the manager's MASTER_CAPABILITY, answered with
+   REPORT_SATELLITE (D9 C5 01 01, retried on a NACK) —
+   `qcom_slim_ngd_power_up`, `qcom_slim_ngd_master_worker`. An NGD that
+   still has its logical address skips the exchange (downstream).
+3. the WCN3950's two devices by enumeration address (`slim217,220`,
+   device index 1 the ports, 0 the registers: bytes `00 01 20 02 17 02`
+   and `00 00 20 02 17 02`, which is both mainline's packed
+   `struct slim_eaddr` and the downstream `elemental-addr`): ADDR_QUERY,
+   ADDR_REPLY with the logical address, retried for up to 5 s (`-w`)
+   while the chip reports present; its slave revision read (REQUEST_VALUE).
+4. the FM ports 1 and 2 (the chip's SoC 0x40070120 is no Cherokee 3.x,
+   whose ports would be 5 and 4): multi-channel group 0x06, over- and
+   underrun recovery, enable with watermark 8 (`wcn399x_fm_ports`,
+   `btfm_slim_slave_enable_port`), CHANGE_VALUE to the interface device.
+5. the stream (`slim_stream_prepare`, `qcom_slim_ngd_enable_stream`):
+   CONNECT_SRC port→channel for both, DEF_ACT_CHAN `{device, 0x24, 0x20,
+   0x83, tid, 160, 161}` (16 bit; 48 kHz on a 4000 Hz superframe:
+   isochronous, rate multiplier 12 = 3·2², presence rate code 3 with
+   the frequency-locked bit; the downstream core computes the same
+   bytes), RECONFIG_NOW. Every one acknowledged (GENERIC_ACK, success bit
+   0x20 as the downstream NGD checks).
+6. the way back: CHAN_CTRL remove and RECONFIG_NOW (the downstream NGD;
+   mainline's NGD has no `disable_stream`), DISCONNECT_PORT for both,
+   the ports' enable off, QMI power INACTIVE.
+
+**No BAM DMA.** Linux moves these messages through two BAM pipes
+(`slimbam`, channels 3 and 4); the NGD also has message registers
+(`NGD_TX_MSG` at +0x30, `NGD_RX_MSG` at +0x70), which the downstream
+`slim-msm-ngd.c` uses whenever its message queues are off
+(`msm_send_msg_buf`, `ngd_slim_interrupt`, `ngd_slim_setup` with neither
+MSGQ_EN bit). That path needs no DMA, so no SMMU stream (unknown for the
+BAM; the downstream device tree has none, and after the kexec unknown
+streams are likely blocked) and no BAM driver. It is the same IP, but not
+the mode this phone shipped with (bengal has no `qcom,rxreg-access`), so
+only the device run proves it. If it fails (TX_MSG_SENT never comes, or
+no RX), a BAM pipe pair is the fallback: the BAM window is already in
+`/dev/qcom_lpass`, the descriptors would need a physically contiguous
+buffer from the kernel, and the stream ID of the BAM (the Linux run of
+pro1x.8 logs it if it is blocked, `docs/fm-radio.md`).
+
+### 3b: the ADSP's side (`afe.c`)
+
+All of it is APR to the AFE service (4), as Linux's `q6afe.c` sends it
+(`q6afe_port_set_param_v2`, `q6afe_port_start`, `q6afe_port_stop`,
+`q6afe_set_lpass_clock`, `q6afe_vote_lpass_core_hw`), and the downstream
+`q6afe.c` for what mainline lacks (`afe_loopback`, `afe_loopback_gain`,
+the devote), each answered by `APR_BASIC_RSP_RESULT` with the command's
+token:
+
+- SLIMBUS_8_TX: `AFE_PARAM_ID_SLIMBUS_CONFIG` (device 0 as the downstream
+  `qcom,msm-dai-q6-slim-dev-id = <0>`, 16 bit, 2 channels on 160/161,
+  48 kHz) and DEVICE_START, token 152 (its index in Linux's bindings with
+  patch 0018). The configuration goes in the whole `union
+  afe_port_config` (36 bytes), as mainline sends it for every port type.
+- RX_CODEC_DMA_RX_0: `AFE_PARAM_ID_CODEC_DMA_CONFIG` (48 kHz, 16 bit,
+  2 channels, mask 0x3), token 113.
+- the loopback: `AFE_MODULE_LOOPBACK`, `AFE_PARAM_ID_LOOPBACK_CONFIG`
+  `{1, dst 0xb030, LB_MODE_DEFAULT, enable}` on SLIMBUS_8_TX (the
+  downstream "RX_CDC_DMA_RX_0 Port Mixer SLIM_8_TX"), its gain
+  `AFE_PARAM_ID_LOOPBACK_GAIN_PER_PATH` in Q13 ("SLIMBUS_8 LOOPBACK
+  Volume", default 0x2000 = unity, `-g`).
+- the output path's clocks, as the macros' probes take them: the DCODEC
+  block vote, TX_CORE_MCLK and its NPL (the VA macro's, 2 × 9.6 MHz) and
+  RX_CORE_MCLK and its NPL at 19.2 MHz (`lpass-rx-macro.c` `MCLK_FREQ`).
+
+The order is Android's (FM HAL and BE DAIs): the SLIMbus stream first
+(the downstream BE prepares its codec DAI, btfm_slim, before the CPU
+DAI), then clocks, gain, loopback, RX_CODEC_DMA_RX_0, SLIMBUS_8_TX; back
+in reverse. `-N` leaves out the output side (clocks, RX port,
+loopback): SLIMBUS_8_TX alone.
+
+### 3c: the output (not written)
+
+What Linux does for headphone playback on this phone (mixer path
+`headphones` of the vendor's `mixer_paths.xml`: RX0/RX1 from AIF1_PB,
+INT0/INT1, CLSH_DSM_OUT, the compander and RDAC switches), in order,
+with where it comes from:
+
+1. the WCD9370's rails: L14A (buck), L9A (RX/TX, PX), L22A (mic bias),
+   through `hw.qcom_rpm.regulator` (`wcd937x.c` probe), and its reset
+   GPIO 92 (active low; `gpioctl`).
+2. the LPASS clocks (3b's clock step) and the LPI pins: gpio3-5 to
+   `swr_rx_clk`/`swr_rx_data`, gpio0-2 to `swr_tx_*` (the register access
+   to the WCD9370 goes over the TX SoundWire) — `pinctrl-sm6115-lpass-lpi.c`.
+3. the VA macro's `fsgen`, the TX and RX macros' MCLK and SoundWire clock
+   gates (`va_macro_mclk_enable`, `tx_macro_mclk_enable`,
+   `rx_macro_mclk_enable`, `swclk_gate_*`), the `swr_audio_cgcr` resets of
+   `lpasscc` and `lpass_audiocc`.
+4. both SoundWire masters (`drivers/soundwire/qcom.c`, v1.6.0):
+   `qcom_swrm_init`, enumeration of the WCD9370's TX device (swr0, 0,3)
+   and RX device (swr1, 0,4), device numbers.
+5. the WCD9370 (`wcd937x.c`, `wcd937x-sdw.c`, `wcd-clsh-v2.c`): its init
+   writes over the TX SoundWire device, then for playback the RX clocks,
+   class-H, HPHL/HPHR PA sequence; the SoundWire port setup of swr1
+   (port 1 HPH L/R, 2 CLSH, 3 COMP; the device tree's port maps) and the
+   bank switch (`sdw_stream` prepare/enable).
+6. the RX macro's path (`lpass-rx-macro.c`): AIF1_PB to RX0/RX1,
+   interpolators INT0/INT1, compander 1/2, the DSM; then 3b's
+   RX_CODEC_DMA_RX_0 start feeds it.
+7. the loudspeakers, if wanted: the AW87339s on I2C 0x59/0x5a, enable
+   GPIO 85/98 (`aw87339.c` with patch 0026).
+
+That is the larger part of the stack (rx-macro 4000 lines, SoundWire
+master and core 6000, WCD937x 4000 in Linux), all MMIO and SoundWire
+register sequences that can go into `pro1x-fmaudio` through the windows
+`qcom_lpass.ko` already maps; but nothing of it can be tested before the
+phone has shown that the bus and the AFE come up (3a, 3b). Two things
+make it cheaper once the phone is back: Linux on the same phone plays to
+the headphones (`docs/audio.md`), and its kernel has tracepoints
+(`CONFIG_TRACING`): `test/leste-hph-trace.sh`, run once under Leste,
+records every regmap write of the RX/TX/VA macros and the WCD9370 and the
+DAPM power sequence of one headphone playback — the exact register
+sequence 3c has to repeat (the SoundWire masters' own registers are
+`writel`, not regmap; they come from `qcom.c`).
 
 ## Stage 4: the app
 
@@ -225,6 +342,22 @@ under ASan and UBSan:
 - `test_q6`: pro1x-q6's APR header against Linux's `struct apr_hdr` as
   q6core fills it, an answer parsed, the SLIMbus QMI requests against the
   TLVs of `qcom-ngd-ctrl.c` (and their maximum lengths), results;
+- `test_fmaudio`: pro1x-fmaudio's AFE packets byte for byte against
+  Linux's structures filled as `q6afe.c` fills them (`union
+  afe_port_config` 36 bytes, the SLIMbus and codec DMA configurations,
+  start/stop, the clock set on and off, the vote with `strscpy`'s 7
+  characters) and the downstream loopback structures; its SLIMbus
+  messages against `qcom_slim_ngd_xfer_msg`'s assembly (header word,
+  `txn->rl - 1`, the payloads of `get_laddr`, `slim_xfer_msg`,
+  `enable_stream`) and `qcom_slim_calc_coef`; then the whole program
+  (its `main`, `qmi_up`, `map_window` and `/dev/apr` replaced) against a
+  simulated NGD with the bus manager and a WCN3950 behind it and a
+  simulated ADSP, written from the protocol: the exact order of every
+  message and command for `probe`, `afe`, `afe -N`, a NACKed capability
+  answer, a chip on the bus only at the third query, no chip, a retained
+  NGD, an AFE port the ADSP refuses (everything taken back), no manager;
+  that no register is touched before the QMI power request; the
+  WCN3950's port registers;
 - `run.sh`: pro1x-fmd on a pty against `fakechip.c`, a simulated WCN3950
   written from the protocol (not from qcabt.c) that checks the host's
   side: the power pulses, the rampatch byte for byte, the NVM as patch
@@ -236,9 +369,10 @@ under ASan and UBSan:
   the app's file with libhildon stubbed); the UART loopback test against
   an echo.
 
-Built for FreeBSD/arm64: both modules (in the kernel's object tree, every
-symbol resolved by the PRO1X kernel and `qcom_dsp.ko`), pro1x-fmd,
-pro1x-fmctl, pro1x-q6, the app (`hildon/build.sh pro1x-fm`).
+Built for FreeBSD/arm64: the three modules (in the kernel's object tree,
+every symbol resolved by the PRO1X kernel and `qcom_dsp.ko`), pro1x-fmd,
+pro1x-fmctl, pro1x-fmaudio, pro1x-q6, the app (`hildon/build.sh
+pro1x-fm`).
 
 ## Tests on the phone
 
@@ -247,8 +381,8 @@ Unattended, as the DSP runs: `pro1x.test=fm pro1x.fm=STEP` in
 to the console (the RAM console keeps it for Leste) and reboots;
 `hint.qcom_wdt.0.lifetime` ends a hang. It needs a root image built after
 this directory came (`rc.local`'s `fm` test); after that, a newer
-`pro1x-fmtest`, `pro1x-fmd`, `pro1x-fmctl` and `pro1x-q6` in
-`/host/freebsd/fm/`, the modules in `/host/freebsd/modules/` and the
+`pro1x-fmtest`, `pro1x-fmd`, `pro1x-fmctl`, `pro1x-fmaudio` and `pro1x-q6`
+in `/host/freebsd/fm/`, the modules in `/host/freebsd/modules/` and the
 firmware in `/host/freebsd/firmware/qca/` are taken first, so later fixes
 need no new image. `$WORK/fm-test/` has them laid out as
 `/host/freebsd/` wants them, with the command lines:
@@ -259,10 +393,27 @@ need no new image. `$WORK/fm-test/` has them laid out as
 | fm-bt | `pro1x.test=fm pro1x.fm=bt hint.qcom_wdt.0.lifetime=240` | `rail l9 on: voted` (and l16, l17, l23), `QCA SOC Version :0x40070120`, `QCA ROM Version :0x00000102`, `UART at 3000000 baud`, both files downloaded, `QCA setup on UART is completed`, `info` with `up=1` |
 | fm-radio | `pro1x.test=fm pro1x.fm=radio hint.qcom_wdt.0.lifetime=360` (headphones in: the cable is the antenna; `pro1x.fm_freq=` a local station) | `tune` answers `ok`, `station` with an RSSI above -100 dBm on a real station, RDS `event ps ...` within 15 s, seeks ending on stations or `ENODATA` |
 | fm-audio | `pro1x.test=fm pro1x.fm=audio hint.qcom_wdt.0.lifetime=480` | the radio run, then `qcom_apr: apr_audio_svc open on lpass`, `core: ADSP state 1 (ready)`, the framework's services; `slim: service 769 ...` and `select instance ...: result 0`, `power active: result 0` — or the evidence that the ADSP does not offer what the sound needs |
+| fm-slim | `pro1x.test=fm pro1x.fm=slim hint.qcom_wdt.0.lifetime=480` (headphones in) | the chip up, tuned; the ADSP up; `qcom_lpass loaded`; `probe`: `slim: QMI ... power active: result 0`, `controller version 0x...`, `NGD before: ...`, `the manager's capability`, `satellite reported; NGD status 0x2`, `WCN3950 generic device at LA 0x.., interface device at LA 0x..`, `slave revision ...`, `probe: 0`; `slim`: `FM ports 1,2 enabled`, `connect port 1 to channel 160: acknowledged` (with `-v`), `FM stream active: 48000 Hz ...`, then the way back, `slim: 0` |
+| fm-afe | `pro1x.test=fm pro1x.fm=afe hint.qcom_wdt.0.lifetime=600` (headphones in) | fm-slim, then `afe -N`: `core: ADSP ready`, `afe: port 0x4011 started`, `afe -N: 0`; `clocks`: `block 4 voted on, handle N`, `the output path's clocks on`, `clocks: 0`; `afe`: the clocks, the loopback's gain and configuration done, `port 0xb030 started`, `port 0x4011 started`, `afe: 0` — or which command the ADSP refused (`ADSP status 0x..`) |
 
 `pro1x.fm_debug=1` logs every frame on the UART; `pro1x.fm_speed=115200`
 keeps the chip at its boot rate (if 3000000 baud fails: the QUP's core
-clock and its bus votes are Linux's, which FreeBSD cannot set).
+clock and its bus votes are Linux's, which FreeBSD cannot set);
+`pro1x.fm_audio_opts=` passes options to every pro1x-fmaudio of the slim
+and afe runs (`-T` every NGD register access, `-c 159,160` other
+channels, `-p` other ports, `-w 20` a longer wait for the chip, `-M` the
+message timeout).
+
+What a failing fm-slim says, in the order it can fail: no service 769
+(the ADSP's audio PD did not come up, or offers no SLIMbus); a hang right
+after `power active` (the NGD's registers not clocked: the watchdog ends
+it; the last line names the step); `capability timed out` ten times
+(the manager never talks to the NGD: the register message path may need
+the message queues after all, then BAM); `tx ... timed out` or `error
+interrupt` (the TX path); `not on the bus` (the chip does not report
+present: its FM receiver must be on, `FC0E 01`; the run's status shows
+`slimbus=1`); a NACK code on a user message (the manager refuses the
+stream's parameters).
 
 ## Risks
 
@@ -279,7 +430,32 @@ clock and its bus votes are Linux's, which FreeBSD cannot set).
 - **In-band sleep**: as Leste's hci_qca does it, but FreeBSD never lets
   the UART's clock go: no power saving while the radio runs.
 - **The antenna**: the headphone cable, as on Leste; not verified.
-- **The sound**: see Stage 3.
+- **The NGD without message queues**: the register path is the
+  downstream driver's, not the mode bengal shipped with; whether
+  `NGD_INT_STAT` shows a received message with `NGD_INT_EN` as Linux sets
+  it (the downstream register mode leaves `RX_MSG_RCVD` out of its mask;
+  this sets mainline's, which has it) is for fm-slim to show. BAM is the
+  fallback (3a).
+- **SMMU streams**: none are used on this path: no DMA on the
+  application processor. A BAM fallback would need the BAM's stream ID
+  (unknown; switched to bypass as `qcom_smmu.c` does for others) and a
+  contiguous buffer. The codec DMA and the SLIMbus data move inside the
+  LPASS, under the ADSP.
+- **LPASS clocks after the kexec**: the ADSP is started by FreeBSD
+  (`pro1x-dsp start adsp`), so its AFE and SLIMbus state is fresh; the
+  clocks of the macros are the AFE's to give (3b's clock step). A read
+  of an LPASS block whose clock is off hangs the bus: `pro1x-fmaudio`
+  touches only the NGD, only after the QMI power request, and nothing of
+  the macros yet.
+- **Power domains**: the ADSP's LPI_CX and LPI_MX (`rpmpd`) are whatever
+  the boot menu's Linux left voted; FreeBSD votes neither
+  (`freebsd/dsp/README.md`). If the ADSP or the SLIMbus does not come
+  up, they are next.
+- **The RX port without a codec**: `afe` starts RX_CODEC_DMA_RX_0 with
+  nothing behind it (3c is missing): the ADSP may refuse or stall the
+  port; it is the last step of fm-afe, after `afe -N` and `clocks`.
+- **/dev/apr has one user**: pro1x-q6 and pro1x-fmaudio cannot run at the
+  same time.
 
 ## Files
 
@@ -295,6 +471,12 @@ clock and its bus votes are Linux's, which FreeBSD cannot set).
 | `test/` | the host tests |
 | `../dsp/sys/arm64/qualcomm/dsp/qcom_apr.c`, `../dsp/sys/modules/qcom_apr/` | `/dev/apr` |
 | `../dsp/tools/pro1x-q6/` | the ADSP's core and SLIMbus services |
+| `sys/arm64/qualcomm/lpass/qcom_lpass.c`, `sys/modules/qcom_lpass/` | `/dev/qcom_lpass`: the LPASS register windows as device memory |
+| `tools/pro1x-fmaudio/ngd.c` | the SLIMbus NGD, messages, logical addresses, value elements, the FM stream, the WCN3950's ports |
+| `tools/pro1x-fmaudio/afe.c` | the AFE over APR: ports, loopback, clocks, votes |
+| `tools/pro1x-fmaudio/pro1x-fmaudio.c`, `mmio.c`, `fmaudio.h` | the steps, the QMI client, the windows, the daemon |
+| `test/test_fmaudio.c` | its host test (simulated NGD, manager, chip, ADSP) |
+| `test/leste-hph-trace.sh` | for 3c: Linux's register sequence of one headphone playback, recorded under Leste |
 | `../rootfs/usr/local/libexec/pro1x-fmtest`, `../rootfs/etc/rc.local` | the device runs |
 | `../rootfs/usr/local/etc/rc.d/pro1x_fmd` | the daemon at boot (off) |
 | `../../apps/pro1x-fm/` | the app, both systems |
