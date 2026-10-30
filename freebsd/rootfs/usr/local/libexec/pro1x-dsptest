@@ -23,10 +23,20 @@
 # summary and rc.local's reboot), and the last line is
 #   === dsp-STEP: PASS|FAIL (N passed, M failed; first failure: ...)
 # Everything goes to the console, which the RAM console keeps for Linux
-# after the next boot. Modules in freebsd/modules next to the kernel on
-# userdata (a build newer than the root image's) come first.
+# after the next boot. From userdata (next to the kernel) first, a build
+# newer than the root image's (freebsd/dsp/build-dsp.sh): this script and
+# pro1x-dsp in freebsd/dsp-tools, the modules in freebsd/modules.
 step=${1:-$(kenv -q pro1x.dsp)}
 step=${step:-load}
+host=/dev/pro1x-host/freebsd
+if [ -f $host/dsp-tools/pro1x-dsptest ] && [ "${PRO1X_DSPTEST_HOST:-}" != 1 ]; then
+	echo "=== the newer pro1x-dsptest from $host/dsp-tools"
+	PRO1X_DSPTEST_HOST=1 exec sh $host/dsp-tools/pro1x-dsptest "$step"
+fi
+# rc's PATH has no /usr/local
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+[ -d $host/dsp-tools ] && PATH=$host/dsp-tools:$PATH
+export PATH
 RUN=dsp-$step
 npass=0
 nfail=0
@@ -88,13 +98,11 @@ state() {
 echo "=== DSP test $RUN, $(uptime_s) s after the boot, watchdog ${life:-off}"
 fw=/usr/local/share/pro1x/firmware/qcom/sm6115/Fxtec/QX1050
 ls -la $fw 2>&1 | grep -E "\.mbn|\.jsn|total" | head -20
-host=/dev/pro1x-host/freebsd
 if [ -d $host/modules ]; then
 	kldconfig -i $host/modules
 	echo "modules from $host/modules first:"
 	ls $host/modules
 fi
-[ -x $host/dsp-tools/pro1x-dsp ] && PATH=$host/dsp-tools:$PATH
 
 # --- dsp1: the substrate ------------------------------------------------------------------
 echo "--- load qcom_dsp, qrtr"
