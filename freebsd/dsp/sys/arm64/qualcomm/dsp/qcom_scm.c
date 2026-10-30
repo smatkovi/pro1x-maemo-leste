@@ -261,10 +261,9 @@ qcom_scm_pas_shutdown(uint32_t pas_id)
 }
 
 /*
- * Memory shared from this processor (HLOS) with others (Linux's
- * qcom_scm_assign_mem with HLOS as the only source): TrustZone reads the
- * source VMIDs, the region and the destinations with their permissions
- * from one buffer.
+ * Memory shared between VMs (Linux's qcom_scm_assign_mem): TrustZone reads
+ * the current owners (source VMIDs), the region and the new owners with
+ * their permissions from one buffer, each part at a 64-byte boundary.
  */
 struct scm_vmperm_info {
 	uint32_t	vmid;
@@ -280,7 +279,8 @@ struct scm_mem_map_info {
 };
 
 int
-qcom_scm_assign_mem(vm_paddr_t addr, vm_size_t size, const uint32_t *vmids,
+qcom_scm_assign_mem_from(vm_paddr_t addr, vm_size_t size,
+    const uint32_t *srcvm, int nsrc, const uint32_t *vmids,
     const uint32_t *perms, int n)
 {
 	struct scm_vmperm_info *dst;
@@ -291,7 +291,7 @@ qcom_scm_assign_mem(vm_paddr_t addr, vm_size_t size, const uint32_t *vmids,
 	char *buf;
 	int i, error;
 
-	if (n < 1 || n > 8)
+	if (n < 1 || n > 8 || nsrc < 1 || nsrc > 8)
 		return (EINVAL);
 	/* src at 0, the region at 64, the destinations at 128 */
 	buf = kmem_alloc_contig(PAGE_SIZE, M_WAITOK | M_ZERO, 0, ~(vm_paddr_t)0,
@@ -300,7 +300,8 @@ qcom_scm_assign_mem(vm_paddr_t addr, vm_size_t size, const uint32_t *vmids,
 		return (ENOMEM);
 	pa = pmap_kextract((vm_offset_t)buf);
 	src = (uint32_t *)buf;
-	src[0] = SCM_VMID_HLOS;
+	for (i = 0; i < nsrc; i++)
+		src[i] = srcvm[i];
 	map = (struct scm_mem_map_info *)(buf + 64);
 	map->addr = addr;
 	map->size = size;
@@ -312,7 +313,7 @@ qcom_scm_assign_mem(vm_paddr_t addr, vm_size_t size, const uint32_t *vmids,
 	args[0] = pa + 64;
 	args[1] = sizeof(*map);
 	args[2] = pa;
-	args[3] = sizeof(uint32_t);
+	args[3] = nsrc * sizeof(uint32_t);
 	args[4] = pa + 128;
 	args[5] = n * sizeof(*dst);
 	args[6] = 0;
@@ -320,4 +321,15 @@ qcom_scm_assign_mem(vm_paddr_t addr, vm_size_t size, const uint32_t *vmids,
 	    SCM_ARG_RO(2) | SCM_ARG_RO(4), args, 7, &result);
 	kmem_free(buf, PAGE_SIZE);
 	return (error != 0 ? error : (result != 0 ? EIO : 0));
+}
+
+/* From this processor (HLOS) only: what Linux's callers here do */
+int
+qcom_scm_assign_mem(vm_paddr_t addr, vm_size_t size, const uint32_t *vmids,
+    const uint32_t *perms, int n)
+{
+	const uint32_t hlos = SCM_VMID_HLOS;
+
+	return (qcom_scm_assign_mem_from(addr, size, &hlos, 1, vmids, perms,
+	    n));
 }

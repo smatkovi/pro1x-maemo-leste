@@ -7,6 +7,14 @@
  * may wait (for FIFO space, for an intent) and the router must not. When the
  * processor goes away, the endpoint goes in a task too (GLINK's down
  * callback runs with the edge locked).
+ *
+ * The endpoint is registered before the channel opens: the remote sends
+ * its HELLO as soon as it has one of our intents, which glink_open offers
+ * (Linux registers the endpoint in qcom_smd_qrtr_probe, before its intents
+ * go out in qcom_glink_announce_create); packets for the remote wait in
+ * the queue until the channel is up. A channel taken over from Linux
+ * (adopted) gets a HELLO from our name service, as from a node that
+ * started again, so that the remote tells its servers once more.
  */
 
 #include <sys/param.h>
@@ -86,10 +94,12 @@ ep_tx_task(void *arg, int pending)
 
 	for (;;) {
 		mtx_lock(&ep->lock);
-		if ((t = STAILQ_FIRST(&ep->txq)) != NULL) {
+		/* not open yet: they wait */
+		if (ep->ch != NULL && (t = STAILQ_FIRST(&ep->txq)) != NULL) {
 			STAILQ_REMOVE_HEAD(&ep->txq, link);
 			ep->ntx--;
-		}
+		} else
+			t = NULL;
 		mtx_unlock(&ep->lock);
 		if (t == NULL)
 			break;
@@ -122,7 +132,8 @@ ep_down_task(void *arg, int pending)
 	qrtr_endpoint_unregister(ep->node);
 	ep->node = NULL;
 	taskqueue_drain(ep->tq, &ep->tx_task);
-	glink_close(ep->ch);
+	if (ep->ch != NULL)
+		glink_close(ep->ch);
 	while ((t = STAILQ_FIRST(&ep->txq)) != NULL) {
 		STAILQ_REMOVE_HEAD(&ep->txq, link);
 		free(t, M_QRTRGL);
@@ -154,7 +165,9 @@ static void
 ipcrtr_announced(void *arg, struct glink_edge *edge, const char *label,
     const char *channel)
 {
+	struct glink_channel *ch;
 	struct qrtr_gl_ep *ep;
+	struct txpkt *t;
 	int error;
 
 	ep = malloc(sizeof(*ep), M_QRTRGL, M_WAITOK | M_ZERO);
@@ -165,20 +178,36 @@ ipcrtr_announced(void *arg, struct glink_edge *edge, const char *label,
 	ep->tq = taskqueue_create("qrtr_glink", M_WAITOK,
 	    taskqueue_thread_enqueue, &ep->tq);
 	taskqueue_start_threads(&ep->tq, 1, PI_NET, "qrtr %s", label);
+	/* before our intents go out: the remote's HELLO may come at once */
+	ep->node = qrtr_endpoint_register(ep_xmit, ep);
 	error = glink_open(edge, channel, IPCRTR_INTENTS, IPCRTR_INTENT_SIZE,
-	    ep_rx, ep_state, ep, OPEN_TIMEOUT_MS, &ep->ch);
+	    ep_rx, ep_state, ep, OPEN_TIMEOUT_MS, &ch);
 	if (error != 0) {
 		printf("qrtr_glink: %s: open %s: %d\n", label, channel, error);
+		qrtr_endpoint_unregister(ep->node);
+		ep->node = NULL;
+		taskqueue_drain(ep->tq, &ep->tx_task);
+		while ((t = STAILQ_FIRST(&ep->txq)) != NULL) {
+			STAILQ_REMOVE_HEAD(&ep->txq, link);
+			free(t, M_QRTRGL);
+		}
 		taskqueue_free(ep->tq);
 		mtx_destroy(&ep->lock);
 		free(ep, M_QRTRGL);
 		return;
 	}
-	ep->node = qrtr_endpoint_register(ep_xmit, ep);
+	mtx_lock(&ep->lock);
+	ep->ch = ch;
+	mtx_unlock(&ep->lock);
 	mtx_lock(&eps_lock);
 	LIST_INSERT_HEAD(&eps, ep, link);
 	mtx_unlock(&eps_lock);
-	printf("qrtr_glink: %s up\n", label);
+	/* what waited for the channel */
+	taskqueue_enqueue(ep->tq, &ep->tx_task);
+	printf("qrtr_glink: %s up%s\n", label,
+	    glink_channel_adopted(ch) ? " (Linux's channel adopted)" : "");
+	if (glink_channel_adopted(ch))
+		qrtr_endpoint_hello(ep->node);
 }
 
 void

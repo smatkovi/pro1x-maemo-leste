@@ -6,7 +6,13 @@
  * modem reads and writes its EFS partitions. The region is shared with the
  * modem's VMIDs (qcom,vmid) through TrustZone, and rmtfs reaches it as
  * /dev/qcom_rmtfs_mem<client-id> (read, write, mmap). Linux's sysfs
- * attributes are sysctls here: hw.qcom_rmtfs.phys_addr, size, client_id.
+ * attributes are sysctls here: hw.qcom_rmtfs.phys_addr, size, client_id;
+ * hw.qcom_rmtfs.assigned is the outcome of the sharing (0: done).
+ *
+ * After a kexec from a Linux that probed rmtfs_mem (Leste: the modem
+ * running, taken over), the region is already the modem's too: the call
+ * from this processor alone fails, and it is made again with this
+ * processor and the modem's VMIDs as the owners, which leaves it as it is.
  */
 
 #include <sys/param.h>
@@ -28,9 +34,10 @@ static struct {
 	vm_paddr_t	pa;
 	vm_size_t	size;
 	uint32_t	client_id;
+	int		assigned;	/* the SCM call's result, -1: none */
 	char		*va;
 	struct cdev	*cdev;
-} rmtfs;
+} rmtfs = { .assigned = -1 };
 
 static SYSCTL_NODE(_hw, OID_AUTO, qcom_rmtfs, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
     "The modem's remote file system memory");
@@ -40,6 +47,8 @@ SYSCTL_U64(_hw_qcom_rmtfs, OID_AUTO, size, CTLFLAG_RD, &rmtfs.size, 0,
     "Size in bytes");
 SYSCTL_U32(_hw_qcom_rmtfs, OID_AUTO, client_id, CTLFLAG_RD, &rmtfs.client_id,
     0, "rmtfs client id");
+SYSCTL_INT(_hw_qcom_rmtfs, OID_AUTO, assigned, CTLFLAG_RD, &rmtfs.assigned,
+    0, "Shared with the modem's VMIDs: 0 done, -1 not asked, else the error");
 
 static int
 rmtfs_rw(struct cdev *dev, struct uio *uio, int flags)
@@ -94,6 +103,11 @@ qcom_rmtfs_init(void)
 	}
 	rmtfs.pa = (vm_paddr_t)reg[0] << 32 | reg[1];
 	rmtfs.size = (vm_size_t)reg[2] << 32 | reg[3];
+	/* Linux: not adjacent to other protected regions */
+	if (OF_hasprop(node, "qcom,use-guard-pages") && rmtfs.size > 2 * 4096) {
+		rmtfs.pa += 4096;
+		rmtfs.size -= 2 * 4096;
+	}
 	rmtfs.va = pmap_mapdev_attr(rmtfs.pa, rmtfs.size,
 	    VM_MEMATTR_WRITE_COMBINING);
 
@@ -113,6 +127,15 @@ qcom_rmtfs_init(void)
 		printf("qcom_rmtfs: %#jx+%#jx shared with VMIDs %u,%u: %d\n",
 		    (uintmax_t)rmtfs.pa, (uintmax_t)rmtfs.size, vm[0],
 		    nvm > 1 ? vm[1] : 0, error);
+		if (error != 0) {
+			/* shared already (by a Linux before the kexec)? */
+			error = qcom_scm_assign_mem_from(rmtfs.pa, rmtfs.size,
+			    vmids, nvm + 1, vmids, perms, nvm + 1);
+			printf("qcom_rmtfs: again, from VMIDs %u,%u,%u (shared "
+			    "before?): %d\n", vmids[0], vmids[1],
+			    nvm > 1 ? vmids[2] : 0, error);
+		}
+		rmtfs.assigned = error;
 	}
 	rmtfs.cdev = make_dev(&rmtfs_cdevsw, 0, UID_ROOT, GID_WHEEL, 0600,
 	    "qcom_rmtfs_mem%u", rmtfs.client_id);

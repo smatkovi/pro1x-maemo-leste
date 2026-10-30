@@ -27,6 +27,10 @@ int	qcom_scm_pas_shutdown(uint32_t pas_id);
 #define	QCOM_SCM_PERM_RW	0x6
 int	qcom_scm_assign_mem(vm_paddr_t addr, vm_size_t size,
 	    const uint32_t *vmids, const uint32_t *perms, int n);
+/* the same from the current owners srcvm (Linux's srcvm bits) */
+int	qcom_scm_assign_mem_from(vm_paddr_t addr, vm_size_t size,
+	    const uint32_t *srcvm, int nsrc, const uint32_t *vmids,
+	    const uint32_t *perms, int n);
 
 /* Shared memory (qcom_smem.c); host: the remote's SMEM host id, or ANY */
 #define	QCOM_SMEM_HOST_ANY	(-1)
@@ -47,6 +51,8 @@ int	qcom_smp2p_in_watch(phandle_t entry, u_int bit, qcom_smp2p_cb_t *cb,
 void	qcom_smp2p_in_unwatch(phandle_t entry, u_int bit);
 int	qcom_smp2p_in_read(phandle_t entry, uint32_t *value);
 int	qcom_smp2p_out_update(phandle_t entry, uint32_t mask, uint32_t value);
+/* every edge's items and entries with their values, on the console */
+void	qcom_smp2p_report(void);
 
 /* GLINK over SMEM (qcom_glink.c), the edges of the remote processors */
 struct glink_edge;
@@ -54,6 +60,9 @@ struct glink_edge;
 typedef void qcom_glink_user_cb_t(void *arg, struct glink_edge *edge,
     const char *label, const char *channel);
 int	qcom_glink_edge_start(device_t dev, phandle_t rproc, void **cookie);
+/* the edge of a processor Linux left running: its FIFOs and channels as
+ * they are (a kexec from Leste) */
+int	qcom_glink_edge_adopt(device_t dev, phandle_t rproc, void **cookie);
 void	qcom_glink_edge_stop(void *cookie);
 void	qcom_glink_register(const char *channel, qcom_glink_user_cb_t *cb,
 	    void *arg);

@@ -37,6 +37,7 @@ qcom_dsp_modevent(module_t mod, int what, void *arg)
 		printf("qcom_dsp: secure monitor %s (%d)\n",
 		    error == 0 ? "answers" : "does not answer", error);
 		qcom_smem_report();
+		qcom_smp2p_report();
 		/* the modem's EFS memory, shared with it before it starts */
 		qcom_rmtfs_init();
 		return (0);
@@ -54,6 +55,10 @@ static moduledata_t qcom_dsp_mod = {
 	NULL
 };
 
-/* before the drivers attach (SI_SUB_DRIVERS) */
+/*
+ * After the drivers of this module attached (their DRIVER_MODULEs run at
+ * SI_SUB_DRIVERS, before SI_SUB_CONFIGURE): SMEM is set up by its first
+ * user, so the order does not matter; the report comes after their lines.
+ */
 DECLARE_MODULE(qcom_dsp, qcom_dsp_mod, SI_SUB_CONFIGURE, SI_ORDER_FIRST);
 MODULE_VERSION(qcom_dsp, 1);

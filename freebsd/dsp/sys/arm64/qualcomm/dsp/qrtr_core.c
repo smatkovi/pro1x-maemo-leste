@@ -77,6 +77,7 @@ struct qrtr_node {
 	bool		gone;
 	int		refs;
 	TAILQ_HEAD(, flow) flows;
+	u_int		rx, tx, hellos;
 };
 
 /* node ids reached through an endpoint (a node may bridge others) */
@@ -242,6 +243,8 @@ node_enqueue(struct qrtr_node *n, int type, uint32_t src_node,
 	if (len != 0)
 		memcpy(h + 1, data, len);
 	error = n->gone ? ENODEV : n->xmit(n->arg, h, plen);
+	if (error == 0)
+		n->tx++;
 	glink_free(h);
 	if (error != 0 && confirm &&
 	    (f = flow_get(n, dst_node, dst_port, false)) != NULL)
@@ -489,6 +492,9 @@ qrtr_endpoint_post(struct qrtr_node *n, const void *data, size_t len)
 	(void)dst_node;
 
 	glink_lock(&r.lock);
+	n->rx++;
+	if (type == QRTR_TYPE_HELLO)
+		n->hellos++;
 	node_assign(n, src_node);
 	if (type == QRTR_TYPE_NEW_SERVER)
 		node_assign(n, pkt->server.node);
@@ -520,24 +526,30 @@ qrtr_endpoint_post(struct qrtr_node *n, const void *data, size_t len)
 	return (0);
 }
 
-/* The endpoint is gone: the name service hears a BYE from its node */
+/*
+ * The endpoint is gone: the name service hears a BYE from every node it
+ * reached (Linux's qrtr_endpoint_unregister: one per node id routed
+ * through it, a node may bridge others)
+ */
 void
 qrtr_endpoint_unregister(struct qrtr_node *n)
 {
 	struct qrtr_ctrl_pkt bye;
 	struct nid_map *m, *next;
 	struct flow *f;
-	uint32_t nid;
+	uint32_t nids[16];
+	int i, count = 0;
 
 	glink_lock(&r.lock);
 	n->gone = true;
-	nid = n->nid;
 	glink_broadcast(&r.cond);
 	while (n->refs > 0)
 		glink_cond_wait(&r.cond, &r.lock, 100);
 	for (m = TAILQ_FIRST(&r.nids); m != NULL; m = next) {
 		next = TAILQ_NEXT(m, link);
 		if (m->node == n) {
+			if (count < (int)nitems(nids))
+				nids[count++] = m->nid;
 			TAILQ_REMOVE(&r.nids, m, link);
 			glink_free(m);
 		}
@@ -549,12 +561,53 @@ qrtr_endpoint_unregister(struct qrtr_node *n)
 	}
 	glink_unlock(&r.lock);
 	glink_free(n);
-	if (nid == QRTR_NODE_BCAST)
-		return;
-	memset(&bye, 0, sizeof(bye));
-	bye.cmd = QRTR_TYPE_BYE;
-	deliver_local(nid, QRTR_PORT_CTRL, QRTR_PORT_CTRL, QRTR_TYPE_BYE, &bye,
-	    sizeof(bye));
+	for (i = 0; i < count; i++) {
+		memset(&bye, 0, sizeof(bye));
+		bye.cmd = QRTR_TYPE_BYE;
+		deliver_local(nids[i], QRTR_PORT_CTRL, QRTR_PORT_CTRL,
+		    QRTR_TYPE_BYE, &bye, sizeof(bye));
+	}
+}
+
+void
+qrtr_endpoint_hello(struct qrtr_node *n)
+{
+	struct qrtr_ctrl_pkt hello;
+
+	memset(&hello, 0, sizeof(hello));
+	hello.cmd = QRTR_TYPE_HELLO;
+	glink_lock(&r.lock);
+	if (!n->gone) {
+		n->refs++;
+		node_enqueue(n, QRTR_TYPE_HELLO, QRTR_LOCAL_NODE, QRTR_PORT_CTRL,
+		    n->nid, QRTR_PORT_CTRL, &hello, sizeof(hello));
+		if (--n->refs == 0 && n->gone)
+			glink_broadcast(&r.cond);
+	}
+	glink_unlock(&r.lock);
+}
+
+void
+qrtr_nodes(qrtr_node_cb_t *cb, void *arg)
+{
+	struct qrtr_node_info ni;
+	struct qrtr_node *n;
+	struct nid_map *m;
+
+	glink_lock(&r.lock);
+	TAILQ_FOREACH(n, &r.nodes, link) {
+		memset(&ni, 0, sizeof(ni));
+		ni.nid = n->nid;
+		TAILQ_FOREACH(m, &r.nids, link)
+			if (m->node == n && ni.nnids < (int)nitems(ni.nids))
+				ni.nids[ni.nnids++] = m->nid;
+		ni.rx = n->rx;
+		ni.tx = n->tx;
+		ni.hellos = n->hellos;
+		ni.gone = n->gone;
+		cb(arg, &ni);
+	}
+	glink_unlock(&r.lock);
 }
 
 /* --- the name service ------------------------------------------------------------------------ */

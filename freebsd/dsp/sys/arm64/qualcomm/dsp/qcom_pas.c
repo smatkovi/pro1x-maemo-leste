@@ -12,9 +12,26 @@
  * The firmware itself is read by a loader in userspace (pro1x-dsp), which
  * parses it as Linux's mdt_loader does and hands this driver the pieces
  * through /dev/qcom_pas/<name> (qcom_pas_ioctl.h): the modem's image alone
- * is 51 MB. Linux also votes the processor's power domains and clocks
- * (rpmpd, xo) until the handover; FreeBSD has no RPM driver and relies on
- * what the boot left voted (freebsd/dsp/README.md, risks).
+ * is 51 MB.
+ *
+ * Linux votes a processor's proxy power domains and its xo clock from the
+ * start until the handover bit (qcom_pas_start, qcom_pas_handover): for
+ * the SM6115 only the modem has one, "cx" (sc8180x_mpss_resource; the
+ * ADSP's and CDSP's data have no proxy_pd_names). The xo clock stays on
+ * while this processor runs. The modem's CX vote is sent here as Linux's
+ * rpmpd sends it (resource "rwcx" 0: "swen" 1, "vlvl" the SoC's highest
+ * level, active and sleep set) when hw.qcom_pas.proxy_votes=1 (loader
+ * tunable; off by default: it goes over the RPM's channel, device run
+ * dsp7a). Linux lowers CX again at the handover to what its other
+ * consumers ask; FreeBSD does not know those and leaves it.
+ *
+ * The SMP2P bits are watched (callbacks) and also read while waiting, so
+ * that a bit set before its interrupt was seen is not missed. Each event
+ * is logged with the time since the start, for the device runs.
+ *
+ * A processor Linux started (kexec from a running Leste) is taken over
+ * with QCOM_PAS_ADOPT: running if its ready bit is set, its GLINK edge
+ * taken as it is (qcom_glink_edge_adopt).
  */
 
 #include <sys/param.h>
@@ -44,18 +61,35 @@
 #include "qcom_dsp.h"
 #include "qcom_pas_ioctl.h"
 
+#include <sys/sysctl.h>
+
 #define	META_MAX		(1024 * 1024)
-#define	STOP_TIMEOUT_MS		5000
+#define	STOP_TIMEOUT_MS		5000	/* Linux's qcom_q6v5_request_stop */
+
+/* Linux's rpmpd (drivers/pmdomain/qcom/rpmpd.c, sm6115_desc) */
+#define	RPMPD_RWCX		0x78637772	/* "rwcx" */
+#define	RPMPD_KEY_ENABLE	0x6e657773	/* "swen" */
+#define	RPMPD_KEY_LEVEL		0x6c766c76	/* "vlvl" */
+#define	RPM_SMD_LEVEL_TURBO_NO_CPR 416		/* the SM6115's max_state */
 
 struct pas_data {
 	const char	*name;
 	uint32_t	pas_id;
 	u_int		crash_reason_item;
+	bool		proxy_cx;	/* Linux's proxy_pd_names "cx" */
 };
 
-static const struct pas_data adsp_data = { "adsp", 1, 423 };
-static const struct pas_data cdsp_data = { "cdsp", 18, 601 };
-static const struct pas_data mpss_data = { "modem", 4, 421 };
+/* Linux's adsp_resource_init, cdsp_resource_init, sc8180x_mpss_resource */
+static const struct pas_data adsp_data = { "adsp", 1, 423, false };
+static const struct pas_data cdsp_data = { "cdsp", 18, 601, false };
+static const struct pas_data mpss_data = { "modem", 4, 421, true };
+
+static int pas_proxy_votes;
+SYSCTL_NODE(_hw, OID_AUTO, qcom_pas, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "Qualcomm remote processors");
+SYSCTL_INT(_hw_qcom_pas, OID_AUTO, proxy_votes, CTLFLAG_RWTUN,
+    &pas_proxy_votes, 0,
+    "Vote the modem's CX at the RPM for its start, as Linux (1)");
 
 static struct ofw_compat_data compat_data[] = {
 	{ "qcom,sm6115-adsp-pas",	(uintptr_t)&adsp_data },
@@ -95,6 +129,11 @@ struct pas_softc {
 	char		crash_reason[128];
 	void		*glink;		/* the GLINK edge while running */
 	struct task	crash_task;
+	sbintime_t	t_start;	/* of the last start, for the log */
+	bool		stopping;	/* a watchdog now is the stop's end */
+	bool		cx_voted;
+	/* set at the start (left from before): counts once seen clear */
+	bool		stale[IN_COUNT];
 };
 
 static d_ioctl_t pas_ioctl;
@@ -124,6 +163,35 @@ pas_crash_reason(struct pas_softc *sc)
 	sc->crash_reason[len] = '\0';
 }
 
+static u_int
+pas_ms(struct pas_softc *sc)
+{
+	return ((u_int)((getsbinuptime() - sc->t_start) / SBT_1MS));
+}
+
+/* An SMP2P bit of the processor came up (callback or read); with sc->mtx */
+static void
+pas_event(struct pas_softc *sc, int i, const char *how)
+{
+	if ((sc->flags & in_flags[i]) != 0)
+		return;
+	sc->flags |= in_flags[i];
+	if (sc->state == QCOM_PAS_STATE_OFF && i != IN_FATAL)
+		return;
+	device_printf(sc->dev, "%s: %s after %u ms%s\n", sc->data->name,
+	    in_names[i], pas_ms(sc), how);
+	if (i == IN_FATAL && sc->state != QCOM_PAS_STATE_OFF) {
+		sc->state = QCOM_PAS_STATE_CRASHED;
+		pas_crash_reason(sc);
+		device_printf(sc->dev, "%s: fatal error: %s\n", sc->data->name,
+		    sc->crash_reason[0] != '\0' ? sc->crash_reason :
+		    "(no message in SMEM)");
+		taskqueue_enqueue(taskqueue_thread, &sc->crash_task);
+	}
+	if (i == IN_READY && sc->state == QCOM_PAS_STATE_LOADING)
+		sc->state = QCOM_PAS_STATE_RUNNING;
+}
+
 static void
 pas_in_cb(void *arg, u_int bit, bool set)
 {
@@ -136,19 +204,44 @@ pas_in_cb(void *arg, u_int bit, bool set)
 	for (i = 0; i < IN_COUNT; i++) {
 		if (sc->in[i].xref == 0 || sc->in[i].bit != bit)
 			continue;
-		sc->flags |= in_flags[i];
-		if (i == IN_FATAL) {
-			sc->state = QCOM_PAS_STATE_CRASHED;
-			pas_crash_reason(sc);
-			device_printf(sc->dev, "fatal error: %s\n",
-			    sc->crash_reason);
-			taskqueue_enqueue(taskqueue_thread, &sc->crash_task);
-		}
-		if (i == IN_READY && sc->state == QCOM_PAS_STATE_LOADING)
-			sc->state = QCOM_PAS_STATE_RUNNING;
+		pas_event(sc, i, "");
 	}
 	wakeup(sc);
 	mtx_unlock(&sc->mtx);
+}
+
+/*
+ * The bits as they are now: a bit whose interrupt was missed (or came
+ * before the watch) is seen here. With sc->mtx.
+ */
+static void
+pas_poll_bits(struct pas_softc *sc)
+{
+	uint32_t v;
+	int i;
+
+	for (i = 0; i < IN_COUNT; i++) {
+		if (sc->in[i].xref == 0 ||
+		    qcom_smp2p_in_read(sc->in[i].xref, &v) != 0)
+			continue;
+		if ((v & (1U << sc->in[i].bit)) == 0)
+			sc->stale[i] = false;
+		else if (!sc->stale[i])
+			pas_event(sc, i, " (read, no interrupt)");
+	}
+}
+
+/* The bits as the start finds them: what is set is from before */
+static void
+pas_mark_stale(struct pas_softc *sc)
+{
+	uint32_t v;
+	int i;
+
+	for (i = 0; i < IN_COUNT; i++)
+		sc->stale[i] = sc->in[i].xref != 0 &&
+		    qcom_smp2p_in_read(sc->in[i].xref, &v) == 0 &&
+		    (v & (1U << sc->in[i].bit)) != 0;
 }
 
 static void
@@ -158,10 +251,18 @@ pas_wdog_intr(void *arg)
 
 	mtx_lock(&sc->mtx);
 	sc->flags |= QCOM_PAS_F_WDOG;
-	if (sc->state != QCOM_PAS_STATE_OFF) {
+	if (sc->stopping) {
+		/* Linux: "Sometimes the stop triggers a watchdog rather than a
+		 * stop-ack" */
+		sc->flags |= QCOM_PAS_F_STOP_ACK;
+		device_printf(sc->dev, "%s: watchdog while stopping: stopped\n",
+		    sc->data->name);
+	} else if (sc->state != QCOM_PAS_STATE_OFF) {
 		sc->state = QCOM_PAS_STATE_CRASHED;
 		pas_crash_reason(sc);
-		device_printf(sc->dev, "watchdog: %s\n", sc->crash_reason);
+		device_printf(sc->dev, "%s: watchdog after %u ms: %s\n",
+		    sc->data->name, pas_ms(sc), sc->crash_reason[0] != '\0' ?
+		    sc->crash_reason : "(no message in SMEM)");
 		taskqueue_enqueue(taskqueue_thread, &sc->crash_task);
 	}
 	wakeup(sc);
@@ -191,7 +292,11 @@ pas_wait(struct pas_softc *sc, uint32_t flags, u_int ms)
 
 	end = getsbinuptime() + ms * SBT_1MS;
 	mtx_lock(&sc->mtx);
-	while ((sc->flags & flags) == 0 && sc->state != QCOM_PAS_STATE_CRASHED) {
+	for (;;) {
+		pas_poll_bits(sc);
+		if ((sc->flags & flags) != 0 ||
+		    sc->state == QCOM_PAS_STATE_CRASHED)
+			break;
 		if (getsbinuptime() >= end) {
 			error = EWOULDBLOCK;
 			break;
@@ -269,15 +374,46 @@ pas_load(struct pas_softc *sc, struct qcom_pas_segment *seg)
 	return (0);
 }
 
+/* Linux's proxy vote for the modem's start: rpmpd_power_on, set_performance */
+static void
+pas_proxy_vote(struct pas_softc *sc)
+{
+	const uint32_t on[2] = { RPMPD_KEY_ENABLE, 1 };
+	const uint32_t lvl[2] = { RPMPD_KEY_LEVEL, RPM_SMD_LEVEL_TURBO_NO_CPR };
+	int e1, e2, e3;
+
+	if (!sc->data->proxy_cx || !pas_proxy_votes || sc->cx_voted)
+		return;
+	e1 = qcom_rpm_write(0, RPMPD_RWCX, 0, on, 1);
+	e2 = qcom_rpm_write(0, RPMPD_RWCX, 0, lvl, 1);
+	e3 = qcom_rpm_write(1, RPMPD_RWCX, 0, lvl, 1);
+	sc->cx_voted = e1 == 0 && e2 == 0 && e3 == 0;
+	device_printf(sc->dev, "%s: proxy vote CX (rwcx 0) on, level %u: %s "
+	    "(%d %d %d)\n", sc->data->name, RPM_SMD_LEVEL_TURBO_NO_CPR,
+	    sc->cx_voted ? "done" : "FAILED", e1, e2, e3);
+}
+
 static int
 pas_start(struct pas_softc *sc, uint32_t timeout_ms)
 {
+	uint32_t v;
 	int error;
 
 	if (sc->state != QCOM_PAS_STATE_LOADING)
 		return (EINVAL);
 	if ((error = pas_watch(sc, true)) != 0)
 		return (error);
+	/* bits set before the start are not this start's: noted, not taken */
+	if (sc->in[IN_READY].xref != 0 &&
+	    qcom_smp2p_in_read(sc->in[IN_READY].xref, &v) == 0 && v != 0)
+		device_printf(sc->dev, "%s: SMP2P bits %#x before the start\n",
+		    sc->data->name, v);
+	pas_proxy_vote(sc);
+	mtx_lock(&sc->mtx);
+	sc->flags = 0;
+	sc->t_start = getsbinuptime();
+	pas_mark_stale(sc);
+	mtx_unlock(&sc->mtx);
 	/* the image in memory before TrustZone looks at it */
 	wmb();
 	error = qcom_scm_pas_auth_and_reset(sc->data->pas_id);
@@ -289,11 +425,17 @@ pas_start(struct pas_softc *sc, uint32_t timeout_ms)
 		mtx_unlock(&sc->mtx);
 		return (error);
 	}
+	device_printf(sc->dev, "%s: authenticated, out of reset; waiting %u ms "
+	    "for ready\n", sc->data->name, MAX(timeout_ms, 100));
 	error = pas_wait(sc, QCOM_PAS_F_READY, MAX(timeout_ms, 100));
 	pas_meta_free(sc);
 	if (error != 0) {
-		device_printf(sc->dev, "no ready (%d), shutting it down\n",
-		    error);
+		v = 0;
+		if (sc->in[IN_READY].xref != 0)
+			qcom_smp2p_in_read(sc->in[IN_READY].xref, &v);
+		device_printf(sc->dev, "%s: no ready (%d) after %u ms, SMP2P "
+		    "bits %#x; shutting it down\n", sc->data->name, error,
+		    pas_ms(sc), v);
 		qcom_scm_pas_shutdown(sc->data->pas_id);
 		mtx_lock(&sc->mtx);
 		if (sc->state != QCOM_PAS_STATE_CRASHED)
@@ -301,9 +443,57 @@ pas_start(struct pas_softc *sc, uint32_t timeout_ms)
 		mtx_unlock(&sc->mtx);
 		return (error == EWOULDBLOCK ? ETIMEDOUT : error);
 	}
-	device_printf(sc->dev, "running\n");
+	device_printf(sc->dev, "%s: running (ready after %u ms)\n",
+	    sc->data->name, pas_ms(sc));
 	/* its channels: GLINK over SMEM, when it has an edge */
 	if (qcom_glink_edge_start(sc->dev, ofw_bus_get_node(sc->dev),
+	    &sc->glink) != 0)
+		sc->glink = NULL;
+	return (0);
+}
+
+/*
+ * A processor Linux started and left running (a kexec from Leste): taken
+ * over if its ready bit is set and no fatal one, with its GLINK edge as it
+ * is. Nothing goes to TrustZone.
+ */
+static int
+pas_adopt(struct pas_softc *sc)
+{
+	uint32_t v = 0;
+	int error;
+
+	if (sc->state == QCOM_PAS_STATE_RUNNING)
+		return (0);
+	if (sc->state != QCOM_PAS_STATE_OFF)
+		return (EBUSY);
+	if ((error = pas_watch(sc, true)) != 0)
+		return (error);
+	if (sc->in[IN_READY].xref == 0 ||
+	    qcom_smp2p_in_read(sc->in[IN_READY].xref, &v) != 0) {
+		device_printf(sc->dev, "%s: adopt: no SMP2P entry of the "
+		    "remote (not started?)\n", sc->data->name);
+		return (ENXIO);
+	}
+	if ((v & (1U << sc->in[IN_READY].bit)) == 0 ||
+	    (sc->in[IN_FATAL].xref != 0 &&
+	    (v & (1U << sc->in[IN_FATAL].bit)) != 0)) {
+		device_printf(sc->dev, "%s: adopt: SMP2P bits %#x: not running\n",
+		    sc->data->name, v);
+		return (ENXIO);
+	}
+	mtx_lock(&sc->mtx);
+	sc->t_start = getsbinuptime();
+	sc->state = QCOM_PAS_STATE_RUNNING;
+	sc->flags = QCOM_PAS_F_READY | QCOM_PAS_F_ADOPTED;
+	if (sc->in[IN_HANDOVER].xref != 0 &&
+	    (v & (1U << sc->in[IN_HANDOVER].bit)) != 0)
+		sc->flags |= QCOM_PAS_F_HANDOVER;
+	sc->crash_reason[0] = '\0';
+	mtx_unlock(&sc->mtx);
+	device_printf(sc->dev, "%s: adopted, running (SMP2P bits %#x)\n",
+	    sc->data->name, v);
+	if (qcom_glink_edge_adopt(sc->dev, ofw_bus_get_node(sc->dev),
 	    &sc->glink) != 0)
 		sc->glink = NULL;
 	return (0);
@@ -321,17 +511,26 @@ pas_stop(struct pas_softc *sc)
 		sc->glink = NULL;
 	}
 	if (sc->stop_xref != 0 && sc->state == QCOM_PAS_STATE_RUNNING) {
+		mtx_lock(&sc->mtx);
+		sc->stopping = true;
+		sc->flags &= ~QCOM_PAS_F_STOP_ACK;
+		sc->t_start = getsbinuptime();
+		pas_mark_stale(sc);
+		mtx_unlock(&sc->mtx);
 		qcom_smp2p_out_update(sc->stop_xref, 1U << sc->stop_bit,
 		    1U << sc->stop_bit);
 		if (pas_wait(sc, QCOM_PAS_F_STOP_ACK, STOP_TIMEOUT_MS) != 0)
-			device_printf(sc->dev, "no stop acknowledgement\n");
+			device_printf(sc->dev, "%s: no stop acknowledgement in "
+			    "%u ms\n", sc->data->name, STOP_TIMEOUT_MS);
 		qcom_smp2p_out_update(sc->stop_xref, 1U << sc->stop_bit, 0);
 	}
 	error = qcom_scm_pas_shutdown(sc->data->pas_id);
 	if (error != 0)
-		device_printf(sc->dev, "PAS shutdown: %d\n", error);
+		device_printf(sc->dev, "%s: PAS shutdown: %d\n", sc->data->name,
+		    error);
 	mtx_lock(&sc->mtx);
 	sc->state = QCOM_PAS_STATE_OFF;
+	sc->stopping = false;
 	mtx_unlock(&sc->mtx);
 	return (error);
 }
@@ -373,6 +572,9 @@ pas_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 	case QCOM_PAS_SHUTDOWN:
 		error = qcom_scm_pas_shutdown(sc->data->pas_id);
 		break;
+	case QCOM_PAS_ADOPT:
+		error = pas_adopt(sc);
+		break;
 	case QCOM_PAS_STATUS:
 		st = (struct qcom_pas_status *)data;
 		memset(st, 0, sizeof(*st));
@@ -383,8 +585,10 @@ pas_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 		    qcom_smp2p_in_read(sc->in[IN_READY].xref, &v) == 0)
 			st->smp2p_in = v;
 		mtx_lock(&sc->mtx);
+		pas_poll_bits(sc);
 		st->state = sc->state;
 		st->flags = sc->flags;
+		st->ms = sc->t_start != 0 ? pas_ms(sc) : 0;
 		strlcpy(st->crash_reason, sc->crash_reason,
 		    sizeof(st->crash_reason));
 		mtx_unlock(&sc->mtx);

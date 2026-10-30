@@ -12,6 +12,19 @@
  * Linux makes inbound entries interrupt controllers; here the users of a
  * bit (qcom_pas.c) register a callback for it, or read the value, by the
  * xref of the entry's device tree node.
+ *
+ * As Linux's qcom_smp2p_start_in and qcom_smp2p_notify_in: an entry found
+ * at attach starts from its value then (nothing is reported for what was
+ * set before), one the remote adds later starts from 0, so that the bits
+ * it already has when it first appears (a DSP that set "ready" before its
+ * interrupt was seen) are reported as changes.
+ *
+ * After a kexec the items stay in SMEM. Linux zeroes its outbound item
+ * when it probes; here, when the remote's item shows it running (a DSP
+ * Linux started, taken over: pro1x-dsp adopt), the values of our entries
+ * and the restart acknowledgement are kept, so that it sees no change.
+ *
+ *   sysctl hw.qcom_smp2p     each edge: pids, items, entries and values
  */
 
 #include <sys/param.h>
@@ -24,6 +37,8 @@
 #include <sys/mutex.h>
 #include <sys/queue.h>
 #include <sys/rman.h>
+#include <sys/sbuf.h>
+#include <sys/sysctl.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
@@ -90,9 +105,15 @@ struct smp2p_softc {
 	struct smp2p_item *in, *out;
 	u_int		valid_in;	/* inbound entries matched so far */
 	bool		negotiated, ssr_ack_enabled, ssr_ack;
+	bool		kept;		/* the remote was up: our values kept */
+	u_int		nintr;		/* interrupts from the remote */
+	u_int		version;	/* ours, as negotiated */
 	struct smp2p_entry *entries[SMP2P_MAX_ENTRY];
 	int		nentries;
+	TAILQ_ENTRY(smp2p_softc) link;	/* for the report */
 };
+
+static TAILQ_HEAD(, smp2p_softc) smp2p_devs = TAILQ_HEAD_INITIALIZER(smp2p_devs);
 
 static TAILQ_HEAD(, smp2p_entry) smp2p_all = TAILQ_HEAD_INITIALIZER(smp2p_all);
 static struct mtx smp2p_list_lock;
@@ -118,9 +139,13 @@ entry_find(phandle_t xref)
 	return (e);
 }
 
-/* The remote's item, and our inbound entries' values in it */
+/*
+ * The remote's item, and our inbound entries' values in it. baseline: at
+ * attach, an entry found starts from its current value; later ones start
+ * from 0 (their set bits are news).
+ */
 static void
-smp2p_match_in(struct smp2p_softc *sc)
+smp2p_match_in(struct smp2p_softc *sc, bool baseline)
 {
 	char name[SMP2P_NAME_LEN];
 	struct smp2p_entry *e;
@@ -143,7 +168,7 @@ smp2p_match_in(struct smp2p_softc *sc)
 			if (e->inbound && e->value == NULL &&
 			    strcmp(name, e->name) == 0) {
 				e->value = &sc->in->entries[i].value;
-				e->last = *e->value;
+				e->last = baseline ? *e->value : 0;
 			}
 		}
 	}
@@ -185,7 +210,8 @@ smp2p_intr(void *arg)
 
 	n = 0;
 	mtx_lock(&sc->lock);
-	smp2p_match_in(sc);
+	sc->nintr++;
+	smp2p_match_in(sc, false);
 	if (sc->in == NULL || ITEM_VERSION(sc->in) == 0)
 		goto out;
 	if (!sc->negotiated)
@@ -244,27 +270,67 @@ smp2p_probe(device_t dev)
 	return (BUS_PROBE_DEFAULT);
 }
 
-static int
-smp2p_alloc_out(struct smp2p_softc *sc)
+/* The remote's item's version, 0 without one (Linux's qcom_smp2p_in_version) */
+static u_int
+smp2p_in_version(struct smp2p_softc *sc)
 {
-	struct smp2p_item *out;
+	struct smp2p_item *in;
 	int error;
 
+	in = qcom_smem_get(sc->remote_pid, sc->item[0], NULL, &error);
+	return (in != NULL ? ITEM_VERSION(in) : 0);
+}
+
+/*
+ * Our item. Linux's qcom_smp2p_alloc_outbound_item, but with the remote
+ * up (its item there, with a version), the values Linux left in our
+ * entries are kept: kept_val[] by name, *kept_flags the flags.
+ */
+static int
+smp2p_alloc_out(struct smp2p_softc *sc, char kept_name[][SMP2P_NAME_LEN],
+    uint32_t *kept_val, int *nkept, uint32_t *kept_flags)
+{
+	struct smp2p_item *out;
+	u_int in_version;
+	int i, error;
+
+	*nkept = 0;
+	*kept_flags = 0;
 	error = qcom_smem_alloc(sc->remote_pid, sc->item[1], sizeof(*out));
 	if (error != 0 && error != EEXIST)
 		return (error);
 	out = qcom_smem_get(sc->remote_pid, sc->item[1], NULL, &error);
 	if (out == NULL)
 		return (error);
+	in_version = smp2p_in_version(sc);
+	if (in_version > SMP2P_VERSION) {
+		device_printf(sc->dev, "remote's version %u, at most %u known\n",
+		    in_version, SMP2P_VERSION);
+		return (EINVAL);
+	}
+	if (in_version != 0 && out->magic == SMP2P_MAGIC) {
+		/* the remote runs: what it reads from us stays as it was */
+		for (i = 0; i < MIN(out->valid_entries, SMP2P_MAX_ENTRY); i++) {
+			memcpy(kept_name[i], out->entries[i].name, SMP2P_NAME_LEN);
+			kept_name[i][SMP2P_NAME_LEN - 1] = '\0';
+			kept_val[i] = out->entries[i].value;
+		}
+		*nkept = i;
+		*kept_flags = out->flags;
+		sc->kept = true;
+	}
 	memset(out, 0, sizeof(*out));
 	out->magic = SMP2P_MAGIC;
 	out->local_pid = sc->local_pid;
 	out->remote_pid = sc->remote_pid;
 	out->total_entries = SMP2P_MAX_ENTRY;
 	out->valid_entries = 0;
+	out->flags = *kept_flags;
 	/* the header before the version that validates it */
 	wmb();
-	out->version_features = SMP2P_VERSION | (SMP2P_FEATURE_SSR_ACK << 8);
+	sc->version = in_version != 0 ? in_version : SMP2P_VERSION;
+	out->version_features = sc->version | (SMP2P_FEATURE_SSR_ACK << 8);
+	sc->ssr_ack = (*kept_flags & SMP2P_FLAG_RESTART_ACK) != 0;
 	sc->out = out;
 	smp2p_kick(sc);
 	return (0);
@@ -277,7 +343,9 @@ smp2p_attach(device_t dev)
 	struct smp2p_entry *e;
 	phandle_t node, child;
 	pcell_t items[2];
-	int rid, error;
+	char kept_name[SMP2P_MAX_ENTRY][SMP2P_NAME_LEN];
+	uint32_t kept_val[SMP2P_MAX_ENTRY], kept_flags;
+	int rid, error, nkept, k;
 
 	sc->dev = dev;
 	node = ofw_bus_get_node(dev);
@@ -302,7 +370,8 @@ smp2p_attach(device_t dev)
 		device_printf(dev, "no SMEM: %d\n", error);
 		return (error);
 	}
-	if ((error = smp2p_alloc_out(sc)) != 0) {
+	if ((error = smp2p_alloc_out(sc, kept_name, kept_val, &nkept,
+	    &kept_flags)) != 0) {
 		device_printf(dev, "SMEM item %u: %d\n", sc->item[1], error);
 		return (error);
 	}
@@ -323,6 +392,12 @@ smp2p_attach(device_t dev)
 			memcpy(sc->out->entries[sc->out->valid_entries].name,
 			    e->name, SMP2P_NAME_LEN);
 			e->value = &sc->out->entries[sc->out->valid_entries].value;
+			for (k = 0; k < nkept; k++)
+				if (strcmp(kept_name[k], e->name) == 0) {
+					*e->value = kept_val[k];
+					kept_name[k][0] = '\0';
+					break;
+				}
 			sc->out->valid_entries++;
 		}
 		sc->entries[sc->nentries++] = e;
@@ -331,9 +406,12 @@ smp2p_attach(device_t dev)
 		mtx_unlock(&smp2p_list_lock);
 	}
 	mtx_lock(&sc->lock);
-	smp2p_match_in(sc);
+	smp2p_match_in(sc, true);
 	mtx_unlock(&sc->lock);
 	smp2p_kick(sc);
+	mtx_lock(&smp2p_list_lock);
+	TAILQ_INSERT_TAIL(&smp2p_devs, sc, link);
+	mtx_unlock(&smp2p_list_lock);
 
 	rid = 0;
 	sc->irq = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid, RF_ACTIVE);
@@ -345,9 +423,10 @@ smp2p_attach(device_t dev)
 	    smp2p_intr, sc, &sc->ih);
 	if (error != 0)
 		return (error);
-	device_printf(dev, "pid %u <-> %u, items %u/%u, %d entries%s\n",
+	device_printf(dev, "pid %u <-> %u, items %u/%u, %d entries%s%s\n",
 	    sc->local_pid, sc->remote_pid, sc->item[1], sc->item[0],
-	    sc->nentries, sc->in != NULL ? ", remote up" : "");
+	    sc->nentries, sc->in != NULL ? ", remote's item there" : "",
+	    sc->kept ? ", remote running: our values kept" : "");
 	return (0);
 }
 
@@ -394,7 +473,7 @@ qcom_smp2p_in_read(phandle_t xref, uint32_t *value)
 	if ((e = entry_find(xref)) == NULL || !e->inbound)
 		return (ENXIO);
 	mtx_lock(&e->sc->lock);
-	smp2p_match_in(e->sc);
+	smp2p_match_in(e->sc, false);
 	if (e->value != NULL)
 		*value = *e->value;
 	else
@@ -420,6 +499,73 @@ qcom_smp2p_out_update(phandle_t xref, uint32_t mask, uint32_t value)
 		smp2p_kick(e->sc);
 	return (0);
 }
+
+/* For the test runs: each edge's state (hw.qcom_smp2p, qcom_smp2p_report) */
+static void
+smp2p_report_sbuf(struct sbuf *sb)
+{
+	struct smp2p_softc *sc;
+	struct smp2p_entry *e;
+	int k;
+
+	mtx_lock(&smp2p_list_lock);
+	TAILQ_FOREACH(sc, &smp2p_devs, link) {
+		mtx_lock(&sc->lock);
+		smp2p_match_in(sc, false);
+		sbuf_printf(sb, "%s: pid %u<->%u items out %u in %u: remote's "
+		    "item %s, version %u, %s, %u interrupts%s\n",
+		    device_get_nameunit(sc->dev), sc->local_pid, sc->remote_pid,
+		    sc->item[1], sc->item[0],
+		    sc->in == NULL ? "absent" : ITEM_VERSION(sc->in) == 0 ?
+		    "not valid yet" : "valid",
+		    sc->in != NULL ? ITEM_VERSION(sc->in) : 0,
+		    sc->negotiated ? "negotiated" : "not negotiated",
+		    sc->nintr, sc->kept ? ", values kept from before" : "");
+		for (k = 0; k < sc->nentries; k++) {
+			e = sc->entries[k];
+			if (e->value != NULL)
+				sbuf_printf(sb, "  %s %-16s %#010x\n",
+				    e->inbound ? "in " : "out", e->name, *e->value);
+			else
+				sbuf_printf(sb, "  %s %-16s (not there)\n",
+				    e->inbound ? "in " : "out", e->name);
+		}
+		mtx_unlock(&sc->lock);
+	}
+	mtx_unlock(&smp2p_list_lock);
+}
+
+void
+qcom_smp2p_report(void)
+{
+	struct sbuf *sb;
+
+	sb = sbuf_new_auto();
+	smp2p_report_sbuf(sb);
+	sbuf_finish(sb);
+	printf("%s", sbuf_data(sb));
+	sbuf_delete(sb);
+}
+
+/* rendered with the locks held, copied out without them */
+static int
+smp2p_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct sbuf *sb;
+	int error;
+
+	sb = sbuf_new_auto();
+	sbuf_printf(sb, "\n");
+	smp2p_report_sbuf(sb);
+	if ((error = sbuf_finish(sb)) == 0)
+		error = SYSCTL_OUT(req, sbuf_data(sb), sbuf_len(sb) + 1);
+	sbuf_delete(sb);
+	return (error);
+}
+
+SYSCTL_PROC(_hw, OID_AUTO, qcom_smp2p, CTLTYPE_STRING | CTLFLAG_RD |
+    CTLFLAG_MPSAFE, NULL, 0, smp2p_sysctl, "A",
+    "SMP2P edges: items, entries and their values");
 
 static device_method_t smp2p_methods[] = {
 	DEVMETHOD(device_probe,		smp2p_probe),

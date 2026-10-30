@@ -6,6 +6,7 @@
  *
  *   pro1x-dsp start NAME [FIRMWARE]   NAME: adsp, cdsp or modem
  *   pro1x-dsp stop NAME
+ *   pro1x-dsp adopt NAME               one Linux started (kexec from Leste)
  *   pro1x-dsp status [NAME]
  *   pro1x-dsp -n start NAME FIRMWARE   only show what would be loaded
  *
@@ -14,7 +15,13 @@
  * program headers with the hash segment (the metadata), the loadable
  * segments go into the processor's memory region, relocated to its start
  * when the image says so, then TrustZone checks the image and starts the
- * processor. Default firmware: FWDIR/<name>.mbn.
+ * processor. Default firmware: FWDIR/<name>.mbn. As Linux's
+ * qcom_mdt_bins_are_split: if any segment lies beyond the file, all of
+ * them come from their .bNN files.
+ *
+ * adopt: a processor that runs already (started by Linux, which kexec'd
+ * FreeBSD) is taken over: nothing goes to TrustZone, its GLINK edge is
+ * taken as it is (freebsd/dsp/README.md, the handover).
  */
 
 #include <sys/types.h>
@@ -113,9 +120,12 @@ status(const char *name)
 	if (ioctl(fd, QCOM_PAS_STATUS, &st) < 0)
 		err(1, "%s: status", name);
 	close(fd);
-	printf("%s: %s, PAS id %u, memory %#jx+%#jx, SMP2P %#x, seen%s%s%s%s%s",
-	    name, st.state < 4 ? states[st.state] : "?", st.pas_id,
+	printf("%s: %s%s, PAS id %u, memory %#jx+%#jx, SMP2P %#x, %u ms, "
+	    "seen%s%s%s%s%s",
+	    name, st.state < 4 ? states[st.state] : "?",
+	    st.flags & QCOM_PAS_F_ADOPTED ? " (adopted)" : "", st.pas_id,
 	    (uintmax_t)st.mem_phys, (uintmax_t)st.mem_size, st.smp2p_in,
+	    st.ms,
 	    st.flags & QCOM_PAS_F_READY ? " ready" : "",
 	    st.flags & QCOM_PAS_F_HANDOVER ? " handover" : "",
 	    st.flags & QCOM_PAS_F_FATAL ? " fatal" : "",
@@ -141,7 +151,7 @@ start(const char *name, const char *fw)
 	char *meta;
 	const char *img;
 	void *data;
-	int fd, dev, i, hash = 0, relocate = 0;
+	int fd, dev, i, hash = 0, relocate = 0, split = 0;
 
 	if ((fd = open(fw, O_RDONLY)) < 0 || fstat(fd, &sb) < 0)
 		err(1, "%s", fw);
@@ -177,6 +187,11 @@ start(const char *name, const char *fw)
 	}
 	if (min >= max)
 		errx(1, "%s: no loadable segment", fw);
+	/* Linux's qcom_mdt_bins_are_split (zero-sized segments aside) */
+	for (i = 0; i < eh->e_phnum; i++)
+		if (ph[i].p_filesz != 0 && (ph[i].p_offset > (uint64_t)sb.st_size ||
+		    ph[i].p_offset + (uint64_t)ph[i].p_filesz > (uint64_t)sb.st_size))
+			split = 1;
 
 	/* the metadata: ELF header and program headers, then the hash */
 	ehdr_size = ph[0].p_filesz;
@@ -206,8 +221,9 @@ start(const char *name, const char *fw)
 	if (max - min > st.mem_size)
 		errx(1, "%s: %ju bytes, the memory region has %ju", fw,
 		    (uintmax_t)(max - min), (uintmax_t)st.mem_size);
-	printf("%s: %s, %d segments, %ju KB%s\n", name, fw, eh->e_phnum,
-	    (uintmax_t)(max - min) / 1024, relocate ? ", relocatable" : "");
+	printf("%s: %s, %d segments, %ju KB%s%s\n", name, fw, eh->e_phnum,
+	    (uintmax_t)(max - min) / 1024, relocate ? ", relocatable" : "",
+	    split ? ", split (.bNN)" : "");
 
 	init.meta = (uintptr_t)meta;
 	init.meta_len = ehdr_size + hash_size;
@@ -234,8 +250,7 @@ start(const char *name, const char *fw)
 		data = NULL;
 		if (seg.filesz == 0)
 			seg.data = 0;
-		else if (ph[i].p_offset + (uint64_t)ph[i].p_filesz <=
-		    (uint64_t)sb.st_size)
+		else if (!split)
 			seg.data = (uintptr_t)(img + ph[i].p_offset);
 		else {
 			data = split_segment(fw, i, ph[i].p_filesz);
@@ -265,6 +280,22 @@ start(const char *name, const char *fw)
 }
 
 static void
+adopt(const char *name)
+{
+	int fd;
+
+	fd = open_dev(name);
+	if (ioctl(fd, QCOM_PAS_ADOPT) < 0) {
+		warn("%s: adopt (not running?)", name);
+		close(fd);
+		status(name);
+		exit(1);
+	}
+	close(fd);
+	status(name);
+}
+
+static void
 stop(const char *name)
 {
 	int fd;
@@ -281,6 +312,7 @@ usage(void)
 {
 	fprintf(stderr, "usage: pro1x-dsp start NAME [FIRMWARE]\n"
 	    "       pro1x-dsp stop NAME\n"
+	    "       pro1x-dsp adopt NAME\n"
 	    "       pro1x-dsp status [NAME]\n"
 	    "       pro1x-dsp -n start NAME FIRMWARE\n"
 	    "NAME: adsp, cdsp or modem\n");
@@ -313,6 +345,8 @@ main(int argc, char **argv)
 		start(argv[2], fw);
 	} else if (strcmp(argv[1], "stop") == 0 && argc == 3)
 		stop(argv[2]);
+	else if (strcmp(argv[1], "adopt") == 0 && argc == 3)
+		adopt(argv[2]);
 	else
 		usage();
 	return (0);

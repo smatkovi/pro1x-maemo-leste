@@ -85,11 +85,24 @@ struct qrtr_node *qrtr_endpoint_register(qrtr_xmit_t *xmit, void *arg);
 /* A packet from the endpoint, with its QRTR header (v1 or v2) */
 int	qrtr_endpoint_post(struct qrtr_node *n, const void *data, size_t len);
 void	qrtr_endpoint_unregister(struct qrtr_node *n);
+/* A HELLO from our name service over this endpoint (a node started again) */
+void	qrtr_endpoint_hello(struct qrtr_node *n);
 
 /* For the test runs: the servers the name service knows */
 typedef void qrtr_server_cb_t(void *arg, uint32_t service, uint32_t instance,
 	    uint32_t node, uint32_t port);
 void	qrtr_ns_servers(qrtr_server_cb_t *cb, void *arg);
+/* the endpoints: their first node id (QRTR_NODE_BCAST: none seen yet),
+ * the node ids behind them, packets in and out, HELLOs seen */
+struct qrtr_node_info {
+	uint32_t	nid;
+	uint32_t	nids[8];
+	int		nnids;
+	u_int		rx, tx, hellos;
+	bool		gone;
+};
+typedef void qrtr_node_cb_t(void *arg, const struct qrtr_node_info *ni);
+void	qrtr_nodes(qrtr_node_cb_t *cb, void *arg);
 
 #ifdef _KERNEL
 /* The endpoints over GLINK's IPCRTR channel (qrtr_glink.c) */

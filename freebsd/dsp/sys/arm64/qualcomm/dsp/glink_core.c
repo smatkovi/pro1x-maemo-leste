@@ -99,6 +99,11 @@ struct glink_channel {
 	TAILQ_HEAD(, rintent) rintents;
 	int		intent_req;	/* -1 asked, 0 refused, 1 granted */
 	bool		intent_received;
+	bool		adopted;	/* Linux's, taken over */
+	char		*bounce;	/* adopted: data into Linux's intents */
+	size_t		bounce_size, bounce_off;
+	uint32_t	bounce_iid;
+	u_int		rx_msgs, tx_msgs, bounced;
 };
 
 struct glink_edge {
@@ -116,6 +121,9 @@ struct glink_edge {
 	bool		destroy;	/* freed with the last channel */
 	bool		read_notify_sent;
 	bool		bad;		/* an unknown command: the FIFO is lost */
+	bool		adopted;	/* Linux's edge, taken over */
+	bool		remote_version;	/* VERSION or VERSION_ACK seen */
+	u_int		rx_msgs, tx_msgs;
 };
 
 /* --- the transport --------------------------------------------------------------- */
@@ -156,6 +164,7 @@ tx(struct glink_edge *e, const void *hdr, size_t hlen, const void *data,
 	e->read_notify_sent = false;
 	e->ops->tx_write(e->ops_arg, hdr, hlen, data, dlen);
 	e->ops->tx_kick(e->ops_arg);
+	e->tx_msgs++;
 	return (0);
 }
 
@@ -289,6 +298,7 @@ ch_maybe_free(struct glink_edge *e, struct glink_channel *ch)
 	TAILQ_REMOVE(&e->channels, ch, link);
 	ch_flush_rintents(ch);
 	ch_flush_lintents(ch);
+	glink_free(ch->bounce);
 	glink_free(ch);
 }
 
@@ -434,6 +444,33 @@ rx_data(struct glink_edge *e, size_t avail)
 			if (li->id == h.msg.param2)
 				break;
 	}
+	if (li == NULL && ch != NULL && ch->adopted && ch->bounce != NULL &&
+	    h.msg.param2 < GLINK_ADOPT_LIID) {
+		/* an intent Linux offered: through the bounce buffer */
+		if (ch->bounce_iid != h.msg.param2) {
+			ch->bounce_iid = h.msg.param2;
+			ch->bounce_off = 0;
+		}
+		if (ch->bounce_off + h.chunk_size <= ch->bounce_size)
+			e->ops->rx_peek(e->ops_arg, ch->bounce + ch->bounce_off,
+			    sizeof(h), h.chunk_size);
+		ch->bounce_off += h.chunk_size;
+		if (h.left_size == 0) {
+			if (ch->bounce_off > ch->bounce_size)
+				glink_log("%s: %s: %zu bytes into Linux's intent "
+				    "%u: too long, dropped\n", e->label, ch->name,
+				    ch->bounce_off, h.msg.param2);
+			else if (ch->user && ch->rx != NULL) {
+				ch->rx_msgs++;
+				ch->bounced++;
+				ch->rx(ch->arg, ch->bounce, ch->bounce_off);
+			}
+			tx_cmd(e, CMD_RX_DONE, ch->lcid, h.msg.param2);
+			ch->bounce_off = 0;
+			ch->bounce_iid = 0;
+		}
+		goto out;
+	}
 	if (li == NULL || li->size - li->offset < h.chunk_size) {
 		glink_log("%s: data for no or a too small intent (%u)\n",
 		    e->label, h.msg.param2);
@@ -444,6 +481,7 @@ rx_data(struct glink_edge *e, size_t avail)
 	li->offset += h.chunk_size;
 	if (h.left_size != 0)
 		goto out;
+	ch->rx_msgs++;
 	if (ch->user && ch->rx != NULL)
 		ch->rx(ch->arg, li->data, li->offset);
 	li->offset = 0;
@@ -477,14 +515,17 @@ glink_edge_rx(struct glink_edge *e)
 			break;
 		e->ops->rx_peek(e->ops_arg, &m, 0, sizeof(m));
 		need = sizeof(m);
+		e->rx_msgs++;
 		switch (m.cmd) {
 		case CMD_VERSION:
+			e->remote_version = true;
 			if (m.param1 == VERSION_1)
 				e->features &= m.param2;
 			if (m.param1 != 0)
 				send_version(e, CMD_VERSION_ACK);
 			break;
 		case CMD_VERSION_ACK:
+			e->remote_version = true;
 			if (m.param1 == VERSION_1 && m.param2 == e->features)
 				break;
 			if (m.param1 == VERSION_1)
@@ -542,8 +583,10 @@ glink_edge_rx(struct glink_edge *e)
 		}
 		case CMD_TX_DATA:
 		case CMD_TX_DATA_CONT:
-			if (rx_data(e, avail) == EAGAIN)
+			if (rx_data(e, avail) == EAGAIN) {
+				e->rx_msgs--;	/* counted when it is all there */
 				goto wait;
+			}
 			continue;	/* rx_data advanced */
 		case CMD_READ_NOTIF:
 			e->ops->tx_kick(e->ops_arg);
@@ -564,8 +607,8 @@ wait:
 
 /* --- the edge ---------------------------------------------------------------------------- */
 
-struct glink_edge *
-glink_edge_create(const char *label, const struct glink_fifo_ops *ops,
+static struct glink_edge *
+edge_new(const char *label, const struct glink_fifo_ops *ops,
     void *ops_arg, glink_announce_cb_t *announce, void *announce_arg)
 {
 	struct glink_edge *e;
@@ -581,10 +624,71 @@ glink_edge_create(const char *label, const struct glink_fifo_ops *ops,
 	TAILQ_INIT(&e->channels);
 	glink_mutex_init(&e->lock);
 	glink_cond_init(&e->cond);
+	return (e);
+}
+
+struct glink_edge *
+glink_edge_create(const char *label, const struct glink_fifo_ops *ops,
+    void *ops_arg, glink_announce_cb_t *announce, void *announce_arg)
+{
+	struct glink_edge *e;
+
+	e = edge_new(label, ops, ops_arg, announce, announce_arg);
 	glink_lock(&e->lock);
 	send_version(e, CMD_VERSION);
 	glink_unlock(&e->lock);
 	return (e);
+}
+
+/* Linux's edge: its negotiation stands, nothing is sent */
+struct glink_edge *
+glink_edge_adopt(const char *label, const struct glink_fifo_ops *ops,
+    void *ops_arg, glink_announce_cb_t *announce, void *announce_arg)
+{
+	struct glink_edge *e;
+
+	e = edge_new(label, ops, ops_arg, announce, announce_arg);
+	e->adopted = true;
+	return (e);
+}
+
+/*
+ * A channel open on both sides with Linux's ids. Its users find it as one
+ * the remote opened (the announcement); new channels of ours get ids above
+ * Linux's.
+ */
+int
+glink_adopt_channel(struct glink_edge *e, const char *name, u_int lcid,
+    u_int rcid, size_t bounce)
+{
+	struct glink_channel *ch;
+	char *buf;
+
+	if (strlen(name) >= NAME_SIZE || lcid == 0 || rcid == 0)
+		return (EINVAL);
+	buf = bounce != 0 ? glink_zalloc(bounce) : NULL;
+	glink_lock(&e->lock);
+	if (ch_by_name(e, name) != NULL || ch_by_lcid(e, lcid) != NULL ||
+	    ch_by_rcid(e, rcid) != NULL) {
+		glink_unlock(&e->lock);
+		glink_free(buf);
+		return (EEXIST);
+	}
+	ch = ch_new(e, name);
+	ch->lcid = lcid;
+	ch->rcid = rcid;
+	ch->open_acked = true;
+	ch->acked_remote = true;
+	ch->adopted = true;
+	ch->bounce = buf;
+	ch->bounce_size = bounce;
+	ch->next_liid = GLINK_ADOPT_LIID;
+	if (e->next_lcid <= lcid)
+		e->next_lcid = lcid + 1;
+	glink_unlock(&e->lock);
+	if (e->announce != NULL)
+		e->announce(e->announce_arg, name);
+	return (0);
 }
 
 void
@@ -633,6 +737,7 @@ glink_edge_destroy(struct glink_edge *e)
 		TAILQ_REMOVE(&e->channels, ch, link);
 		ch_flush_rintents(ch);
 		ch_flush_lintents(ch);
+		glink_free(ch->bounce);
 		glink_free(ch);
 	}
 	empty = TAILQ_EMPTY(&e->channels);
@@ -666,6 +771,20 @@ glink_open(struct glink_edge *e, const char *name, int nintents,
 		goto out;
 	}
 	ch = ch_by_name(e, name);
+	if (ch != NULL && ch->adopted && !ch->user && ch->lcid != 0 &&
+	    ch->rcid != 0) {
+		/* Linux's channel: open as it is, only our intents are new */
+		ch->user = true;
+		ch->rx = rx;
+		ch->state = state;
+		ch->arg = arg;
+		for (i = 0; i < nintents; i++)
+			advertise(e, ch, lintent_new(ch, intent_size, true));
+		ch->up = true;
+		*chp = ch;
+		glink_unlock(&e->lock);
+		return (0);
+	}
 	if (ch != NULL && (ch->user || ch->lcid != 0)) {
 		error = EBUSY;
 		goto out;
@@ -782,6 +901,8 @@ glink_send(struct glink_channel *ch, const void *data, size_t len)
 		if (len == 0)
 			break;
 	}
+	if (error == 0)
+		ch->tx_msgs++;
 out:
 	glink_unlock(&e->lock);
 	return (error);
@@ -821,4 +942,69 @@ const char *
 glink_channel_name(struct glink_channel *ch)
 {
 	return (ch->name);
+}
+
+bool
+glink_channel_adopted(struct glink_channel *ch)
+{
+	return (ch->adopted);
+}
+
+void
+glink_edge_info(struct glink_edge *e, struct glink_edge_info *ei,
+    glink_channel_info_cb_t *cb, void *arg)
+{
+	struct glink_channel_info ci;
+	struct glink_channel *ch;
+	struct lintent *li;
+	struct rintent *ri;
+
+	glink_lock(&e->lock);
+	memset(ei, 0, sizeof(*ei));
+	ei->label = e->label;
+	ei->adopted = e->adopted;
+	ei->remote_version = e->remote_version;
+	ei->bad = e->bad;
+	ei->aborted = e->aborted;
+	ei->features = e->features;
+	ei->rx_msgs = e->rx_msgs;
+	ei->tx_msgs = e->tx_msgs;
+	TAILQ_FOREACH(ch, &e->channels, link) {
+		ei->nchannels++;
+		if (cb == NULL)
+			continue;
+		memset(&ci, 0, sizeof(ci));
+		ci.name = ch->name;
+		ci.lcid = ch->lcid;
+		ci.rcid = ch->rcid;
+		ci.user = ch->user;
+		ci.up = ch->up;
+		ci.open_acked = ch->open_acked;
+		ci.acked_remote = ch->acked_remote;
+		ci.adopted = ch->adopted;
+		TAILQ_FOREACH(li, &ch->lintents, link)
+			ci.lintents++;
+		TAILQ_FOREACH(ri, &ch->rintents, link)
+			ci.rintents++;
+		ci.rx_msgs = ch->rx_msgs;
+		ci.tx_msgs = ch->tx_msgs;
+		ci.bounced = ch->bounced;
+		cb(arg, &ci);
+	}
+	glink_unlock(&e->lock);
+}
+
+/* A user registered after the remote opened NAME: tell it now */
+void
+glink_edge_reannounce(struct glink_edge *e, const char *name)
+{
+	struct glink_channel *ch;
+	bool tell;
+
+	glink_lock(&e->lock);
+	ch = ch_by_name(e, name);
+	tell = ch != NULL && !ch->user && ch->rcid != 0 && !e->aborted;
+	glink_unlock(&e->lock);
+	if (tell && e->announce != NULL)
+		e->announce(e->announce_arg, name);
 }
