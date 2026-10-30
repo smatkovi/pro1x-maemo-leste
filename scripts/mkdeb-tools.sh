@@ -8,10 +8,11 @@
 #                     Xsession.post/47pro1x-events
 #   pro1x-volume-osd  the N9's volume bar (tools/pro1x-volume-osd),
 #                     Xsession.post/46pro1x-volume-osd
-#   pro1x-alarmboot   after a start by the RTC alarm: its own ringing should
-#                     no alarm dialog come, then the question to switch
+#   pro1x-alarmboot   after a start by the RTC alarm: the N9's alarm screen
+#                     over the system UI's alarm dialog, its own ringing
+#                     should no dialog come, then the question to switch
 #                     off again (tools/pro1x-alarmboot,
-#                     docs/alarm-power-on.md), Xsession.post/48pro1x-alarmboot
+#                     docs/alarm-power-on.md), Xsession.d/02pro1x-alarmboot
 #
 # Depends: the libraries they link (dpkg-shlibdeps) and the hildon-desktop
 # with patches/meego they need (49-hidpi.sh's +pro1xN). Neither has GConf
@@ -38,7 +39,7 @@ export DEBIAN_FRONTEND=noninteractive
 MAINTAINER="Sebastian Matkovich <sebastian.matkovich@gmail.com>"
 HOMEPAGE=https://github.com/smatkovi/pro1x-maemo-leste
 ARCH=$(dpkg --print-architecture)
-declare -A VERSIONS=([pro1x-events]=1.2 [pro1x-volume-osd]=1.0 [pro1x-alarmboot]=1.0)
+declare -A VERSIONS=([pro1x-events]=1.2 [pro1x-volume-osd]=1.0 [pro1x-alarmboot]=1.1)
 log() { echo ">> $*"; }
 
 # Build dependencies (49-events.sh's and 49-volume-osd.sh's). The -dev
@@ -129,6 +130,9 @@ EOF
   (cd "$d" && find . -type f ! -path './DEBIAN/*' -printf '%P\0' | sort -z |
     xargs -0 md5sum) > "$d/DEBIAN/md5sums"
   chmod 644 "$d"/DEBIAN/*
+  for f in preinst postinst prerm postrm; do
+    [ ! -f "$d/DEBIAN/$f" ] || chmod 755 "$d/DEBIAN/$f"
+  done
   find "$d" -type d -exec chmod 755 {} +
   find "$d" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
   mkdir -p "$OUT"
@@ -186,17 +190,25 @@ if want pro1x-alarmboot; then
   # shellcheck disable=SC2046,SC2086
   gcc $CPPFLAGS $CFLAGS -Wall -o "$d/usr/bin/pro1x-alarmboot" \
     "$REPO/tools/pro1x-alarmboot/pro1x-alarmboot.c" $LDFLAGS \
-    $(pkg-config --cflags --libs gtk+-2.0 hildon-1 gio-2.0 alarm libpulse-simple) -lm
+    $(pkg-config --cflags --libs gtk+-2.0 gio-2.0 alarm libpulse-simple) -lm
   chmod 755 "$d/usr/bin/pro1x-alarmboot"
-  install -D -m 644 "$REPO/rootfs-overlay/etc/X11/Xsession.post/48pro1x-alarmboot" \
-    "$d/etc/X11/Xsession.post/48pro1x-alarmboot"
-  # it watches osso-systemui-alarm's dialog and asks alarmd; the switch
-  # off is dsme's
+  install -D -m 644 "$REPO/rootfs-overlay/etc/X11/Xsession.d/02pro1x-alarmboot" \
+    "$d/etc/X11/Xsession.d/02pro1x-alarmboot"
+  # 1.0 started it from Xsession.post/48pro1x-alarmboot (a conffile),
+  # after the system UI: dpkg removes that one
+  install -d -m 755 "$d/DEBIAN"
+  for s in preinst postinst postrm; do
+    printf '#!/bin/sh\nset -e\ndpkg-maintscript-helper rm_conffile /etc/X11/Xsession.post/48pro1x-alarmboot 1.1~ pro1x-alarmboot -- "$@"\n' \
+      > "$d/DEBIAN/$s"
+  done
+  # it covers osso-systemui-alarm's dialog, answers it through the system
+  # UI and alarmd; the switch off is dsme's; Open Sans stands in for the
+  # N9's Nokia Pure
   mkdeb pro1x-alarmboot \
     "alarmd, osso-systemui-alarm, dsme" \
-    "pulseaudio" \
-    "After the RTC alarm switched the Pro1X on: rings, offers to switch off" \
-    "When the F(x)tec Pro1X's boot menu started Maemo Leste because Leste's RTC alarm switched the phone on (/host/pro1x-boot/alarmboot), pro1x-alarmboot watches the alarm dialog of alarmd and the system UI. Should none come within two minutes of the alarm's time while alarmd still has the alarm (or does not answer), it rings by itself, a tone through PulseAudio, until Stop. Once the alarm is stopped or snoozed it asks whether to switch the phone off again, as the N900 asked whether to switch it on in its acting-dead mode; no answer keeps it on. After any other start it ends at once. Started by the X session (Xsession.post)."
+    "pulseaudio, fonts-open-sans" \
+    "After the RTC alarm switched the Pro1X on: the N9's alarm screen" \
+    "When the F(x)tec Pro1X's boot menu started Maemo Leste because Leste's RTC alarm switched the phone on (/host/pro1x-boot/alarmboot), pro1x-alarmboot shows what the Nokia N9 showed when an alarm switched it on: while the system UI's alarm dialog rings, a full screen with the time, the alarm's text, Snooze and Stop in the N9's look, answered through the system UI (Snooze as when the phone is turned over, Stop then to alarmd); should that dialog not go after a tap, its own dialog stays to be used. Should no alarm dialog come within two minutes of the alarm's time while alarmd still has the alarm (or does not answer), it rings by itself, the same screen and a tone through PulseAudio. Once the alarm is over it asks, in the look of the N9's query dialogs, whether to switch the phone off again; no answer in 60 s keeps it on (after-alarm=switch-off in /etc/pro1x-alarmboot.conf: off after 10 s, as the N9 did). After any other start it ends at once. Started by the X session (Xsession.d). The N9's font and button pictures are used where installed; none are included."
 fi
 
 ls -l "$OUT"/*.deb

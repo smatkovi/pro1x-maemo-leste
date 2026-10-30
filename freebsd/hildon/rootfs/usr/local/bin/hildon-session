@@ -73,6 +73,14 @@ respawn() {
 		sleep $pause
 	done
 }
+# After a start by the RTC alarm (rc.d/pro1x_alarmboot): the N9's alarm
+# screen over the system UI's alarm dialog, its own ringing should no
+# dialog come, then the question to switch off again
+# (docs/alarm-power-on.md); ends at once after any other start. Before the
+# system UI, so that it sees the dialog of an alarm already due come up
+if [ -x /usr/local/bin/pro1x-alarmboot ]; then
+	/usr/local/bin/pro1x-alarmboot &
+fi
 # The alarm daemon and the system UI, which shows its alarm dialog (Leste:
 # Xsession.d/03alarmd and 03osso-systemui): alarmd needs this session's
 # bus, so alarms ring while Hildon runs. Its queue is in /var/cache/alarmd
@@ -86,12 +94,6 @@ fi
 if [ -x /usr/local/bin/systemui ]; then
 	respawn /usr/local/bin/systemui &
 	alarm="$alarm $!"
-fi
-# After a start by the RTC alarm (rc.d/pro1x_alarmboot): rings by itself
-# should no alarm dialog come, then asks whether to switch off again
-# (docs/alarm-power-on.md); ends at once after any other start
-if [ -x /usr/local/bin/pro1x-alarmboot ]; then
-	/usr/local/bin/pro1x-alarmboot &
 fi
 # The location dialogs (the disclaimer, "enable positioning") that
 # liblocation's clients ask for over the system bus; Leste's bus activates

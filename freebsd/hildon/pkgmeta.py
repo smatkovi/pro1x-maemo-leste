@@ -107,14 +107,18 @@ LOCAL = {
                          'MeeGo-like look is on; a tap or a drag sets it '
                          "(tools/pro1x-volume-osd). Nokia's graphics are not included.",
                          ['UNKNOWN']),
-    'pro1x-alarmboot': ('1.0', 'After the RTC alarm switched the Pro1X on: rings, offers to switch off',
+    'pro1x-alarmboot': ('1.1', "After the RTC alarm switched the Pro1X on: the N9's alarm screen",
                         'When the boot menu started FreeBSD for the RTC alarm that FreeBSD '
                         'had set (kenv pro1x.alarmboot), rc.d/pro1x_alarmboot starts the '
-                        'Hildon session; pro1x-alarmboot there rings by itself should no '
-                        "alarm dialog of alarmd's come (its queue lost with a memory /var), "
-                        'and once the alarm is stopped asks whether to switch the phone off '
-                        'again, as the N900 asked whether to switch it on '
-                        '(tools/pro1x-alarmboot, docs/alarm-power-on.md).',
+                        'Hildon session; pro1x-alarmboot there shows what the Nokia N9 '
+                        "showed when an alarm switched it on: over the system UI's ringing "
+                        'alarm dialog the time, the alarm and Snooze and Stop in the N9\'s '
+                        'look, answered through the system UI; it rings by itself (the same '
+                        "screen) should no alarm dialog of alarmd's come (its queue lost with "
+                        'a memory /var), and once the alarm is over asks, as the N9\'s query '
+                        'dialogs look, whether to switch the phone off again (no answer keeps '
+                        "it on). The N9's font and button pictures where installed, none "
+                        'included (tools/pro1x-alarmboot, docs/alarm-power-on.md).',
                         ['GPLv2+']),
 }
 # The N9's applications of harmattan-qt5 (apps/; harmattan.sh), new ones
