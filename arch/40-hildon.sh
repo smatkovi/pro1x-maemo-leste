@@ -53,8 +53,10 @@ eval "$(sed -n '/^declare -A [A-Z ]*REV=(/,/^)/p' "$F")"
 eval "$(grep '^URL\[[a-z0-9.-]*\]=' "$F")"
 
 log "packages"
+# (doxygen: profiled's install makes its documentation; on the phone
+# step 30 had brought it)
 chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
-pacman -Sy --noconfirm --needed base-devel git autoconf automake libtool \
+pacman -Sy --noconfirm --needed base-devel git autoconf automake libtool doxygen \
 	gtk-doc intltool gettext glib2 glib2-devel pango cairo atk gdk-pixbuf2 \
 	shared-mime-info libxcursor libxinerama libxrandr libxi libxcomposite \
 	libxdamage libxfixes libxtst libxss libsm dbus-glib libcanberra libpulse \
