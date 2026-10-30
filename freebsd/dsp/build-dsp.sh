@@ -7,6 +7,8 @@
 # modules into out/modules with the rest).
 #
 #   WORK=/path/to/freebsd-build bash freebsd/dsp/build-dsp.sh [module|tools|all]
+#   MODS="qcom_dsp qrtr qcom_ipa ath10k_snoc" ...   the modules on the DSP
+#                     stack's QMI and GLINK too (default: qcom_dsp qrtr)
 #
 # The modules are built against the PRO1X kernel in $WORK/obj (KERNFAST:
 # the kernel itself is only relinked if its sources changed), which is
@@ -21,7 +23,7 @@ WHAT=${1:-all}
 SRC=$WORK/src
 T=$WORK/dsp-test
 JOBS=${JOBS:-$(nproc)}
-MODS="qcom_dsp qrtr"
+MODS=${MODS:-qcom_dsp qrtr}
 mkdir -p "$T/modules" "$T/dsp-tools"
 
 lock=$WORK/.kbuild-lock
@@ -37,11 +39,15 @@ take_lock() {
 if [ "$WHAT" = module ] || [ "$WHAT" = all ]; then
 	take_lock
 	cp -a "$REPO/freebsd/dsp/sys/." "$SRC/sys/"
+	# the IPA (freebsd/data), on qcom_dsp's QMI
+	case " $MODS " in
+	*" qcom_ipa "*) cp -a "$REPO/freebsd/data/sys/." "$SRC/sys/" ;;
+	esac
 	export PATH=$WORK/hostbin:$PATH MAKEOBJDIRPREFIX=$WORK/obj
 	(cd "$SRC" && ./tools/build/make.py --cross-bindir=/usr/bin \
 	    --cross-compiler-type=clang --host-bindir=/usr/bin \
 	    --host-compiler-type=clang TARGET=arm64 TARGET_ARCH=aarch64 \
-	    -j"$JOBS" KERNCONF=PRO1X MODULES_OVERRIDE="$MODS" \
+	    -j"$JOBS" -DNO_WERROR WERROR= KERNCONF=PRO1X MODULES_OVERRIDE="$MODS" \
 	    -DWITH_KERNEL_BIN KERNFAST=1 -DNO_KERNELCLEAN buildkernel) \
 	    > "$T/build-module.log" 2>&1 || { tail -40 "$T/build-module.log"; exit 1; }
 	rm -f "$lock"

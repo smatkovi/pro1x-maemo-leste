@@ -114,10 +114,11 @@ ipa_qmi_ready(struct ipa_qmi *q)
 /* --- the server (IPA service 0x31, instance 1) ------------------------------------- */
 
 /*
- * The modem's side is gone (ipa_server_bye). Linux's QMI passes the node
- * of the BYE's client; freebsd/dsp's qmi_core passes the sender of the
- * name service's relay (the local node), so the client handle's DEL_SERVER
- * of the modem's IPA service counts as well. Once per boot of the modem.
+ * The modem's side is gone (ipa_server_bye: the BYE of its node, which
+ * qmi_core passes as Linux's qmi_recv_bye does). Linux's ipa_server_bye
+ * resets on any node's BYE; here only on the modem's, since this one also
+ * starts the crash path (Linux's SSR notifier for the modem), which another
+ * DSP going must not. Once per boot of the modem.
  */
 static void
 ipa_qmi_modem_gone(struct ipa_qmi *q, const char *why)
@@ -351,20 +352,20 @@ ipa_qmi_init_driver_work(struct ipa *ipa)
 	ret = (int)qmi_send_request(&q->client_handle, &sq, &txn,
 	    IPA_QMI_INIT_DRIVER, IPA_QMI_INIT_DRIVER_REQ_SZ,
 	    ipa_init_modem_driver_req_ei, req);
-	if (ret < 0) {	/* qmi_core: the length sent */
+	if (ret < 0) {	/* 0, or a negative errno (Linux) */
 		ipa_os_log(q->ipa, "error %d sending init driver request\n", ret);
 		qmi_txn_cancel(&txn);
-		q->st.init_driver_result = ret < 0 ? -ret : ret;
+		q->st.init_driver_result = -ret;
 		return;
 	}
 	/* qmi_txn_wait's timeout is in ticks (Linux's jiffies) */
 	ret = qmi_txn_wait(&txn, (unsigned long)QMI_INIT_DRIVER_TIMEOUT_MS *
 	    IPA_QMI_HZ / 1000);
-	/* the decoded length, or a negative error */
+	/* the decoded length, or a negative errno (Linux's qmi_txn_wait) */
 	if (ret < 0) {
 		ipa_os_log(q->ipa, "error %d awaiting init driver response\n",
 		    ret);
-		q->st.init_driver_result = ret < 0 ? -ret : ret;
+		q->st.init_driver_result = -ret;
 		return;
 	}
 	/* Linux takes any response as success; its result is logged here */
@@ -404,18 +405,9 @@ ipa_client_new_server(struct qmi_handle *qmi, struct qmi_service *svc)
 	return (0);
 }
 
-static void
-ipa_client_del_server(struct qmi_handle *qmi, struct qmi_service *svc)
-{
-	struct ipa_qmi *q = qmi_of(qmi);
-
-	if (svc->node == q->modem_sq.sq_node && svc->port == q->modem_sq.sq_port)
-		ipa_qmi_modem_gone(q, "its IPA service went");
-}
-
+/* Linux's ipa_client_ops */
 static const struct qmi_ops ipa_client_ops = {
 	.new_server = ipa_client_new_server,
-	.del_server = ipa_client_del_server,
 };
 
 /* The modem went away: ipa_modem_crashed() on the driver's thread */

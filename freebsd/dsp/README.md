@@ -299,6 +299,14 @@ service. What differed, and is now as Linux:
   before (Linux's driver core binds late drivers).
 - **QRTR types** the name service's notices by their command (Linux types
   by the sender's port).
+- **QMI** (`qmi_core.c`, against `qmi_interface.c`): `qmi_send_request`,
+  `_response`, `_indication` returned the length sent (Linux's
+  `qmi_send_message`: 0); `ops.bye` got the name service's node (1)
+  instead of the BYE's `client.node`, and before that node's servers went
+  (Linux's `qmi_recv_bye`: `del_server` first); short control packets are
+  ignored. `qmi_txn_wait` was already as Linux's: the response's decoded
+  length (`txn->result` from `qmi_decode_message`) or a negative errno.
+  Found by the IPA's tests; `test/qmi_test.c` pins all of it.
 
 Found besides: `sysctl` handlers drained into userspace with a mutex held
 once their output passed 256 bytes (`net.qrtr.servers` with the modem's

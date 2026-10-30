@@ -7,7 +7,11 @@
  * lookup and new_server, a request with its decoded response, a 6 KB
  * board data segment, indications to their handlers, a response nobody
  * waits for, a timeout, del_server on BYE, and release with a transaction
- * pending elsewhere.
+ * pending elsewhere. Pinned to Linux 7.1's qmi_interface.c: qmi_send_*
+ * return 0 (qmi_send_message), qmi_txn_wait the decoded length
+ * (txn->result from qmi_decode_message); a BYE reaches ops.bye with its
+ * client.node (the node that went, not the name service's), after that
+ * node's servers went (qmi_recv_bye); a short control packet is ignored.
  */
 
 #include <assert.h>
@@ -198,6 +202,94 @@ wait_counter(int *c, int n)
 	assert(counter(c) >= n);
 }
 
+/* The server handle of step 7 */
+static struct qmi_handle srv;
+static uint32_t srv_port;
+static int srv_new, srv_byes, srv_requests, srv_send_ret = -1;
+static unsigned int srv_bye_node;
+static char srv_ev[8];
+static int srv_nev;
+
+static int
+srv_new_server(struct qmi_handle *h, struct qmi_service *svc)
+{
+	pthread_mutex_lock(&ev_lock);
+	srv_new++;
+	pthread_mutex_unlock(&ev_lock);
+	return (0);
+}
+
+static void
+srv_del_server(struct qmi_handle *h, struct qmi_service *svc)
+{
+	pthread_mutex_lock(&ev_lock);
+	if (srv_nev < (int)sizeof(srv_ev))
+		srv_ev[srv_nev++] = 'D';
+	pthread_mutex_unlock(&ev_lock);
+}
+
+static void
+srv_bye(struct qmi_handle *h, unsigned int node)
+{
+	pthread_mutex_lock(&ev_lock);
+	if (srv_nev < (int)sizeof(srv_ev))
+		srv_ev[srv_nev++] = 'B';
+	srv_bye_node = node;
+	srv_byes++;
+	pthread_mutex_unlock(&ev_lock);
+}
+
+/* A request with no TLVs: an empty response, then an indication */
+static void
+srv_request(struct qmi_handle *h, struct sockaddr_qrtr *sq,
+    struct qmi_txn *txn, const void *decoded)
+{
+	int r1, r2;
+
+	r1 = (int)qmi_send_response(h, sq, txn, 0x21, 0,
+	    wlfw_fw_ready_ind_msg_v01_ei, NULL);
+	r2 = (int)qmi_send_indication(h, sq, 0x22, 0,
+	    wlfw_fw_ready_ind_msg_v01_ei, NULL);
+	pthread_mutex_lock(&ev_lock);
+	srv_send_ret = r1 != 0 ? r1 : r2;
+	srv_requests++;
+	pthread_mutex_unlock(&ev_lock);
+}
+
+static const struct qmi_msg_handler srv_handlers[] = {
+	{ .type = QMI_REQUEST, .msg_id = 0x21,
+	  .ei = wlfw_fw_ready_ind_msg_v01_ei,
+	  .decoded_size = sizeof(struct wlfw_fw_ready_ind_msg_v01),
+	  .fn = srv_request },
+	{ 0 }
+};
+
+static const struct qmi_ops srv_ops = { .new_server = srv_new_server,
+    .del_server = srv_del_server, .bye = srv_bye };
+
+/* The port of a local server, from the name service */
+static uint32_t local_port;
+static void
+local_cb(void *arg, uint32_t service, uint32_t instance, uint32_t node,
+    uint32_t port)
+{
+	if (service == *(uint32_t *)arg && node == QRTR_LOCAL_NODE)
+		local_port = port;
+}
+
+static uint32_t
+local_port_of(uint32_t service)
+{
+	int i;
+
+	for (i = 0; i < 200 && local_port == 0; i++) {
+		qrtr_ns_servers(local_cb, &service);
+		if (local_port == 0)
+			usleep(5000);
+	}
+	return (local_port);
+}
+
 /* A request from another thread (the test answers it meanwhile) */
 struct call {
 	struct qmi_txn	txn;
@@ -206,6 +298,7 @@ struct call {
 	const struct qmi_elem_info *req_ei;
 	const void	*req;
 	unsigned long	timeout;
+	int		send_ret;
 	int		ret;
 };
 
@@ -214,8 +307,8 @@ call_thread(void *arg)
 {
 	struct call *c = arg;
 
-	c->ret = (int)qmi_send_request(&qmi, &server, &c->txn, c->msg_id,
-	    c->max, c->req_ei, c->req);
+	c->ret = c->send_ret = (int)qmi_send_request(&qmi, &server, &c->txn,
+	    c->msg_id, c->max, c->req_ei, c->req);
 	if (c->ret < 0) {
 		qmi_txn_cancel(&c->txn);
 		return (NULL);
@@ -288,7 +381,9 @@ main(void)
 	    qh->txn_id, WLFW_IND_REGISTER_RESP_MSG_V01_MAX_MSG_LEN,
 	    wlfw_ind_register_resp_msg_v01_ei, &ind_resp);
 	pthread_join(t, NULL);
-	assert(call.ret >= 0);
+	/* Linux: the request sent is 0, the wait the response's decoded length */
+	assert(call.send_ret == 0);
+	assert(call.ret > 0);
 	assert(memcmp(&ind_resp, &ind_resp_rx, sizeof(ind_resp)) == 0);
 	client_port = s->h.src_port;
 	free_sent(s);
@@ -388,7 +483,7 @@ main(void)
 	memset(&cap_rx, 0, sizeof(cap_rx));
 	assert(qmi_txn_init(&qmi, &call.txn, wlfw_cap_resp_msg_v01_ei, &cap_rx) == 0);
 	assert(qmi_send_request(&qmi, &server, &call.txn, QMI_WLFW_CAP_REQ_V01,
-	    WLFW_CAP_REQ_MSG_V01_MAX_MSG_LEN, wlfw_cap_req_msg_v01_ei, &cap_req) >= 0);
+	    WLFW_CAP_REQ_MSG_V01_MAX_MSG_LEN, wlfw_cap_req_msg_v01_ei, &cap_req) == 0);
 	s = next_data();
 	qh = (struct qmi_header *)s->data;
 	assert(qmi_txn_wait(&call.txn, 100) == -ETIMEDOUT);
@@ -422,23 +517,80 @@ main(void)
 	memset(&cap_rx, 0, sizeof(cap_rx));
 	assert(qmi_txn_init(&qmi, &call.txn, wlfw_cap_resp_msg_v01_ei, &cap_rx) == 0);
 	assert(qmi_send_request(&qmi, NULL, &call.txn, QMI_WLFW_CAP_REQ_V01,
-	    WLFW_CAP_REQ_MSG_V01_MAX_MSG_LEN, wlfw_cap_req_msg_v01_ei, &cap_req) >= 0);
+	    WLFW_CAP_REQ_MSG_V01_MAX_MSG_LEN, wlfw_cap_req_msg_v01_ei, &cap_req) == 0);
 	s = next_data();
 	assert(s->h.dst_node == 5 && s->h.dst_port == 7);
 	qh = (struct qmi_header *)s->data;
 	reply5(client_port, QMI_RESPONSE, QMI_WLFW_CAP_REQ_V01, qh->txn_id,
 	    WLFW_CAP_RESP_MSG_V01_MAX_MSG_LEN, wlfw_cap_resp_msg_v01_ei, &cap);
 	/* as Linux: the decoded length */
-	assert(qmi_txn_wait(&call.txn, 1000) >= 0);
+	assert(qmi_txn_wait(&call.txn, 1000) > 0);
 	assert(cap_rx.chip_info_valid == 1);
 	free_sent(s);
 	printf("connected handle: requests without an address to 5:7: ok\n");
 
-	/* 7. node 5 says bye: its server goes */
+	/*
+	 * 7. a server handle that looks up a service of node 5 too (as IPA's
+	 * modem side): our response and indication are 0 as Linux's
+	 */
+	assert(qmi_handle_init(&srv, 64, &srv_ops, srv_handlers) == 0);
+	assert(qmi_add_server(&srv, 0x99, 1, 0) == 0);
+	assert(qmi_add_lookup(&srv, 0x77, 1, 0) == 0);
+	ctrl5(QRTR_TYPE_NEW_SERVER, 0x77, 1, 5, 9);
+	wait_counter(&srv_new, 1);
+	srv_port = local_port_of(0x99);
+	assert(srv_port != 0);
+	{
+		uint8_t req[7] = { QMI_REQUEST, 3, 0, 0x21, 0, 0, 0 };
+
+		from5(QRTR_TYPE_DATA, 11, srv_port, req, sizeof(req));
+		wait_counter(&srv_requests, 1);
+		assert(counter(&srv_send_ret) == 0);
+		s = next_data();
+		qh = (struct qmi_header *)s->data;
+		assert(qh->type == QMI_RESPONSE && qh->txn_id == 3 &&
+		    s->h.dst_node == 5 && s->h.dst_port == 11);
+		free_sent(s);
+		s = next_data();
+		qh = (struct qmi_header *)s->data;
+		assert(qh->type == QMI_INDICATION && qh->msg_id == 0x22);
+		free_sent(s);
+	}
+	printf("qmi_send_response, qmi_send_indication: 0, as Linux: ok\n");
+
+	/* 7a. node 5 says bye: its server goes; the server handle hears the
+	 * BYE (relayed by the name service, node 1) with node 5 */
 	ctrl5(QRTR_TYPE_BYE, 0, 0, 0, 0);
 	wait_counter(&del_servers, 1);
 	assert(counter(&del_servers) == 1);
-	printf("bye, del_server: ok\n");
+	wait_counter(&srv_byes, 1);
+	pthread_mutex_lock(&ev_lock);
+	assert(srv_bye_node == 5);
+	assert(srv_nev == 2 && srv_ev[0] == 'D' && srv_ev[1] == 'B');
+	pthread_mutex_unlock(&ev_lock);
+	printf("bye, del_server; ops.bye with the BYE's node (5, not 1): ok\n");
+
+	/* 7b. a BYE straight to the handle: its node's servers go first, then
+	 * ops.bye (qmi_recv_bye); a short control packet is ignored */
+	ctrl5(QRTR_TYPE_NEW_SERVER, 0x77, 1, 5, 9);
+	wait_counter(&srv_new, 2);
+	{
+		struct qrtr_ctrl_pkt bye;
+		uint32_t cmd = QRTR_TYPE_BYE;
+
+		from5(QRTR_TYPE_DATA, QRTR_PORT_CTRL, srv_port, &cmd, sizeof(cmd));
+		memset(&bye, 0, sizeof(bye));
+		bye.cmd = QRTR_TYPE_BYE;
+		bye.client.node = 5;
+		from5(QRTR_TYPE_DATA, QRTR_PORT_CTRL, srv_port, &bye, sizeof(bye));
+	}
+	wait_counter(&srv_byes, 2);
+	pthread_mutex_lock(&ev_lock);
+	assert(srv_nev == 4 && srv_ev[2] == 'D' && srv_ev[3] == 'B' &&
+	    srv_bye_node == 5);
+	pthread_mutex_unlock(&ev_lock);
+	qmi_handle_release(&srv);
+	printf("BYE: del_server before ops.bye, a short one ignored: ok\n");
 
 	/* 8. release while a transaction waits: it ends with -ENETRESET */
 	ctrl5(QRTR_TYPE_NEW_SERVER, WLFW_SERVICE_ID_V01, WLFW_SERVICE_VERS_V01, 5, 7);

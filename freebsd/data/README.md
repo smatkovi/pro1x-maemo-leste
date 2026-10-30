@@ -143,13 +143,15 @@ API):
 `INIT_DRIVER` waits for its answer (a minute) on the driver's own thread,
 not on the QMI handles' one that delivers it.
 
-Two differences of freebsd/dsp's `qmi_core.c` from Linux's
-`qmi_interface.c`, found by the tests and handled here (left to the DSP
-stack's owner): `qmi_send_*` return the length sent and `qmi_txn_wait` the
-decoded length (Linux: 0), so only negative values are errors; and
-`ops.bye` gets the sender of the name service's relayed BYE (the local
-node), where Linux passes the BYE's `client.node`, so the modem's departure
-is also taken from the client handle's DEL_SERVER of its IPA service.
+freebsd/dsp's `qmi_core.c` returns and calls as Linux 7.1's
+`qmi_interface.c` (two differences the tests found are fixed there):
+`qmi_send_*` return 0 or a negative errno, `qmi_txn_wait` the response's
+decoded length or a negative errno (Linux's `txn->result`, from
+`qmi_decode_message`), and `ops.bye` gets the BYE's `client.node`, after
+that node's servers went (`qmi_recv_bye`). The client handle has only
+`new_server`, as Linux's `ipa_client_ops`. `ipa_server_bye` acts on the
+modem's node only (Linux's resets on any node's BYE), since here it also
+starts the crash path, which another DSP going must not.
 
 ## Stage 4: sessions (pro1x-modemd)
 

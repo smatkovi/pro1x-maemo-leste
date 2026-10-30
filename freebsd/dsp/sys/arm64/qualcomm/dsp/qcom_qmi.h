@@ -167,7 +167,11 @@ int	qmi_add_lookup(struct qmi_handle *qmi, unsigned int service,
 int	qmi_add_server(struct qmi_handle *qmi, unsigned int service,
 	    unsigned int version, unsigned int instance);
 
-/* timeout in ticks (jiffies) */
+/*
+ * timeout in ticks (jiffies). As Linux: qmi_txn_wait returns the
+ * response's decoded length (qmi_decode_message, >= 0) or a negative
+ * errno; qmi_send_* return 0 or a negative errno.
+ */
 int	qmi_txn_init(struct qmi_handle *qmi, struct qmi_txn *txn,
 	    const struct qmi_elem_info *ei, void *c_struct);
 int	qmi_txn_wait(struct qmi_txn *txn, unsigned long timeout);

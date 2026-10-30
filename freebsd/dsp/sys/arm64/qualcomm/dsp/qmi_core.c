@@ -157,16 +157,21 @@ qmi_recv_del_server(struct qmi_core *c, unsigned int node, unsigned int port,
 	}
 }
 
+/*
+ * The name service's notices, as Linux's qmi_recv_ctrl_pkt: a short one is
+ * ignored; a BYE names the node that went in its client field (the
+ * sender is the name service, this node), whose servers go first
+ * (qmi_recv_bye), then ops.bye hears of it.
+ */
 static void
 qmi_recv_ctrl_pkt(struct qmi_core *c, const struct qmi_rx *rx)
 {
 	struct qmi_handle *qmi = c->qmi;
 	struct qrtr_ctrl_pkt pkt;
 
-	if (rx->len < sizeof(pkt.cmd))
+	if (rx->len < sizeof(pkt))
 		return;
-	memset(&pkt, 0, sizeof(pkt));
-	memcpy(&pkt, rx->data, MIN(rx->len, sizeof(pkt)));
+	memcpy(&pkt, rx->data, sizeof(pkt));
 	switch (pkt.cmd) {
 	case QRTR_TYPE_NEW_SERVER:
 		qmi_recv_new_server(c, pkt.server.service, pkt.server.instance,
@@ -176,9 +181,9 @@ qmi_recv_ctrl_pkt(struct qmi_core *c, const struct qmi_rx *rx)
 		qmi_recv_del_server(c, pkt.server.node, pkt.server.port, false);
 		break;
 	case QRTR_TYPE_BYE:
+		qmi_recv_del_server(c, pkt.client.node, 0, true);
 		if (qmi->ops.bye != NULL)
-			qmi->ops.bye(qmi, rx->node);
-		qmi_recv_del_server(c, rx->node, 0, true);
+			qmi->ops.bye(qmi, pkt.client.node);
 		break;
 	case QRTR_TYPE_DEL_CLIENT:
 		if (qmi->ops.del_client != NULL)
@@ -571,7 +576,8 @@ qmi_send_message(struct qmi_handle *qmi, struct sockaddr_qrtr *sq,
 		return (-EINVAL);
 	error = qrtr_sendto(c->port, node, port, msg, len);
 	glink_free(msg);
-	return (error != 0 ? -error : (ssize_t)len);
+	/* Linux's qmi_send_message: 0, or a negative errno */
+	return (error != 0 ? -error : 0);
 }
 
 int
