@@ -153,10 +153,15 @@ def tidy(stage, own):
     for d, dirs, files in sorted(os.walk(stage), key=lambda x: -len(x[0])):
         if d != stage and not os.listdir(d):
             os.rmdir(d)
-    for rel, why in dropped[:15]:
+    # every file another package owns; of the excluded ones a few
+    owned = [x for x in dropped if x[1] != 'excluded']
+    excl = [x for x in dropped if x[1] == 'excluded']
+    for rel, why in owned[:60] + excl[:5]:
         note('left out: /%s (%s)' % (rel, why))
-    if len(dropped) > 15:
-        note('left out: %d more' % (len(dropped) - 15))
+    if len(owned) > 60:
+        note('left out: %d more owned by other packages' % (len(owned) - 60))
+    if len(excl) > 5:
+        note('left out: %d more excluded' % (len(excl) - 5))
 
 
 # --- version, description, licence ----------------------------------------------
