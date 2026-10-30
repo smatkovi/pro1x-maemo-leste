@@ -41,13 +41,40 @@ unit; `pro1x-desktop phosh|hildon|meego|harmattan` (as root) picks one:
 | Session | Step | What it is |
 | --- | --- | --- |
 | `hildon` | `40-hildon.sh`, `41-hildon-apps.sh` | Maemo Leste's Hildon desktop with its apps, as on Leste and in the FreeBSD packages (Leste's sources at the revisions `freebsd/hildon` pins, Leste's theme, icons and sounds) |
-| `meego` | the same | Hildon with the Nokia N9's look as on FreeBSD: the home views, the launcher and the open applications as pages in a ring, the edge gestures (`patches/meego`), the MeeGo clock and the other MeeGo apps with the N9's theme |
+| `meego` | the same, `42-meego-look.sh` | Hildon with the Nokia N9's look as on Leste and FreeBSD (`patches/meego`): the home views, the launcher and the open applications as pages in a ring, the edge gestures, no title bars but the N9's thin status bar, the one-column app menu, the N9's icon shapes and rolling wheels for dates and times; the Events page (`tools/pro1x-events`: the weather, notifications, the calendar's appointments, a Mastodon timeline; Settings, Events) and the N9's volume bar (`tools/pro1x-volume-osd`); the MeeGo clock and the other MeeGo apps with the N9's theme |
 | `harmattan` | `30-meego.sh` | the N9's own user interface ported to Qt 5 (smatkovi/harmattan-qt5: mcompositor, the home screen, the system UI with its status menu, the settings, the N9's keyboard), its touch and event sounds |
+
+Step 42 also builds the FM radio (`apps/pro1x-fm`, "FM Radio" in the
+launcher: the WCN3950's receiver through `/dev/radio0`, the kernel's
+radio-qca-fm from the shared kernel and its modules, docs/fm-radio.md; its
+sound through PipeWire's PulseAudio server, as on Leste through
+PulseAudio) and its test tools `pro1x-fm-test` and `pro1x-fm-audio-test`
+(`tools/pro1x-fm`).
 
 The N9's theme, fonts and sounds are Nokia's: step 30 takes them from the
 phone's own Harmattan image, nothing of them is in this repository. The
 apps leave out the web engines (QtWebEngine has no Arch Linux ARM package,
 QtWebKit would build for hours) and so Jib and Dorian.
+
+## Building again, on the phone or on the PC
+
+Steps 40 and 41 build a part again when its revision or this repository's
+patches for it change (`patches/hidpi`, `meego`, `fixes`, the FreeBSD ones
+41 takes); `REBUILD="part ..."` builds parts again anyway, and 41 takes
+`ONLY="part ..."` for just these. Bringing an image built before the MeeGo
+look's steps 2 to 4 (2026-10-28) up to date, in Leste with the image on
+`/mnt/arch`:
+
+    bash arch/40-hildon.sh        # libhildon, hildon-status-menu, hildon-desktop
+    ONLY="calendar-backend rtcom-eventlogger rtcom-eventlogger-plugins" \
+        bash arch/41-hildon-apps.sh
+    bash arch/42-meego-look.sh    # the Events page, the volume bar, FM radio
+
+or, without building, the packages of a release (`arch-hildon-*`, made by
+`OUT=/dir bash arch/42-meego-look.sh`) with `PKGS=/dir bash
+arch/42-meego-look.sh`; `MNT=/` runs 42 in the running Arch itself.
+`arch/pc-chroot.sh` makes a chroot of Arch Linux ARM on the PC (qemu) for
+the same builds there.
 
 ## Btrfs and snapshots
 
@@ -91,7 +118,9 @@ and the watchdog; phoc draws with the GPU (freedreno, FD610). Phosh does
 not stay up yet: its home bar asks for a layer surface of height 0
 anchored only at the bottom, and phoc ends the connection ("height 0
 requested without setting top and bottom anchors"). The clock starts at
-1970 until a saved RTC offset exists (`/host/pro1x-rtc-offset`).
+1970 until a saved RTC offset exists (`/host/pro1x-rtc-offset`);
+`pro1x-rtc.service` waits for the RTC (rtc0, a module's, about 17 s into
+the boot) before it puts the offset on top.
 
 Untested so far: everything on the phone (the first boot, the screen's
 rotation, touch), and mobile data (no SIM).

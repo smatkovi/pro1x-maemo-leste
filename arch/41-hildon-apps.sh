@@ -6,23 +6,43 @@
 #
 # apps.sh's recipes are read for /usr instead of FreeBSD's /usr/local, its
 # build helpers (qmake, CMake) are replaced by native ones with a Maemo
-# spec as Leste's (Q_WS_MAEMO_5); Debian's patches and the HiDPI and MeeGo
-# patches are applied, the FreeBSD ones are not. Not built here: the web
+# spec as Leste's (Q_WS_MAEMO_5); Debian's patches and this repository's
+# HiDPI, MeeGo and fix patches (patches/hidpi, meego, fixes) are applied,
+# of the FreeBSD ones those below (FBSD_PATCHES). Not built here: the web
 # engines (no QtWebEngine for Arch Linux ARM, QtWebKit would build for
 # hours) and the apps on them (Jib, Dorian), and the DSP userland, which
 # step 20 takes from Leste. A part that fails is listed at the end and
 # does not stop the others.
 #
 #   bash arch/41-hildon-apps.sh            # as root in Leste, image on $MNT
+#   ONLY="calendar-backend rtcom-eventlogger" bash arch/41-hildon-apps.sh
+#
+# ONLY: just these parts (their sources, build and the libraries before
+# them that they need from here: GTK 2's VTE, libical 3, QtPositioning),
+# with the tools the builds use but not the Qt and other packages of the
+# whole set. A part is built again when its revision or the patches
+# applied to it change; parts built before the patches counted (a mark
+# with the revision only) count as built, but for those whose patches
+# changed since (STALE). REBUILD names parts to build again anyway.
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 MNT=${MNT:-/mnt/arch}
 JOBS=${JOBS:-$(nproc)}
+ONLY=${ONLY:-}
+REBUILD=${REBUILD:-}
+# the parts whose patches changed after the marks with the revision only
+# (2026-10-28: calendar-backend's repeating appointments on 64-bit)
+STALE="calendar-backend"
 B=/usr/src/hildon
 # (Pure Maps and OSM Scout Server: Arch has them as Flatpaks; countdowntimer
 # needs Phonon, which Arch Linux ARM no longer has for Qt 5)
 SKIP=" ffmpeg8-libs qt5-webengine qt5-webkit jib dorian hexagonrpc libqrtr-glib libqmi libssc qrtr rmtfs tqftpserv pd-mapper maplibre-native-qt nemo-qml-plugin-dbus mapbox-gl-qml pure-maps osmscout-server countdowntimer "
 log() { echo ">> $*"; }
+# a part of this run (not skipped; in ONLY, if given)
+want() {
+	case $SKIP in *" $1 "*) return 1 ;; esac
+	[ -z "$ONLY" ] || case " $ONLY " in *" $1 "*) ;; *) return 1 ;; esac
+}
 
 mountpoint -q "$MNT" || { echo "$MNT is not mounted"; exit 1; }
 for m in proc sys dev dev/pts; do
@@ -42,9 +62,11 @@ cp /etc/resolv.conf "$MNT/etc/resolv.conf"
 mkdir -p "$MNT$B/src" "$MNT$B/patches"
 sed -e 's|/usr/local|/usr|g' -e 's|libdata/pkgconfig|lib/pkgconfig|g' \
 	"$REPO/freebsd/hildon/apps.sh" > "$MNT$B/apps-arch.sh"
-mkdir -p "$MNT$B/patches/hidpi" "$MNT$B/patches/meego"
-cp -a "$REPO/patches/hidpi/." "$MNT$B/patches/hidpi/"
-cp -a "$REPO/patches/meego/." "$MNT$B/patches/meego/"
+for d in hidpi meego fixes; do
+	rm -rf "${MNT:?}$B/patches/$d"
+	mkdir -p "$MNT$B/patches/$d"
+	cp -a "$REPO/patches/$d/." "$MNT$B/patches/$d/"
+done
 # those of FreeBSD's patches that are no FreeBSD matter (Qt 5.15, today's
 # compilers); the others are its paths and its interfaces
 FBSD_PATCHES="easylist/0001-missing-semicolon.patch
@@ -66,17 +88,21 @@ bash -c "declare -A REV URL; . '$MNT$B/apps-arch.sh'; declare -p APPS REV URL" >
 . "$MNT$B/apps-tables.sh"
 
 log "packages"
-chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
-# only those Arch Linux ARM has (qt5-location and qt5-websockets it has
-# not): one unknown name would make pacman install none of them. dpkg for
-# dpkg-parsechangelog, which configure.ac files call for their version.
-have=
-for p in cmake qt5-base qt5-svg qt5-declarative \
+# with ONLY the build tools alone (what the parts need besides is there
+# from the whole run, or ONLY's caller installs it)
+all="cmake qt5-base qt5-svg qt5-declarative \
 	qt5-quickcontrols qt5-quickcontrols2 qt5-graphicaleffects qt5-multimedia \
 	qt5-x11extras qt5-xmlpatterns qt5-location qt5-tools qt5-websockets \
 	poppler-glib libical espeak-ng expat libxkbfile curl libsigc++ \
 	evolution-data-server sdl12-compat sdl_mixer sdl_image gnuchess \
-	python python-pip gettext libevent json-c protobuf-c dpkg; do
+	python python-pip gettext libevent json-c protobuf-c dpkg"
+[ -z "$ONLY" ] || all="cmake curl expat python gettext dpkg"
+chroot "$MNT" /bin/bash -euo pipefail -s "$all" <<'EOF'
+# only those Arch Linux ARM has (qt5-location and qt5-websockets it has
+# not): one unknown name would make pacman install none of them. dpkg for
+# dpkg-parsechangelog, which configure.ac files call for their version.
+have=
+for p in $1; do
 	if pacman -Si "$p" > /dev/null 2>&1; then have="$have $p"
 	else echo "   (Arch Linux ARM has no $p)"; fi
 done
@@ -84,6 +110,7 @@ done
 pacman -S --noconfirm --needed $have > /dev/null
 gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
 # Leste's Qt spec: Linux with Maemo 5's define and platform
+command -v qmake-qt5 > /dev/null || exit 0
 d=$(qmake-qt5 -query QT_INSTALL_ARCHDATA)/mkspecs/linux-maemo
 mkdir -p "$d"
 printf 'include(../linux-g++/qmake.conf)\nQMAKE_PLATFORM += maemo5\nDEFINES += Q_WS_MAEMO_5\n' > "$d/qmake.conf"
@@ -94,7 +121,7 @@ EOF
 # has only the GTK 3 and 4 ones
 VTE=vte-0.28.2
 VTE_SHA256=86cf0b81aa023fa93ed415653d51c96767f20b2d7334c893caba71e42654b0ae
-if [ ! -f "$MNT/usr/lib/pkgconfig/vte.pc" ]; then
+if want osso-xterm && [ ! -f "$MNT/usr/lib/pkgconfig/vte.pc" ]; then
 	log "$VTE (GTK 2)"
 	mkdir -p "$MNT$B/dl"
 	f=$MNT$B/dl/$VTE.tar.xz
@@ -121,7 +148,8 @@ fi
 # Arch's, for the calendar backend and the apps on it only (the build loop)
 ICAL=libical-3.0.20
 ICAL_SHA256=e73de92f5a6ce84c1b00306446b290a2b08cdf0a80988eca0a2c9d5c3510b4c2
-if [ ! -f "$MNT/opt/libical3/lib/pkgconfig/libical.pc" ]; then
+if { want calendar-backend || want qalendar || want cal-home-widget; } &&
+    [ ! -f "$MNT/opt/libical3/lib/pkgconfig/libical.pc" ]; then
 	log "$ICAL (/opt/libical3)"
 	mkdir -p "$MNT$B/dl" "$MNT$B/build"
 	f=$MNT$B/dl/$ICAL.tar.gz
@@ -148,7 +176,7 @@ fi
 # what it put there is listed in $B/qt5-positioning.files
 QTLOC=qtlocation-everywhere-opensource-src-5.15.19
 QTLOC_SHA256=d521e36220e061ebfc4109fcbfa4092e861ed1ca54229ffee2eafa1e26f45fd8
-if ! chroot "$MNT" pacman -Qq qt5-location > /dev/null 2>&1 &&
+if want meecast && ! chroot "$MNT" pacman -Qq qt5-location > /dev/null 2>&1 &&
     [ ! -f "$MNT$B/qt5-positioning.files" ]; then
 	log "QtPositioning (${QTLOC##*-})"
 	mkdir -p "$MNT$B/dl" "$MNT$B/build"
@@ -179,7 +207,7 @@ fi
 log "sources"
 for p in "${APPS[@]}"; do
 	name=${p%%|*}
-	case $SKIP in *" $name "*) continue ;; esac
+	want "$name" || continue
 	url=${URL[$name]:-https://github.com/maemo-leste/$name.git}
 	d=$MNT$B/src/$name
 	case $url in *.tar.*|pkg:*) continue ;; esac
@@ -191,8 +219,8 @@ done
 
 log "build"
 printf '%s\n' "${APPS[@]}" > "$MNT$B/apps-list"
-chroot "$MNT" /bin/bash -uo pipefail -s "$JOBS" "$SKIP" <<'EOF'
-jobs=$1 skip=$2
+chroot "$MNT" /bin/bash -uo pipefail -s "$JOBS" "$SKIP" "$ONLY" "$REBUILD" "$STALE" <<'EOF'
+jobs=$1 skip=$2 only=$3 rebuild=" $4 " stale=" $5 "
 B=/usr/src/hildon
 declare -A REV URL
 # apps.sh's FreeBSD-only paths (the DSP headers) ask for the repository
@@ -232,9 +260,22 @@ while IFS= read -r p; do
 	args=${rest%%|*}
 	extra=; case $rest in *"|"*) extra=${rest#*|} ;; esac
 	case $skip in *" $name "*) continue ;; esac
+	[ -z "$only" ] || case " $only " in *" $name "*) ;; *) continue ;; esac
 	[ -d "$B/src/$name/.git" ] || { failed="$failed $name(source)"; continue; }
 	rev=$(git -C $B/src/$name rev-parse HEAD)
-	if [ "$(cat $B/$name.done 2> /dev/null)" = "$rev" ]; then
+	# the patches of FreeBSD's and this repository's for it, in their order
+	ours=
+	for q in "$B/patches/fbsd/$name"/*.patch "$B/patches/hidpi/$name.patch" \
+	    "$B/patches/meego/$name.patch" "$B/patches/fixes/$name.patch"; do
+		[ ! -f "$q" ] || ours="$ours $q"
+	done
+	mark=$rev
+	# shellcheck disable=SC2086
+	[ -z "$ours" ] || mark="$rev $(cat $ours | sha256sum | cut -c1-16)"
+	was=$(cat $B/$name.done 2> /dev/null || true)
+	case $rebuild in *" $name "*) was= ;; esac
+	case $stale in *" $name "*) [ "$was" != "$rev" ] || was= ;; esac
+	if [ "$was" = "$mark" ] || [ "$was" = "$rev" ]; then
 		echo "   $name: built"; continue
 	fi
 	echo "   $name"
@@ -265,11 +306,11 @@ while IFS= read -r p; do
 				[ -n "$q" ] && patch -s -p1 < "debian/patches/$q"
 			done
 		fi
-		for q in "$B/patches/fbsd/$name"/*.patch; do
-			[ ! -f "$q" ] || patch -s -p1 < "$q"
-		done
-		for d in hidpi meego; do
-			[ ! -f "$B/patches/$d/$name.patch" ] || patch -s -p1 < "$B/patches/$d/$name.patch"
+		# FreeBSD's, then HiDPI, the MeeGo look and bug fixes (as Leste's
+		# scripts/49-hidpi.sh: calendar-backend's repeating appointments on
+		# 64-bit, liblocation linked to its libraries)
+		for q in $ours; do
+			patch -s -p1 < "$q"
 		done
 		case $args in
 		"!")	"custom_${name//-/_}" ;;
@@ -302,7 +343,7 @@ while IFS= read -r p; do
 	fi
 	cp -a "$PR/." / || { failed="$failed $name(install)"; continue; }
 	ldconfig
-	echo "$rev" > "$B/$name.done"
+	echo "$mark" > "$B/$name.done"
 done < $B/apps-list
 echo "failed:${failed:- none}"
 EOF

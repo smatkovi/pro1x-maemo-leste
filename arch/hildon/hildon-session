@@ -41,9 +41,24 @@ respawn() {
 		sleep 2
 	done
 }
+# Sound is PipeWire's, its PulseAudio server started by the user's
+# systemd (pipewire-pulse.socket). The N9's volume bar on its default
+# sink, seen while the MeeGo look is on (Leste:
+# Xsession.post/46pro1x-volume-osd; arch/42-meego-look.sh)
+extra=
+if [ -x /usr/bin/pro1x-volume-osd ]; then
+	respawn /usr/bin/pro1x-volume-osd &
+	extra=$!
+fi
 respawn /usr/bin/hildon-status-menu &
 menu=$!
+# The N9's Events page, the first home view while the MeeGo look is on
+# (Leste: Xsession.post/47pro1x-events)
+if [ -x /usr/bin/pro1x-events ]; then
+	respawn /usr/bin/pro1x-events &
+	extra="$extra $!"
+fi
 respawn /usr/bin/hildon-home &
 home=$!
 /usr/bin/hildon-desktop
-kill $menu $home $sapwood 2> /dev/null
+kill $menu $home $extra $sapwood 2> /dev/null

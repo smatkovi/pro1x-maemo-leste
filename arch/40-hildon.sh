@@ -1,19 +1,31 @@
 #!/bin/bash
 # Maemo Leste's Hildon desktop for the Arch Linux ARM image, built natively
 # in the image from Leste's sources at the revisions freebsd/hildon/build.sh
-# pins (PARTS, REV, URL), with Debian's patches and the Pro1X HiDPI
-# patches Leste gets too (patches/hidpi); Leste's theme, icons and sounds
-# from the running Leste itself. An X11 session (hildon-session,
-# hildon.service) beside Phosh and MeeGo (pro1x-desktop hildon).
+# pins (PARTS, REV, URL), with Debian's patches and the patches Leste
+# gets too (patches/hidpi, patches/meego, patches/fixes); Leste's theme,
+# icons and sounds from the running Leste itself. An X11 session
+# (hildon-session, hildon.service) beside Phosh and MeeGo (pro1x-desktop
+# hildon).
 #
 # Runs as root on the phone, in Maemo Leste, with the image mounted on $MNT
-# (Leste has the network the builds need):
+# (Leste has the network the builds need), or on the PC with a chroot of
+# Arch Linux ARM there (arch/pc-chroot.sh; no Leste theme then):
 #
 #   bash arch/40-hildon.sh
+#   REBUILD="libhildon hildon-desktop" bash arch/40-hildon.sh
+#
+# A part is built again when its revision or this repository's patches for
+# it change. Parts built before the patches counted (their mark has the
+# revision only) count as built, but for those whose patches changed since
+# (STALE); REBUILD names parts to build again anyway.
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 MNT=${MNT:-/mnt/arch}
 JOBS=${JOBS:-$(nproc)}
+REBUILD=${REBUILD:-}
+# the parts whose patches changed after the marks with the revision only
+# (2026-10-28: the MeeGo look's steps 2 to 4)
+STALE="libhildon hildon-status-menu hildon-desktop"
 B=/usr/src/hildon
 log() { echo ">> $*"; }
 
@@ -51,6 +63,24 @@ pacman -Sy --noconfirm --needed base-devel git autoconf automake libtool \
 gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
 EOF
 
+# GConf, from the AUR, where step 30 has not built it (as there: built by
+# the user alarm, installed by root)
+if ! chroot "$MNT" pacman -Q gconf > /dev/null 2>&1; then
+	log "GConf (AUR)"
+	chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
+rm -rf /home/alarm/aur/gconf
+install -d -o alarm -g alarm /home/alarm/aur
+su alarm -c 'cd /home/alarm/aur && git clone -q https://aur.archlinux.org/gconf.git'
+deps=$(cd /home/alarm/aur/gconf && bash -c '. ./PKGBUILD; echo "${depends[@]} ${makedepends[@]}"' |
+	sed 's/[<>=][^ ]*//g')
+pacman -S --noconfirm --needed $deps > /dev/null
+su alarm -c 'cd /home/alarm/aur/gconf && makepkg --nocheck --noconfirm > makepkg.log 2>&1' ||
+	{ tail -30 /home/alarm/aur/gconf/makepkg.log; exit 1; }
+pacman -U --noconfirm /home/alarm/aur/gconf/gconf-*.pkg.tar.* > /dev/null
+gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
+EOF
+fi
+
 # --- sources (on the host, Leste has git and the network either way) ----------
 log "sources"
 mkdir -p "$MNT$B/src"
@@ -62,15 +92,17 @@ for p in "${PARTS[@]}"; do
 	git -C "$d" cat-file -e "${REV[$name]}^{commit}" 2> /dev/null || git -C "$d" fetch -q origin
 	git -C "$d" checkout -q -f "${REV[$name]}"
 done
-mkdir -p "$MNT$B/patches/hidpi" "$MNT$B/patches/meego"
-cp -a "$REPO/patches/hidpi/." "$MNT$B/patches/hidpi/"
-cp -a "$REPO/patches/meego/." "$MNT$B/patches/meego/"
+for d in hidpi meego fixes; do
+	rm -rf "${MNT:?}$B/patches/$d"
+	mkdir -p "$MNT$B/patches/$d"
+	cp -a "$REPO/patches/$d/." "$MNT$B/patches/$d/"
+done
 
 # --- build ------------------------------------------------------------------------
 log "build"
 printf '%s\n' "${PARTS[@]}" > "$MNT$B/parts"
-chroot "$MNT" /bin/bash -euo pipefail -s "$JOBS" <<'EOF'
-jobs=$1
+chroot "$MNT" /bin/bash -euo pipefail -s "$JOBS" "$REBUILD" "$STALE" <<'EOF'
+jobs=$1 rebuild=" $2 " stale=" $3 "
 B=/usr/src/hildon
 # Today's GCC refuses what Leste's let pass (C23 by default, implicit
 # declarations and pointer types as errors): the code as it was written
@@ -83,7 +115,18 @@ while IFS= read -r p; do
 	args=${rest%%|*}
 	extra=; case $rest in *"|"*) extra=${rest#*|} ;; esac
 	rev=$(git -C $B/src/$name rev-parse HEAD)
-	if [ "$(cat $B/$name.done 2> /dev/null)" = "$rev" ]; then
+	# this repository's patches for it (HiDPI, the MeeGo look, fixes)
+	ours=
+	for d in hidpi meego fixes; do
+		[ ! -f "$B/patches/$d/$name.patch" ] || ours="$ours $B/patches/$d/$name.patch"
+	done
+	mark=$rev
+	# shellcheck disable=SC2086
+	[ -z "$ours" ] || mark="$rev $(cat $ours | sha256sum | cut -c1-16)"
+	was=$(cat $B/$name.done 2> /dev/null || true)
+	case $rebuild in *" $name "*) was= ;; esac
+	case $stale in *" $name "*) [ "$was" != "$rev" ] || was= ;; esac
+	if [ "$was" = "$mark" ] || [ "$was" = "$rev" ]; then
 		echo "   $name: built"; continue
 	fi
 	echo "   $name"
@@ -95,9 +138,10 @@ while IFS= read -r p; do
 			[ -n "$q" ] && patch -s -p1 < "debian/patches/$q"
 		done
 	fi
-	# HiDPI, then the MeeGo look (pages, edge gestures), as Leste and FreeBSD
-	for d in hidpi meego; do
-		[ ! -f "$B/patches/$d/$name.patch" ] || patch -s -p1 < "$B/patches/$d/$name.patch"
+	# HiDPI, then the MeeGo look (pages, edge gestures, status bar), then
+	# bug fixes, as Leste (scripts/49-hidpi.sh) and FreeBSD
+	for q in $ours; do
+		patch -s -p1 < "$q"
 	done
 	if [ "$args" = "!" ]; then
 		case $name in
@@ -129,19 +173,23 @@ while IFS= read -r p; do
 		make install > install.log 2>&1 || { tail -20 install.log; exit 1; }
 	fi
 	ldconfig
-	echo "$rev" > "$B/$name.done"
+	echo "$mark" > "$B/$name.done"
 done < $B/parts
 EOF
 
 # --- Leste's theme, icons and sounds, from Leste itself ---------------------------
-log "theme, icons and sounds from Leste"
-for pkg in hildon-theme-alpha osso-icons-default osso-sounds-ui; do
-	dpkg -L "$pkg" 2> /dev/null | while read -r f; do
-		[ -f "$f" ] || [ -L "$f" ] || continue
-		mkdir -p "$MNT$(dirname "$f")"
-		cp -a "$f" "$MNT$f"
+if command -v dpkg > /dev/null; then
+	log "theme, icons and sounds from Leste"
+	for pkg in hildon-theme-alpha osso-icons-default osso-sounds-ui; do
+		{ dpkg -L "$pkg" 2> /dev/null || true; } | while read -r f; do
+			[ -f "$f" ] || [ -L "$f" ] || continue
+			mkdir -p "$MNT$(dirname "$f")"
+			cp -a "$f" "$MNT$f"
+		done
 	done
-done
+else
+	log "(not in Leste: no theme, icons and sounds from it)"
+fi
 
 # --- at the N900's size on the full resolution (tools/pro1x-hidpi, as Leste) ----
 log "pro1x-hidpi"
@@ -150,7 +198,7 @@ cp "$REPO/tools/pro1x-hidpi/pro1x-theme-scale.c" "$MNT$B/"
 chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
 gcc -O2 -Wall -o /usr/local/bin/pro1x-theme-scale /usr/src/hildon/pro1x-theme-scale.c \
 	$(pkg-config --cflags --libs gdk-pixbuf-2.0) -lm
-pro1x-hidpi theme > /dev/null
+pro1x-hidpi theme > /dev/null || echo "   (no theme to scale yet: pro1x-hidpi theme once it is there)"
 EOF
 
 # --- the session ------------------------------------------------------------------

@@ -1,19 +1,28 @@
 # The real time across power off (tools/pro1x-rtc): the PMIC's RTC cannot be
 # set, so the clock comes from the RTC plus the offset saved at shutdown,
-# shared with the phone's other systems (pro1x-rtc-sync).
+# shared with the phone's other systems (pro1x-rtc-sync). Kali and Arch.
+#
+# rtc-pm8xxx is a module: rtc0 comes late in the boot (about 17 s), and its
+# registration sets the clock to the RTC's own count (hctosys). A restore
+# before it was undone, and the clock stayed at the last shutdown's time.
+# So the restore waits for rtc0 (at most 30 s) and a moment more for that,
+# as Leste's init script does; not before sysinit.target, which would hold
+# the whole boot for that long, but before time-set.target.
 [Unit]
 Description=Clock from the Pro1X RTC and its saved offset
 DefaultDependencies=no
 After=local-fs.target
-Before=time-set.target sysinit.target shutdown.target
+Before=time-set.target shutdown.target
 Wants=time-set.target
 Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+ExecStartPre=/bin/sh -c 'i=0; while [ ! -e /sys/class/rtc/rtc0 ] && [ $$i -lt 60 ]; do sleep 0.5; i=$$((i + 1)); done; sleep 1'
 ExecStart=/usr/local/sbin/pro1x-rtc-sync restore
 ExecStop=/usr/local/sbin/pro1x-rtc-sync save
+TimeoutStartSec=60
 
 [Install]
 WantedBy=sysinit.target
