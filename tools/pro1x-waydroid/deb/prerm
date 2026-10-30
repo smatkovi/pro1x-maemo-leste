@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+case $1 in
+remove | deconfigure)
+	# the container manager (and a running Android) stopped
+	if command -v rc-service > /dev/null &&
+		rc-service waydroid-container status > /dev/null 2>&1; then
+		invoke-rc.d waydroid-container stop || true
+	fi
+	;;
+esac
+exit 0

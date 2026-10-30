@@ -1,0 +1,26 @@
+#!/bin/sh
+# dbus-daemon's activation of id.waydro.Container (Waydroid's container
+# manager, as root through dbus-daemon-launch-helper) when a session asks
+# for it and nobody owns it: started as the OpenRC service
+# waydroid-container, as systemd starts it for upstream's
+# SystemdService=waydroid-container.service. Package pro1x-waydroid
+# diverts Waydroid's own activation file, which runs the manager outside
+# of any service.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+owned() {
+	dbus-send --system --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+		org.freedesktop.DBus.NameHasOwner string:id.waydro.Container 2> /dev/null |
+		grep -q 'boolean true'
+}
+owned && exit 0
+# also where the service was started before Waydroid was installed (it
+# then did nothing) or the manager is gone
+rc-service waydroid-container restart > /dev/null 2>&1
+# dbus-daemon waits for the name; this process may go once it is owned
+i=0
+while [ $i -lt 60 ]; do
+	owned && exit 0
+	sleep 0.5
+	i=$((i + 1))
+done
+exit 1

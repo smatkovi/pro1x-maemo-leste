@@ -1,0 +1,56 @@
+#!/bin/sh
+set -e
+
+# lxc-net (lxc's bridge lxcbr0 and its dnsmasq at boot) is not needed by
+# Waydroid: out of the runlevel when lxc installs or upgrades it, unless
+# WAYDROID_LXC_NET=keep (/etc/default/pro1x-waydroid)
+lxc_net_off() {
+	WAYDROID_LXC_NET=off
+	[ ! -r /etc/default/pro1x-waydroid ] || . /etc/default/pro1x-waydroid
+	[ "$WAYDROID_LXC_NET" = keep ] && return 0
+	[ -e /etc/runlevels/default/lxc-net ] || return 0
+	command -v rc-update > /dev/null || return 0
+	rc-update del lxc-net default > /dev/null 2>&1 &&
+		echo "pro1x-waydroid: lxc-net taken out of the boot runlevel (Waydroid has its own bridge)" || true
+}
+
+case $1 in
+triggered)
+	lxc_net_off
+	;;
+configure)
+	# Waydroid's repository for the Debian release under this Devuan
+	# (daedalus: bookworm); its key is /usr/share/keyrings/pro1x-waydroid.gpg
+	codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2> /dev/null | tr -d '"')
+	case $codename in
+	chimaera | bullseye) dist=bullseye ;;
+	daedalus | bookworm) dist=bookworm ;;
+	excalibur | trixie) dist=trixie ;;
+	*)
+		case $(cut -d. -f1 /etc/debian_version 2> /dev/null) in
+		11) dist=bullseye ;;
+		13) dist=trixie ;;
+		*) dist=bookworm ;;
+		esac
+		;;
+	esac
+	cat > /etc/apt/sources.list.d/pro1x-waydroid.list <<-LIST
+	# pro1x-waydroid (written by its postinst, removed with it): Waydroid's own
+	# repository, its packages for Debian $dist (waydroid, libgbinder,
+	# python3-gbinder, libglibutil)
+	deb [signed-by=/usr/share/keyrings/pro1x-waydroid.gpg] https://repo.waydro.id/ $dist main
+	LIST
+	chmod 644 /etc/apt/sources.list.d/pro1x-waydroid.list
+	# the container manager at boot (it does nothing without Waydroid)
+	if command -v rc-update > /dev/null; then
+		rc-update add waydroid-container default > /dev/null 2>&1 || true
+	fi
+	# the system's dnsmasq leaves waydroid0 to Waydroid's
+	# (/etc/dnsmasq.d/pro1x-waydroid)
+	if [ -x /etc/init.d/dnsmasq ] && command -v rc-service > /dev/null &&
+		rc-service dnsmasq status > /dev/null 2>&1; then
+		invoke-rc.d dnsmasq restart || true
+	fi
+	;;
+esac
+exit 0

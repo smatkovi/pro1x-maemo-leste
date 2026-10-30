@@ -1,0 +1,12 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Type=Application
+Name=Android
+Comment=Android apps (Waydroid)
+Exec=/usr/bin/pro1x-waydroid
+Icon=pro1x-waydroid
+Terminal=false
+Categories=System;Emulator;
+X-Osso-Type=application/x-executable
+X-Maemo-Wm-Class=Weston Compositor

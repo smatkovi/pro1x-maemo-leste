@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=id.waydro.Container
+Exec=/usr/lib/pro1x-waydroid/dbus-activate
+User=root
+SystemdService=waydroid-container.service

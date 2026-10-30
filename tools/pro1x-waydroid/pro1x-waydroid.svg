@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- pro1x-waydroid's menu icon: a phone with a container inside. Drawn for
+     this package; no third-party artwork. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="#2e8b57"/>
+  <rect x="38" y="16" width="52" height="96" rx="9" fill="#ffffff"/>
+  <rect x="44" y="28" width="40" height="66" rx="3" fill="#2e8b57"/>
+  <circle cx="64" cy="103" r="4" fill="#2e8b57"/>
+  <path d="M52 52 L64 45 L76 52 L76 70 L64 77 L52 70 Z" fill="#ffffff"/>
+  <path d="M52 52 L64 59 L76 52 M64 59 L64 77" fill="none" stroke="#2e8b57" stroke-width="3" stroke-linejoin="round"/>
+</svg>

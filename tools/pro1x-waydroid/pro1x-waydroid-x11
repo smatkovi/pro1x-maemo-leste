@@ -1,0 +1,153 @@
+#!/usr/bin/python3 -I
+"""pro1x-waydroid-x11: the nested compositor's X window (Xlib by ctypes,
+no X tools needed).
+
+    pro1x-waydroid-x11 window CLASS TITLE TIMEOUT
+
+waits up to TIMEOUT seconds for a mapped window whose WM_CLASS class is
+CLASS (weston 10's X11 backend: "Weston Compositor", without a WM_NAME),
+names it TITLE (WM_NAME and _NET_WM_NAME, which Hildon's title bar shows)
+and prints "XID WIDTH HEIGHT": the size the window manager gave it.
+Exit status 1 when no such window appeared.
+"""
+import ctypes
+import ctypes.util
+import sys
+import time
+
+Window = ctypes.c_ulong
+Atom = ctypes.c_ulong
+IsViewable = 2
+
+
+class XClassHint(ctypes.Structure):
+    _fields_ = [("res_name", ctypes.c_void_p), ("res_class", ctypes.c_void_p)]
+
+
+class XWindowAttributes(ctypes.Structure):
+    # the leading fields of Xlib's XWindowAttributes, then room for the rest
+    _fields_ = [("x", ctypes.c_int), ("y", ctypes.c_int),
+                ("width", ctypes.c_int), ("height", ctypes.c_int),
+                ("border_width", ctypes.c_int), ("depth", ctypes.c_int),
+                ("visual", ctypes.c_void_p), ("root", Window),
+                ("c_class", ctypes.c_int), ("bit_gravity", ctypes.c_int),
+                ("win_gravity", ctypes.c_int), ("backing_store", ctypes.c_int),
+                ("backing_planes", ctypes.c_ulong),
+                ("backing_pixel", ctypes.c_ulong),
+                ("save_under", ctypes.c_int), ("colormap", ctypes.c_ulong),
+                ("map_installed", ctypes.c_int), ("map_state", ctypes.c_int),
+                ("all_event_masks", ctypes.c_long),
+                ("your_event_mask", ctypes.c_long),
+                ("do_not_propagate_mask", ctypes.c_long),
+                ("override_redirect", ctypes.c_int),
+                ("screen", ctypes.c_void_p), ("_spare", ctypes.c_char * 64)]
+
+
+def load_xlib():
+    name = ctypes.util.find_library("X11") or "libX11.so.6"
+    x = ctypes.CDLL(name)
+    x.XOpenDisplay.restype = ctypes.c_void_p
+    x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x.XDefaultRootWindow.restype = Window
+    x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x.XQueryTree.argtypes = [ctypes.c_void_p, Window, ctypes.POINTER(Window),
+                             ctypes.POINTER(Window),
+                             ctypes.POINTER(ctypes.POINTER(Window)),
+                             ctypes.POINTER(ctypes.c_uint)]
+    x.XGetWindowAttributes.argtypes = [ctypes.c_void_p, Window,
+                                       ctypes.POINTER(XWindowAttributes)]
+    x.XGetClassHint.argtypes = [ctypes.c_void_p, Window,
+                                ctypes.POINTER(XClassHint)]
+    x.XFree.argtypes = [ctypes.c_void_p]
+    x.XStoreName.argtypes = [ctypes.c_void_p, Window, ctypes.c_char_p]
+    x.XInternAtom.restype = Atom
+    x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    x.XChangeProperty.argtypes = [ctypes.c_void_p, Window, Atom, Atom,
+                                  ctypes.c_int, ctypes.c_int,
+                                  ctypes.c_char_p, ctypes.c_int]
+    x.XFlush.argtypes = [ctypes.c_void_p]
+    x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    # a window that goes away between the query and the look is no error
+    handler = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+    x._ignore = handler(lambda d, e: 0)
+    x.XSetErrorHandler.argtypes = [handler]
+    x.XSetErrorHandler(x._ignore)
+    return x
+
+
+def class_of(x, dpy, w):
+    h = XClassHint()
+    if not x.XGetClassHint(dpy, w, ctypes.byref(h)):
+        return None
+    s = None
+    if h.res_class:
+        s = ctypes.cast(h.res_class, ctypes.c_char_p).value.decode("utf-8", "replace")
+    for p in (h.res_name, h.res_class):
+        if p:
+            x.XFree(p)
+    return s
+
+
+def find(x, dpy, w, wm_class):
+    root, parent = Window(), Window()
+    children, n = ctypes.POINTER(Window)(), ctypes.c_uint()
+    if not x.XQueryTree(dpy, w, ctypes.byref(root), ctypes.byref(parent),
+                        ctypes.byref(children), ctypes.byref(n)):
+        return None
+    kids = [children[i] for i in range(n.value)]
+    if children:
+        x.XFree(children)
+    for c in kids:
+        if class_of(x, dpy, c) == wm_class:
+            a = XWindowAttributes()
+            if x.XGetWindowAttributes(dpy, c, ctypes.byref(a)) and \
+                    a.map_state == IsViewable:
+                return c, a.width, a.height
+        found = find(x, dpy, c, wm_class)
+        if found:
+            return found
+    return None
+
+
+def window(wm_class, title, timeout):
+    x = load_xlib()
+    dpy = x.XOpenDisplay(None)
+    if not dpy:
+        print("pro1x-waydroid-x11: cannot open the X display", file=sys.stderr)
+        return 1
+    end = time.monotonic() + timeout
+    found = None
+    while True:
+        found = find(x, dpy, x.XDefaultRootWindow(dpy), wm_class)
+        if found or time.monotonic() > end:
+            break
+        time.sleep(0.2)
+    if not found:
+        x.XCloseDisplay(dpy)
+        return 1
+    w = found[0]
+    # let the window manager's placement settle, then read the size again
+    time.sleep(0.5)
+    a = XWindowAttributes()
+    if x.XGetWindowAttributes(dpy, w, ctypes.byref(a)):
+        found = (w, a.width, a.height)
+    t = title.encode("utf-8")
+    x.XStoreName(dpy, w, t)
+    x.XChangeProperty(dpy, w, x.XInternAtom(dpy, b"_NET_WM_NAME", 0),
+                      x.XInternAtom(dpy, b"UTF8_STRING", 0), 8, 0, t, len(t))
+    x.XSync(dpy, 0)
+    x.XCloseDisplay(dpy)
+    print("0x%x %d %d" % found)
+    return 0
+
+
+def main(argv):
+    if len(argv) == 5 and argv[1] == "window":
+        return window(argv[2], argv[3], float(argv[4]))
+    print(__doc__.strip(), file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

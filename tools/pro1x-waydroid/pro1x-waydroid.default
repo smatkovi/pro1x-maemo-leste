@@ -1,0 +1,40 @@
+# Settings of pro1x-waydroid (Waydroid in Hildon on the F(x)tec Pro1X),
+# read by the container service (/etc/init.d/waydroid-container) and by
+# the Android menu entry (pro1x-waydroid). A user's
+# ~/.config/pro1x-waydroid.conf may override the window settings
+# (WAYDROID_WINDOW, WAYDROID_RENDERER, WAYDROID_DENSITY).
+
+# Where Waydroid keeps its images and its container (about 2 GB after
+# "waydroid init", more during the download). Empty: /var/lib/waydroid on
+# Leste's root image. A directory on userdata instead, e.g.
+# /host/pro1x-waydroid (mkdir it first): the service binds it to
+# /var/lib/waydroid when it starts, so set it before "waydroid init" and
+# restart the service (rc-service waydroid-container restart).
+WAYDROID_STORE=
+
+# The Android window: "window" (below Hildon's title bar, with its close
+# button) or "fullscreen" (the whole screen; the task switcher and closing
+# then only by keyboard or "pro1x-waydroid stop").
+WAYDROID_WINDOW=window
+
+# The nested compositor's renderer: "gl" (OpenGL ES, needed when Android
+# renders on the GPU) or "pixman" (software; enough for
+# "pro1x-waydroid software"). gl falls back to pixman by itself when it
+# does not start.
+WAYDROID_RENDERER=gl
+
+# Android's density in dpi (multiples of 20). Empty: 160 times Hildon's
+# scale (pro1x-hidpi, HILDON_SCALE: 2.25 gives 360).
+WAYDROID_DENSITY=
+
+# yes: the container service adds this package's Waydroid properties where
+# they are missing (persist.waydroid.fake_touch=*: the touch screen reaches
+# the nested compositor as a mouse). no: the service leaves waydroid.cfg
+# alone.
+WAYDROID_PROPERTY_DEFAULTS=yes
+
+# off: when lxc (which comes with Waydroid) is installed or upgraded, its
+# service lxc-net (a bridge lxcbr0 with its own dnsmasq at boot, for LXC's
+# own containers; Waydroid has its own bridge) is taken out of the boot
+# runlevel. keep: left as lxc sets it up.
+WAYDROID_LXC_NET=off

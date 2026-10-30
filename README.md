@@ -27,6 +27,7 @@ there, every boot image variant that was tested: [docs/HANDOFF.md](docs/HANDOFF.
 | Device lock code (CAL) | works | block2mtd file as `/dev/mtd1`, patched libcal |
 | Crash logs | works | ramoops, `/sys/fs/pstore` |
 | Double tap to wake | not working yet | goodix patch in the kernel, first test failed |
+| Android apps (Waydroid) | prepared, untested on the phone | `pro1x-waydroid` package: OpenRC service, Waydroid's repository, Android as one Hildon window (nested weston); then `apt install waydroid` ([docs/waydroid.md](docs/waydroid.md)) |
 
 The key point: with an empty `dtbo` the stock ABL only accepts a **DTB appended
 to the kernel** (header v0); the DTB section of header v2 is not enough.
@@ -261,6 +262,7 @@ would otherwise lose its slot after seven starts.
 | `scripts/49-apps.sh` | inside the rootfs, root | `pro1x-camera`, the Desktop applet (`pro1x-look`) |
 | `scripts/49-hidpi.sh` | inside the rootfs, root | Hildon at the N900's size on 2160x1080 (`tools/pro1x-hidpi`); also the parts with bug fixes in `patches/fixes/` (liblocation, location-ui, calendar-backend) |
 | `scripts/49-mobile-data.sh` | inside the rootfs, root | oFono rebuilt for mobile data over the IPA (`patches/fixes/ofono.patch`), `pro1x-modem-wait` instead of `pro1x-rmnet` |
+| `scripts/mkdeb-waydroid.sh` | inside the rootfs (or a Leste chroot), root | the `pro1x-waydroid` package: everything Waydroid needs on Leste before `apt install waydroid` ([docs/waydroid.md](docs/waydroid.md)) |
 | `scripts/50-build-bootimg.sh` | build host | pack the Android boot image (v0, DTB appended) |
 | `scripts/55-deploy-rootfs.sh` | device, root | first deployment: shrink, stream, grow again (additive) |
 | `scripts/56-update-rootfs.sh` | device, root | updates as rsync delta (`--inplace`) |

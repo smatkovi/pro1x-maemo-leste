@@ -1,0 +1,18 @@
+# pro1x-waydroid's apt preferences.
+#
+# Waydroid's libgbinder needs libglibutil 1.0.52 or newer; Leste's
+# repository has 1.0.35 and its pin (1001, /etc/apt/preferences.d/
+# pin-daedalus) would keep it, so Waydroid's repository's libglibutil
+# wins (1002). It is the same library, newer and compatible (its only
+# user in Leste, libgofono, links symbols both versions have).
+Package: libglibutil
+Pin: origin repo.waydro.id
+Pin-Priority: 1002
+
+# Waydroid needs lxc, not what lxc recommends: container templates (with
+# debootstrap, qemu-utils and Ceph libraries), lxcfs (a FUSE daemon at
+# boot) and libpam-cgfs (a PAM session module). Delete these lines to
+# install them anyway.
+Package: lxc-templates lxcfs libpam-cgfs
+Pin: version *
+Pin-Priority: -1

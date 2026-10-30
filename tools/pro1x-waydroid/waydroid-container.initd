@@ -1,0 +1,103 @@
+#!/sbin/openrc-run
+# Waydroid's container manager for Maemo Leste (package pro1x-waydroid,
+# tools/pro1x-waydroid): what upstream's waydroid-container.service does
+# under systemd, "waydroid container start" as a daemon on the system bus
+# (id.waydro.Container). The Android container itself starts with a
+# session (the Hildon menu's Android entry, pro1x-waydroid).
+#
+# Before it starts the manager: /var/lib/waydroid on WAYDROID_STORE (if
+# set in /etc/default/pro1x-waydroid), the kernel modules of the
+# container's network (veth, bridge, iptables NAT as waydroid-net.sh uses
+# them), the package's Waydroid properties (pro1x-waydroid defaults).
+# Waydroid mounts binderfs and makes its binder devices itself.
+#
+# Without Waydroid installed it does nothing (and says so).
+
+description="Waydroid container manager"
+command=/usr/bin/waydroid
+command_args="container start"
+supervisor=supervise-daemon
+respawn_delay=3
+respawn_max=5
+respawn_period=120
+# as upstream's unit (UMask=0022)
+umask=022
+output_log=/var/log/waydroid-container.log
+error_log=/var/log/waydroid-container.log
+# SIGTERM: the manager stops the container and its network itself
+retry="TERM/30/KILL/5"
+
+[ -r /etc/default/pro1x-waydroid ] && . /etc/default/pro1x-waydroid
+
+depend() {
+	need dbus
+	use net
+	# after, not need: the cgroups are mounted in sysinit; Leste's OpenRC
+	# (on sysvinit) has no localmount
+	after cgroups localmount icd2
+}
+
+# /var/lib/waydroid (the images, ~2 GB) on another disk, e.g. userdata
+store_bind() {
+	[ -n "$WAYDROID_STORE" ] || return 0
+	mountinfo -q /var/lib/waydroid && return 0
+	if [ ! -d "$WAYDROID_STORE" ]; then
+		eerror "WAYDROID_STORE $WAYDROID_STORE does not exist (mkdir it, or empty the setting)"
+		return 1
+	fi
+	if [ -e /var/lib/waydroid/waydroid.cfg ] || [ -e /var/lib/waydroid/images ]; then
+		eerror "/var/lib/waydroid holds a Waydroid setup: move its contents to $WAYDROID_STORE first"
+		return 1
+	fi
+	mkdir -p /var/lib/waydroid
+	ebegin "Binding $WAYDROID_STORE to /var/lib/waydroid"
+	mount --bind "$WAYDROID_STORE" /var/lib/waydroid
+	eend $?
+}
+
+prepare() {
+	local m missing=
+	# waydroid-net.sh: a bridge (waydroid0), the container's veth, NAT with
+	# iptables-legacy (or iptables), the DHCP answers' checksums
+	# (CHECKSUM target); the images: loop, overlayfs; Android's vold: fuse
+	if [ -d "/lib/modules/$(uname -r)" ]; then
+		for m in loop fuse overlay veth bridge nf_nat ip_tables \
+			iptable_filter iptable_nat iptable_mangle xt_MASQUERADE \
+			xt_CHECKSUM xt_tcpudp; do
+			modprobe -q "$m" 2> /dev/null || missing="$missing $m"
+		done
+		[ -z "$missing" ] || ewarn "kernel modules not loaded:$missing"
+	else
+		ewarn "no /lib/modules/$(uname -r): kernel modules not loaded"
+	fi
+	grep -qw binder /proc/filesystems ||
+		ewarn "this kernel has no binderfs (CONFIG_ANDROID_BINDERFS): Android will not start"
+	[ -e /sys/fs/cgroup/cgroup.controllers ] || [ -e /sys/fs/cgroup/unified/cgroup.controllers ] ||
+		mountinfo -q /sys/fs/cgroup ||
+		ewarn "/sys/fs/cgroup is not mounted (OpenRC's cgroups service)"
+	# the properties Hildon's nested compositor needs (mouse as touch), once
+	if [ -f /var/lib/waydroid/waydroid.cfg ] && yesno "${WAYDROID_PROPERTY_DEFAULTS:-yes}" &&
+		[ -x /usr/bin/pro1x-waydroid ]; then
+		/usr/bin/pro1x-waydroid defaults --quiet ||
+			ewarn "pro1x-waydroid defaults failed"
+	fi
+	return 0
+}
+
+start() {
+	service_set_value manager no
+	store_bind || return 1
+	if [ ! -x "$command" ]; then
+		einfo "Waydroid is not installed (apt install waydroid): nothing to start"
+		return 0
+	fi
+	prepare
+	default_start || return 1
+	service_set_value manager yes
+}
+
+stop() {
+	# nothing to stop where start found no Waydroid
+	[ "$(service_get_value manager)" = yes ] || return 0
+	default_stop
+}

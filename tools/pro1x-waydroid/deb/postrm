@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+F=/usr/share/dbus-1/system-services/id.waydro.Container.service
+case $1 in
+remove | abort-install | disappear)
+	if command -v rc-update > /dev/null; then
+		rc-update del waydroid-container default > /dev/null 2>&1 || true
+	fi
+	# the source goes with its key
+	rm -f /etc/apt/sources.list.d/pro1x-waydroid.list
+	# Waydroid's own activation file back
+	dpkg-divert --package pro1x-waydroid --remove --rename --divert "$F.waydroid" "$F"
+	;;
+purge)
+	rm -f /var/log/waydroid-container.log
+	# the dnsmasq drop-in is gone with the configuration files
+	if [ -x /etc/init.d/dnsmasq ] && command -v rc-service > /dev/null &&
+		rc-service dnsmasq status > /dev/null 2>&1; then
+		invoke-rc.d dnsmasq restart || true
+	fi
+	;;
+esac
+exit 0

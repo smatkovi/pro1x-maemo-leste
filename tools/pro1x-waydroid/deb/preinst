@@ -1,0 +1,12 @@
+#!/bin/sh
+# pro1x-waydroid: Waydroid's own D-Bus activation file starts its container
+# manager outside of any service; diverted, the package's own one starts
+# the OpenRC service waydroid-container instead (dbus-activate).
+set -e
+F=/usr/share/dbus-1/system-services/id.waydro.Container.service
+case $1 in
+install | upgrade)
+	dpkg-divert --package pro1x-waydroid --add --rename --divert "$F.waydroid" "$F"
+	;;
+esac
+exit 0

@@ -1,0 +1,455 @@
+#!/bin/sh
+# pro1x-waydroid: Android (Waydroid) as one window of Hildon's X11 desktop
+# on the F(x)tec Pro1X (Maemo Leste), package pro1x-waydroid.
+#
+#   pro1x-waydroid [start]   (the menu's Android entry) a nested Wayland
+#                            compositor (weston, X11 backend) as one Hildon
+#                            window, Waydroid's session and full UI in it;
+#                            closing the window stops the session
+#   pro1x-waydroid stop      the session stopped (the window closes)
+#   pro1x-waydroid status    what is installed, configured and running
+#   pro1x-waydroid check     the kernel and system features Waydroid needs
+#   pro1x-waydroid gpu       as root: Android renders on the GPU (Mesa,
+#                            freedreno on the Adreno 610); Waydroid's default
+#   pro1x-waydroid software  as root: Android renders in software
+#                            (SwiftShader), when the GPU mode fails
+#   pro1x-waydroid defaults  as root: this package's Waydroid properties
+#                            where they are missing (the container service
+#                            does it when it starts)
+#   pro1x-waydroid compositor  only the nested compositor, for tests: prints
+#                            its WAYLAND_DISPLAY, runs until it is closed
+#
+# Settings: /etc/default/pro1x-waydroid, ~/.config/pro1x-waydroid.conf.
+# Logs of the last start in $XDG_RUNTIME_DIR: pro1x-waydroid.log,
+# pro1x-waydroid-weston.log, pro1x-waydroid-session.log (Waydroid's
+# session).
+
+WAYDROID_WINDOW=window
+WAYDROID_RENDERER=gl
+WAYDROID_DENSITY=
+[ -r /etc/default/pro1x-waydroid ] && . /etc/default/pro1x-waydroid
+[ -n "$HOME" ] && [ -r "$HOME/.config/pro1x-waydroid.conf" ] &&
+	. "$HOME/.config/pro1x-waydroid.conf"
+
+WORK=/var/lib/waydroid
+CFG=$WORK/waydroid.cfg
+LIB=/usr/lib/pro1x-waydroid
+SOCKET=wayland-pro1x-waydroid
+TITLE=Android
+# weston 10's X11 window (also X-Maemo-Wm-Class of the menu entry)
+WM_CLASS="Weston Compositor"
+
+# A message for the user: Hildon's banner when there is a session, always
+# stderr
+note() {
+	echo "pro1x-waydroid: $*" >&2
+	[ -n "$DBUS_SESSION_BUS_ADDRESS" ] || return 0
+	dbus-send --session --type=method_call --dest=org.freedesktop.Notifications \
+		/org/freedesktop/Notifications org.freedesktop.Notifications.SystemNoteInfoprint \
+		string:"$*" > /dev/null 2>&1 || true
+}
+fail() {
+	note "$*"
+	exit 1
+}
+need_root() {
+	[ "$(id -u)" = 0 ] || fail "'$1' needs root (sudo pro1x-waydroid $1)"
+}
+
+# ---- Waydroid's properties (waydroid.cfg, [properties]) ----
+
+# props_edit MODE: defaults (fake touch where missing), software (gralloc
+# default, SwiftShader, no Vulkan), gpu (those removed: Waydroid's own
+# choice, gbm + Mesa on the render node). Prints what changed; status 3
+# when nothing did.
+props_edit() {
+	python3 -I - "$CFG" "$1" <<-'EOF'
+	import configparser, os, shutil, sys
+	path, mode = sys.argv[1], sys.argv[2]
+	cfg = configparser.ConfigParser()  # as Waydroid reads and writes it
+	cfg.read(path)
+	if "properties" not in cfg:
+	    cfg["properties"] = {}
+	p = cfg["properties"]
+	changed = []
+	def put(k, v, if_missing=False):
+	    if (if_missing and k in p) or p.get(k) == v:
+	        return
+	    p[k] = v
+	    changed.append("%s=%s" % (k, v))
+	def drop(k):
+	    if k in p:
+	        del p[k]
+	        changed.append("%s removed" % k)
+	soft = {"ro.hardware.gralloc": "default", "ro.hardware.egl": "swiftshader",
+	        "ro.hardware.vulkan": ""}
+	if mode == "defaults":
+	    # the nested compositor gets the touch screen as X's pointer
+	    put("persist.waydroid.fake_touch", "*", if_missing=True)
+	elif mode == "software":
+	    for k, v in soft.items():
+	        put(k, v)
+	elif mode == "gpu":
+	    for k in soft:
+	        drop(k)
+	if not changed:
+	    sys.exit(3)
+	tmp = path + ".pro1x-new"
+	with open(tmp, "w") as f:
+	    cfg.write(f)
+	shutil.copymode(path, tmp)
+	os.replace(tmp, path)
+	print("\n".join(changed))
+	EOF
+}
+
+props() {
+	need_root "$1"
+	[ -f "$CFG" ] || fail "Waydroid is not set up: waydroid init first"
+	quiet=$2
+	out=$(props_edit "$1")
+	case $? in
+	0)	[ -n "$quiet" ] || printf '%s\n' "$out" | sed 's/^/  /'
+		# waydroid_base.prop from waydroid.cfg; a running container is
+		# restarted with it
+		waydroid upgrade -o > /dev/null 2>&1 || fail "waydroid upgrade -o failed"
+		[ -n "$quiet" ] || echo "applied (waydroid upgrade -o)"
+		;;
+	3)	[ -n "$quiet" ] || echo "nothing to change" ;;
+	*)	fail "could not edit $CFG" ;;
+	esac
+	if [ -z "$quiet" ]; then
+		case $1 in
+		gpu)	echo "GPU rendering: the next Android start (close the Android window, open it again)" ;;
+		software) echo "software rendering: the next Android start (close the Android window, open it again)" ;;
+		esac
+	fi
+}
+
+# ---- the session's environment ----
+
+runtime_dir() {
+	uid=$(id -u)
+	if [ -z "$XDG_RUNTIME_DIR" ] || [ ! -d "$XDG_RUNTIME_DIR" ] || [ ! -w "$XDG_RUNTIME_DIR" ]; then
+		if [ -d "/run/user/$uid" ] && [ -w "/run/user/$uid" ]; then
+			XDG_RUNTIME_DIR=/run/user/$uid
+		else
+			XDG_RUNTIME_DIR=/tmp/pro1x-waydroid-$uid
+			mkdir -p -m 700 "$XDG_RUNTIME_DIR" 2> /dev/null
+			[ -d "$XDG_RUNTIME_DIR" ] && [ -O "$XDG_RUNTIME_DIR" ] ||
+				fail "no runtime directory ($XDG_RUNTIME_DIR)"
+			chmod 700 "$XDG_RUNTIME_DIR"
+		fi
+	fi
+	export XDG_RUNTIME_DIR
+}
+
+# Waydroid binds PulseAudio's socket into the container: where the
+# session's PulseAudio has it ($XDG_RUNTIME_DIR/pulse by default)
+pulse_path() {
+	[ -n "$PULSE_RUNTIME_PATH" ] && return 0
+	s=$(LC_ALL=C pactl info 2> /dev/null | sed -n 's/^Server String: //p')
+	s=${s#unix:}
+	case $s in
+	/*/native) PULSE_RUNTIME_PATH=${s%/native}; export PULSE_RUNTIME_PATH ;;
+	esac
+}
+
+# Android's density: Waydroid takes GRID_UNIT_PX * 20 (where the host has
+# no ro.sf.lcd_density)
+density() {
+	d=$WAYDROID_DENSITY
+	if [ -z "$d" ]; then
+		s=${HILDON_SCALE:-}
+		[ -n "$s" ] || s=$(/usr/local/bin/pro1x-hidpi get 2> /dev/null)
+		d=$(awk -v s="${s:-1}" 'BEGIN { printf "%d", 160 * s + 0.5 }')
+	fi
+	GRID_UNIT_PX=$(((d + 10) / 20))
+	export GRID_UNIT_PX
+}
+
+screen_size() {
+	xrandr --current 2> /dev/null |
+		sed -n 's/.* current \([0-9]*\) x \([0-9]*\).*/\1 \2/p' | head -1
+}
+
+# The height of Hildon's title bar: the app windows' north decoration of
+# the theme in use (pro1x-hidpi's scaled copy), else 56 times the scale
+title_height() {
+	t=$(awk '/<client type="app"/ { app = 1 }
+		app && /<decor type="north"/ { north = 1 }
+		north && match($0, /template-height="[0-9]+"/) {
+			print substr($0, RSTART + 17, RLENGTH - 18); exit }' \
+		/etc/hildon/theme/matchbox2/theme.xml 2> /dev/null)
+	[ -n "$t" ] || t=$(awk -v s="${HILDON_SCALE:-1}" 'BEGIN { printf "%d", 56 * s + 0.5 }')
+	echo "$t"
+}
+
+# ---- the nested compositor ----
+
+WPID=
+weston_up() {
+	w=$1 h=$2 renderer=$3
+	set -- --backend=x11-backend.so --shell=kiosk-shell.so --socket="$SOCKET" \
+		--width="$w" --height="$h" --idle-time=0 \
+		--config="$LIB/weston.ini" --log="$XDG_RUNTIME_DIR/pro1x-waydroid-weston.log"
+	[ "$WAYDROID_WINDOW" = fullscreen ] && set -- "$@" --fullscreen
+	[ "$renderer" = pixman ] && set -- "$@" --use-pixman
+	rm -f "$XDG_RUNTIME_DIR/$SOCKET" "$XDG_RUNTIME_DIR/$SOCKET.lock"
+	echo "weston $*" >> "$LOG"
+	weston "$@" >> "$LOG" 2>&1 &
+	WPID=$!
+	i=0
+	while [ $i -lt 150 ]; do
+		[ -S "$XDG_RUNTIME_DIR/$SOCKET" ] && return 0
+		kill -0 "$WPID" 2> /dev/null || break
+		sleep 0.1
+		i=$((i + 1))
+	done
+	kill "$WPID" 2> /dev/null
+	wait "$WPID" 2> /dev/null
+	WPID=
+	return 1
+}
+
+weston_down() {
+	[ -n "$WPID" ] || return 0
+	kill "$WPID" 2> /dev/null
+	i=0
+	while kill -0 "$WPID" 2> /dev/null && [ $i -lt 30 ]; do
+		sleep 0.1
+		i=$((i + 1))
+	done
+	kill -9 "$WPID" 2> /dev/null
+	wait "$WPID" 2> /dev/null
+	WPID=
+}
+
+compositor() {
+	command -v weston > /dev/null || fail "weston is missing (apt install weston)"
+	[ -n "$DISPLAY" ] || fail "no X display"
+	set -- $(screen_size)
+	[ $# = 2 ] || fail "cannot read the screen size (xrandr)"
+	sw=$1 sh=$2
+	if [ "$WAYDROID_WINDOW" = fullscreen ]; then
+		w=$sw h=$sh
+	else
+		w=$sw h=$((sh - $(title_height)))
+	fi
+	renderer=$WAYDROID_RENDERER
+	: > "$XDG_RUNTIME_DIR/pro1x-waydroid-weston.log"
+	if ! weston_up "$w" "$h" "$renderer"; then
+		[ "$renderer" = gl ] || return 1
+		echo "the GL renderer did not start; pixman (Android's GPU mode needs GL)" >> "$LOG"
+		renderer=pixman
+		weston_up "$w" "$h" "$renderer" || return 1
+	fi
+	# the size Hildon gave the window; weston cannot follow a resize, so it
+	# starts again once with that size
+	got=$("$LIB/pro1x-waydroid-x11" window "$WM_CLASS" "$TITLE" 10 2>> "$LOG")
+	echo "window: ${got:-not found}, asked ${w}x$h" >> "$LOG"
+	set -- $got
+	if [ $# = 3 ] && [ "$WAYDROID_WINDOW" != fullscreen ] &&
+		{ [ "$2" != "$w" ] || [ "$3" != "$h" ]; } && [ "$2" -gt 0 ] && [ "$3" -gt 0 ]; then
+		w=$2 h=$3
+		weston_down
+		weston_up "$w" "$h" "$renderer" || return 1
+		"$LIB/pro1x-waydroid-x11" window "$WM_CLASS" "$TITLE" 10 >> "$LOG" 2>&1
+	fi
+	echo "compositor: $SOCKET, ${w}x$h, $renderer" >> "$LOG"
+	return 0
+}
+
+# ---- the session ----
+
+session_running() {
+	waydroid status 2> /dev/null | grep -q '^Session:[[:space:]]*RUNNING'
+}
+
+# Waydroid's last words in the session's output, for the banner
+last_words() {
+	grep . "$SLOG" 2> /dev/null | tail -1 | sed 's/^\[[0-9:]*\] //' | cut -c1-160
+}
+
+SPID=
+cleanup() {
+	trap - EXIT INT TERM HUP
+	if [ -n "$SPID" ] && kill -0 "$SPID" 2> /dev/null; then
+		waydroid session stop >> "$LOG" 2>&1
+		i=0
+		while kill -0 "$SPID" 2> /dev/null && [ $i -lt 150 ]; do
+			sleep 0.1
+			i=$((i + 1))
+		done
+		kill "$SPID" 2> /dev/null
+	fi
+	weston_down
+	rm -f "$PIDFILE"
+}
+
+start() {
+	command -v waydroid > /dev/null ||
+		fail "Waydroid is not installed. As root: apt install waydroid, then waydroid init"
+	[ -f "$CFG" ] || fail "Waydroid is not set up yet. As root: waydroid init"
+	[ -n "$DISPLAY" ] || fail "no X display"
+	runtime_dir
+	PIDFILE=$XDG_RUNTIME_DIR/pro1x-waydroid.pid
+	LOG=$XDG_RUNTIME_DIR/pro1x-waydroid.log
+	SLOG=$XDG_RUNTIME_DIR/pro1x-waydroid-session.log
+	# a second start while the window is open: Android's home screen again
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2> /dev/null; then
+		WAYLAND_DISPLAY=$SOCKET waydroid show-full-ui > /dev/null 2>&1
+		exit 0
+	fi
+	echo $$ > "$PIDFILE"
+	: > "$LOG"
+	: > "$SLOG"
+	trap cleanup EXIT
+	trap 'exit 0' INT TERM HUP
+	pulse_path
+	density
+	# a session left over from a window that is gone
+	if session_running; then
+		echo "stopping a session left over" >> "$LOG"
+		waydroid session stop >> "$LOG" 2>&1
+		sleep 2
+	fi
+	compositor || fail "the compositor (weston) did not start: $LOG"
+	export WAYLAND_DISPLAY=$SOCKET
+	note "Starting Android..."
+	# becomes Waydroid's session: starts the container, shows Android's UI
+	# once it is up, and lasts as long as the session
+	waydroid show-full-ui >> "$SLOG" 2>&1 &
+	SPID=$!
+	while kill -0 "$WPID" 2> /dev/null && kill -0 "$SPID" 2> /dev/null; do
+		sleep 1
+	done
+	if ! kill -0 "$SPID" 2> /dev/null; then
+		wait "$SPID" 2> /dev/null
+		SPID=
+		e=$(last_words)
+		note "Android stopped${e:+: $e}"
+	fi
+	exit 0
+}
+
+stop() {
+	waydroid session stop
+}
+
+# ---- information ----
+
+status() {
+	printf 'pro1x-waydroid %s\n' "$(dpkg-query -W -f='${Version}' pro1x-waydroid 2> /dev/null)"
+	if command -v waydroid > /dev/null; then
+		printf 'waydroid       %s\n' "$(dpkg-query -W -f='${Version}' waydroid 2> /dev/null)"
+	else
+		echo "waydroid       not installed (apt install waydroid)"
+	fi
+	printf 'service        '
+	rc-service waydroid-container status 2>&1 | sed 's/^ *\* *//' | head -1
+	if mountpoint -q "$WORK" 2> /dev/null; then
+		echo "store          $WORK bound from ${WAYDROID_STORE:-?}"
+	fi
+	df -h "$WORK" 2> /dev/null | awk 'NR == 2 { print "space          " $4 " free on " $6 }'
+	if [ -f "$CFG" ]; then
+		echo "properties     (waydroid.cfg)"
+		sed -n '/^\[properties\]/,/^\[/p' "$CFG" | grep -v '^\[' | grep . | sed 's/^/  /'
+		waydroid status 2> /dev/null | sed 's/^/  /'
+	elif command -v waydroid > /dev/null; then
+		echo "not set up     waydroid init (as root)"
+	fi
+}
+
+check() {
+	ok() { printf 'ok    %s\n' "$*"; }
+	bad() { printf 'FAIL  %s\n' "$*"; fails=$((fails + 1)); }
+	warn() { printf 'warn  %s\n' "$*"; }
+	fails=0
+	echo "kernel $(uname -r)"
+	if grep -qw binder /proc/filesystems; then ok "binderfs"; else bad "binderfs (CONFIG_ANDROID_BINDERFS)"; fi
+	if grep -q ' /dev/binderfs binder ' /proc/mounts; then
+		ok "binderfs mounted: $(ls /dev/binderfs | tr '\n' ' ')"
+	else
+		warn "binderfs not mounted yet (Waydroid mounts it at the first session)"
+	fi
+	[ -e /proc/pressure/memory ] && ok "PSI (lmkd)" || bad "PSI (/proc/pressure/memory)"
+	[ -c /dev/fuse ] && ok "/dev/fuse" || warn "/dev/fuse missing (modprobe fuse)"
+	[ -c /dev/net/tun ] && ok "/dev/net/tun" || warn "/dev/net/tun missing"
+	[ -c /dev/loop-control ] && ok "loop devices" || bad "loop devices"
+	if [ -e /sys/fs/cgroup/cgroup.controllers ]; then
+		ok "cgroups: unified (v2) at /sys/fs/cgroup"
+	elif [ -e /sys/fs/cgroup/unified/cgroup.controllers ]; then
+		ok "cgroups: hybrid (v1 + v2 at /sys/fs/cgroup/unified): $(ls /sys/fs/cgroup | tr '\n' ' ')"
+	elif grep -q ' /sys/fs/cgroup ' /proc/mounts; then
+		ok "cgroups: v1 ($(ls /sys/fs/cgroup | tr '\n' ' '))"
+	else
+		bad "cgroups not mounted (/etc/init.d/cgroups)"
+	fi
+	missing=
+	for m in veth bridge nf_nat ip_tables iptable_filter iptable_nat iptable_mangle \
+		xt_MASQUERADE xt_CHECKSUM xt_tcpudp overlay fuse; do
+		grep -q "^$m " /proc/modules || modinfo "$m" > /dev/null 2>&1 || missing="$missing $m"
+	done
+	if [ -z "$missing" ]; then
+		ok "kernel modules for the network, overlayfs, fuse"
+	else
+		bad "kernel modules missing:$missing"
+	fi
+	set -- /dev/dri/renderD*
+	if [ -e "$1" ]; then
+		drv=$(sed -n 's/^DRIVER=//p' "/sys/class/drm/${1##*/}/device/uevent" 2> /dev/null)
+		ok "GPU render node $1 ($drv)"
+	else
+		warn "no GPU render node: Android renders in software"
+	fi
+	command -v waydroid > /dev/null && ok "waydroid $(dpkg-query -W -f='${Version}' waydroid 2> /dev/null)" ||
+		bad "waydroid not installed (apt install waydroid)"
+	[ -f "$CFG" ] && ok "waydroid set up ($(sed -n 's/^vendor_type *= *//p' "$CFG" | head -1))" ||
+		warn "waydroid not set up (waydroid init)"
+	if rc-service waydroid-container status > /dev/null 2>&1; then
+		ok "service waydroid-container started"
+	else
+		warn "service waydroid-container not started (rc-service waydroid-container start)"
+	fi
+	if dbus-send --system --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+		org.freedesktop.DBus.NameHasOwner string:id.waydro.Container 2> /dev/null | grep -q 'boolean true'; then
+		ok "container manager on the system bus (id.waydro.Container)"
+	else
+		warn "no container manager on the system bus"
+	fi
+	if [ -d /sys/class/net/waydroid0 ]; then
+		ok "bridge waydroid0: $(ip -4 -o addr show waydroid0 2> /dev/null | awk '{ print $4 }')"
+	fi
+	if command -v iptables-legacy > /dev/null && [ "$(id -u)" = 0 ]; then
+		iptables-legacy -t nat -S POSTROUTING 2> /dev/null | grep -q 192.168.240.0/24 &&
+			ok "NAT for 192.168.240.0/24 (iptables-legacy)"
+	fi
+	df -h "$WORK" 2> /dev/null | awk 'NR == 2 { print "info  " $4 " free for /var/lib/waydroid (" $6 ")" }'
+	[ "$fails" = 0 ] && echo "no failures" || echo "$fails failure(s)"
+	[ "$fails" = 0 ]
+}
+
+case ${1:-start} in
+start)		start ;;
+stop)		stop ;;
+status)		status ;;
+check)		check ;;
+gpu)		props gpu ;;
+software)	props software ;;
+defaults)	props defaults "$2" ;;
+compositor)
+	runtime_dir
+	LOG=$XDG_RUNTIME_DIR/pro1x-waydroid.log
+	: > "$LOG"
+	trap weston_down EXIT
+	trap 'exit 0' INT TERM HUP
+	compositor || fail "the compositor (weston) did not start: $LOG"
+	echo "WAYLAND_DISPLAY=$SOCKET XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+	wait "$WPID"
+	;;
+*)
+	sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0" >&2
+	exit 2
+	;;
+esac
