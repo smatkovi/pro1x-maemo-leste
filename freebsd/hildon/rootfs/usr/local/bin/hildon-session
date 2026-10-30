@@ -77,9 +77,10 @@ respawn() {
 # screen over the system UI's alarm dialog, its own ringing should no
 # dialog come, then the question to switch off again
 # (docs/alarm-power-on.md); ends at once after any other start. Before the
-# system UI, so that it sees the dialog of an alarm already due come up
+# system UI, so that it sees the dialog of an alarm already due come up.
+# What it did: /tmp/pro1x-alarmboot.log
 if [ -x /usr/local/bin/pro1x-alarmboot ]; then
-	/usr/local/bin/pro1x-alarmboot &
+	/usr/local/bin/pro1x-alarmboot -v 2> /tmp/pro1x-alarmboot.log &
 fi
 # The alarm daemon and the system UI, which shows its alarm dialog (Leste:
 # Xsession.d/03alarmd and 03osso-systemui): alarmd needs this session's

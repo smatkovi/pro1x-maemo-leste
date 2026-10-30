@@ -4,7 +4,8 @@
 # come, then asks whether to switch the phone off again; it ends at once
 # after any other start (tools/pro1x-alarmboot, package pro1x-alarmboot
 # from scripts/mkdeb-tools.sh). Before the system UI (03osso-systemui), so
-# that it sees the dialog of an alarm already due come up.
+# that it sees the dialog of an alarm already due come up. What it did:
+# /tmp/pro1x-alarmboot.log.
 if [ -x /usr/bin/pro1x-alarmboot ]; then
-	/usr/bin/pro1x-alarmboot > /dev/null 2>&1 &
+	/usr/bin/pro1x-alarmboot -v > /dev/null 2> /tmp/pro1x-alarmboot.log &
 fi
