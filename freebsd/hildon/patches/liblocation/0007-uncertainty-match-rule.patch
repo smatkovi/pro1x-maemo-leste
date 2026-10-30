@@ -1,0 +1,30 @@
+The last of LocationGPSDevice's match rules,
+"type='signal',interface='com.nokia.Location.Uncertainty", lacked its
+closing quote: the bus answered every device's AddMatch (and its
+RemoveMatch) with MatchRuleInvalid ("Unbalanced quotation marks in match
+rule"). The rule is for Nokia's liblas, which nothing here runs, and the
+signal filter has no handler for that interface: the accuracy comes from
+location-daemon's org.maemo.LocationDaemon.Accuracy, whose rule is right,
+so no data was lost, only an error per device. The same fix is in Leste's
+liblocation (patches/fixes/liblocation.patch).
+
+--- a/src/location-gps-device.c
++++ b/src/location-gps-device.c
+@@ -512,7 +512,7 @@
+ 			"type='signal',interface='com.nokia.Location.Cell'",
+ 			NULL);
+ 		dbus_bus_remove_match(p->bus,
+-			"type='signal',interface='com.nokia.Location.Uncertainty",
++			"type='signal',interface='com.nokia.Location.Uncertainty'",
+ 			NULL);
+ 		dbus_connection_remove_filter(p->bus,
+ 			(DBusHandleMessageFunction)on_locationdaemon_signal,
+@@ -589,7 +589,7 @@
+ 			"type='signal',interface='com.nokia.Location.Cell'",
+ 			NULL);
+ 		dbus_bus_add_match(p->bus,
+-			"type='signal',interface='com.nokia.Location.Uncertainty",
++			"type='signal',interface='com.nokia.Location.Uncertainty'",
+ 			NULL);
+ 		dbus_connection_add_filter(p->bus,
+ 			(DBusHandleMessageFunction)on_locationdaemon_signal,

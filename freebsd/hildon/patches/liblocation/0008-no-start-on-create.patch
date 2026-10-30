@@ -1,0 +1,66 @@
+Creating a LocationGPSDControl (location_gpsd_control_get_default())
+started positioning: its init reads GConf's method pair (which
+location-control's schema always sets) through get_location_method(),
+which then called location_gpsd_control_prestart_internal(TRUE), so the
+privacy disclaimer or the "enable positioning" dialog opened, or
+location-daemon was started, before the app called
+location_gpsd_control_start(), or when it never did (MeeCast only watches
+the gpsd_running and gpsd_stopped signals; GPS Recorder and
+rtcom-presence-ui set preferred-method and -interval after creating the
+control, so the early start ignored them). Maemo 5's API says that
+location_gpsd_control_start() is how "the application informs that it
+wants to use the location service", and location-control's schema that
+the start shows the enable dialog. Leste's reimplementation had it right
+at first (19328e5: restarted after a method change only if it had been
+running, "stopped"); 6dcbd87 (the port to gpsd) put "!p->gpsd_running" in
+that place, true wherever nothing runs. Now it restarts, and reports
+gpsd_stopped, only where positioning was running. The same fix is in
+Leste's liblocation (patches/fixes/liblocation.patch).
+
+--- a/src/location-gpsd-control.c
++++ b/src/location-gpsd-control.c
+@@ -777,10 +777,16 @@
+ 	LocationGPSDControlPrivate *p;
+ 	GConfValue *car_ret, *cdr_ret;
+ 	const gchar *cdr_str, *car_str;
++	gboolean was_running;
+ 
+ 	p = location_gpsd_control_get_instance_private(control);
+ 
+-	if (p->gpsd_running)
++	/* Restarted with the new method only where positioning ran: called
++	 * from location_gpsd_control_init() too, where it ran nowhere, and
++	 * creating a control must not start it (location_gpsd_control_start()
++	 * does, with the dialogs it may need) */
++	was_running = p->gpsd_running;
++	if (was_running)
+ 		gpsd_shutdown(control);
+ 
+ 	if (p->device != NULL) {
+@@ -794,7 +800,7 @@
+ 	}
+ 
+ 	if (!value) {
+-		if (!p->gpsd_running)
++		if (was_running)
+ 			g_signal_emit(control, signals[GPSD_STOPPED], 0);
+ 		return;
+ 	}
+@@ -805,7 +811,7 @@
+ 	if (car_ret) {
+ 		if (!cdr_ret || car_ret->type != GCONF_VALUE_STRING
+ 				|| cdr_ret->type != GCONF_VALUE_STRING) {
+-			if (!p->gpsd_running)
++			if (was_running)
+ 				g_signal_emit(control, signals[GPSD_STOPPED], 0);
+ 		} else {
+ 			cdr_str = gconf_value_get_string(cdr_ret);
+@@ -815,7 +821,7 @@
+ 			g_debug("car_str: %s", car_str);
+ 			p->device_car = g_strdup(car_str);
+ 
+-			if (!p->gpsd_running)
++			if (was_running)
+ 				location_gpsd_control_prestart_internal(control, TRUE);
+ 		}
+ 	}

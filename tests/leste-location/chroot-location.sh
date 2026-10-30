@@ -1,12 +1,14 @@
 #!/bin/bash
 # chroot-location.sh start|reset [off|accepted|off-accepted]|ui|basic|
-#   methods|closetest PATH|shot NAME|click X Y|log|stop
+#   methods|create [SECONDS]|matchrule|closetest PATH|shot NAME|click X Y|
+#   log|stop
 #
 # liblocation's dialogs against location-ui in the Leste chroot on the PC
 # (scripts/leste-chroot.sh), as root: a system bus of the chroot's own,
 # a session bus (GConf), a fake MCE (fake-mce.py: get_device_mode
 # "normal"), Xvfb :5 at the N900's 800x480, dbus-monitor on the system
-# bus. location-ui is run directly (launch.c loads its
+# bus (fake-mce.py also stands in for location-daemon, so the bus does
+# not activate the real one). location-ui is run directly (launch.c loads its
 # /usr/libexec/location-ui.launch, as maemo-launcher would, without the
 # invoker); it ends by itself 15 s after its last dialog.
 #
@@ -19,6 +21,13 @@
 #   basic      liblocation's example (examples/basic.c, method
 #              USER_SELECTED) in the background
 #   methods    allowed-methods.c: location_gpsd_control_get_allowed_methods()
+#   create     create-only.c: a LocationGPSDevice and a LocationGPSDControl
+#              created, start() never called; then what that did on the
+#              system bus: dialog requests, location-daemon's start,
+#              MatchRuleInvalid answers (all 0 with fixed liblocation)
+#   matchrule  the bus' answer to the Uncertainty match rule without and
+#              with its closing quote, and the rule in the installed
+#              liblocation.so.0
 #   closetest  location-ui's "display" then "close" of PATH by dbus-send,
 #              then whether location-ui still runs
 #   shot       the screen as $L/NAME.xwd;  click  xdotool's click at X Y
@@ -28,6 +37,7 @@
 #
 # The sources are next to this script (basic.c from liblocation's
 # examples, copied there by the caller); state in /tmp/lt.
+UNCERTAINTY="type='signal',interface='com.nokia.Location.Uncertainty"
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
 L=/tmp/lt
@@ -114,6 +124,31 @@ methods)
 	[ -x "$L/allowed-methods" ] ||
 	    gcc -Wall -o "$L/allowed-methods" "$T/allowed-methods.c" $(pkg-config --cflags --libs liblocation)
 	session "$L/allowed-methods"
+	;;
+create)
+	[ -x "$L/create-only" ] ||
+	    gcc -Wall -o "$L/create-only" "$T/create-only.c" $(pkg-config --cflags --libs liblocation)
+	n=$(wc -l < "$L/monitor.log")
+	m=$(wc -l < "$L/mce.log")
+	session "$L/create-only" "${2:-4}" 2>&1 | sed 's/^/  /'
+	sleep 1
+	tail -n +$((n + 1)) "$L/monitor.log" > "$L/create-monitor.log"
+	echo "on the system bus meanwhile ($L/create-monitor.log):"
+	echo "  location-ui dialog requests: $(grep -c 'interface=com.nokia.Location.UI.Dialog; member=display' "$L/create-monitor.log")"
+	echo "  location-daemon start calls: $(grep -c 'interface=org.maemo.LocationDaemon; member=start' "$L/create-monitor.log")"
+	echo "  ... received by the stand-in: $(tail -n +$((m + 1)) "$L/mce.log" | grep -c 'location-daemon: start')"
+	echo "  MatchRuleInvalid answers:    $(grep -c 'MatchRuleInvalid' "$L/create-monitor.log")"
+	;;
+matchrule)
+	for r in "$UNCERTAINTY" "$UNCERTAINTY'"; do
+		echo "AddMatch $r:"
+		dbus-send --system --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+		    org.freedesktop.DBus.AddMatch "string:$r" 2>&1 | sed 's/^/  /'
+	done
+	for f in /usr/lib/*/liblocation.so.0; do
+		echo "in $(readlink -f "$f"):"
+		grep -ao "$UNCERTAINTY'*" "$f" | sed 's/^/  /'
+	done
 	;;
 closetest)
 	p=${2:-/com/nokia/location/ui/disclaimer}

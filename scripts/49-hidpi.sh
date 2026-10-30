@@ -37,8 +37,9 @@ PARTS=(
   # its libraries, its dialog calls with dbus-glib's output terminator, the
   # user's methods (the "enable positioning" dialog's yes); location-ui's
   # dialogs without an answer at the start, its answer to "close" (which
-  # aborted it on every OK)
-  "liblocation|d1ae86503411|2"
+  # aborted it on every OK); a match rule's missing quote, positioning
+  # started by merely creating a LocationGPSDControl
+  "liblocation|d1ae86503411|3"
   "location-ui|55b9700aed33|2"
   # repeating appointments on 64-bit (patches/fixes): none was expanded,
   # in qalendar's views and on the Events page (pro1x-events)
