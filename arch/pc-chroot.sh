@@ -141,6 +141,17 @@ binfmt_check() {
 	sudo -n chroot "$R" /usr/bin/true || { echo "the chroot does not run (binfmt?)"; exit 1; }
 }
 
+# the system's proc, sys, dev, dev/pts, each a slave of it: unmounting
+# dev/pts here would otherwise take the PC's /dev/pts along (a bind of the
+# shared /dev is its peer)
+bind_sys() {
+	for m in proc sys dev dev/pts; do
+		mountpoint -q "$R/$m" && continue
+		sudo -n mount --bind "/$m" "$R/$m"
+		sudo -n mount --make-rslave "$R/$m"
+	done
+}
+
 do_mount() {
 	free_ok "$MIN_FREE_GB" "$CHROOT"
 	mkdir -p "$CHROOT"
@@ -148,10 +159,13 @@ do_mount() {
 	binfmt_check
 	# a mount point of its own, which the steps ask for (and pacman's
 	# space check)
-	mountpoint -q "$R" || sudo -n mount --bind "$R" "$R"
-	for m in proc sys dev dev/pts; do
-		mountpoint -q "$R/$m" || sudo -n mount --bind "/$m" "$R/$m"
-	done
+	# private: as a peer of the disk's mount (shared) every mount below it
+	# would get a hidden copy there
+	if ! mountpoint -q "$R"; then
+		sudo -n mount --bind "$R" "$R"
+		sudo -n mount --make-private "$R"
+	fi
+	bind_sys
 	prepare_root
 	for m in dev/pts dev sys proc; do
 		! mountpoint -q "$R/$m" || sudo -n umount "$R/$m"
@@ -173,9 +187,7 @@ mount) do_mount ;;
 root) echo "$R" ;;
 shell)
 	mountpoint -q "$R" || { echo "not mounted: $0 mount"; exit 1; }
-	for m in proc sys dev dev/pts; do
-		mountpoint -q "$R/$m" || sudo -n mount --bind "/$m" "$R/$m"
-	done
+	bind_sys
 	in_chroot /bin/bash -l || true
 	for m in dev/pts dev sys proc; do
 		! mountpoint -q "$R/$m" || sudo -n umount "$R/$m"

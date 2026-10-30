@@ -46,7 +46,11 @@ want() {
 
 mountpoint -q "$MNT" || { echo "$MNT is not mounted"; exit 1; }
 for m in proc sys dev dev/pts; do
-	mountpoint -q "$MNT/$m" || mount --bind "/$m" "$MNT/$m"
+	mountpoint -q "$MNT/$m" && continue
+	mount --bind "/$m" "$MNT/$m"
+	# a slave of the system's: unmounting dev/pts here would otherwise
+	# take the system's /dev/pts along (a bind of a shared /dev is its peer)
+	mount --make-rslave "$MNT/$m"
 done
 cleanup() {
 	chroot "$MNT" gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true

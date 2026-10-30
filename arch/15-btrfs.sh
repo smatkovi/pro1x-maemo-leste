@@ -95,8 +95,10 @@ mount -o "subvol=/@,$OPTS" "$dev" "$R"
 for s in home:home snapshots:.snapshots log:var/log pkg:var/cache/pacman/pkg; do
 	mount -o "subvol=/@${s%%:*},$OPTS" "$dev" "$R/${s#*:}"
 done
-for m in proc sys dev dev/pts; do mount --bind "/$m" "$R/$m"; done
-mkdir -p "$R/host" && mount --bind /host "$R/host"
+# each a slave of the system's: unmounting dev/pts here would otherwise take
+# the system's /dev/pts along (a bind of a shared /dev is its peer)
+for m in proc sys dev dev/pts; do mount --bind "/$m" "$R/$m"; mount --make-rslave "$R/$m"; done
+mkdir -p "$R/host" && mount --bind /host "$R/host" && mount --make-rslave "$R/host"
 rm -f "$R/etc/resolv.conf" && cp /etc/resolv.conf "$R/etc/resolv.conf"
 cp -a "$REPO/arch/rootfs-overlay/usr/local/sbin/pro1x-snapshot-menu" \
 	"$REPO/arch/rootfs-overlay/usr/local/sbin/pro1x-rollback" "$R/usr/local/sbin/"
