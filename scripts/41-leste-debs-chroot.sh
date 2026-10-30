@@ -74,7 +74,7 @@ log "checks"
   for f in *.deb; do
     { dpkg-deb -I "$f"; dpkg-deb -c "$f"; } > "check-${f%.deb}.txt"
     ! command -v lintian > /dev/null ||
-      { echo "== lintian"; lintian --no-tag-display-limit "$f" 2>&1; } >> "check-${f%.deb}.txt" || true
+      { echo "== lintian"; lintian --tag-display-limit 0 "$f" 2>&1; } >> "check-${f%.deb}.txt" || true
   done'
 
 mkdir -p "$OUT/checks"

@@ -76,12 +76,15 @@ mkdeb() {
       ;;
     esac
   done < <(find "$d" -type f ! -path "$d/DEBIAN/*" -print0)
-  # Depends from the libraries they link
+  # Depends from the libraries they link (dpkg-shlibdeps wants a
+  # debian/control and the files below debian/<package>)
   t=$(mktemp -d)
   mkdir "$t/debian"
+  ln -s "$d" "$t/debian/$name"
   printf 'Source: %s\nMaintainer: %s\n\nPackage: %s\nArchitecture: %s\n' \
     "$name" "$MAINTAINER" "$name" "$ARCH" > "$t/debian/control"
-  shlibs=$(cd "$t" && dpkg-shlibdeps -O "${elfs[@]/#/-e}" 2> "$t/warnings" |
+  elfs=("${elfs[@]/#$d/-edebian/$name}")
+  shlibs=$(cd "$t" && dpkg-shlibdeps -O "${elfs[@]}" 2> "$t/warnings" |
     sed -n 's/^shlibs:Depends=//p')
   sed 's/^/   /' "$t/warnings"
   rm -rf "$t"
