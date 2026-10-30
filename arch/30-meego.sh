@@ -162,6 +162,9 @@ part libmlocale configure -prefix /usr -release -nomake demos -nomake tests -nom
 part libmeegotouch configure -prefix /usr -release -no-werror -nomake demos -nomake tests -nomake benchmarks
 part contextkit autotools --disable-doc --disable-coverage
 part libcontentaction autotools --disable-doc --disable-coverage
+# the open base theme and the Pro1X's (black, blanco's look where blanco
+# is there), as Leste's harmattan-meegotouchtheme has them
+part meegotouchtheme qmake theme.pro
 part mcompositor qmake mcompositor.pro
 part libdsme make
 part mce-dev make
