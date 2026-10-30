@@ -65,6 +65,7 @@ same pinned key. For Kali and Arch it is `phone.sh ssh kali`, and so on.
 | `collect.sh RUN [FILE...]` | PC | Collects logs, the RAM console, the screenshot and FILEs into `~/ps/pro1x-runs/2026-10-31/RUN/`, with `summary.txt`. |
 | `ramconsole.py` | phone | Reads FreeBSD's and KolibriOS's RAM console and screenshot at 0x5ca00000, read only. `--clear` clears it afterwards. collect.sh uses it. |
 | `leste-install.sh plan\|install` | phone | Installs the fetched packages group by group. By default it only upgrades packages that are installed already, and holds them. It restarts no service. |
+| `check-initrd.sh INITRD [alarm]` | PC | Checks that the initramfs `prepare` made carries the trial's parts. The watchdog's arming is skipped silently without `qcom-wdt.ko` or `devmem`. Passes on pro1x.5's initramfs. |
 | `test/run.sh` | PC | Tests all of the above against a fake phone (fake ssh/scp): 39 checks. |
 
 `DRY=1` in front of deploy.sh, collect.sh or backup.sh prints the phone
@@ -189,7 +190,21 @@ Before the flash:
    `git status --short initramfs tools/pro1x-boot tools/pro1x-boot-trial`
    is empty, then `bash tests/pro1x-boot-trial/run.sh` ends in "all cases
    passed".
-4. After the flash, `pro1x-boot list` must show
+4. **The boot image must carry the parts, not only the scripts.** The
+   watchdog's arming in `pro1x-loop-root` is skipped silently when
+   `devmem` or `qcom_wdt` is missing. After prepare:
+   - `bash tools/devday/check-initrd.sh $OUT/initrd.img-$KVER alarm` must
+     end in "the trial's parts are there". It checks pro1x-loop-root with
+     trial-check, pro1x-boot with trial, trial-check and alarm-check,
+     pro1x-bootmenu, sgdisk, kexec, `qcom-wdt.ko` and `devmem`.
+   - On the phone, the confirming service must be in every system:
+     `rc-update show default | grep pro1x-boot-trial` in Leste. In the
+     images:
+     `for i in kali luneos; do mount -o loop,ro /host/$i.img /mnt && ls -l /mnt/etc/systemd/system/multi-user.target.wants/pro1x-boot-trial.service; umount /mnt; done`
+     and for Arch `mount -o loop,ro,subvol=@ /host/arch.img /mnt` (same
+     `ls`). The MeeGo copy is covered by "no `left out` in prepare.log".
+   This makes "armed" a checked fact, not an inference.
+5. After the flash, `pro1x-boot list` must show
    `trial:   kernel 7.1.0-pro1x.10 on slot b, boot_b 3 tries left, not successful`.
 
 While the trial runs, boot only Leste. One confirmed start, then one more
@@ -299,8 +314,11 @@ Rollback: Rollback, ways back 2-4.
    - The menu appears but Leste hangs: the watchdog resets it by itself
      (within 15 min). Count the starts.
    - USB `05c6:900e`: ways back 4.
-6. **The first look, before anything changes.** The pstore holds the
-   console of the hung shutdown of 10-29:
+6. **The first look, before anything changes.** If the pstore (ramoops)
+   survived the 10 s power-key reset, it holds the console of the hung
+   shutdown of 10-29. It did survive the crash-dump resets, but a
+   power-key hold may be a colder reset. An empty `pstore.txt` is then
+   expected, not a failure of collect:
    ```sh
    bash $D/deploy.sh tools
    bash $D/collect.sh 01-first-boot /host/pro1x-boot /var/log/syslog
@@ -378,7 +396,11 @@ Preconditions: blocks 1-2 done, Rollback points 1-3 checked.
    ```sh
    PHONE="$PHONE" WORK=$WORK OUT=$OUT bash scripts/65-kernel-update.sh prepare 2>&1 | tee $OUT/prepare.log
    grep -n 'left out\|not there' $OUT/prepare.log     # must be empty
+   bash $D/check-initrd.sh $OUT/initrd.img-$KVER alarm  # "the trial's parts are there"
    ```
+   Also run the phone-side checks of "Verdict and proposal" point 4
+   (`pro1x-boot-trial` in Leste's runlevel and in the images). If any of
+   them fails, do not flash.
 3. **[OK] flash.** It saves boot_b as
    `/host/boot_b-before-$KVER.img` and copies it to `$OUT`, writes boot_b,
    and starts the trial with 3 tries:
@@ -408,6 +430,10 @@ Abort: ways back 1 (the kernel runs) or 2 (it does not).
 
 The order matters: the jack's gate comes before the UCM profile, and the
 traces for FreeBSD come after the profile.
+
+Some steps here and in block 6 need Wi-Fi on the phone:
+`apt install evtest` in step 2, and `gcc` and `libglib2.0-dev` for 71.
+Connect Wi-Fi first (status menu).
 
 1. **Loudspeaker pop (patch 0026):** `docs/audio.md` steps 1-5. Use the
    wav files in `/root/devday/`. PulseAudio is still on the old 300 s
