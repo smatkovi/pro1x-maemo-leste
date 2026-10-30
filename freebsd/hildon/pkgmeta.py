@@ -65,12 +65,17 @@ LOCAL = {
                       'X blanks the screen, the rest black for the AMOLED panel '
                       "(tools/pro1x-standby); Nokia's icons and font are not "
                       'included.', ['UNKNOWN']),
-    'pro1x-events': ('1.0', "The Nokia N9's Events page for Hildon's MeeGo-like look",
-                     'pro1x-events shows on the first home view the date, the missed '
-                     'calls, messages and chats (rtcom-eventlogger), unread e-mail '
-                     "(modest) and a Mastodon account's home timeline, pulled down to "
-                     'update, while the MeeGo-like look is on; its control panel applet '
-                     'takes the account (tools/pro1x-events, apps/pro1x-events).',
+    # 1.1: the weather (Open-Meteo) and the calendar's appointments
+    # (calendar-backend), each section on or off
+    'pro1x-events': ('1.1', "The Nokia N9's Events page for Hildon's MeeGo-like look",
+                     'pro1x-events shows on the first home view the date, the weather '
+                     "of a place (Open-Meteo, MeeCast's icons where MeeCast is installed), "
+                     'the missed calls, messages and chats (rtcom-eventlogger), unread '
+                     "e-mail (modest), the next days' appointments of Hildon's calendar "
+                     "(calendar-backend) and a Mastodon account's home timeline, pulled "
+                     'down to update, while the MeeGo-like look is on; its control panel '
+                     'applet turns the sections on and off and takes the place and the '
+                     'account (tools/pro1x-events, apps/pro1x-events).',
                      ['UNKNOWN']),
     'pro1x-volume-osd': ('1.0', "The Nokia N9's volume bar for Hildon's MeeGo-like look",
                          'pro1x-volume-osd shows the volume of PulseAudio\'s default sink '
@@ -397,6 +402,10 @@ REVISION = {
     'libhildon': 2, 'leste-l10n-en': 1,
     # 2026-10-29: the MeeGo-like look's thin status bar (patches/meego)
     'hildon-status-menu': 1,
+    # 2026-10-30: repeating appointments on 64-bit (0003, also Leste's
+    # patches/fixes), SQLite's double-quoted strings allowed again (0004):
+    # no repeating appointment was expanded, the default calendars missing
+    'calendar-backend': 1,
     # 2026-10-27: Qt 5.15 fixes (fonts, theme images, window size, styles,
     # dialogs and banners that took taps)
     'qt-components': 1,

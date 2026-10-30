@@ -34,19 +34,20 @@ export DEBIAN_FRONTEND=noninteractive
 MAINTAINER="Sebastian Matkovich <sebastian.matkovich@gmail.com>"
 HOMEPAGE=https://github.com/smatkovi/pro1x-maemo-leste
 ARCH=$(dpkg --print-architecture)
-declare -A VERSIONS=([pro1x-events]=1.0 [pro1x-volume-osd]=1.0)
+declare -A VERSIONS=([pro1x-events]=1.1 [pro1x-volume-osd]=1.0)
 log() { echo ">> $*"; }
 
 # Build dependencies (49-events.sh's and 49-volume-osd.sh's). The -dev
 # packages of what 49-hidpi.sh rebuilt (+pro1xN, held) from that build,
 # where they are missing: the archive's want the archive's libraries
 # exactly
-pkgs=(gcc libc6-dev pkg-config make gettext binutils dpkg-dev libgconf2-dev
+pkgs=(gcc g++ libc6-dev pkg-config make gettext binutils dpkg-dev libgconf2-dev
   libjson-glib-dev librtcom-eventlogger-dev hildon-control-panel-dev libosso-dev
-  libx11-dev libpulse-dev)
+  libx11-dev libpulse-dev libtime-dev libical-dev
+  libsqlite3-dev libdbus-1-dev)
 pkg-config --exists libcurl 2> /dev/null || pkgs+=(libcurl4-openssl-dev)
 debs=()
-for p in libgtk2.0-dev libhildon1-dev; do
+for p in libgtk2.0-dev libhildon1-dev calendar-backend-dev; do
   dpkg-query -W -f='${Status}' "$p" 2> /dev/null | grep -q "ok installed" && continue
   f=$(ls "$SRC"/"$p"_*+pro1x*_*.deb 2> /dev/null | tail -1 || true)
   if [ -n "$f" ]; then debs+=("$f"); else pkgs+=("$p"); fi
@@ -55,8 +56,9 @@ apt-get install -y -q --no-install-recommends "${pkgs[@]}" "${debs[@]}"
 
 CPPFLAGS=$(dpkg-buildflags --get CPPFLAGS)
 CFLAGS=$(dpkg-buildflags --get CFLAGS)
+CXXFLAGS=$(dpkg-buildflags --get CXXFLAGS)
 LDFLAGS=$(dpkg-buildflags --get LDFLAGS)
-export CPPFLAGS CFLAGS LDFLAGS
+export CPPFLAGS CFLAGS CXXFLAGS LDFLAGS
 
 # mkdeb NAME DEPENDS RECOMMENDS SYNOPSIS DESCRIPTION: $SRC/pkg/NAME (the
 # files below their paths) as NAME_<version>_<arch>.deb in $OUT
@@ -137,18 +139,19 @@ if want pro1x-events; then
   rm -rf "$d" "$b"
   mkdir -p "$SRC"
   cp -r "$REPO/apps/pro1x-events" "$b"
-  make -C "$b" install PREFIX=/usr DESTDIR="$d" \
+  make -C "$b" install PREFIX=/usr DESTDIR="$d" HAVE_CAL=1 \
     PAGE="$REPO/tools/pro1x-events/pro1x-events.c"
   install -D -m 644 "$REPO/rootfs-overlay/etc/X11/Xsession.post/47pro1x-events" \
     "$d/etc/X11/Xsession.post/47pro1x-events"
   # the page is a Home widget of hildon-desktop's MeeGo-like look, which
   # scrolls it (step 3: _HILDON_MEEGO_SCROLLING_APPLET); the certificates
-  # for Mastodon's https; the event types of calls, messages and chats
+  # for Open-Meteo's and Mastodon's https; the event types of calls,
+  # messages and chats; the calendar whose appointments it shows
   mkdeb pro1x-events \
     "hildon-desktop (>= 1:2.2.196+pro1x4), hildon-control-panel, ca-certificates" \
-    "librtcom-eventlogger-plugins1" \
+    "librtcom-eventlogger-plugins1, qalendar" \
     "Nokia N9 style Events page for Hildon's MeeGo-like look" \
-    "pro1x-events shows on the first home view, while the MeeGo-like look is on (GConf /apps/osso/hildon-desktop/meego_pages), the day and the date, the missed calls, messages and chats (rtcom-eventlogger), unread e-mail (modest) and a Mastodon account's home timeline; pulled down it updates. Its control panel applet, Settings, Events, takes the Mastodon server and access token. Started by the X session (Xsession.post). No Nokia graphics or fonts are included."
+    "pro1x-events shows on the first home view, while the MeeGo-like look is on (GConf /apps/osso/hildon-desktop/meego_pages), the day and the date, the weather of a place (Open-Meteo, no key; MeeCast's icons where MeeCast is installed), the missed calls, messages and chats (rtcom-eventlogger), unread e-mail (modest), the next days' appointments of Hildon's calendar (calendar-backend) and a Mastodon account's home timeline; pulled down it updates. Its control panel applet, Settings, Events, turns each section on or off and takes the weather's place (with Open-Meteo's geocoding) and the Mastodon server and access token. Started by the X session (Xsession.post). No Nokia graphics or fonts are included."
 fi
 
 if want pro1x-volume-osd; then

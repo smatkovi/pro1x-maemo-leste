@@ -11,10 +11,20 @@
 #   events  the Events page (pro1x-events) on the first home view (7), its
 #           feed pulled down to update (8, while pulled; 9 after), scrolled
 #           up (10), the swipe on to the next page (11)
-# EVENTS_FIXTURE=1 makes up a Mastodon home timeline and unread calls and
-# messages (events-fixture.sh, beside this script), serves the timeline at
-# http://127.0.0.1:8000 and points the Events page's Mastodon account
-# there. Then everything ends.
+#   step4   (on the first home view, with EVENTS_FIXTURE) the weather (12),
+#           the appointments (13, 14: the weekly one, the task, the
+#           birthday), the weather drawn without MeeCast's icons (15), only
+#           the weather and the calendar (16), no place (17), no
+#           connection (18: the last answer), the settings applet (19), its
+#           place (20), searched (21: the places found; 22: one taken), the
+#           calendar's days (23), 3 days saved (24), an appointment tapped:
+#           qalendar (25, after a minute)
+# (LANG=de_DE.UTF-8 in the environment: the session in German)
+# EVENTS_FIXTURE=1 makes up a Mastodon home timeline, unread calls and
+# messages, the weather, places and appointments (events-fixture.sh,
+# beside this script), serves the timeline, the weather and the places at
+# http://127.0.0.1:8000 and points the Events page's Mastodon account,
+# weather and geocoding there. Then everything ends.
 set -u
 SHOTS=/root/shots
 STEPS=${STEPS:-volume bar events}
@@ -38,6 +48,16 @@ if [ -n "${EVENTS_FIXTURE:-}" ]; then
 	fixture=$!
 	gc -s -t string /apps/pro1x/events/mastodon_server http://127.0.0.1:8000
 	gc -s -t string /apps/pro1x/events/mastodon_token try-token
+	gc -s -t string /apps/pro1x/events/weather_url http://127.0.0.1:8000/v1/forecast
+	gc -s -t string /apps/pro1x/events/geocoding_url http://127.0.0.1:8000/v1/search
+	gc -s -t string /apps/pro1x/events/weather_place "Wien"
+	gc -s -t float /apps/pro1x/events/weather_latitude 48.2085
+	gc -s -t float /apps/pro1x/events/weather_longitude 16.3721
+	for k in show_notifications show_weather show_calendar show_mastodon weather_icons \
+	    calendar_days; do
+		gc -u /apps/pro1x/events/$k
+	done
+	rm -f "$HOME"/.cache/pro1x-events/weather-*.json
 fi
 daemon -f -o /tmp/session.log /usr/local/bin/hildon-session
 sleep ${WAIT:-40}
@@ -64,6 +84,9 @@ drag() {
 	done
 }
 release() { xdotool mouseup 1; }
+# a drag held still before its release: the list scrolls by as much, with
+# no flick after it
+dragh() { drag "$@"; sleep 0.4; release; }
 tap() { xdotool mousemove "$1" "$2" mousedown 1; sleep 0.15; xdotool mouseup 1; }
 shot() {
 	sleep ${SHOTWAIT:-6}
@@ -118,6 +141,55 @@ case " $STEPS " in *" events "*)
 	release;                       shot 9 "updated"
 	drag 1080 900 1080 300 10; release; shot 10 "scrolled up"
 	drag 1800 600 300 600; release; shot 11 "swiped on"
+	;;
+esac
+
+case " $STEPS " in *" step4 "*)
+	e=/apps/pro1x/events
+	shot 12 "the weather under the date"
+	dragh 1080 1000 1080 200 14; dragh 1080 1000 1080 300 14
+	SHOTWAIT=3 shot 13 "the appointments"
+	dragh 1080 1000 1080 500 12
+	SHOTWAIT=3 shot 14 "the weekly one tomorrow, the task, the birthday"
+	gconftool-2 -s -t string $e/weather_icons none
+	for i in 1 2 3; do dragh 1080 200 1080 1000 10; sleep 1; done
+	shot 15 "the weather's own glyphs (pulled down: updated)"
+	gconftool-2 -u $e/weather_icons
+	gconftool-2 -s -t bool $e/show_notifications false
+	gconftool-2 -s -t bool $e/show_mastodon false
+	shot 16 "only the weather and the calendar"
+	gconftool-2 -u $e/show_notifications
+	gconftool-2 -u $e/show_mastodon
+	gconftool-2 -u $e/weather_place
+	shot 17 "no place: the hint"
+	gconftool-2 -s -t string $e/weather_url http://127.0.0.1:8009/v1/forecast
+	gconftool-2 -s -t string $e/weather_place Wien
+	sleep 3; dragh 1080 200 1080 1000 10
+	SHOTWAIT=8 shot 18 "no connection: the last answer, not updated"
+	gconftool-2 -s -t string $e/weather_url http://127.0.0.1:8000/v1/forecast
+	# Settings, Events: the control panel first, then its entry (the
+	# eighth of Personalisation)
+	dbus-send --session --type=method_call --dest=com.nokia.controlpanel \
+	    /com/nokia/controlpanel com.nokia.controlpanel.run_applet \
+	    string:libpro1x-events.so boolean:true > /dev/null 2>&1 &
+	sleep 25; tap 240 712
+	SHOTWAIT=10 shot 19 "the settings applet"
+	dragh 800 1000 800 450 12;     SHOTWAIT=3 shot 20 "its weather place"
+	tap 1580 866;                  SHOTWAIT=8 shot 21 "searched: the places found"
+	tap 1080 816; sleep 2; dragh 800 1000 800 600 10
+	SHOTWAIT=3 shot 22 "one taken: its coordinates"
+	dragh 1700 1000 1700 450 10;   tap 860 796
+	SHOTWAIT=5 shot 23 "the calendar's days"
+	tap 1080 658; sleep 2; tap 1944 992; sleep 3
+	gconftool-2 -R $e | grep -E 'calendar_days|weather_(place|latitude|longitude)'
+	pkill -x controlpanel; sleep 5
+	dragh 1080 1000 1080 200 14; dragh 1080 1000 1080 300 14; dragh 1080 1000 1080 400 12
+	SHOTWAIT=3 shot 24 "3 days saved: the appointments until the day after tomorrow"
+	# the weekly one: qalendar (slow to start in the VM)
+	tap 600 380
+	SHOTWAIT=60 shot 25 "an appointment tapped: qalendar"
+	pkill -9 -f qalendar
+	gconftool-2 -u $e/calendar_days
 	;;
 esac
 

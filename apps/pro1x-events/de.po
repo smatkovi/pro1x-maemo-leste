@@ -85,3 +85,184 @@ msgstr "Zugangsschlüssel"
 
 msgid "Save"
 msgstr "Speichern"
+
+msgid "Clear sky"
+msgstr "Klar"
+
+msgid "Mainly clear"
+msgstr "Überwiegend klar"
+
+msgid "Partly cloudy"
+msgstr "Teilweise bewölkt"
+
+msgid "Overcast"
+msgstr "Bedeckt"
+
+msgid "Fog"
+msgstr "Nebel"
+
+msgid "Freezing fog"
+msgstr "Gefrierender Nebel"
+
+msgid "Light drizzle"
+msgstr "Leichter Nieselregen"
+
+msgid "Drizzle"
+msgstr "Nieselregen"
+
+msgid "Dense drizzle"
+msgstr "Starker Nieselregen"
+
+msgid "Freezing drizzle"
+msgstr "Gefrierender Nieselregen"
+
+msgid "Light rain"
+msgstr "Leichter Regen"
+
+msgid "Rain"
+msgstr "Regen"
+
+msgid "Heavy rain"
+msgstr "Starker Regen"
+
+msgid "Freezing rain"
+msgstr "Gefrierender Regen"
+
+msgid "Light snow"
+msgstr "Leichter Schneefall"
+
+msgid "Snow"
+msgstr "Schneefall"
+
+msgid "Heavy snow"
+msgstr "Starker Schneefall"
+
+msgid "Snow grains"
+msgstr "Schneegriesel"
+
+msgid "Light showers"
+msgstr "Leichte Regenschauer"
+
+msgid "Showers"
+msgstr "Regenschauer"
+
+msgid "Heavy showers"
+msgstr "Starke Regenschauer"
+
+msgid "Snow showers"
+msgstr "Schneeschauer"
+
+msgid "Heavy snow showers"
+msgstr "Starke Schneeschauer"
+
+msgid "Thunderstorm"
+msgstr "Gewitter"
+
+msgid "Thunderstorm with hail"
+msgstr "Gewitter mit Hagel"
+
+msgid "No connection to Open-Meteo (%s)."
+msgstr "Keine Verbindung zu Open-Meteo (%s)."
+
+msgid "Open-Meteo answered %ld."
+msgstr "Open-Meteo antwortete %ld."
+
+msgid "Open-Meteo's answer was not understood."
+msgstr "Die Antwort von Open-Meteo war unverständlich."
+
+msgid "Today"
+msgstr "Heute"
+
+msgid "Tomorrow"
+msgstr "Morgen"
+
+# g_date_time_format(): a day of the next week
+msgid "%a %-d %b"
+msgstr "%a, %-d. %b"
+
+msgid "%s, task"
+msgstr "%s, Aufgabe"
+
+msgid "%s, birthday"
+msgstr "%s, Geburtstag"
+
+msgid "%s, all day"
+msgstr "%s, ganztägig"
+
+msgid "Now, until %s"
+msgstr "Jetzt, bis %s"
+
+msgid "(no title)"
+msgstr "(ohne Titel)"
+
+msgid "feels like %s"
+msgstr "gefühlt %s"
+
+msgid "wind %ld km/h"
+msgstr "Wind %ld km/h"
+
+msgid "As of %s, not updated"
+msgstr "Stand %s, nicht aktualisiert"
+
+msgid "As of %s"
+msgstr "Stand %s"
+
+msgid "Weather data by Open-Meteo.com"
+msgstr "Wetterdaten: Open-Meteo.com"
+
+msgid "Choose a place in Settings, Events, and its weather shows here."
+msgstr "Einen Ort in Einstellungen, Ereignisse wählen, dann erscheint hier sein Wetter."
+
+msgid "Calendar"
+msgstr "Kalender"
+
+msgid "No appointments today."
+msgstr "Heute keine Termine."
+
+msgid "No appointments in the next %d days."
+msgstr "Keine Termine in den nächsten %d Tagen."
+
+msgid "Weather"
+msgstr "Wetter"
+
+msgid "On the page"
+msgstr "Auf der Seite"
+
+msgid "Place"
+msgstr "Ort"
+
+msgid "Vienna"
+msgstr "Wien"
+
+msgid "Search"
+msgstr "Suchen"
+
+msgid "Latitude"
+msgstr "Breite"
+
+msgid "Longitude"
+msgstr "Länge"
+
+msgid "Search finds the place's coordinates, or type them in. Weather data by Open-Meteo.com (CC BY 4.0), places by GeoNames."
+msgstr "Suchen findet die Koordinaten des Orts, oder sie hier eingeben. Wetterdaten von Open-Meteo.com (CC BY 4.0), Orte von GeoNames."
+
+msgid "Type the place's name first."
+msgstr "Zuerst den Namen des Orts eingeben."
+
+msgid "No place of this name was found."
+msgstr "Kein Ort dieses Namens gefunden."
+
+msgid "3 days"
+msgstr "3 Tage"
+
+msgid "1 week"
+msgstr "1 Woche"
+
+msgid "2 weeks"
+msgstr "2 Wochen"
+
+msgid "Appointments of"
+msgstr "Termine für"
+
+msgid "The place needs its coordinates: Search finds them."
+msgstr "Der Ort braucht seine Koordinaten: Suchen findet sie."

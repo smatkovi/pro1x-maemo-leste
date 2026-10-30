@@ -549,18 +549,24 @@ fm_app() {
 	cp -a "$PR/." "$STAGE/"
 }
 
-# The Events page of the MeeGo-like look (tools/pro1x-events) and its
-# control panel applet, the Mastodon account (apps/pro1x-events)
+# The Events page of the MeeGo-like look (tools/pro1x-events, its
+# calendar through calendar-backend's C++ API: calendar.cpp) and its
+# control panel applet, the sections, the weather's place and the Mastodon
+# account (apps/pro1x-events)
 events_page() {
-	local b=$BUILD/pro1x-events src=$REPO/apps/pro1x-events
+	local b=$BUILD/pro1x-events src=$REPO/apps/pro1x-events t=$REPO/tools/pro1x-events
 	local page="gtk+-2.0 gconf-2.0 gio-2.0 libcurl json-glib-1.0 rtcom-eventlogger x11"
-	local applet="hildon-1 hildon-control-panel gconf-2.0 libosso gtk+-2.0"
+	local cal="calendar-backend libtime dbus-1 sqlite3 libical glib-2.0"
+	local applet="hildon-1 hildon-control-panel gconf-2.0 libosso gtk+-2.0 libcurl json-glib-1.0"
 	log "pro1x-events"
 	mkdir -p "$b"
 	# shellcheck disable=SC2046,SC2086
-	$CC $CPPFLAGS $CFLAGS $LDFLAGS -DLOCALEDIR='"/usr/local/share/locale"' \
-	    -o "$b/pro1x-events" "$REPO/tools/pro1x-events/pro1x-events.c" \
-	    $(pkg-config --cflags --libs $page) -lm > "$b/make.out" 2>&1 ||
+	{ $CC $CPPFLAGS $CFLAGS -DLOCALEDIR='"/usr/local/share/locale"' \
+	    $(pkg-config --cflags $page) -c -o "$b/page.o" "$t/pro1x-events.c" &&
+	  $CXX $CPPFLAGS $CXXFLAGS $(pkg-config --cflags $cal) -c -o "$b/calendar.o" \
+	    "$t/calendar.cpp" &&
+	  $CXX $CXXFLAGS $LDFLAGS -o "$b/pro1x-events" "$b/page.o" "$b/calendar.o" \
+	    $(pkg-config --libs $page $cal) -lm; } > "$b/make.out" 2>&1 ||
 	    { grep -m20 error "$b/make.out"; return 1; }
 	# shellcheck disable=SC2046,SC2086
 	$CC $CPPFLAGS $CFLAGS $LDFLAGS -fPIC -shared -DLOCALEDIR='"/usr/local/share/locale"' \

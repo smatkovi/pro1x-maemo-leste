@@ -120,6 +120,52 @@ Settings, Events. Sizes and colours are those of the N9's Events view (its
 home screen's style), the N9's font and icons where they are installed (not
 part of this repository).
 
+Since pro1x-events 1.1 the page also has, each section switched on or off
+in Settings, Events (GConf `/apps/pro1x/events/show_weather`,
+`show_notifications`, `show_calendar`, `show_mastodon`):
+
+- **The weather** right below the date: now (temperature, the conditions,
+  feels like, wind) and today with the next four days (their icon, highest
+  and lowest), beside it where the screen is wide enough, else below. From
+  [Open-Meteo](https://open-meteo.com/)'s forecast API (`current=` and
+  `daily=`, `timezone=auto`): no key, free for non-commercial use, its data
+  under CC BY 4.0, which asks for the credit "Weather data by Open-Meteo.com"
+  next to it (it is the item's last line; a tap on it opens the site, a tap
+  elsewhere nomweather or MeeCast). Every 30 minutes while the page is seen
+  (5 after a failed try) and when it is pulled down; the last answer is kept
+  in `~/.cache/pro1x-events/weather-<lat>_<lon>.json` and shown, "not
+  updated", without a connection. MeeCast's own data is not used: its
+  sources need keys or have changed their APIs (see
+  `freebsd/hildon/README.md`); nomweather, Leste's weather app, uses
+  Open-Meteo as well. The place: `weather_place`, `weather_latitude`,
+  `weather_longitude`, set in the applet by Search (Open-Meteo's geocoding,
+  GeoNames' places, a list to pick from) or typed in; `weather_url` and
+  `geocoding_url` take another Open-Meteo server (it is free software; the
+  VM test serves its fixture there). The icons: MeeCast's icon set
+  (`weather_icons`, default `Meecast`, GPL, Andrew Zhilin's) where MeeCast
+  is installed, looked up in its directories and mapped from the WMO weather
+  codes to its weather.com numbers; without it (or with `none`) plain glyphs
+  drawn by the page, white outlines on black like that set. Neither MeeCast's
+  nor Nokia's graphics are in this repository.
+- **The calendar**: the appointments of today and the next days
+  (`calendar_days`, 1, 3, 7 or 14 in the applet, default 7, at most 12),
+  those already over left out, from calendar-backend, the library of
+  Hildon's calendar qalendar, through its C++ API as qalendar's agenda reads
+  them (`tools/pro1x-events/calendar.cpp`: each visible calendar's
+  `getAllEventsTodos()`, the repeating ones expanded with
+  `getInstanceTimes()`, open tasks, birthdays with the age). Each shows its
+  day on a plate of its calendar's colour, the title, the place and when
+  ("Today, 14:00–15:30", "Now, until 15:30", "Tomorrow, all day"); it is
+  updated on calendar-backend's `dbChange` signal and when an appointment
+  begins or ends. A tap opens it in qalendar (`com.nokia.calendar`
+  `launch_view`; qalendar's agenda for the hint without appointments).
+  calendar-backend expanded no repeating appointment on 64-bit systems:
+  `patches/fixes/calendar-backend.patch` (Leste, in `49-hidpi.sh`'s parts)
+  and `freebsd/hildon/patches/calendar-backend/0003` fix that, FreeBSD's
+  `0004` lets its SQL's double-quoted strings through FreeBSD's SQLite
+  (built without them); pro1x-events allows them on its own connection
+  too, for a calendar-backend without that patch.
+
 - `pro1x-events` is a Home widget of its own (a `_HILDON_WM_WINDOW_TYPE_HOME_APPLET`
   window, as Hildon's operator name is), started by the X session (Leste:
   `Xsession.post/47pro1x-events`, FreeBSD: `hildon-session`), shown while
@@ -139,7 +185,8 @@ part of this repository).
   `/apps/pro1x/events/mastodon_server` and `mastodon_token`, in plain text
   as Hildon keeps its other settings; empty fields remove the account.
 
-Leste: `scripts/49-events.sh` (after `49-hidpi.sh` with this patch). FreeBSD:
+Leste: `scripts/49-events.sh` (after `49-hidpi.sh` with this patch and the
+calendar-backend fix), or the package of `scripts/mkdeb-tools.sh`. FreeBSD:
 `freebsd/hildon/build.sh pro1x-events`, package `pro1x-events`.
 
 Tried in the FreeBSD VM (`freebsd/vm/try-meego-events.sh EVENTS_FIXTURE=1`,
@@ -152,3 +199,17 @@ and the feed fetched with it. Not tried: a real Mastodon server, modest
 with unread mail, a phone. Portrait: the page follows the screen's size,
 but hildon-desktop's portrait home pans up and down, so it gets no drags
 there.
+
+The weather and the calendar (1.1) in the VM, `STEPS=step4` with
+`EVENTS_FIXTURE=1` (a made-up answer in Open-Meteo's format, three places
+called Wien for the search, and made-up appointments in calendar-backend's
+database: one over, one now, one later, an all-day one, a weekly one, a
+task and a birthday in three calendars), in German with
+`LANG=de_DE.UTF-8`: the weather beside the date with MeeCast's icons and
+with the page's own, the appointments (the weekly one only with the
+calendar-backend fix), single sections off, no place, no connection (the
+last answer), the applet's search with its list and the place taken, the
+calendar's days, a tap opening qalendar (in the VM its month view: the
+appointment's own view needs qalendar to answer within the call's minute,
+which it did not in the emulated VM), and the real Open-Meteo for Vienna
+from the VM. Not tried: a phone.

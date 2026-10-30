@@ -1,12 +1,14 @@
 /*
  * pro1x-events -- the Nokia N9's Events page for Hildon's MeeGo-like look
  * (patches/meego): the first home view shows, below the status bar, the
- * day and the date, the notifications (missed calls, messages and chats
- * that rtcom-eventlogger has unread, unread e-mail from modest while it
- * runs) and the home timeline of a Mastodon account, in one list that
- * scrolls; pulled down at its top it updates. Only while the look is on
- * (the root window's _HILDON_MEEGO_LOOK, which hildon-desktop sets), else it
- * waits unseen.
+ * day and the date, the weather of a place (now and the next days), the
+ * notifications (missed calls, messages and chats that rtcom-eventlogger
+ * has unread, unread e-mail from modest while it runs), the appointments
+ * of today and the next days (Hildon's calendar) and the home timeline of
+ * a Mastodon account, in one list that scrolls; pulled down at its top it
+ * updates. Each of these sections can be switched off. Only while the look
+ * is on (the root window's _HILDON_MEEGO_LOOK, which hildon-desktop sets),
+ * else it waits unseen.
  *
  *   pro1x-events        runs in the X session (Leste: Xsession.post,
  *                       FreeBSD: hildon-session)
@@ -24,6 +26,25 @@
  * avatars are cached in ~/.cache/pro1x-events. A tap opens the post in the
  * browser, a notification its application (through hildon-desktop's
  * launcher), Clear marks the notifications read.
+ *
+ * Weather: Open-Meteo's forecast API (open-meteo.com: no key, free for
+ * non-commercial use, its data CC BY 4.0, credited below it), for the
+ * place of GConf /apps/pro1x/events/weather_place, weather_latitude and
+ * weather_longitude (the settings applet finds them with Open-Meteo's
+ * geocoding), every 30 minutes while the page is seen, the last answer
+ * kept in ~/.cache/pro1x-events for the time without a connection;
+ * weather_url takes another Open-Meteo server (it is free software). The
+ * icons are MeeCast's set (weather_icons, default "Meecast") where MeeCast
+ * is installed, else drawn here. A tap opens a weather application, on the
+ * credit line Open-Meteo's site.
+ *
+ * Calendar: the appointments of calendar-backend, the library of Hildon's
+ * calendar qalendar, through its API (calendar.cpp), from today on for
+ * calendar_days days (default 7), updated on its dbChange signal; a tap
+ * opens the appointment in qalendar.
+ *
+ * Sections: show_notifications, show_weather, show_calendar, show_mastodon
+ * (all on by default).
  *
  * Sizes and colours as the N9's Events view (its home screen's style,
  * meegotouchhome.css, in the N9's millimetres of 10 of its pixels, which
@@ -46,9 +67,13 @@
 #include <json-glib/json-glib.h>
 #include <rtcom-eventlogger/eventlogger.h>
 #include <X11/Xatom.h>
+#ifndef PRO1X_NO_CALENDAR
+#include "calendar.h"
+#endif
 
 #define DOMAIN "pro1x-events"
 #define _(s) dgettext(DOMAIN, s)
+#define N_(s) (s)
 #ifndef LOCALEDIR
 #define LOCALEDIR "/usr/share/locale"
 #endif
@@ -58,6 +83,16 @@
 #define KEY_SERVER KEY_DIR "/mastodon_server"
 #define KEY_TOKEN KEY_DIR "/mastodon_token"
 #define KEY_CLEARED KEY_DIR "/mail_cleared"
+#define KEY_SHOW_NOTES KEY_DIR "/show_notifications"
+#define KEY_SHOW_WEATHER KEY_DIR "/show_weather"
+#define KEY_SHOW_CALENDAR KEY_DIR "/show_calendar"
+#define KEY_SHOW_FEED KEY_DIR "/show_mastodon"
+#define KEY_PLACE KEY_DIR "/weather_place"
+#define KEY_LAT KEY_DIR "/weather_latitude"
+#define KEY_LON KEY_DIR "/weather_longitude"
+#define KEY_WEATHER_URL KEY_DIR "/weather_url"
+#define KEY_WEATHER_ICONS KEY_DIR "/weather_icons"
+#define KEY_CAL_DAYS KEY_DIR "/calendar_days"
 #define APPLET_ID "pro1x-events"
 #define APPLET_KEY "/apps/osso/hildon-desktop/applets/" APPLET_ID
 
@@ -66,6 +101,13 @@
 #define MAIL_PER_ACCOUNT 3
 #define AVATAR_MAX (2 << 20)	/* bytes */
 #define AVATAR_DAYS 7
+#define WEATHER_URL "https://api.open-meteo.com/v1/forecast"
+#define WEATHER_SITE "https://open-meteo.com/"
+#define WEATHER_EVERY (30 * 60)	/* s between updates while seen */
+#define WEATHER_RETRY (5 * 60)	/* after one that failed */
+#define WEATHER_DAYS 5		/* today and four more */
+#define CAL_DAYS 7
+#define CAL_LIMIT 12		/* appointments at most */
 
 /* the N9's pixels to ours (HILDON_SCALE, as hildon-desktop's), its
  * millimetre (10 of its pixels) */
@@ -83,20 +125,25 @@ static GDBusConnection *bus;
 
 /* --- the items ---------------------------------------------------------- */
 
-enum kind { K_DATE, K_SECTION, K_NOTE, K_FEED, K_HINT };
-enum action { A_NONE, A_APP, A_URL, A_SETTINGS };
+enum kind { K_DATE, K_SECTION, K_NOTE, K_FEED, K_HINT, K_WEATHER, K_CAL };
+enum action { A_NONE, A_APP, A_URL, A_SETTINGS, A_CALENDAR, A_WEATHER };
 
 typedef struct {
 	int kind, action;
 	char *title, *body, *footer;
 	GdkPixbuf *icon;
 	gint64 time;
-	char *target;		/* application ids (space separated) or a URL */
+	char *target;		/* application ids (space separated), a URL or an
+				 * appointment's id */
 	GArray *events;		/* rtcom-eventlogger's ids of a notification */
 	gboolean clear;		/* a section with the Clear button */
+	int colour, cal_id, cal_kind;	/* an appointment's calendar, kind */
 	/* laid out */
 	int y, h;
 	PangoLayout *lt, *lb, *lf;
+	/* the weather's: the temperature, then each day's name and degrees */
+	PangoLayout *lx[1 + 2 * WEATHER_DAYS];
+	int wtemp_x, wtext_x, wtext_y, wday_x, wday_y, wday_w, wdays, wlink_y;
 } Item;
 
 static GPtrArray *notes;	/* calls and messages (rtcom-eventlogger) */
@@ -106,12 +153,42 @@ static char *feed_hint;		/* instead of them: why there are none */
 static gboolean feed_hint_settings;	/* a tap on the hint opens the settings */
 static GPtrArray *items;	/* what the page shows, in its order */
 static GPtrArray *chrome;	/* the date and the sections (owned) */
+static GPtrArray *appointments;	/* the calendar's */
 static int content_height;
+
+/* the sections shown (Settings, Events) */
+static gboolean show_notes = TRUE, show_weather = TRUE, show_calendar = TRUE,
+		show_feed = TRUE;
+static int cal_days = CAL_DAYS;
+
+/* the weather, as Open-Meteo answered */
+typedef struct {
+	double temp, feels, wind;
+	int code, is_day;
+	int days;
+	struct {
+		int year, month, mday;
+		int code, pop;	/* pop: the chance of rain in %, -1 unknown */
+		double tmax, tmin;
+	} day[WEATHER_DAYS];
+	gint64 fetched;		/* Unix time */
+} Weather;
+
+static Weather *weather;
+static char *weather_hint;	/* why it is not (or not newly) there */
+static gboolean weather_busy;
+static gint64 weather_next;	/* monotonic time of the next update */
+static char *place_name;
+static double place_lat, place_lon;
 
 static void item_free(gpointer p)
 {
 	Item *it = p;
+	guint i;
 
+	for (i = 0; i < G_N_ELEMENTS(it->lx); i++)
+		if (it->lx[i])
+			g_object_unref(it->lx[i]);
 	g_free(it->title);
 	g_free(it->body);
 	g_free(it->footer);
@@ -144,7 +221,7 @@ static Item *item_new(int kind, const char *title, const char *body)
 static double offset;		/* scrolled down by, in pixels */
 static double pull;		/* pulled down at the top by */
 static gboolean pressed, dragging, refreshing;
-static double press_y, press_offset, last_y;
+static double press_y, press_cy, press_offset, last_y;
 static gint64 last_t;
 static double velocity;		/* px/s, of the content upwards */
 static guint anim_id;
@@ -223,14 +300,105 @@ static int icon_size(void)
 /* the items' x for their text */
 static int text_x(const Item *it)
 {
-	return margin() + (it->kind == K_NOTE || it->kind == K_FEED ?
+	return margin() + (it->kind == K_NOTE || it->kind == K_FEED || it->kind == K_CAL ?
 			   MM(0.2) + icon_size() + MM(1.6) : 0);
+}
+
+/* the weather's sizes: its icon now, a day's icon, a day's column */
+#define WICON MM(8.0)
+#define WDAY_ICON MM(4.4)
+#define WDAY_W MM(7.8)
+
+static void temp_text(char *buf, gsize n, double t)
+{
+	long v = lround(t);
+
+	g_snprintf(buf, n, "%ld°", v == 0 ? 0 : v);	/* (no "-0°") */
+}
+
+static void layout_weather(Item *it)
+{
+	PangoFontDescription *d;
+	int tw, th, textw, dayh = 0, n = weather->days, i, h1, texth;
+	gboolean one_row;
+	char buf[64];
+
+	d = font(TRUE, FALSE, MM(5.6));
+	temp_text(buf, sizeof buf, weather->temp);
+	it->lx[0] = layout_text(buf, d, MM(30), 1);
+	pango_font_description_free(d);
+	pango_layout_get_pixel_size(it->lx[0], &tw, &th);
+	it->wtemp_x = margin() + WICON + MM(1.2);
+	it->wtext_x = it->wtemp_x + tw + MM(1.8);
+	textw = width - margin() - it->wtext_x;
+	/* the days beside it where the page is wide enough (landscape),
+	 * else below */
+	one_row = n > 0 && textw - MM(3) - n * WDAY_W >= MM(24);
+	if (one_row)
+		textw -= MM(3) + n * WDAY_W;
+	d = font(FALSE, TRUE, MM(2.2));
+	it->lt = layout_text(it->title, d, textw, 1);
+	pango_font_description_free(d);
+	d = font(FALSE, FALSE, MM(2.2));
+	it->lb = layout_text(it->body, d, textw, 2);
+	pango_font_description_free(d);
+	d = font(FALSE, FALSE, MM(1.6));
+	it->lf = layout_text(it->footer, d, textw, 2);
+	pango_font_description_free(d);
+	texth = layout_h(it->lt) + layout_h(it->lb) + MM(0.4) + layout_h(it->lf);
+	h1 = MAX(WICON, texth);
+	it->wtext_y = MM(0.8) + (h1 - texth) / 2;
+	it->wlink_y = it->wtext_y + layout_h(it->lt) + layout_h(it->lb) + MM(0.4);
+
+	it->wdays = n;
+	it->wday_w = one_row ? WDAY_W : MIN(MM(13), (width - 2 * margin()) / MAX(n, 1));
+	for (i = 0; i < n; i++) {
+		GDateTime *now = g_date_time_new_now_local();
+		GDateTime *day = g_date_time_new_local(weather->day[i].year, weather->day[i].month,
+						       weather->day[i].mday, 12, 0, 0);
+		char *name, *max, *min, *m;
+
+		if (day && g_date_time_get_year(day) == g_date_time_get_year(now) &&
+		    g_date_time_get_day_of_year(day) == g_date_time_get_day_of_year(now))
+			name = g_strdup(_("Today"));
+		else
+			name = day ? g_date_time_format(day, "%a") : g_strdup("");
+		if (day)
+			g_date_time_unref(day);
+		g_date_time_unref(now);
+		d = font(FALSE, FALSE, MM(1.8));
+		it->lx[1 + 2 * i] = layout_text(name, d, it->wday_w, 1);
+		pango_layout_set_alignment(it->lx[1 + 2 * i], PANGO_ALIGN_CENTER);
+		g_free(name);
+		temp_text(buf, sizeof buf, weather->day[i].tmax);
+		max = g_markup_escape_text(buf, -1);
+		temp_text(buf, sizeof buf, weather->day[i].tmin);
+		min = g_markup_escape_text(buf, -1);
+		m = g_strdup_printf("%s <span foreground=\"#808080\">%s</span>", max, min);
+		it->lx[2 + 2 * i] = layout_text("", d, it->wday_w, 1);
+		pango_layout_set_markup(it->lx[2 + 2 * i], m, -1);
+		pango_layout_set_alignment(it->lx[2 + 2 * i], PANGO_ALIGN_CENTER);
+		g_free(max), g_free(min), g_free(m);
+		pango_font_description_free(d);
+		dayh = layout_h(it->lx[1 + 2 * i]) + MM(0.3) + WDAY_ICON + MM(0.3) +
+		       layout_h(it->lx[2 + 2 * i]);
+	}
+	if (one_row) {
+		it->wday_x = width - margin() - n * WDAY_W;
+		it->wday_y = MM(0.8) + MAX(0, (h1 - dayh) / 2);
+		it->h = MM(0.8) + MAX(h1, dayh) + MM(1.0);
+	} else {
+		it->wday_x = margin();
+		it->wday_y = MM(0.8) + h1 + MM(1.0);
+		it->h = it->wday_y + dayh + (n ? MM(1.0) : 0);
+	}
 }
 
 static void layout_item(Item *it)
 {
 	PangoFontDescription *d;
 	int w = width - text_x(it) - margin();
+	guint i;
 
 	if (it->lt)
 		g_object_unref(it->lt);
@@ -239,7 +407,15 @@ static void layout_item(Item *it)
 	if (it->lf)
 		g_object_unref(it->lf);
 	it->lt = it->lb = it->lf = NULL;
+	for (i = 0; i < G_N_ELEMENTS(it->lx); i++)
+		if (it->lx[i]) {
+			g_object_unref(it->lx[i]);
+			it->lx[i] = NULL;
+		}
 	switch (it->kind) {
+	case K_WEATHER:
+		layout_weather(it);
+		break;
 	case K_DATE:
 		d = font(TRUE, FALSE, MM(4.0));
 		it->lt = layout_text(it->title, d, w, 1);
@@ -486,6 +662,9 @@ static void notes_reload(void)
 /* --- notifications: modest ---------------------------------------------- */
 
 static void rebuild(void);
+static void calendar_reload(void);
+static void busy_check(void);
+static void weather_update(void);
 
 static void mails_cb(GObject *src, GAsyncResult *res, gpointer data)
 {
@@ -581,6 +760,7 @@ static gboolean reload_cb(gpointer data)
 	reload_id = 0;
 	notes_reload();
 	mails_reload();
+	calendar_reload();
 	rebuild();
 	return FALSE;
 }
@@ -901,7 +1081,7 @@ static gboolean fetch_done(gpointer data)
 	Fetch *f = data;
 
 	feed_busy = FALSE;
-	refreshing = FALSE;
+	busy_check();
 	feed_time = g_get_monotonic_time();
 	g_free(feed_hint);
 	feed_hint = f->error;
@@ -946,7 +1126,9 @@ static gpointer fetch_thread(gpointer data)
 		g_byte_array_free(b, TRUE);
 	g_free(error);
 	g_free(url);
-	g_idle_add(fetch_done, f);
+	/* (at the timers' priority: the spinner's frames and their redraws
+	 * keep a slow machine busy, an idle callback would wait for ever) */
+	g_idle_add_full(G_PRIORITY_DEFAULT, fetch_done, f, NULL);
 	return NULL;
 }
 
@@ -971,7 +1153,7 @@ static void feed_update(void)
 	Fetch *f;
 	GThread *t;
 
-	if (feed_busy)
+	if (feed_busy || !show_feed)
 		return;
 	server = gconf_client_get_string(gconf, KEY_SERVER, NULL);
 	token = gconf_client_get_string(gconf, KEY_TOKEN, NULL);
@@ -982,7 +1164,7 @@ static void feed_update(void)
 		feed_hint = g_strdup(_("Add a Mastodon account in Settings, Events, "
 				       "and its home timeline shows here."));
 		feed_hint_settings = TRUE;
-		refreshing = FALSE;
+		busy_check();
 		notes_reload();
 		mails_reload();
 		rebuild();
@@ -1008,16 +1190,578 @@ static void feed_update(void)
 	rebuild();
 }
 
+/* --- weather: Open-Meteo ------------------------------------------------- */
+
+/* The WMO weather codes of Open-Meteo: their text, MeeCast's icons (the
+ * weather.com numbers its sets use) by day and by night, and the glyph
+ * drawn without them */
+enum glyph { G_CLEAR, G_FAIR, G_PARTLY, G_CLOUDY, G_FOG, G_DRIZZLE, G_RAIN, G_SHOWER,
+	     G_SLEET, G_SNOW, G_SNOWSHOWER, G_THUNDER };
+
+static const struct wmo {
+	int code;
+	const char *text;
+	int day, night, glyph;
+} wmo[] = {
+	{ 0, N_("Clear sky"), 32, 31, G_CLEAR },
+	{ 1, N_("Mainly clear"), 34, 33, G_FAIR },
+	{ 2, N_("Partly cloudy"), 30, 29, G_PARTLY },
+	{ 3, N_("Overcast"), 26, 26, G_CLOUDY },
+	{ 45, N_("Fog"), 20, 20, G_FOG },
+	{ 48, N_("Freezing fog"), 20, 20, G_FOG },
+	{ 51, N_("Light drizzle"), 9, 9, G_DRIZZLE },
+	{ 53, N_("Drizzle"), 9, 9, G_DRIZZLE },
+	{ 55, N_("Dense drizzle"), 9, 9, G_DRIZZLE },
+	{ 56, N_("Freezing drizzle"), 8, 8, G_SLEET },
+	{ 57, N_("Freezing drizzle"), 8, 8, G_SLEET },
+	{ 61, N_("Light rain"), 11, 11, G_RAIN },
+	{ 63, N_("Rain"), 12, 12, G_RAIN },
+	{ 65, N_("Heavy rain"), 12, 12, G_RAIN },
+	{ 66, N_("Freezing rain"), 10, 10, G_SLEET },
+	{ 67, N_("Freezing rain"), 10, 10, G_SLEET },
+	{ 71, N_("Light snow"), 14, 14, G_SNOW },
+	{ 73, N_("Snow"), 16, 16, G_SNOW },
+	{ 75, N_("Heavy snow"), 43, 43, G_SNOW },
+	{ 77, N_("Snow grains"), 13, 13, G_SNOW },
+	{ 80, N_("Light showers"), 39, 45, G_SHOWER },
+	{ 81, N_("Showers"), 39, 45, G_SHOWER },
+	{ 82, N_("Heavy showers"), 39, 45, G_SHOWER },
+	{ 85, N_("Snow showers"), 41, 46, G_SNOWSHOWER },
+	{ 86, N_("Heavy snow showers"), 41, 46, G_SNOWSHOWER },
+	{ 95, N_("Thunderstorm"), 4, 4, G_THUNDER },
+	{ 96, N_("Thunderstorm with hail"), 3, 3, G_THUNDER },
+	{ 99, N_("Thunderstorm with hail"), 3, 3, G_THUNDER },
+};
+
+static const struct wmo *wmo_find(int code)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(wmo); i++)
+		if (wmo[i].code == code)
+			return &wmo[i];
+	return NULL;
+}
+
+static double jnum(JsonNode *n, double def)
+{
+	GType t;
+
+	if (!n || JSON_NODE_TYPE(n) != JSON_NODE_VALUE)
+		return def;
+	t = json_node_get_value_type(n);
+	if (t == G_TYPE_DOUBLE || t == G_TYPE_FLOAT)
+		return json_node_get_double(n);
+	if (t == G_TYPE_INT64 || t == G_TYPE_INT)
+		return json_node_get_int(n);
+	return def;
+}
+
+static double jmember(JsonObject *o, const char *name, double def)
+{
+	return o && json_object_has_member(o, name) ?
+	       jnum(json_object_get_member(o, name), def) : def;
+}
+
+static JsonArray *jarray(JsonObject *o, const char *name)
+{
+	JsonNode *n;
+
+	if (!o || !json_object_has_member(o, name))
+		return NULL;
+	n = json_object_get_member(o, name);
+	return n && JSON_NODE_TYPE(n) == JSON_NODE_ARRAY ? json_node_get_array(n) : NULL;
+}
+
+static double jat(JsonArray *a, guint i, double def)
+{
+	return a && i < json_array_get_length(a) ? jnum(json_array_get_element(a, i), def) : def;
+}
+
+/* Open-Meteo's answer (current=..., daily=...), NULL if it is none */
+static Weather *parse_weather(const char *data, gsize len)
+{
+	JsonParser *jp = json_parser_new();
+	JsonNode *root;
+	JsonObject *o, *cur, *daily;
+	JsonArray *days, *codes, *tmax, *tmin, *pop;
+	Weather *w = NULL;
+	guint i;
+
+	if (!json_parser_load_from_data(jp, data, len, NULL) ||
+	    !(root = json_parser_get_root(jp)) || JSON_NODE_TYPE(root) != JSON_NODE_OBJECT)
+		goto out;
+	o = json_node_get_object(root);
+	cur = jobj(o, "current");
+	if (!cur || jmember(cur, "temperature_2m", G_MAXDOUBLE) == G_MAXDOUBLE)
+		goto out;
+	w = g_new0(Weather, 1);
+	w->temp = jmember(cur, "temperature_2m", 0);
+	w->feels = jmember(cur, "apparent_temperature", G_MAXDOUBLE);
+	w->wind = jmember(cur, "wind_speed_10m", -1);
+	w->code = (int)jmember(cur, "weather_code", -1);
+	w->is_day = (int)jmember(cur, "is_day", 1);
+	daily = jobj(o, "daily");
+	days = jarray(daily, "time");
+	codes = jarray(daily, "weather_code");
+	tmax = jarray(daily, "temperature_2m_max");
+	tmin = jarray(daily, "temperature_2m_min");
+	pop = jarray(daily, "precipitation_probability_max");
+	for (i = 0; days && i < json_array_get_length(days) && w->days < WEATHER_DAYS; i++) {
+		const char *s = json_array_get_string_element(days, i);
+		int y, m, d;
+
+		if (!s || sscanf(s, "%d-%d-%d", &y, &m, &d) != 3 ||
+		    jat(tmax, i, G_MAXDOUBLE) == G_MAXDOUBLE || jat(tmin, i, G_MAXDOUBLE) == G_MAXDOUBLE)
+			continue;
+		w->day[w->days].year = y;
+		w->day[w->days].month = m;
+		w->day[w->days].mday = d;
+		w->day[w->days].code = (int)jat(codes, i, -1);
+		w->day[w->days].tmax = jat(tmax, i, 0);
+		w->day[w->days].tmin = jat(tmin, i, 0);
+		w->day[w->days].pop = (int)jat(pop, i, -1);
+		w->days++;
+	}
+out:
+	g_object_unref(jp);
+	return w;
+}
+
+/* the days of before (a cached answer) left out */
+static void weather_drop_past(Weather *w)
+{
+	GDateTime *now = g_date_time_new_now_local();
+	int today = g_date_time_get_year(now) * 10000 + g_date_time_get_month(now) * 100 +
+		    g_date_time_get_day_of_month(now);
+	int i, j = 0;
+
+	g_date_time_unref(now);
+	for (i = 0; i < w->days; i++)
+		if (w->day[i].year * 10000 + w->day[i].month * 100 + w->day[i].mday >= today)
+			w->day[j++] = w->day[i];
+	w->days = j;
+}
+
+static gboolean place_set(void)
+{
+	return place_name && *place_name && place_lat >= -90 && place_lat <= 90 &&
+	       place_lon >= -180 && place_lon <= 180;
+}
+
+/* the cache of a place's last answer */
+static char *weather_cache(void)
+{
+	char la[G_ASCII_DTOSTR_BUF_SIZE], lo[G_ASCII_DTOSTR_BUF_SIZE], *name, *p;
+
+	g_ascii_formatd(la, sizeof la, "%.3f", place_lat);
+	g_ascii_formatd(lo, sizeof lo, "%.3f", place_lon);
+	name = g_strdup_printf("weather-%s_%s.json", la, lo);
+	p = g_build_filename(g_get_user_cache_dir(), "pro1x-events", name, NULL);
+	g_free(name);
+	return p;
+}
+
+static void weather_load_cache(void)
+{
+	char *path, *data = NULL;
+	gsize len;
+	GStatBuf st;
+	Weather *w;
+
+	g_free(weather);
+	weather = NULL;
+	if (!place_set())
+		return;
+	path = weather_cache();
+	/* (a day old, its days are gone) */
+	if (!g_stat(path, &st) && time(NULL) - st.st_mtime < 2 * 86400 &&
+	    g_file_get_contents(path, &data, &len, NULL) && (w = parse_weather(data, len))) {
+		w->fetched = st.st_mtime;
+		weather_drop_past(w);
+		weather = w;
+	}
+	g_free(data);
+	g_free(path);
+}
+
+typedef struct {
+	char *url, *cache;
+	double lat, lon;	/* of the place asked for */
+	Weather *w;
+	char *error;
+} WeatherFetch;
+
+static void busy_check(void)
+{
+	if (!feed_busy && !weather_busy)
+		refreshing = FALSE;
+}
+
+static gboolean weather_done(gpointer data)
+{
+	WeatherFetch *f = data;
+
+	weather_busy = FALSE;
+	if (f->lat != place_lat || f->lon != place_lon) {
+		/* another place meanwhile: its weather */
+		g_free(f->w), g_free(f->error);
+		g_free(f->url), g_free(f->cache), g_free(f);
+		weather_next = 0;
+		weather_update();
+		busy_check();
+		return FALSE;
+	}
+	busy_check();
+	g_free(weather_hint);
+	weather_hint = f->error;
+	if (f->w) {
+		g_free(weather);
+		weather = f->w;
+		weather_drop_past(weather);
+	}
+	weather_next = g_get_monotonic_time() +
+		       (gint64)(f->w ? WEATHER_EVERY : WEATHER_RETRY) * G_USEC_PER_SEC;
+	g_free(f->url), g_free(f->cache), g_free(f);
+	rebuild();
+	return FALSE;
+}
+
+static gpointer weather_thread(gpointer data)
+{
+	WeatherFetch *f = data;
+	char *error = NULL;
+	long status;
+	GByteArray *b = http_get(f->url, NULL, &status, &error);
+
+	if (!b)
+		f->error = g_strdup_printf(_("No connection to Open-Meteo (%s)."), error ? error : "?");
+	else if (status != 200)
+		f->error = g_strdup_printf(_("Open-Meteo answered %ld."), status);
+	else if (!(f->w = parse_weather((const char *)b->data, b->len)))
+		f->error = g_strdup(_("Open-Meteo's answer was not understood."));
+	else {
+		f->w->fetched = time(NULL);
+		g_file_set_contents(f->cache, (const char *)b->data, b->len, NULL);
+	}
+	if (b)
+		g_byte_array_free(b, TRUE);
+	g_free(error);
+	g_idle_add_full(G_PRIORITY_DEFAULT, weather_done, f, NULL);
+	return NULL;
+}
+
+static void weather_update(void)
+{
+	char la[G_ASCII_DTOSTR_BUF_SIZE], lo[G_ASCII_DTOSTR_BUF_SIZE], *base, *dir;
+	WeatherFetch *f;
+	GThread *t;
+
+	if (weather_busy || !show_weather || !place_set())
+		return;
+	base = gconf_client_get_string(gconf, KEY_WEATHER_URL, NULL);
+	if (base)
+		g_strstrip(base);
+	g_ascii_formatd(la, sizeof la, "%.4f", place_lat);
+	g_ascii_formatd(lo, sizeof lo, "%.4f", place_lon);
+	f = g_new0(WeatherFetch, 1);
+	f->url = g_strdup_printf("%s?latitude=%s&longitude=%s"
+				 "&current=temperature_2m,apparent_temperature,weather_code,"
+				 "is_day,wind_speed_10m"
+				 "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+				 "precipitation_probability_max"
+				 "&timezone=auto&forecast_days=%d",
+				 base && *base ? base : WEATHER_URL, la, lo, WEATHER_DAYS);
+	g_free(base);
+	f->cache = weather_cache();
+	f->lat = place_lat;
+	f->lon = place_lon;
+	dir = g_path_get_dirname(f->cache);
+	g_mkdir_with_parents(dir, 0700);
+	g_free(dir);
+	weather_busy = TRUE;
+	t = g_thread_try_new("weather", weather_thread, f, NULL);
+	if (t)
+		g_thread_unref(t);
+	else {
+		weather_busy = FALSE;
+		g_free(f->url), g_free(f->cache), g_free(f);
+	}
+	rebuild();
+}
+
+/* MeeCast's icon sets (GPL, not part of this; where MeeCast is installed):
+ * weather_icons names one (default "Meecast") or a directory, "none"
+ * draws them here */
+static const char *iconset_dirs[] = {
+	"/usr/local/lib/meecast/share/iconsets",	/* FreeBSD's MeeCast */
+	"/opt/com.meecast.omweather/share/iconsets",	/* its own place */
+	"/usr/share/omweather/icons",			/* Maemo 5's */
+};
+static char *iconset;		/* the directory, "" none; NULL: not looked for */
+static GHashTable *weather_icons;	/* "number size" -> GdkPixbuf */
+
+static void iconset_reset(void)
+{
+	g_free(iconset);
+	iconset = NULL;
+	if (weather_icons)
+		g_hash_table_remove_all(weather_icons);
+}
+
+static const char *iconset_dir(void)
+{
+	char *set;
+	guint i;
+
+	if (iconset)
+		return iconset;
+	set = gconf_client_get_string(gconf, KEY_WEATHER_ICONS, NULL);
+	if (!set)
+		set = g_strdup("Meecast");
+	g_strstrip(set);
+	iconset = g_strdup("");
+	if (*set && strcmp(set, "none")) {
+		if (g_path_is_absolute(set) && g_file_test(set, G_FILE_TEST_IS_DIR)) {
+			g_free(iconset);
+			iconset = g_strdup(set);
+		}
+		for (i = 0; !*iconset && i < G_N_ELEMENTS(iconset_dirs); i++) {
+			char *p = g_build_filename(iconset_dirs[i], set, "32.png", NULL);
+
+			if (g_file_test(p, G_FILE_TEST_EXISTS)) {
+				g_free(iconset);
+				iconset = g_path_get_dirname(p);
+			}
+			g_free(p);
+		}
+	}
+	g_free(set);
+	return iconset;
+}
+
+static GdkPixbuf *iconset_icon(int number, int size)
+{
+	char key[32], *p;
+	GdkPixbuf *b;
+
+	if (!*iconset_dir())
+		return NULL;
+	if (!weather_icons)
+		weather_icons = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+						      g_object_unref);
+	g_snprintf(key, sizeof key, "%d %d", number, size);
+	if ((b = g_hash_table_lookup(weather_icons, key)))
+		return b;
+	p = g_strdup_printf("%s/%d.png", iconset, number);
+	b = gdk_pixbuf_new_from_file_at_size(p, size, size, NULL);
+	g_free(p);
+	if (b)
+		g_hash_table_insert(weather_icons, g_strdup(key), b);
+	return b;
+}
+
+/* --- the calendar -------------------------------------------------------- */
+
+/* "Today", "Tomorrow" or "Mon 3 Nov" */
+static char *day_name(GDateTime *d)
+{
+	GDateTime *now = g_date_time_new_now_local();
+	GDateTime *today = g_date_time_new_local(g_date_time_get_year(now), g_date_time_get_month(now),
+						 g_date_time_get_day_of_month(now), 0, 0, 0);
+	GTimeSpan diff = g_date_time_difference(d, today);
+	char *s;
+
+	if (diff >= 0 && diff < G_TIME_SPAN_DAY)
+		s = g_strdup(_("Today"));
+	else if (diff >= G_TIME_SPAN_DAY && diff < 2 * G_TIME_SPAN_DAY)
+		s = g_strdup(_("Tomorrow"));
+	else
+		/* TRANSLATORS: g_date_time_format()'s, a day of the next week */
+		s = g_date_time_format(d, _("%a %-d %b"));
+	g_date_time_unref(today);
+	g_date_time_unref(now);
+	return s;
+}
+
+#ifndef PRO1X_NO_CALENDAR
+/* When an appointment is: "Today, 14:00–15:30", "Tomorrow, all day",
+ * "Now, until 15:30" */
+static char *cal_when(const CalEntry *c, gint64 now)
+{
+	GDateTime *s = g_date_time_new_from_unix_local(c->start);
+	GDateTime *e = g_date_time_new_from_unix_local(c->end);
+	char *day = day_name(s), *r, *a, *b;
+
+	if (c->kind == CAL_TODO)
+		r = g_strdup_printf(_("%s, task"), day);
+	else if (c->kind == CAL_BIRTHDAY)
+		r = g_strdup_printf(_("%s, birthday"), day);
+	else if (c->allday)
+		r = g_strdup_printf(_("%s, all day"), day);
+	else if (c->start <= now && now < c->end) {
+		a = g_date_time_format(e, "%H:%M");
+		r = g_strdup_printf(_("Now, until %s"), a);
+		g_free(a);
+	} else if (c->end <= c->start) {
+		a = g_date_time_format(s, "%H:%M");
+		r = g_strdup_printf("%s, %s", day, a);
+		g_free(a);
+	} else if (g_date_time_get_day_of_year(s) == g_date_time_get_day_of_year(e) &&
+		   g_date_time_get_year(s) == g_date_time_get_year(e)) {
+		a = g_date_time_format(s, "%H:%M");
+		b = g_date_time_format(e, "%H:%M");
+		r = g_strdup_printf("%s, %s–%s", day, a, b);
+		g_free(a), g_free(b);
+	} else {
+		char *eday = day_name(e);
+
+		a = g_date_time_format(s, "%H:%M");
+		b = g_date_time_format(e, "%H:%M");
+		r = g_strdup_printf("%s, %s – %s, %s", day, a, eday, b);
+		g_free(a), g_free(b), g_free(eday);
+	}
+	g_free(day);
+	g_date_time_unref(s);
+	g_date_time_unref(e);
+	return r;
+}
+#endif
+
+/* when the next shown appointment begins or ends (its line changes) */
+static gint64 cal_next = G_MAXINT64;
+
+/* today's and the next days' appointments, those over left out */
+static void calendar_reload(void)
+{
+	cal_next = G_MAXINT64;
+#ifndef PRO1X_NO_CALENDAR
+	GDateTime *now, *today, *end;
+	GPtrArray *all;
+	gint64 t = time(NULL);
+	guint i;
+
+	g_ptr_array_set_size(appointments, 0);
+	if (!show_calendar)
+		return;
+	now = g_date_time_new_now_local();
+	today = g_date_time_new_local(g_date_time_get_year(now), g_date_time_get_month(now),
+				      g_date_time_get_day_of_month(now), 0, 0, 0);
+	end = g_date_time_add_days(today, cal_days);
+	all = pro1x_calendar_load(g_date_time_to_unix(today), g_date_time_to_unix(end) - 1, 0);
+	for (i = 0; i < all->len && appointments->len < CAL_LIMIT; i++) {
+		CalEntry *c = g_ptr_array_index(all, i);
+		Item *it;
+
+		if (!c->allday && MAX(c->end, c->start) <= t)
+			continue;
+		if (!c->allday)
+			cal_next = MIN(cal_next, c->start > t ? c->start : c->end);
+		it = item_new(K_CAL, c->summary && *c->summary ? c->summary : _("(no title)"),
+			      c->location);
+		if (c->kind == CAL_BIRTHDAY && c->born) {
+			GDateTime *s = g_date_time_new_from_unix_local(c->start);
+
+			g_free(it->title);
+			it->title = g_strdup_printf("%s (%d)", c->summary ? c->summary : "",
+						    g_date_time_get_year(s) - c->born);
+			g_date_time_unref(s);
+		}
+		it->footer = cal_when(c, t);
+		it->time = c->start;
+		it->colour = c->colour;
+		it->cal_kind = c->kind;
+		it->cal_id = c->calendar_id;
+		it->target = g_strdup(c->id);
+		it->action = A_CALENDAR;
+		g_ptr_array_add(appointments, it);
+	}
+	g_ptr_array_unref(all);
+	g_date_time_unref(end);
+	g_date_time_unref(today);
+	g_date_time_unref(now);
+#endif
+}
+
+static void calendar_signal(GDBusConnection *c, const char *sender, const char *path,
+			    const char *iface, const char *signal, GVariant *p, gpointer data)
+{
+	(void)c, (void)sender, (void)path, (void)iface, (void)signal, (void)p, (void)data;
+	reload_soon();
+}
+
+/* --- updates ------------------------------------------------------------- */
+
 static gboolean feed_timer(gpointer data)
 {
+	gint64 now = g_get_monotonic_time();
+
 	(void)data;
-	if (look_on && !closed &&
-	    g_get_monotonic_time() - feed_time > (gint64)FEED_EVERY * G_USEC_PER_SEC)
-		feed_update();
+	if (look_on && !closed) {
+		if (show_feed && now - feed_time > (gint64)FEED_EVERY * G_USEC_PER_SEC)
+			feed_update();
+		if (show_weather && now >= weather_next)
+			weather_update();
+	}
 	return TRUE;
 }
 
 /* --- the page's items --------------------------------------------------- */
+
+/* the weather under the date: now and the next days, or why not */
+static void add_weather(void)
+{
+	Item *it;
+
+	if (weather) {
+		const struct wmo *w = wmo_find(weather->code);
+		GString *b = g_string_new(w ? _(w->text) : "");
+		char t[32], *at, *as_of;
+
+		if (weather->feels != G_MAXDOUBLE) {
+			temp_text(t, sizeof t, weather->feels);
+			if (b->len)
+				g_string_append(b, " · ");
+			g_string_append_printf(b, _("feels like %s"), t);
+		}
+		if (weather->wind >= 0) {
+			char *w = g_strdup_printf(_("wind %ld km/h"), lround(weather->wind)), *p;
+
+			if (b->len)
+				g_string_append(b, " · ");
+			/* "10 km/h" kept on one line: a no-break space before the
+			 * unit, a word joiner after its slash */
+			for (p = w; *p; p++) {
+				if (*p == ' ' && g_str_has_prefix(p + 1, "km/h")) {
+					g_string_append(b, "\u00a0km/\u2060h");
+					p += 4;
+				} else
+					g_string_append_c(b, *p);
+			}
+			g_free(w);
+		}
+		it = item_new(K_WEATHER, place_name, b->str);
+		g_string_free(b, TRUE);
+		at = when(weather->fetched);
+		as_of = g_strdup_printf(weather_hint ? _("As of %s, not updated") : _("As of %s"), at);
+		/* the credit Open-Meteo's licence (CC BY 4.0) asks for */
+		it->footer = g_strconcat(as_of, "\n", _("Weather data by Open-Meteo.com"), NULL);
+		g_free(at), g_free(as_of);
+		it->action = A_WEATHER;
+	} else if (!place_set()) {
+		it = item_new(K_HINT, _("Choose a place in Settings, Events, and its weather "
+					"shows here."), NULL);
+		it->action = A_SETTINGS;
+	} else {
+		char *s = g_strdup_printf("%s: %s", place_name, weather_hint ? weather_hint :
+					  _("Updating…"));
+
+		it = item_new(K_HINT, s, NULL);
+		g_free(s);
+	}
+	g_ptr_array_add(chrome, it);
+	g_ptr_array_add(items, it);
+}
 
 static void rebuild(void)
 {
@@ -1037,9 +1781,12 @@ static void rebuild(void)
 	g_ptr_array_add(items, it);
 	g_free(day), g_free(date);
 
-	for (i = 0; i < notes->len; i++)
+	if (show_weather)
+		add_weather();
+
+	for (i = 0; show_notes && i < notes->len; i++)
 		g_ptr_array_add(n, g_ptr_array_index(notes, i));
-	for (i = 0; i < mails->len; i++)
+	for (i = 0; show_notes && i < mails->len; i++)
 		g_ptr_array_add(n, g_ptr_array_index(mails, i));
 	g_ptr_array_sort(n, by_time);
 	if (n->len) {
@@ -1052,22 +1799,44 @@ static void rebuild(void)
 	}
 	g_ptr_array_free(n, TRUE);
 
-	it = item_new(K_SECTION, "Mastodon", NULL);
-	g_ptr_array_add(chrome, it);
-	g_ptr_array_add(items, it);
-	if (feed->len && !feed_hint)
-		for (i = 0; i < feed->len; i++)
-			g_ptr_array_add(items, g_ptr_array_index(feed, i));
-	else {
-		it = item_new(K_HINT, feed_hint ? feed_hint :
-			      feed_busy ? _("Updating…") : "", NULL);
-		it->action = feed_hint_settings ? A_SETTINGS : A_NONE;
+#ifndef PRO1X_NO_CALENDAR
+	if (show_calendar) {
+		it = item_new(K_SECTION, _("Calendar"), NULL);
 		g_ptr_array_add(chrome, it);
 		g_ptr_array_add(items, it);
-		/* the posts of before, below the reason there are no new ones */
-		if (!feed_hint_settings)
+		for (i = 0; i < appointments->len; i++)
+			g_ptr_array_add(items, g_ptr_array_index(appointments, i));
+		if (!appointments->len) {
+			char *s = cal_days <= 1 ? g_strdup(_("No appointments today.")) :
+				  g_strdup_printf(_("No appointments in the next %d days."), cal_days);
+
+			it = item_new(K_HINT, s, NULL);
+			g_free(s);
+			it->action = A_CALENDAR;
+			g_ptr_array_add(chrome, it);
+			g_ptr_array_add(items, it);
+		}
+	}
+#endif
+
+	if (show_feed) {
+		it = item_new(K_SECTION, "Mastodon", NULL);
+		g_ptr_array_add(chrome, it);
+		g_ptr_array_add(items, it);
+		if (feed->len && !feed_hint)
 			for (i = 0; i < feed->len; i++)
 				g_ptr_array_add(items, g_ptr_array_index(feed, i));
+		else {
+			it = item_new(K_HINT, feed_hint ? feed_hint :
+				      feed_busy ? _("Updating…") : "", NULL);
+			it->action = feed_hint_settings ? A_SETTINGS : A_NONE;
+			g_ptr_array_add(chrome, it);
+			g_ptr_array_add(items, it);
+			/* the posts of before, below the reason there are no new ones */
+			if (!feed_hint_settings)
+				for (i = 0; i < feed->len; i++)
+					g_ptr_array_add(items, g_ptr_array_index(feed, i));
+		}
 	}
 	layout_all();
 	redraw();
@@ -1105,12 +1874,253 @@ static void text_at(cairo_t *cr, PangoLayout *l, double x, double y, guint32 rgb
 	pango_cairo_show_layout(cr, l);
 }
 
+static void set_rgb(cairo_t *cr, guint32 rgb)
+{
+	cairo_set_source_rgb(cr, ((rgb >> 16) & 255) / 255.0, ((rgb >> 8) & 255) / 255.0,
+			     (rgb & 255) / 255.0);
+}
+
+/* The weather's glyphs where no icon set of MeeCast's is there: white
+ * outlines on the black page as MeeCast's own set has them, the sun and
+ * the moon in colour */
+static void cloud(cairo_t *cr, double x, double y, double w, double lw)
+{
+	/* (w wide, 0.6 w high) its parts' union, outlined: stroked twice as
+	 * wide, then filled black over the inner half */
+	cairo_new_sub_path(cr);
+	cairo_arc(cr, x + 0.25 * w, y + 0.40 * w, 0.20 * w, 0, 2 * G_PI);
+	cairo_new_sub_path(cr);
+	cairo_arc(cr, x + 0.48 * w, y + 0.28 * w, 0.24 * w, 0, 2 * G_PI);
+	cairo_new_sub_path(cr);
+	cairo_arc(cr, x + 0.75 * w, y + 0.40 * w, 0.20 * w, 0, 2 * G_PI);
+	cairo_rectangle(cr, x + 0.25 * w, y + 0.30 * w, 0.50 * w, 0.30 * w);
+	cairo_set_line_width(cr, 2 * lw);
+	set_rgb(cr, 0xffffff);
+	cairo_stroke_preserve(cr);
+	set_rgb(cr, 0x000000);
+	cairo_fill(cr);
+}
+
+static void sun(cairo_t *cr, double cx, double cy, double r)
+{
+	int i;
+
+	set_rgb(cr, 0xf5c518);
+	cairo_arc(cr, cx, cy, r * 0.6, 0, 2 * G_PI);
+	cairo_fill(cr);
+	cairo_set_line_width(cr, r * 0.14);
+	for (i = 0; i < 8; i++) {
+		double a = i * G_PI / 4;
+
+		cairo_move_to(cr, cx + cos(a) * r * 0.78, cy + sin(a) * r * 0.78);
+		cairo_line_to(cr, cx + cos(a) * r, cy + sin(a) * r);
+	}
+	cairo_stroke(cr);
+}
+
+static void moon(cairo_t *cr, double cx, double cy, double r)
+{
+	cairo_push_group(cr);
+	set_rgb(cr, 0xfaeb9c);
+	cairo_arc(cr, cx, cy, r * 0.8, 0, 2 * G_PI);
+	cairo_fill(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+	cairo_arc(cr, cx + r * 0.45, cy - r * 0.3, r * 0.68, 0, 2 * G_PI);
+	cairo_fill(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+	cairo_pop_group_to_source(cr);
+	cairo_paint(cr);
+}
+
+static void sky(cairo_t *cr, gboolean day, double cx, double cy, double r)
+{
+	if (day)
+		sun(cr, cx, cy, r);
+	else
+		moon(cr, cx, cy, r);
+}
+
+static void drops(cairo_t *cr, double x, double y, double w, int n, double len, double lw)
+{
+	int i;
+
+	set_rgb(cr, 0xffffff);
+	cairo_set_line_width(cr, lw * 1.3);
+	for (i = 0; i < n; i++) {
+		double xi = x + w * (i + 0.5) / n + len * 0.15;
+
+		cairo_move_to(cr, xi, y + (i % 2) * len * 0.3);
+		cairo_line_to(cr, xi - len * 0.3, y + (i % 2) * len * 0.3 + len);
+	}
+	cairo_stroke(cr);
+}
+
+static void flakes(cairo_t *cr, double x, double y, double w, int n, double r)
+{
+	int i;
+
+	set_rgb(cr, 0xffffff);
+	for (i = 0; i < n; i++) {
+		cairo_new_sub_path(cr);
+		cairo_arc(cr, x + w * (i + 0.5) / n, y + r + (i % 2) * r * 2.2, r, 0, 2 * G_PI);
+	}
+	cairo_fill(cr);
+}
+
+static void bolt(cairo_t *cr, double x, double y, double h)
+{
+	set_rgb(cr, 0xf5c518);
+	cairo_move_to(cr, x + 0.30 * h, y);
+	cairo_line_to(cr, x + 0.02 * h, y + 0.56 * h);
+	cairo_line_to(cr, x + 0.22 * h, y + 0.56 * h);
+	cairo_line_to(cr, x + 0.08 * h, y + h);
+	cairo_line_to(cr, x + 0.46 * h, y + 0.40 * h);
+	cairo_line_to(cr, x + 0.26 * h, y + 0.40 * h);
+	cairo_line_to(cr, x + 0.40 * h, y);
+	cairo_close_path(cr);
+	cairo_fill(cr);
+}
+
+static void fog(cairo_t *cr, double x, double y, double w, double lw)
+{
+	int i;
+
+	set_rgb(cr, 0xffffff);
+	cairo_set_line_width(cr, lw * 1.3);
+	for (i = 0; i < 3; i++) {
+		double yi = y + i * w * 0.13;
+
+		cairo_move_to(cr, x, yi);
+		cairo_curve_to(cr, x + w * 0.25, yi - w * 0.06, x + w * 0.25, yi + w * 0.06,
+			       x + w * 0.5, yi);
+		cairo_curve_to(cr, x + w * 0.75, yi - w * 0.06, x + w * 0.75, yi + w * 0.06,
+			       x + w, yi);
+	}
+	cairo_stroke(cr);
+}
+
+static void draw_glyph(cairo_t *cr, int g, gboolean day, double x, double y, double s)
+{
+	double lw = MAX(1, s * 0.045);
+	double top = y + s * 0.04, low = y + s * 0.64;	/* a cloud above, rain below */
+
+	cairo_save(cr);
+	cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+	cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+	switch (g) {
+	case G_CLEAR:
+		sky(cr, day, x + s / 2, y + s / 2, s * 0.44);
+		break;
+	case G_FAIR:
+		sky(cr, day, x + s * 0.42, y + s * 0.40, s * 0.38);
+		cloud(cr, x + s * 0.42, y + s * 0.54, s * 0.52, lw);
+		break;
+	case G_PARTLY:
+		sky(cr, day, x + s * 0.36, y + s * 0.34, s * 0.32);
+		cloud(cr, x + s * 0.18, y + s * 0.36, s * 0.78, lw);
+		break;
+	case G_CLOUDY:
+		cloud(cr, x + s * 0.06, y + s * 0.20, s * 0.88, lw);
+		break;
+	case G_FOG:
+		cloud(cr, x + s * 0.12, y + s * 0.04, s * 0.76, lw);
+		fog(cr, x + s * 0.14, y + s * 0.66, s * 0.72, lw);
+		break;
+	default:
+		if (g == G_SHOWER || g == G_SNOWSHOWER)
+			sky(cr, day, x + s * 0.72, y + s * 0.22, s * 0.24);
+		cloud(cr, x + s * 0.08, top, s * 0.84, lw);
+		if (g == G_DRIZZLE)
+			drops(cr, x + s * 0.2, low, s * 0.6, 3, s * 0.14, lw);
+		else if (g == G_RAIN || g == G_SHOWER)
+			drops(cr, x + s * 0.16, low, s * 0.68, 4, s * 0.24, lw);
+		else if (g == G_SLEET) {
+			drops(cr, x + s * 0.16, low, s * 0.34, 2, s * 0.22, lw);
+			flakes(cr, x + s * 0.52, low, s * 0.34, 2, s * 0.05);
+		} else if (g == G_SNOW || g == G_SNOWSHOWER)
+			flakes(cr, x + s * 0.16, low, s * 0.68, 4, s * 0.055);
+		else if (g == G_THUNDER) {
+			bolt(cr, x + s * 0.38, y + s * 0.5, s * 0.46);
+			drops(cr, x + s * 0.12, low, s * 0.24, 1, s * 0.22, lw);
+			drops(cr, x + s * 0.66, low, s * 0.24, 1, s * 0.22, lw);
+		}
+		break;
+	}
+	cairo_restore(cr);
+}
+
+/* a weather code's icon: MeeCast's where its set is there, else a glyph */
+static void draw_weather_icon(cairo_t *cr, int code, gboolean day, double x, double y, int s)
+{
+	const struct wmo *w = wmo_find(code);
+	GdkPixbuf *b = w ? iconset_icon(day ? w->day : w->night, s) : NULL;
+
+	if (b) {
+		gdk_cairo_set_source_pixbuf(cr, b, x + (s - gdk_pixbuf_get_width(b)) / 2,
+					    y + (s - gdk_pixbuf_get_height(b)) / 2);
+		cairo_paint(cr);
+	} else
+		draw_glyph(cr, w ? w->glyph : G_CLOUDY, day, x, y, s);
+}
+
+/* An appointment's icon: its day on a plate of its calendar's colour
+ * (calendar-backend's ten, as Hildon's calendar shows them) */
+static const guint32 cal_colours[] = {
+	0x2b5cb0, 0x2f8a3c, 0xa5302b, 0xee8a1e, 0x8c4db6,
+	0xe3c21a, 0xd6d6d6, 0x3ea2ea, 0xe5413a, 0x7cc63b,
+};
+
+static void draw_plate(cairo_t *cr, Item *it, double x, double y)
+{
+	int s = icon_size(), w, h;
+	guint32 c = cal_colours[it->colour >= 0 && it->colour < (int)G_N_ELEMENTS(cal_colours) ?
+				it->colour : 0];
+	gboolean light = it->colour == 5 || it->colour == 6;	/* yellow, white */
+	GDateTime *d = g_date_time_new_from_unix_local(it->time);
+	char *wd = d ? g_date_time_format(d, "%a") : g_strdup(""), num[8];
+	PangoFontDescription *f;
+	PangoLayout *l;
+
+	g_snprintf(num, sizeof num, "%d", d ? g_date_time_get_day_of_month(d) : 0);
+	if (d)
+		g_date_time_unref(d);
+	cairo_save(cr);
+	rounded(cr, x, y, s, s, s * 0.18);
+	cairo_clip(cr);
+	set_rgb(cr, c);
+	cairo_paint(cr);
+	/* the darker band of its weekday */
+	cairo_set_source_rgba(cr, 0, 0, 0, 0.25);
+	cairo_rectangle(cr, x, y, s, s * 0.32);
+	cairo_fill(cr);
+	f = font(FALSE, TRUE, s * 0.2);
+	l = layout_text(wd, f, s, 1);
+	pango_layout_set_alignment(l, PANGO_ALIGN_CENTER);
+	pango_layout_get_pixel_size(l, &w, &h);
+	text_at(cr, l, x, y + (s * 0.32 - h) / 2, light ? 0x202020 : 0xffffff);
+	g_object_unref(l);
+	pango_font_description_free(f);
+	f = font(FALSE, TRUE, s * 0.4);
+	l = layout_text(num, f, s, 1);
+	pango_layout_set_alignment(l, PANGO_ALIGN_CENTER);
+	pango_layout_get_pixel_size(l, &w, &h);
+	text_at(cr, l, x, y + s * 0.32 + (s * 0.68 - h) / 2, light ? 0x202020 : 0xffffff);
+	g_object_unref(l);
+	pango_font_description_free(f);
+	cairo_restore(cr);
+	g_free(wd);
+}
+
 /* an icon in a rounded square (the avatars, as the N9 masked its feeds'
  * icons), or a letter on grey for none */
 static void draw_icon(cairo_t *cr, Item *it, double x, double y)
 {
 	int s = icon_size();
 
+	if (it->kind == K_CAL) {
+		draw_plate(cr, it, x, y);
+		return;
+	}
 	cairo_save(cr);
 	rounded(cr, x, y, s, s, s * 0.18);
 	if (it->icon) {
@@ -1177,8 +2187,35 @@ static void draw_item(cairo_t *cr, Item *it)
 		}
 		break;
 	case K_HINT:
-		text_at(cr, it->lt, x, y + MM(0.8), it->action == A_SETTINGS ? 0xc8c8c8 : 0x808080);
+		text_at(cr, it->lt, x, y + MM(0.8), it->action != A_NONE ? 0xc8c8c8 : 0x808080);
 		break;
+	case K_WEATHER: {
+		int i, n = weather ? MIN(it->wdays, weather->days) : 0;
+
+		if (!weather)
+			break;
+		draw_weather_icon(cr, weather->code, weather->is_day, margin(), y + MM(0.8), WICON);
+		text_at(cr, it->lx[0], it->wtemp_x, y + MM(0.8) + (WICON - layout_h(it->lx[0])) / 2,
+			0xffffff);
+		text_at(cr, it->lt, it->wtext_x, y + it->wtext_y, 0xffffff);
+		text_at(cr, it->lb, it->wtext_x, y + it->wtext_y + layout_h(it->lt), 0xffffff);
+		text_at(cr, it->lf, it->wtext_x, y + it->wlink_y, 0x808080);
+		for (i = 0; i < n; i++) {
+			int dx = it->wday_x + i * it->wday_w, dy = y + it->wday_y;
+
+			text_at(cr, it->lx[1 + 2 * i], dx, dy, i ? 0x808080 : 0xc8c8c8);
+			dy += layout_h(it->lx[1 + 2 * i]) + MM(0.3);
+			draw_weather_icon(cr, weather->day[i].code, TRUE,
+					  dx + (it->wday_w - WDAY_ICON) / 2, dy, WDAY_ICON);
+			dy += WDAY_ICON + MM(0.3);
+			text_at(cr, it->lx[2 + 2 * i], dx, dy, 0xffffff);
+		}
+		cairo_set_source_rgb(cr, 0.16, 0.16, 0.16);
+		cairo_rectangle(cr, margin(), y + it->h - MAX(1, MM(0.1)), width - 2 * margin(),
+				MAX(1, MM(0.1)));
+		cairo_fill(cr);
+		break;
+	}
 	default:
 		draw_icon(cr, it, margin() + MM(0.2), y + MM(0.8));
 		text_at(cr, it->lt, x, y + MM(0.8), 0xffffff);
@@ -1360,7 +2397,7 @@ static Item *item_at(double y, gboolean *on_clear)
 
 /* an application through hildon-desktop's launcher (its loading screen, a
  * running one brought up): the first of @ids that has a menu entry */
-static void launch(const char *ids)
+static gboolean launch(const char *ids)
 {
 	char **v = g_strsplit(ids, " ", 0), **id;
 	const char *const *dirs = g_get_system_data_dirs();
@@ -1379,10 +2416,11 @@ static void launch(const char *ids)
 						       "LaunchApplication", g_variant_new("(s)", *id),
 						       NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
 				g_strfreev(v);
-				return;
+				return TRUE;
 			}
 		}
 	g_strfreev(v);
+	return FALSE;
 }
 
 static void open_url(const char *url)
@@ -1404,6 +2442,43 @@ static void open_settings(void)
 				       G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
 }
 
+/* qalendar not there for its D-Bus service: through the launcher */
+static void calendar_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	GError *e = NULL;
+	GVariant *v = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), res, &e);
+
+	(void)data;
+	if (v)
+		g_variant_unref(v);
+	else {
+		g_error_free(e);
+		launch("qalendar calendar");
+	}
+}
+
+/* Hildon's calendar (qalendar's com.nokia.calendar, Maemo's calendar
+ * interface): an appointment, else the agenda of today */
+static void open_calendar(Item *it)
+{
+	guint type = 3;		/* the agenda */
+
+	if (!bus) {
+		launch("qalendar calendar");
+		return;
+	}
+#ifndef PRO1X_NO_CALENDAR
+	if (it && it->target && *it->target)
+		type = it->cal_kind == CAL_TODO ? 5 : 4;
+#endif
+	g_dbus_connection_call(bus, "com.nokia.calendar", "/com/nokia/calendar",
+			       "com.nokia.calendar", "launch_view",
+			       g_variant_new("(uisi)", type, (gint32)(it && it->time ? it->time :
+								      time(NULL)),
+					     type == 3 ? "" : it->target, type == 3 ? 0 : it->cal_id),
+			       NULL, G_DBUS_CALL_FLAGS_NONE, 60000, NULL, calendar_cb, NULL);
+}
+
 /* Clear: the calls and messages read, the mails until new ones come */
 static void clear_notes(void)
 {
@@ -1422,7 +2497,8 @@ static void clear_notes(void)
 	rebuild();
 }
 
-static void tap(Item *it, gboolean on_clear)
+/* CY: where in the item (content coordinates) */
+static void tap(Item *it, gboolean on_clear, double cy)
 {
 	if (!it)
 		return;
@@ -1447,6 +2523,16 @@ static void tap(Item *it, gboolean on_clear)
 		break;
 	case A_SETTINGS:
 		open_settings();
+		break;
+	case A_CALENDAR:
+		open_calendar(it);
+		break;
+	case A_WEATHER:
+		/* the credit line: Open-Meteo's site; else a weather application */
+		if ((cy >= it->y + it->wlink_y - MM(0.6) &&
+		     cy < it->y + it->wlink_y + layout_h(it->lf) + MM(0.6)) ||
+		    !launch("nomweather meecast"))
+			open_url(WEATHER_SITE);
 		break;
 	}
 }
@@ -1480,6 +2566,7 @@ static gboolean pointer_cb(GtkWidget *w, GdkEvent *e, gpointer data)
 		last_t = 0;
 		sample(e->button.y);
 		pressed_item = item_at(e->button.y, &pressed_clear);
+		press_cy = e->button.y - (pull > 0 ? pull : 0) + offset;
 		if (pressed_clear) {
 			GdkRectangle r;
 			double cy = e->button.y - (pull > 0 ? pull : 0) + offset;
@@ -1531,8 +2618,9 @@ static gboolean pointer_cb(GtkWidget *w, GdkEvent *e, gpointer data)
 			if (!refreshing && pull >= PULL_UPDATE) {
 				refreshing = TRUE;
 				feed_update();
-				if (!feed_busy)
-					refreshing = FALSE;
+				weather_update();
+				reload_soon();
+				busy_check();
 			}
 			if (g_get_monotonic_time() - last_t > 150000)
 				velocity = 0;	/* held still before the release */
@@ -1542,7 +2630,7 @@ static gboolean pointer_cb(GtkWidget *w, GdkEvent *e, gpointer data)
 
 			pressed_item = NULL;
 			redraw();
-			tap(it, c);
+			tap(it, c, press_cy);
 		}
 		dragging = FALSE;
 		pressed_item = NULL;
@@ -1615,6 +2703,8 @@ static void show_page(void)
 		if (!feed_time || g_get_monotonic_time() - feed_time >
 				  (gint64)FEED_EVERY * G_USEC_PER_SEC)
 			feed_update();
+		if (g_get_monotonic_time() >= weather_next)
+			weather_update();
 	} else if (!want && GTK_WIDGET_VISIBLE(win))
 		gtk_widget_hide(win);
 }
@@ -1659,9 +2749,12 @@ static gboolean property_cb(GtkWidget *w, GdkEventProperty *e, gpointer data)
 {
 	(void)w, (void)data;
 	if (e->atom == gdk_atom_intern_static_string("_HILDON_APPLET_ON_CURRENT_DESKTOP") &&
-	    e->state == GDK_PROPERTY_NEW_VALUE &&
-	    g_get_monotonic_time() - feed_time > (gint64)FEED_EVERY * G_USEC_PER_SEC)
-		feed_update();
+	    e->state == GDK_PROPERTY_NEW_VALUE) {
+		if (g_get_monotonic_time() - feed_time > (gint64)FEED_EVERY * G_USEC_PER_SEC)
+			feed_update();
+		if (g_get_monotonic_time() >= weather_next)
+			weather_update();
+	}
 	return FALSE;
 }
 
@@ -1675,10 +2768,83 @@ static gboolean delete_cb(GtkWidget *w, GdkEvent *e, gpointer data)
 	return TRUE;
 }
 
+static gboolean gconf_bool(const char *key, gboolean def)
+{
+	GConfValue *v = gconf_client_get(gconf, key, NULL);
+	gboolean r = def;
+
+	if (v) {
+		if (v->type == GCONF_VALUE_BOOL)
+			r = gconf_value_get_bool(v);
+		gconf_value_free(v);
+	}
+	return r;
+}
+
+/* a float (the applet's), an int or a string */
+static double gconf_number(const char *key, double def)
+{
+	GConfValue *v = gconf_client_get(gconf, key, NULL);
+	double r = def;
+
+	if (v) {
+		if (v->type == GCONF_VALUE_FLOAT)
+			r = gconf_value_get_float(v);
+		else if (v->type == GCONF_VALUE_INT)
+			r = gconf_value_get_int(v);
+		else if (v->type == GCONF_VALUE_STRING) {
+			const char *s = gconf_value_get_string(v);
+			char *end;
+
+			r = g_ascii_strtod(s, &end);
+			if (end == s)
+				r = def;
+		}
+		gconf_value_free(v);
+	}
+	return r;
+}
+
+static void read_settings(void)
+{
+	show_notes = gconf_bool(KEY_SHOW_NOTES, TRUE);
+	show_weather = gconf_bool(KEY_SHOW_WEATHER, TRUE);
+	show_calendar = gconf_bool(KEY_SHOW_CALENDAR, TRUE);
+	show_feed = gconf_bool(KEY_SHOW_FEED, TRUE);
+	cal_days = gconf_client_get_int(gconf, KEY_CAL_DAYS, NULL);
+	cal_days = cal_days > 0 ? MIN(cal_days, 31) : CAL_DAYS;
+	g_free(place_name);
+	place_name = gconf_client_get_string(gconf, KEY_PLACE, NULL);
+	if (place_name)
+		g_strstrip(place_name);
+	place_lat = gconf_number(KEY_LAT, 999);
+	place_lon = gconf_number(KEY_LON, 999);
+}
+
+/* the applet saves the place's keys one by one: once after them */
+static guint place_id;
+
+static gboolean place_cb(gpointer data)
+{
+	(void)data;
+	place_id = 0;
+	g_free(weather_hint);
+	weather_hint = NULL;
+	weather_load_cache();
+	weather_next = 0;
+	if (look_on && !closed)
+		weather_update();
+	rebuild();
+	return FALSE;
+}
+
 static void settings_changed(GConfClient *c, guint id, GConfEntry *e, gpointer data)
 {
 	(void)c, (void)id, (void)data;
-	if (e && (!strcmp(e->key, KEY_SERVER) || !strcmp(e->key, KEY_TOKEN))) {
+	if (!e)
+		return;
+	read_settings();
+	if (!strcmp(e->key, KEY_SERVER) || !strcmp(e->key, KEY_TOKEN)) {
 		/* (the page shows none of the old posts from here on) */
 		g_ptr_array_set_size(items, 0);
 		g_ptr_array_set_size(feed, 0);
@@ -1686,6 +2852,23 @@ static void settings_changed(GConfClient *c, guint id, GConfEntry *e, gpointer d
 		rebuild();
 		if (look_on)
 			feed_update();
+	} else if (!strcmp(e->key, KEY_WEATHER_ICONS)) {
+		iconset_reset();
+		rebuild();
+	} else if (!strcmp(e->key, KEY_PLACE) || !strcmp(e->key, KEY_LAT) ||
+		   !strcmp(e->key, KEY_LON) || !strcmp(e->key, KEY_WEATHER_URL)) {
+		if (!place_id)
+			place_id = g_timeout_add(300, place_cb, NULL);
+	} else if (g_str_has_prefix(e->key, KEY_DIR "/show_") || !strcmp(e->key, KEY_CAL_DAYS)) {
+		/* a section on or off */
+		calendar_reload();
+		rebuild();
+		if (look_on && !closed) {
+			if (show_feed && !feed->len && !feed_busy)
+				feed_update();
+			if (show_weather && g_get_monotonic_time() >= weather_next)
+				weather_update();
+		}
 	}
 }
 
@@ -1698,7 +2881,7 @@ static gboolean minute_cb(gpointer data)
 
 	(void)data;
 	g_date_time_unref(now);
-	if (day != -1 && d != day)
+	if ((day != -1 && d != day) || time(NULL) >= cal_next)
 		reload_soon();
 	day = d;
 	return TRUE;
@@ -1752,6 +2935,11 @@ int main(int argc, char **argv)
 						   G_DBUS_SIGNAL_FLAGS_NONE, modest_signal, NULL, NULL);
 		g_bus_watch_name_on_connection(bus, "com.nokia.modest", G_BUS_NAME_WATCHER_FLAGS_NONE,
 					       modest_owner, NULL, NULL, NULL);
+		/* calendar-backend's: the appointments changed */
+		g_dbus_connection_signal_subscribe(bus, NULL, "com.nokia.calendar", "dbChange",
+						   "/com/nokia/calendar", NULL,
+						   G_DBUS_SIGNAL_FLAGS_NONE, calendar_signal, NULL,
+						   NULL);
 	}
 	el = rtcom_el_new();
 	if (el) {
@@ -1768,6 +2956,9 @@ int main(int argc, char **argv)
 	feed = g_ptr_array_new_with_free_func(item_free);
 	chrome = g_ptr_array_new_with_free_func(item_free);
 	items = g_ptr_array_new();
+	appointments = g_ptr_array_new_with_free_func(item_free);
+	read_settings();
+	weather_load_cache();
 
 	win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 	gtk_window_set_title(GTK_WINDOW(win), "Events");
@@ -1792,6 +2983,7 @@ int main(int argc, char **argv)
 
 	notes_reload();
 	mails_reload();
+	calendar_reload();
 	rebuild();
 
 	root = gdk_get_default_root_window();
