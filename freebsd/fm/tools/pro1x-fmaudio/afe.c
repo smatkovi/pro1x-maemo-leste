@@ -214,8 +214,11 @@ afe_pkt_vote(uint8_t *pkt, uint32_t block, const char *client, bool vote,
 
 /*
  * Send pkt and wait for the answer: APR_BASIC_RSP_RESULT for its opcode
- * and token, or the packet with want_opcode (then *rsp, *rsplen hold it).
- * 0 done; > 0 the ADSP's status; < 0 an errno.
+ * and token, or, if want_opcode is set, the packet with that opcode (then
+ * *rsp, *rsplen hold it; a basic result for the command then only ends
+ * the wait if it reports an error: both kernels wait for the answer
+ * itself, e.g. the vote's handle). 0 done; > 0 the ADSP's status; < 0 an
+ * errno (-ETIMEDOUT, or -ENODATA: only a basic success, no answer).
  */
 static int
 afe_txn(struct afe *a, const uint8_t *pkt, size_t len, uint32_t want_opcode,
@@ -225,6 +228,7 @@ afe_txn(struct afe *a, const uint8_t *pkt, size_t len, uint32_t want_opcode,
 	uint32_t opcode = le32dec_(pkt + 16), token = le32dec_(pkt + 12);
 	uint64_t until;
 	int n, hlen;
+	bool basic_ok = false;
 
 	if (a->io->send(a->io->ctx, pkt, len) != 0)
 		return (-EIO);
@@ -245,7 +249,10 @@ afe_txn(struct afe *a, const uint8_t *pkt, size_t len, uint32_t want_opcode,
 		    n >= hlen + 8 && le32dec_(buf + hlen) == opcode &&
 		    le32dec_(buf + 12) == token) {
 			a->last_status = le32dec_(buf + hlen + 4);
-			return ((int)a->last_status);
+			if (want_opcode == 0 || a->last_status != 0)
+				return ((int)a->last_status);
+			basic_ok = true;
+			continue;
 		}
 		if (want_opcode != 0 && le32dec_(buf + 16) == want_opcode) {
 			if (rsp != NULL) {
@@ -258,7 +265,7 @@ afe_txn(struct afe *a, const uint8_t *pkt, size_t len, uint32_t want_opcode,
 		fma_log("afe: from service %u: opcode %#x token %#x (%d bytes)",
 		    buf[4], le32dec_(buf + 16), le32dec_(buf + 12), n);
 	}
-	return (-ETIMEDOUT);
+	return (basic_ok ? -ENODATA : -ETIMEDOUT);
 }
 
 static int
@@ -402,8 +409,14 @@ afe_vote(struct afe *a, uint32_t block, const char *client, uint32_t *handle)
 
 	len = afe_pkt_vote(pkt, block, client, true, 0);
 	snprintf(what, sizeof(what), "vote for block %u", block);
+	*handle = 0;
 	r = afe_txn(a, pkt, len, AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST,
 	    rsp, &rlen);
+	if (r == -ENODATA) {
+		fma_log("afe: block %u: the vote acknowledged, but no handle "
+		    "came", block);
+		return (0);
+	}
 	if (r == 0) {
 		*handle = rlen >= APR_HDR_SIZE + 4 ?
 		    le32dec_(rsp + APR_HDR_SIZE) : 0;
@@ -419,6 +432,11 @@ afe_unvote(struct afe *a, uint32_t block, uint32_t handle)
 	char what[64];
 	size_t len;
 
+	/* the downstream q6afe.c sends no devote without a valid handle */
+	if (handle == 0) {
+		fma_log("afe: block %u: no handle, no devote", block);
+		return (0);
+	}
 	len = afe_pkt_vote(pkt, block, NULL, false, handle);
 	snprintf(what, sizeof(what), "devote block %u", block);
 	return (afe_result(what, afe_txn(a, pkt, len, 0, NULL, NULL)));

@@ -126,7 +126,8 @@ qmi_find(struct slimqmi *q)
 	uint32_t pkt[5] = { QRTR_TYPE_NEW_LOOKUP, SLIMBUS_QMI_SVC_ID, 0, 0, 0 };
 	uint32_t rsp[5];
 	socklen_t fl;
-	int found = -1;
+	int found = -1;	/* 0 exact, 1 another instance of version 1 */
+	uint32_t other = 0;
 
 	if (sendto(q->s, pkt, sizeof(pkt), 0, (struct sockaddr *)&ns,
 	    sizeof(ns)) != sizeof(pkt))
@@ -140,13 +141,23 @@ qmi_find(struct slimqmi *q)
 			break;
 		fma_log("slim: QMI service %u instance %#x at %u:%u", rsp[1],
 		    rsp[2], rsp[3], rsp[4]);
-		if (rsp[1] == SLIMBUS_QMI_SVC_ID && rsp[2] ==
-		    (SLIMBUS_QMI_SVC_V1 | SLIMBUS_QMI_INS_ID << 8) && found < 0) {
+		if (rsp[1] != SLIMBUS_QMI_SVC_ID ||
+		    (rsp[2] & 0xff) != SLIMBUS_QMI_SVC_V1)
+			continue;
+		if (rsp[2] == (SLIMBUS_QMI_SVC_V1 | SLIMBUS_QMI_INS_ID << 8) &&
+		    found != 0) {
 			q->srv = qrtr_addr(rsp[3], rsp[4]);
 			found = 0;
+		} else if (found < 0) {
+			q->srv = qrtr_addr(rsp[3], rsp[4]);
+			other = rsp[2] >> 8;
+			found = 1;
 		}
 	}
-	return (found);
+	if (found == 1)
+		fma_log("slim: no instance 0 of service %u: taking instance "
+		    "%u", SLIMBUS_QMI_SVC_ID, other);
+	return (found < 0 ? -1 : 0);
 }
 
 static int
@@ -325,7 +336,8 @@ struct path {
 	struct apr_io	io;
 	struct afe	afe;
 	/* what is on, for the way back */
-	bool		tx_started, rx_started, loopback, clocks;
+	bool		tx_started, rx_started, loopback;
+	bool		clk_on[4];	/* out_clocks[] */
 	bool		voted;
 	uint32_t	dcodec_handle;
 };
@@ -421,19 +433,28 @@ static const uint32_t out_clocks[] = {
 	Q6AFE_LPASS_CLK_ID_RX_CORE_MCLK, Q6AFE_LPASS_CLK_ID_RX_CORE_NPL_MCLK,
 };
 
+/* every one tried; -1 if any was refused (those on stay recorded) */
 static int
 clocks_on(struct path *p)
 {
-	unsigned i;
+	unsigned i, bad = 0;
 
 	if (afe_vote(&p->afe, Q6AFE_LPASS_CORE_HW_DCODEC_BLOCK,
-	    "LPASS_HW_DCODEC", &p->dcodec_handle) != 0)
+	    "LPASS_HW_DCODEC", &p->dcodec_handle) == 0)
+		p->voted = true;
+	else
+		bad++;
+	for (i = 0; i < sizeof(out_clocks) / sizeof(out_clocks[0]); i++) {
+		if (afe_clock(&p->afe, out_clocks[i], MCLK_FREQ) == 0)
+			p->clk_on[i] = true;
+		else
+			bad++;
+	}
+	if (bad != 0) {
+		fma_log("afe: %u of the output path's 5 clock requests refused",
+		    bad);
 		return (-1);
-	p->voted = true;
-	for (i = 0; i < sizeof(out_clocks) / sizeof(out_clocks[0]); i++)
-		if (afe_clock(&p->afe, out_clocks[i], MCLK_FREQ) != 0)
-			return (-1);
-	p->clocks = true;
+	}
 	fma_log("afe: the output path's clocks on");
 	return (0);
 }
@@ -443,10 +464,11 @@ clocks_off(struct path *p)
 {
 	unsigned i;
 
-	if (p->clocks)
-		for (i = sizeof(out_clocks) / sizeof(out_clocks[0]); i-- > 0; )
+	for (i = sizeof(out_clocks) / sizeof(out_clocks[0]); i-- > 0; )
+		if (p->clk_on[i]) {
 			afe_clock(&p->afe, out_clocks[i], 0);
-	p->clocks = false;
+			p->clk_on[i] = false;
+		}
 	if (p->voted)
 		afe_unvote(&p->afe, Q6AFE_LPASS_CORE_HW_DCODEC_BLOCK,
 		    p->dcodec_handle);
@@ -468,8 +490,9 @@ afe_up(struct path *p)
 	if (apr_up(p) != 0)
 		return (-1);
 	if (!opt.no_output) {
+		/* nothing depends on them before the codec path (3c): noted */
 		if (clocks_on(p) != 0)
-			return (-1);
+			fma_log("afe: going on without them");
 		if (afe_loopback_gain(&p->afe, AFE_PORT_ID_SLIMBUS_MULTI_CHAN_8_TX,
 		    AFE_TOKEN_SLIMBUS_8_TX, opt.gain) != 0)
 			return (-1);

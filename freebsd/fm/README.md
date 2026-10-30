@@ -264,6 +264,9 @@ token:
 - the output path's clocks, as the macros' probes take them: the DCODEC
   block vote, TX_CORE_MCLK and its NPL (the VA macro's, 2 × 9.6 MHz) and
   RX_CORE_MCLK and its NPL at 19.2 MHz (`lpass-rx-macro.c` `MCLK_FREQ`).
+  The vote's answer is its own packet with the client's handle (both
+  kernels wait for it), which the devote names; a refused clock is noted
+  and the rest goes on, since nothing behind them exists yet (3c).
 
 The order is Android's (FM HAL and BE DAIs): the SLIMbus stream first
 (the downstream BE prepares its codec DAI, btfm_slim, before the CPU
@@ -439,6 +442,15 @@ interrupt` (the TX path); `not on the bus` (the chip does not report
 present: its FM receiver must be on, `FC0E 01`; the run's status shows
 `slimbus=1`); a NACK code on a user message (the manager refuses the
 stream's parameters).
+
+The chip is powered before the bus exists in these runs (the receiver
+first, then the ADSP), the other way round from Android, where the bus
+runs long before Bluetooth comes on. Whether the WCN3950 reports present
+on a bus that appears after it is unknown, so if the first `probe` finds
+it not on the bus, the run tries once more with the order reversed: a
+`probe` waiting 40 s for it holds the bus up while the receiver is
+switched off and on again, and every later step of the run does the
+same (the stage 4 check is then left out, its `off` would end it).
 
 ## Risks
 

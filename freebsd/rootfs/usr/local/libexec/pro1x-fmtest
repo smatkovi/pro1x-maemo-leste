@@ -167,31 +167,64 @@ if [ "$step" = slim ] || [ "$step" = afe ]; then
 	sysctl hw.qcom_lpass.windows 2>&1
 	o=$(kenv -q pro1x.fm_audio_opts)
 	pro1x-fmctl status
+	# fma ARGS: pro1x-fmaudio, its output after it; with cycle=1 the
+	# receiver is switched off and on while it waits for the chip on the
+	# bus (the chip powered after the bus came up, as on Android)
+	cycle=0
+	fma() {
+		if [ $cycle = 1 ]; then
+			pro1x-fmaudio -v $o -w 40 "$@" > /tmp/fma.log 2>&1 &
+			fp=$!
+			sleep 8
+			step_t "the receiver off and on while the bus is up"
+			pro1x-fmctl off
+			pro1x-fmctl on
+			pro1x-fmctl tune "$freq"
+			wait $fp
+			r=$?
+		else
+			pro1x-fmaudio -v $o "$@" > /tmp/fma.log 2>&1
+			r=$?
+		fi
+		cat /tmp/fma.log
+		return $r
+	}
 	step_t "pro1x-fmaudio probe"
-	pro1x-fmaudio -v $o probe 2>&1
+	fma probe
 	echo "probe: $?"
+	if grep -q "is not on the bus" /tmp/fma.log; then
+		echo "--- the WCN3950 not on the bus: once more, the chip powered while the bus is up"
+		cycle=1
+		step_t "pro1x-fmaudio probe (the chip after the bus)"
+		fma probe
+		echo "probe: $?"
+	fi
 	step_t "pro1x-fmaudio slim"
-	pro1x-fmaudio -v $o -t 5 slim 2>&1
+	fma -t 5 slim
 	echo "slim: $?"
 	if [ "$step" = afe ]; then
 		step_t "pro1x-fmaudio afe -N (SLIMBUS_8_TX alone)"
-		pro1x-fmaudio -v $o -N -t 5 afe 2>&1
+		fma -N -t 5 afe
 		echo "afe -N: $?"
 		step_t "pro1x-fmaudio clocks"
 		pro1x-fmaudio -v $o -t 3 clocks 2>&1
 		echo "clocks: $?"
 		step_t "pro1x-fmaudio afe (play-fm)"
-		pro1x-fmaudio -v $o -t 5 afe 2>&1
+		fma -t 5 afe
 		echo "afe: $?"
 		# stage 4: the same through pro1x-fmd, as the app asks for it
 		# (its output in pro1x-fmd's log below)
-		step_t "pro1x-fmd: audio on"
-		pro1x-fmctl audio on
-		pro1x-fmctl status
-		sleep 3
-		step_t "pro1x-fmd: audio off"
-		pro1x-fmctl audio off
-		pro1x-fmctl audio
+		if [ $cycle = 1 ]; then
+			echo "stage 4 left out: the chip needs the power cycle, which \"off\" would end"
+		else
+			step_t "pro1x-fmd: audio on"
+			pro1x-fmctl audio on
+			pro1x-fmctl status
+			sleep 3
+			step_t "pro1x-fmd: audio off"
+			pro1x-fmctl audio off
+			pro1x-fmctl audio
+		fi
 	fi
 	pro1x-fmctl status
 	sysctl hw.qcom_apr hw.qcom_lpass.windows 2>&1

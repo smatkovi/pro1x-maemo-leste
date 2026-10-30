@@ -411,6 +411,8 @@ static struct sim {
 	unsigned	wcn_late;	/* ADDR_QUERYs answered "unknown" */
 	uint32_t	fail_opcode;	/* the ADSP refuses this command ... */
 	uint16_t	fail_port;	/* ... for this port */
+	bool		vote_basic_first; /* a basic result before the vote's */
+	uint32_t	fail_clock;	/* refuses this clock */
 	/* the NGD */
 	bool		qmi_powered;
 	unsigned	mmio_before_qmi;
@@ -723,12 +725,19 @@ sim_apr_send(void *ctx, const uint8_t *pkt, size_t len)
 		break;
 	case AFE_SVC_CMD_SET_PARAM:
 		ev("clock %#x %u", le32dec_(p + 28 + 4), le32dec_(p + 28 + 8));
+		if (le32dec_(p + 28 + 4) == sim.fail_clock)
+			status = 0x2;
 		break;
 	case AFE_CMD_REMOTE_LPASS_CORE_HW_VOTE_REQUEST: {
 		uint8_t h[4] = { 7, 0, 0, 0 };
 
 		ev("vote %u %.8s", le32dec_(p), (const char *)p + 4);
 		sim.voted = true;
+		if (sim.vote_basic_first) {
+			le32enc_(res, opcode);
+			le32enc_(res + 4, 0);
+			sim_apr_reply(pkt, APR_BASIC_RSP_RESULT, res, 8);
+		}
 		sim_apr_reply(pkt, AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST,
 		    h, 4);
 		return (0);
@@ -973,6 +982,28 @@ test_runs(void)
 		sim.fail_port = 0x4011;
 		CHECK(run(args) == 1);
 		expect("refused start", want);
+	}
+	/* a basic result before the vote's answer: the handle still comes;
+	 * a refused clock: noted, the rest of play-fm goes on, the others
+	 * off again at the end */
+	{
+		static const char *const args[] = { "x", "-t", "0", "afe", NULL };
+		static const char *const want[] = { BUS_UP, PORTS_ON, STREAM_ON,
+		    "adsp state", "vote 4 LPASS_H", "clock 0x30c 19200000",
+		    "clock 0x30d 19200000", "clock 0x30e 19200000",
+		    "clock 0x30f 19200000",
+		    "set 0x4011 param 0x10206", "set 0x4011 param 0x1020b",
+		    "set 0xb030 param 0x102b8", "start 0xb030", TX_ON,
+		    "stop 0x4011", "set 0x4011 param 0x1020b", "stop 0xb030",
+		    "clock 0x30f 0", "clock 0x30d 0", "clock 0x30c 0",
+		    "devote 4", STREAM_OFF, "qmi power inactive", NULL };
+
+		sim_reset();
+		sim.vote_basic_first = true;
+		sim.fail_clock = 0x30e;
+		CHECK(run(args) == 0);
+		expect("refused clock", want);
+		CHECK(!sim.bad_pkt && !sim.voted);
 	}
 	/* no manager: the capability never comes (10 tries) */
 	{
