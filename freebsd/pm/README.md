@@ -9,7 +9,8 @@ This directory adds, in stages:
 | 2 | CPU idle: the PSCI idle states of the device tree, OS-initiated mode, the core's context across a power-down, the memory-mapped timer as the wake-up | built, tried in QEMU with every power-down played (`simulate`); device runs prepared |
 | 3 | the SoC's sleep (RPM sleep set, MPM hand-over) and suspend-to-idle | built; the freeze tried in QEMU (no RPM there); device runs prepared |
 | 4 | USB device mode (CDC ethernet to the PC) | dwc3dci (a DWC_usb3 device controller driver) and the SM6115 glue built, the encodings tested on the PC; a probe and the gadget run prepared |
-| 4b | the USB-C port, USB 3 | the Type-C detection (`pro1x_typec`) built and its decoding tested; USB 3 wired per the device tree, host mode and USB 3 not done |
+| 4b | the USB-C port | the Type-C detection (`pro1x_typec`, by its interrupts) built, its decoding tested |
+| 4c | host mode, USB 3, the role switch | xHCI on the DWC3, the QMP USB3 PHY (Linux's tables, checked), devd role switch: built, untested; SuperSpeed in device mode not done |
 | 5 | the PMIC RTC's alarm as the suspend's wake-up, alarmd's alarms through it | built; the registers tested on the PC against Linux's rtc-pm8xxx, the wake-up in QEMU (a PL031 in the PMIC's place), alarmd's side in the VM; device runs prepared |
 
 Nothing here has run on the phone yet (it is unreachable until
@@ -34,6 +35,7 @@ unchanged until the device runs below pass.
 | `test/qcom_rtc_test.c` | the host test of `qcom_rtc_alarm.h` against Linux's `rtc-pm8xxx` and Leste's `librtc-realtime` |
 | `test/dwc3dci_test.c` | the host test of `dwc3dci_hw.h` |
 | `sys/dev/qcom_spmi/pro1x_typec.{c,h}`, `sys/modules/pro1x_typec` | `pro1x_typec.ko`: the PMI632's Type-C detection (stage 4b); `test/typec_test.c` its host test |
+| `sys/dev/usb/controller/dwc3dci_host.c`, `dwc3dci_qmp.h` | host mode (xHCI), the QMP USB3 PHY (stage 4c); `test/qmp_test.c` |
 | `../patches/0032-arm64-cpu_idle-hook-psci-idle.patch` | `cpu_idle()` asks `arm64_cpu_idle_hook` first; the files for `device psci_idle` |
 | `../mfsroot/etc/pro1x-pmtest.sh` | the device tests in the RAM root (`pro1x.test=smp`, `idle`), sourced by `mfsroot/etc/rc` |
 | `build.sh` | the kernels: `qemu` (PRO1XQ) and `phone` (PRO1XPM = `freebsd/PRO1X` with `device psci_idle`) into `$WORK/pm-out` (`PMOUT=`: elsewhere; `LOCKNAME=`: the name in `$WORK/.kbuild-lock`) |
@@ -580,14 +582,19 @@ with this project's patches; Linux's drivers):
   tree with its supplies (L4A, L12A), its output endpoint goes to the
   connector's SuperSpeed port, the DWC3 has both PHYs and no
   `maximum-speed` limit. The PHY is the `orientation-switch`: it selects
-  the lanes by the plug's orientation through the TCSR register 0xb244
-  (`qcom,tcsr-reg`). No SuperSpeed connection has been seen on the phone
+  the lanes by the plug's orientation in its own PCS_MISC register
+  (0xa00 in its window: SW_PORTSELECT_MUX, and _VAL for CC2,
+  `qmp_usbc_usb_power_on`); the TCSR register 0xb244 (`qcom,tcsr-reg`) is
+  its VLS clamp for the autonomous (suspend) mode, 0 in normal operation. No SuperSpeed connection has been seen on the phone
   yet (none in the logs); that the lanes reach the plug is the device
   tree's statement, not a measurement.
 
 **Done:** `pro1x_typec.ko` (`sys/dev/qcom_spmi/pro1x_typec.c`, a child of
 FreeBSD's `qcom_pmic` bus): only with `hw.pro1x_typec.enable=1`. It
-polls (`hw.pro1x_typec.poll_ms`, 250) MISC_STATUS (attached, orientation
+is woken by the block's interrupts (`attach-detach`, `cc-state-change`,
+`vbus-change`, through the SPMI arbiter as `qcom_pon`'s keys; a look 20
+ms after each; `hw.pro1x_typec.poll_ms=N` also polls, the fallback, and
+without interrupts it polls every 250 ms) and reads MISC_STATUS (attached, orientation
 CC1/CC2, VBUS detected, sink or source mode), SNK_STATUS (the partner's
 Rp: 500 mA, 1.5 A, 3 A) and SRC_STATUS (Rd: a device, Ra/Ra audio,
 debug), the registers of Linux's `qcom_pmic_typec_port.c`, and reports
@@ -605,29 +612,50 @@ from `regulator-max-microamp`, CMD_OTG). Tested on the PC:
 powered cable, audio and debug accessories, the mode names, the VBUS
 limits): 0 failures.
 
-**Not done** (the next steps, in this order):
+**Host mode, USB 3, the role switch (stage 4c, built, untested):**
 
-1. Host mode: the DWC3 as xHCI. FreeBSD's `dwc3`/`xhci` drivers exist,
-   but FreeBSD's `dwc3` takes its clocks and PHYs from frameworks that
-   have no SM6115 providers; the way is `pro1x_usb`'s bring-up, then
-   GCTL's port capability to host and `generic_xhci_attach` on the core,
-   switched by `pro1x_typec`'s role (with VBUS on).
-2. USB 3: the QMP PHY's init tables of `phy-qcom-qmp-usbc.c` for the
-   SM6115, its pipe clock (`GCC_USB3_PRIM_PHY_PIPE_CLK`) and two resets,
-   the lane select in TCSR 0xb244 by `orientation`, then xHCI SuperSpeed
-   (host) and SuperSpeed in `dwc3dci` (bursts, U1/U2: device).
-3. The role switch itself: `pro1x_usb` (device) or the host path loaded
-   by devd on `role=device` / `role=host`.
+- **Host mode** (`dwc3dci_host.c` in `pro1x_usb.ko`, `hw.dwc3dci.host=1`):
+  the same bring-up as for the device, then the core's soft reset and its
+  port capability to host (GCTL), and FreeBSD's xHCI driver on the core
+  through a child device `xhci` (`generic_xhci_attach`, as FreeBSD's own
+  `dwc3.c` does it) that uses the glue's register window and interrupt.
+  Needs `xhci.ko` (and `umass.ko` for a stick). VBUS out comes from
+  `pro1x_typec` (`hw.pro1x_typec.vbus=1`, now a sysctl).
+- **USB 3** (`hw.dwc3dci.usb3=1`, host mode only): the QMP USB3 PHY as
+  Linux's `qmp_usbc_com_init` and `qmp_usbc_usb_power_on` for the
+  SM6115 (`qcm2290_usb3phy_cfg`): its supplies (L4A, L12A) through the
+  RPM, its resets (GCC 0x1b000 and 0x1b008), the com_aux clock (0x1a054),
+  the PCS powered down, the lane select by the orientation
+  (`hw.dwc3dci.cc2`), the serdes table, the pipe clock (0x1a058), the TX
+  and RX tables on both lanes, the PCS table, out of reset, started,
+  PHYSTATUS clear within 10 ms. The tables (38 serdes, 5 TX, 17 RX, 21 PCS
+  entries) are generated from Linux's (`dwc3dci_qmp.h`, each entry with
+  its register's name); `test/qmp_test.c` checks entries against Linux's
+  source and headers by hand, the offsets unique and inside their blocks:
+  0 failures. Without `usb3` the port is USB 2 only (UTMI as the PIPE
+  clock). SuperSpeed in device mode (`dwc3dci`) is not done: FreeBSD's
+  device side has no SuperSpeed controller driver to follow (EP0 at 512
+  bytes, bursts, the templates' SuperSpeed descriptors), so it stays a
+  high-speed gadget.
+- **The role switch** (`rootfs/usr/local/libexec/pro1x-usbrole`, run by
+  devd on `pro1x_typec`'s events; off unless `pro1x.usbrole=1` in
+  `freebsd/cmdline` or `pro1x_usbrole_enable="YES"`): `role=device` (a PC)
+  starts `rc.d/pro1x_usbnet` (dwc3dci, CDC Ethernet, sshd); `role=host`
+  (an OTG adapter, a stick, a hub) loads `xhci` and `umass`, switches
+  VBUS on and loads `pro1x_usb` in host mode (with `pro1x.usb3=1` USB 3,
+  its lanes by the event's orientation); `DETACH` unloads it and switches
+  VBUS off. A change of role reloads the controller's module.
 
 **Device run:**
 
-12. **The port's detection** (`pro1x_typec`), with someone at the phone,
+14. **The port's detection** (`pro1x_typec`), with someone at the phone,
     from the full system's console (or ssh over Wi-Fi):
     `kenv hw.pro1x_typec.enable=1; kldload pro1x_typec`, then
     `tail -f /var/log/messages` and plug, one after the other: the PC's
     cable (both orientations), a charger, an OTG adapter with a USB
     stick, a hub. Expected: `pro1x_typec0: at 0x1500, mode 00 (dual
-    role), VBUS out at 0x1100 up to 1000 mA (left alone)`, then per plug
+    role), VBUS out at 0x1100 up to 1000 mA (left alone)`, `pro1x_typec0:
+    3 of 3 interrupts`, then per plug
     `role=device orientation=cc1 vbus=1 rp=500 (misc 29 ...)` and with
     the plug turned `orientation=cc2`; the charger `role=device ...
     rp=1500` or `3000`; the OTG adapter `role=host ... vbus=0` (with
@@ -637,6 +665,32 @@ limits): 0 failures.
     (disabled)` (Linux switched the port off at the kexec: then
     `hw.pro1x_typec.drp=1`), no change on plugging (`misc` stays: the
     block not running, or the debounce bits differ from Linux's reading).
+
+15. **Host mode, USB 2** (needs 14), with someone at the phone, the full
+    system: in `freebsd/cmdline` `pro1x.usbrole=1 hw.pro1x_typec.enable=1`
+    (rc.conf or the console: `kldload pro1x_typec`), then an OTG adapter
+    with a USB stick. Expected in `/var/log/messages`: `pro1x_typec:
+    ATTACH role=host ...`, `pro1x-usbrole: ATTACH host ...: host`,
+    `pro1x_typec0: VBUS out on`, `dwc3dci0: bring-up: ... host mode`,
+    `dwc3dci0: host mode (xHCI), USB 2 only`, `xhci0: <DWC_usb3 xHCI
+    (SM6115)> on dwc3dci0`, `usbus0 on xhci0`, `umass0` and `da1` for the
+    stick; `DETACH` on unplugging, VBUS off. With a hub: the hub and what
+    hangs on it. Failure signs: no `VBUS out on` or the stick unpowered
+    (its light off: the VBUS output, `hw.pro1x_typec.vbus`); `xhci0`
+    failing to reset or start (the core not in host mode: GCTL); the
+    stick not seen (the PHY in host mode, VBUS).
+16. **USB 3** (needs 15): as 15 with `pro1x.usb3=1` and a USB 3 stick, in
+    both orientations of the adapter. Expected additionally `dwc3dci0:
+    QMP USB3 PHY started (lanes CC1)` (CC2 turned), the stick on the
+    SuperSpeed port (`usbconfig` shows it at 5.0 Gbps). Failure signs:
+    `QMP USB3 PHY failed` (PHYSTATUS stays: the pipe clock, the resets,
+    the supplies), the stick only at high speed in one orientation (the
+    lane select reversed: CC1/CC2 swapped), at high speed in both (the
+    lanes not reaching the plug after all, or the PHY's tables).
+17. **The switch between the roles** (needs 11 and 15): the PC's cable,
+    then the OTG adapter, then the PC again, with `pro1x.usbrole=1`.
+    Expected: `ue0` and ssh with the PC, the stick with the adapter, `ue0`
+    again with the PC, each change in the log (`pro1x-usbrole`).
 
 ## Device runs (prepared, for 2026-10-31)
 
@@ -761,7 +815,9 @@ phone N seconds after the start whatever happens.
 
 9. The USB probe (`pro1x.test=usb`), 10. the gadget
    (`pro1x.test=usbnet`) and 11. the full system over the cable
-   (`pro1x.usb=1`): see stage 4 above.
+   (`pro1x.usb=1`): see stage 4 above; 14 to 17 (the USB-C port, host
+   mode, USB 3, the role switch): stage 4b/4c. (12 and 13 are the RTC
+   alarm's.)
 
 12. **The RTC alarm** (`rtcalarm`, stage 5; needs 6 to have woken by its
     deadline), unplugged, about 7 minutes, nobody needed at the phone.

@@ -66,6 +66,12 @@
 int	qcom_smmu_bypass(phandle_t smmu, uint32_t sid, uint32_t mask,
 	    const char *who);
 int	qcom_rpm_regulator(phandle_t xref, bool on, const char *who);
+/* dwc3dci_host.c */
+int	dwc3dci_host_start(struct dwc3dci_softc *sc, int usb3, int cc2);
+struct resource *dwc3dci_alloc_resource(device_t, device_t, int, int *,
+	    rman_res_t, rman_res_t, rman_res_t, u_int);
+int	dwc3dci_release_resource(device_t, device_t, struct resource *);
+int	dwc3dci_activate_resource(device_t, device_t, struct resource *);
 
 #define	GCC_USB30_BCR		0x1a000
 #define	GCC_USB30_GDSCR		0x1a004
@@ -123,6 +129,15 @@ static const struct { uint16_t off; uint8_t val; } qusb2_tbl[] = {
 /* hw.dwc3dci.enable=1: attach (the kernel environment, freebsd/cmdline) */
 static int dwc3dci_enable;
 TUNABLE_INT("hw.dwc3dci.enable", &dwc3dci_enable);
+/*
+ * hw.dwc3dci.host=1: host mode (xHCI, dwc3dci_host.c) instead of the
+ * device; hw.dwc3dci.usb3=1: with the QMP USB3 PHY, its lanes by
+ * hw.dwc3dci.cc2 (the plug's orientation, pro1x_typec)
+ */
+static int dwc3dci_host, dwc3dci_usb3, dwc3dci_cc2;
+TUNABLE_INT("hw.dwc3dci.host", &dwc3dci_host);
+TUNABLE_INT("hw.dwc3dci.usb3", &dwc3dci_usb3);
+TUNABLE_INT("hw.dwc3dci.cc2", &dwc3dci_cc2);
 
 static inline uint32_t
 rd(uint8_t *base, uint32_t off)
@@ -248,8 +263,9 @@ pro1x_qusb2(struct dwc3dci_softc *sc)
 	return (0);
 }
 
+/* USB 2 only: UTMI as the PIPE clock (dwc3_qcom_select_utmi_clk) */
 static void
-pro1x_qscratch(struct dwc3dci_softc *sc)
+pro1x_utmi_pipe(struct dwc3dci_softc *sc)
 {
 	uint8_t *q = sc->sc_qscratch;
 
@@ -261,6 +277,15 @@ pro1x_qscratch(struct dwc3dci_softc *sc)
 	DELAY(100);
 	wr(q, QSCRATCH_GENERAL_CFG, rd(q, QSCRATCH_GENERAL_CFG) &
 	    ~PIPE_UTMI_CLK_DIS);
+}
+
+/* device mode: VBUS forced valid (dwc3_qcom_vbus_override_enable) */
+static void
+pro1x_qscratch(struct dwc3dci_softc *sc)
+{
+	uint8_t *q = sc->sc_qscratch;
+
+	pro1x_utmi_pipe(sc);
 	wr(q, QSCRATCH_HS_PHY_CTRL, rd(q, QSCRATCH_HS_PHY_CTRL) |
 	    UTMI_OTG_VBUS_VALID | SW_SESSVLD_SEL);
 	wr(q, QSCRATCH_SS_PHY_CTRL, rd(q, QSCRATCH_SS_PHY_CTRL) |
@@ -377,6 +402,16 @@ dwc3dci_fdt_attach(device_t dev)
 		device_printf(dev, "bring-up: %s\n", sc->sc_bringup);
 		return (ENXIO);
 	}
+	if (dwc3dci_host) {
+		if (!dwc3dci_usb3)
+			pro1x_utmi_pipe(sc);
+		NOTE(sc, "host mode%s", dwc3dci_usb3 ? ", USB 3" : "");
+		device_printf(dev, "bring-up: %s\n", sc->sc_bringup);
+		SYSCTL_ADD_STRING(device_get_sysctl_ctx(dev),
+		    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+		    "bringup", CTLFLAG_RD, sc->sc_bringup, 0, "The bring-up");
+		return (dwc3dci_host_start(sc, dwc3dci_usb3, dwc3dci_cc2));
+	}
 	pro1x_qscratch(sc);
 	NOTE(sc, "UTMI as PIPE clock, VBUS valid");
 	device_printf(dev, "bring-up: %s\n", sc->sc_bringup);
@@ -432,11 +467,12 @@ dwc3dci_fdt_detach(device_t dev)
 
 	if ((err = bus_generic_detach(dev)) != 0)
 		return (err);
-	if (sc->sc_io_res != NULL)
+	if (sc->sc_io_res != NULL && !dwc3dci_host)
 		dwc3dci_uninit(sc);
 	if (sc->sc_intr_hdl != NULL)
 		bus_teardown_intr(dev, sc->sc_irq_res, sc->sc_intr_hdl);
-	usb_bus_mem_free_all(&sc->sc_bus, NULL);
+	if (!dwc3dci_host)
+		usb_bus_mem_free_all(&sc->sc_bus, NULL);
 	return (0);
 }
 
@@ -447,6 +483,12 @@ static device_method_t dwc3dci_fdt_methods[] = {
 	DEVMETHOD(device_suspend,	bus_generic_suspend),
 	DEVMETHOD(device_resume,	bus_generic_resume),
 	DEVMETHOD(device_shutdown,	bus_generic_shutdown),
+	/* host mode: the xhci child uses the glue's window and interrupt */
+	DEVMETHOD(bus_alloc_resource,	dwc3dci_alloc_resource),
+	DEVMETHOD(bus_release_resource,	dwc3dci_release_resource),
+	DEVMETHOD(bus_activate_resource, dwc3dci_activate_resource),
+	DEVMETHOD(bus_setup_intr,	bus_generic_setup_intr),
+	DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
 	DEVMETHOD_END
 };
 
@@ -459,4 +501,5 @@ static driver_t dwc3dci_fdt_driver = {
 DRIVER_MODULE(dwc3dci, simplebus, dwc3dci_fdt_driver, 0, 0);
 MODULE_DEPEND(dwc3dci, usb, 1, 1, 1);
 MODULE_DEPEND(dwc3dci, qcom_dsp, 1, 1, 1);
+MODULE_DEPEND(dwc3dci, xhci, 1, 1, 1);
 MODULE_VERSION(dwc3dci, 1);

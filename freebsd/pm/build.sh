@@ -139,7 +139,7 @@ for t in $TARGETS; do
 		    > "$PMOUT/PRO1XPM.tmpl"
 		kernel PRO1XPM "$PMOUT/PRO1XPM.tmpl" "$PMOUT/mfsroot.ufs" \
 		    "$REPO/freebsd/pro1x.env" "$PMOUT/kernel.bin" \
-		    "qcom_dsp pro1x_rpmsleep usb/usb usb/template usb/uether usb/cdce pro1x_usb pro1x_typec"
+		    "qcom_dsp pro1x_rpmsleep usb/usb usb/template usb/uether usb/cdce pro1x_usb pro1x_typec usb/xhci usb/umass"
 		;;
 	*)	echo "unknown target $t"; exit 1 ;;
 	esac

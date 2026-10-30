@@ -1,0 +1,41 @@
+#!/bin/sh
+# pro1x-usbrole TYPE ROLE ORIENTATION: the USB controller's role by the
+# USB-C port (devd: pro1x_typec's ATTACH/DETACH, freebsd/pm/README.md
+# stage 4c). Off unless pro1x.usbrole=1 is in the kernel environment
+# (freebsd/cmdline) or pro1x_usbrole_enable="YES" in rc.conf: the drivers
+# are untested on the phone.
+#   role=device (a PC):   dwc3dci, CDC Ethernet (rc.d/pro1x_usbnet)
+#   role=host (a device): xHCI on the DWC3, VBUS on; with pro1x.usb3=1 the
+#                         QMP USB3 PHY, its lanes by the orientation
+#   DETACH:               the controller's module out, VBUS off
+. /etc/rc.subr
+load_rc_config pro1x_usbrole
+[ "$(kenv -q pro1x.usbrole)" = 1 ] || checkyesno pro1x_usbrole_enable 2>/dev/null ||
+    exit 0
+case "$1/$2" in
+ATTACH/host)	mode=host ;;
+ATTACH/device)	mode=device ;;
+DETACH/*)	mode=none ;;
+*)		exit 0 ;;
+esac
+logger -t pro1x-usbrole "$1 $2 $3: $mode"
+service pro1x_usbnet onestop > /dev/null 2>&1
+kldunload pro1x_usb 2> /dev/null
+sysctl -q hw.pro1x_typec.vbus=0 > /dev/null
+case $mode in
+host)
+	kldload -n qcom_dsp usb xhci umass || exit 1
+	kenv hw.dwc3dci.enable=1 hw.dwc3dci.host=1 > /dev/null
+	kenv hw.dwc3dci.usb3=$([ "$(kenv -q pro1x.usb3)" = 1 ] && echo 1 || echo 0) \
+	    > /dev/null
+	kenv hw.dwc3dci.cc2=$([ "$3" = cc2 ] && echo 1 || echo 0) > /dev/null
+	# VBUS for the device first (pro1x_typec switches it with the role)
+	sysctl -q hw.pro1x_typec.vbus=1 > /dev/null
+	kldload pro1x_usb && logger -t pro1x-usbrole "host mode: $(sysctl -n dev.dwc3dci.0.bringup)"
+	;;
+device)
+	kenv hw.dwc3dci.host=0 > /dev/null
+	service pro1x_usbnet onestart
+	;;
+esac
+exit 0

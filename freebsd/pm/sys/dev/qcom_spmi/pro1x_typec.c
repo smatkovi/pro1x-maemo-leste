@@ -20,7 +20,10 @@
  *   VBUS: CMD_OTG 0x40 OTG_EN (0), OTG_CFG 0x53 OTG_EN_SRC_CFG (1),
  *         OTG_CURRENT_LIMIT_CFG 0x52 (500 mA steps from 500 mA)
  *
- * Polled (hw.pro1x_typec.poll_ms, 250), read only by default: what it
+ * Woken by the block's interrupts (attach-detach, cc-state-change,
+ * vbus-change through the SPMI arbiter; hw.pro1x_typec.poll_ms=N polls as
+ * well, the fallback, and without interrupts every 250 ms), read only by
+ * default: what it
  * sees goes to dev.pro1x_typec.0.state and, on every change, to devd as
  * system PRO1X, subsystem TYPEC, type ATTACH or DETACH with
  * role=device|host|audio|debug, orientation=cc1|cc2, vbus=0|1, rp=...
@@ -37,7 +40,10 @@
 #include <sys/lock.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
+#include <sys/rman.h>
 #include <sys/sysctl.h>
+
+#include <machine/bus.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
@@ -46,14 +52,21 @@
 #include <dev/qcom_spmi/qcom_spmi.h>
 #include <dev/qcom_spmi/pro1x_typec.h>
 
+static SYSCTL_NODE(_hw, OID_AUTO, pro1x_typec, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "The Pro1X's USB-C port");
 static int pro1x_typec_enable;
-TUNABLE_INT("hw.pro1x_typec.enable", &pro1x_typec_enable);
+SYSCTL_INT(_hw_pro1x_typec, OID_AUTO, enable, CTLFLAG_RDTUN,
+    &pro1x_typec_enable, 0, "Attach to the PMI632's Type-C block");
 static int pro1x_typec_drp;
-TUNABLE_INT("hw.pro1x_typec.drp", &pro1x_typec_drp);
+SYSCTL_INT(_hw_pro1x_typec, OID_AUTO, drp, CTLFLAG_RDTUN, &pro1x_typec_drp,
+    0, "Set dual role at attach");
 static int pro1x_typec_vbus;
-TUNABLE_INT("hw.pro1x_typec.vbus", &pro1x_typec_vbus);
-static int pro1x_typec_poll_ms = 250;
-TUNABLE_INT("hw.pro1x_typec.poll_ms", &pro1x_typec_poll_ms);
+SYSCTL_INT(_hw_pro1x_typec, OID_AUTO, vbus, CTLFLAG_RWTUN, &pro1x_typec_vbus,
+    0, "VBUS out while a device is attached");
+/* 0: the block's interrupts only; N: also a look every N ms (fallback) */
+static int pro1x_typec_poll_ms;
+SYSCTL_INT(_hw_pro1x_typec, OID_AUTO, poll_ms, CTLFLAG_RWTUN,
+    &pro1x_typec_poll_ms, 0, "Polling interval (0: interrupts only)");
 
 struct typec_softc {
 	device_t	dev;
@@ -64,7 +77,10 @@ struct typec_softc {
 	uint32_t	vbus_max_ua;
 	struct typec_state st;
 	int		vbus_on;
-	uint64_t	changes;
+	int		nirq;
+	struct resource	*irq[3];
+	void		*ih[3];
+	uint64_t	changes, irqs;
 	char		state[160];
 };
 
@@ -130,8 +146,59 @@ typec_poll(void *arg)
 		sc->st = st;
 	}
 again:
-	callout_reset(&sc->poll, MAX(pro1x_typec_poll_ms, 20) * hz / 1000,
-	    typec_poll, sc);
+	/* the interrupts call again; polling only as the fallback */
+	if (pro1x_typec_poll_ms > 0 || sc->nirq == 0)
+		callout_reset(&sc->poll, MAX(pro1x_typec_poll_ms, 250) * hz /
+		    1000, typec_poll, sc);
+}
+
+/* attach-detach, cc-state-change, vbus-change: a look 20 ms later */
+static void
+typec_intr(void *arg)
+{
+	struct typec_softc *sc = arg;
+
+	mtx_lock(&sc->mtx);
+	sc->irqs++;
+	callout_reset(&sc->poll, MAX(hz / 50, 1), typec_poll, sc);
+	mtx_unlock(&sc->mtx);
+}
+
+/* The block's interrupts through the SPMI arbiter, as qcom_pon's */
+static void
+typec_irqs(struct typec_softc *sc)
+{
+	static const char *const names[] = { "attach-detach",
+	    "cc-state-change", "vbus-change" };
+	phandle_t node = ofw_bus_get_node(sc->dev);
+	pcell_t *cells;
+	ssize_t n;
+	int i, idx, irq, rid;
+
+	n = OF_getencprop_alloc_multi(node, "interrupts", sizeof(pcell_t),
+	    (void **)&cells);
+	if (n <= 0)
+		return;
+	for (i = 0; i < (int)nitems(names); i++) {
+		if (ofw_bus_find_string_index(node, "interrupt-names", names[i],
+		    &idx) != 0 || (idx + 1) * 4 > n)
+			continue;
+		irq = ofw_bus_map_intr(sc->dev, qcom_spmi_intr_xref(sc->dev), 4,
+		    &cells[idx * 4]);
+		rid = sc->nirq;
+		bus_set_resource(sc->dev, SYS_RES_IRQ, rid, irq, 1);
+		sc->irq[rid] = bus_alloc_resource_any(sc->dev, SYS_RES_IRQ, &rid,
+		    RF_ACTIVE);
+		if (sc->irq[rid] == NULL || bus_setup_intr(sc->dev, sc->irq[rid],
+		    INTR_TYPE_MISC | INTR_MPSAFE, NULL, typec_intr, sc,
+		    &sc->ih[rid]) != 0) {
+			device_printf(sc->dev, "interrupt %s not set up\n",
+			    names[i]);
+			continue;
+		}
+		sc->nirq++;
+	}
+	OF_prop_free(cells);
 }
 
 static int
@@ -185,6 +252,12 @@ typec_attach(device_t dev)
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "changes",
 	    CTLFLAG_RD, &sc->changes, 0, "Changes seen");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "irqs",
+	    CTLFLAG_RD, &sc->irqs, 0, "Interrupts taken");
+	typec_irqs(sc);
+	device_printf(dev, "%d of 3 interrupts%s\n", sc->nirq,
+	    sc->nirq == 0 || pro1x_typec_poll_ms > 0 ? ", polling" : "");
 	mtx_lock(&sc->mtx);
 	typec_poll(sc);
 	mtx_unlock(&sc->mtx);
@@ -196,6 +269,10 @@ typec_detach(device_t dev)
 {
 	struct typec_softc *sc = device_get_softc(dev);
 
+	int i;
+
+	for (i = 0; i < sc->nirq; i++)
+		bus_teardown_intr(dev, sc->irq[i], sc->ih[i]);
 	callout_drain(&sc->poll);
 	mtx_lock(&sc->mtx);
 	if (sc->vbus_on)

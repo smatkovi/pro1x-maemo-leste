@@ -102,6 +102,8 @@ PM_MODULES="pro1x_rpmsleep pro1x_usb usb/template usb/uether usb/cdce"
 PM_MODULES="$PM_MODULES usb/ucom usb/umodem"
 # the USB-C port's detection (pro1x_typec: the PMI632's Type-C block)
 PM_MODULES="$PM_MODULES pro1x_typec"
+# host mode on the DWC3 (pro1x_usb): xHCI, and a stick's mass storage
+PM_MODULES="$PM_MODULES usb/xhci usb/umass"
 MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss sound/sound snd_pro1x $PM_MODULES qcom_ipa}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
