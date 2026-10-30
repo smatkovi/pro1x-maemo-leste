@@ -1,0 +1,66 @@
+#!/bin/sh
+# pro1x-modem-wait -- wait for the part of the Pro1X modem a service needs.
+#
+#   pro1x-modem-wait remoteproc [seconds]   for rmtfs: /dev/qcom_rmtfs_mem1
+#                                           and the modem's remoteproc
+#                                           (default 120 s)
+#   pro1x-modem-wait qmi [seconds]          for ModemManager: the modem's
+#                                           WDS, DMS and NAS services on
+#                                           QRTR (default 90 s)
+#
+# Exit status 0 once it is there, 1 after the time is up.
+#
+# remoteproc: `rmtfs -s` looks the modem's remoteproc up once, at its start,
+# and exits when qcom_q6v5_pas has not registered it yet; the modem itself
+# only starts when rmtfs asks for it (auto_boot is off for the SM6115 MPSS).
+#
+# qmi: ModemManager 1.24 takes a QRTR node for a modem only if WDS, DMS and
+# NAS turn up within 4 s of the node's first service
+# (src/mm-qrtr-bus-watcher.c); a node that misses that is dropped until the
+# modem restarts. Started after those services, it finds them at once.
+# Without qrtr-lookup (qrtr-tools) there is nothing to wait with: exit 0.
+mode=${1:-}
+case "$mode" in
+remoteproc) max=${2:-120} ;;
+qmi) max=${2:-90} ;;
+*) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac
+
+modem_remoteproc() {
+	[ -e /dev/qcom_rmtfs_mem1 ] || return 1
+	for n in /sys/class/remoteproc/*/name; do
+		[ "$(cat "$n" 2> /dev/null)" = modem ] && return 0
+	done
+	return 1
+}
+
+# qrtr-lookup <service> prints a header line, then one line per server
+has_service() {
+	[ "$(qrtr-lookup "$1" 2> /dev/null | wc -l)" -gt 1 ]
+}
+
+modem_qmi() {
+	# 1 WDS (data), 2 DMS (device), 3 NAS (network)
+	has_service 1 && has_service 2 && has_service 3
+}
+
+if [ "$mode" = qmi ] && ! command -v qrtr-lookup > /dev/null 2>&1; then
+	echo "pro1x-modem-wait: no qrtr-lookup, not waiting" >&2
+	exit 0
+fi
+
+t=0
+while [ "$t" -lt "$max" ]; do
+	if [ "$mode" = remoteproc ]; then
+		modem_remoteproc && exit 0
+	else
+		modem_qmi && { echo "pro1x-modem-wait: modem QMI services up after $t s"; exit 0; }
+	fi
+	sleep 1
+	t=$((t + 1))
+done
+case "$mode" in
+remoteproc) echo "pro1x-modem-wait: no /dev/qcom_rmtfs_mem1 or modem remoteproc after $max s" >&2 ;;
+qmi) echo "pro1x-modem-wait: modem QMI services (WDS, DMS, NAS) missing after $max s" >&2 ;;
+esac
+exit 1

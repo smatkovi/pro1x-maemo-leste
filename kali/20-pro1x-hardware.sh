@@ -45,10 +45,13 @@ chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 # Desktop and Kali's default tool set; the modem (rmtfs, tqftpserv, qrtr),
-# mobile data (ModemManager + NetworkManager), GPS (gpsd); the libraries
-# the Pro1X stack from Leste links against.
+# mobile data (ModemManager + NetworkManager; the APN database for
+# NetworkManager's gsm.auto-config, qmicli for looking at the modem; both
+# only came as Recommends), GPS (gpsd); the libraries the Pro1X stack from
+# Leste links against.
 apt-get install -y -q kali-desktop-xfce kali-linux-default \
 	network-manager modemmanager rmtfs tqftpserv qrtr-tools \
+	mobile-broadband-provider-info libqmi-utils \
 	bluez gpsd alsa-utils alsa-ucm-conf wireless-regdb mesa-utils xinput \
 	libprotobuf-c1 libqrtr-glib0 libgudev-1.0-0 libpolkit-gobject-1-0 polkitd
 apt-get clean
