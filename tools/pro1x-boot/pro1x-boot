@@ -178,6 +178,12 @@ pmic_read() {
 	    [ -d /sys/kernel/debug ] && ! grep -q ' /sys/kernel/debug ' /proc/mounts; then
 		mount -t debugfs debugfs /sys/kernel/debug 2> /dev/null && mounted=1
 	fi
+	# should the PMIC's regmap have another name: the first SPMI slave 0
+	if [ -z "${PRO1X_BOOT_REGS:-}" ] && [ ! -e "$PMIC_REGS" ]; then
+		for f in /sys/kernel/debug/regmap/[0-9]-00/registers; do
+			[ -e "$f" ] && { PMIC_REGS=$f; break; }
+		done
+	fi
 	pmic_read_regs || true
 	[ -z "$mounted" ] || umount /sys/kernel/debug 2> /dev/null || true
 }
