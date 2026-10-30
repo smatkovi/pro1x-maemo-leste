@@ -33,10 +33,13 @@ PARTS=(
   "hildon-home|0d34886acdc2|1"
   "hildon-desktop|1273f9eee252|5"
   "mce|422d5f2bd618|3"
-  # the location framework's two bugs (patches/fixes): liblocation linked
-  # to its libraries, location-ui's dialogs without an answer at the start
-  "liblocation|d1ae86503411|1"
-  "location-ui|55b9700aed33|1"
+  # the location framework's bugs (patches/fixes): liblocation linked to
+  # its libraries, its dialog calls with dbus-glib's output terminator, the
+  # user's methods (the "enable positioning" dialog's yes); location-ui's
+  # dialogs without an answer at the start, its answer to "close" (which
+  # aborted it on every OK)
+  "liblocation|d1ae86503411|2"
+  "location-ui|55b9700aed33|2"
   # repeating appointments on 64-bit (patches/fixes): none was expanded,
   # in qalendar's views and on the Events page (pro1x-events)
   "calendar-backend|7a149bfc9f76|1"

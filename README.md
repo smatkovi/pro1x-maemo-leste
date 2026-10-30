@@ -22,7 +22,7 @@ there, every boot image variant that was tested: [docs/HANDOFF.md](docs/HANDOFF.
 | Accelerometer, light, proximity, compass | works | ADSP sensors: hexagonrpcd + libssc + iio-sensor-proxy 3.9 |
 | Step counter | works (count while walking untested) | the ADSP's pedometer: libssc patch + `pro1x-steps` on D-Bus (`org.pro1x.Steps`) |
 | Clock across power off, alarms that power the phone on | prepared (power-on by the RTC alarm untested) | the PMIC's RTC cannot be set: `pro1x-rtc` keeps the offset, `librtc-realtime` translates alarmd's and timed's wake alarms (`tools/pro1x-rtc`) |
-| GPS | engine runs, positions arrive | `pro1x-gnss` (QMI LOC -> NMEA -> gpsd); outdoor fix untested |
+| GPS | engine runs, positions arrive | `pro1x-gnss` (QMI LOC -> NMEA -> gpsd); liblocation and location-ui rebuilt with fixes of the privacy disclaimer and "enable positioning" dialogs (`patches/fixes/liblocation.patch`, `location-ui.patch`, in `scripts/49-hidpi.sh`; untested on the phone); outdoor fix untested |
 | Cameras (12 MP rear, 8 MP front) | works | libcamera 0.7.2 + soft ISP on the GPU; `pro1x-camera` app with autofocus |
 | Device lock code (CAL) | works | block2mtd file as `/dev/mtd1`, patched libcal |
 | Crash logs | works | ramoops, `/sys/fs/pstore` |
@@ -259,7 +259,7 @@ would otherwise lose its slot after seven starts.
 | `scripts/47-libcal.sh` | inside the rootfs, root | libcal that accepts the block2mtd CAL (lock code) |
 | `scripts/48-camera-stack.sh` | inside the rootfs, root | libcamera 0.7.2 with the Pro1X sensors |
 | `scripts/49-apps.sh` | inside the rootfs, root | `pro1x-camera`, the Desktop applet (`pro1x-look`) |
-| `scripts/49-hidpi.sh` | inside the rootfs, root | Hildon at the N900's size on 2160x1080 (`tools/pro1x-hidpi`) |
+| `scripts/49-hidpi.sh` | inside the rootfs, root | Hildon at the N900's size on 2160x1080 (`tools/pro1x-hidpi`); also the parts with bug fixes in `patches/fixes/` (liblocation, location-ui, calendar-backend) |
 | `scripts/49-mobile-data.sh` | inside the rootfs, root | oFono rebuilt for mobile data over the IPA (`patches/fixes/ofono.patch`), `pro1x-modem-wait` instead of `pro1x-rmnet` |
 | `scripts/50-build-bootimg.sh` | build host | pack the Android boot image (v0, DTB appended) |
 | `scripts/55-deploy-rootfs.sh` | device, root | first deployment: shrink, stream, grow again (additive) |
