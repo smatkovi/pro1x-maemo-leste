@@ -89,7 +89,10 @@ cp -a "$REPO/freebsd/pm/sys/." "$SRC/sys/"
 # The cameras (freebsd/camera/README.md): the CCI's buses, the camera
 # clocks, pins and power domain, /dev/camss (qcom_camss), new files only
 cp -a "$REPO/freebsd/camera/sys/." "$SRC/sys/"
-MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss}
+# The sound (freebsd/audio/README.md): sound(4) as a module (the kernel has
+# no "device sound") and its device over the ADSP, snd_pro1x
+cp -a "$REPO/freebsd/audio/sys/." "$SRC/sys/"
+MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss sound/sound snd_pro1x}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
 	buildkernel)
@@ -132,6 +135,16 @@ done
 clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" \
     -fuse-ld=lld -O2 -Wall -I"$REPO/freebsd/camera/sys/arm64/qualcomm/camss" \
     -o "$OUT/dsp-tools/pro1x-cam" "$REPO"/freebsd/camera/tools/pro1x-cam/*.c -lz -lm
+# The sound's daemon (with freebsd/fm's AFE packets) and its client
+# (freebsd/audio/tools)
+clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" -fuse-ld=lld \
+    -O2 -Wall -o "$OUT/dsp-tools/pro1x-audiod" \
+    "$REPO"/freebsd/audio/tools/pro1x-audiod/*.c \
+    "$REPO/freebsd/fm/tools/pro1x-fmaudio/afe.c" \
+    "$REPO/freebsd/fm/tools/pro1x-fmaudio/mmio.c"
+clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" -fuse-ld=lld \
+    -O2 -Wall -o "$OUT/dsp-tools/pro1x-audioctl" \
+    "$REPO/freebsd/audio/tools/pro1x-audioctl/pro1x-audioctl.c" -lm
 # and the test of the QRTR sockets (freebsd/dsp/test)
 clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" -fuse-ld=lld \
     -O2 -Wall -I"$REPO/freebsd/dsp/sys/arm64/qualcomm/dsp" \

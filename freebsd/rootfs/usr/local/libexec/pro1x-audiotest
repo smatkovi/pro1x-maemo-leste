@@ -1,0 +1,167 @@
+#!/bin/sh
+# pro1x-audiotest [STEP]: the sound's test runs of freebsd/audio/README.md,
+# each after the ones below it, up to STEP (kernel environment
+# pro1x.audio, set in the boot menu's freebsd/cmdline with
+# pro1x.test=audio):
+#   pcm    sound.ko and snd_pro1x.ko alone (no ADSP): /dev/dsp, the SMMU
+#          stream of the ADSP's buffers, the buffers' addresses; 2 s of
+#          playback and of recording through the driver's clock
+#   adsp   pcm, then the ADSP (pd_mapper, pro1x-dsp start adsp), qcom_apr,
+#          qcom_lpass, pro1x-audiod without /dev/pro1x_pcm (-n): its
+#          status, the back ends' AFE ports up and down without a codec
+#          path (up rx, down rx, up va, down va)
+#   play   adsp with /dev/pro1x_pcm: a 1 kHz tone for 3 s to /dev/dsp
+#          (pro1x-audioctl tone), the ADSP's write-done events counted;
+#          the route's sequences if the sequence file has them
+#          (pro1x.audio_route=hph|spk|ear, default hph: headphones in)
+#   rec    play, then 3 s recorded from /dev/dsp (the built-in microphone,
+#          mic-up), its peak level
+#   codec  rec, then the sequences' checks (check-<route>, check-mic: the
+#          registers against Linux's), the SoundWire masters' state
+#   voice  codec, then the voice session started and stopped (no call:
+#          what the ADSP says to a session without the modem's)
+# pro1x.audio_trace=1: every register access in the log (-T);
+# pro1x.audio_opts: more options for pro1x-audiod. A newer copy of this
+# script, pro1x-audiod, pro1x-audioctl and the sequences
+# (pro1x-audio.seq, from tools/trace2seq.py) are taken from userdata
+# first (freebsd/audio/ next to the kernel), the modules from
+# freebsd/modules. Everything goes to the console, which the RAM console
+# keeps for Linux after the next boot.
+step=${1:-$(kenv -q pro1x.audio)}
+step=${step:-pcm}
+host=/dev/pro1x-host/freebsd
+if [ -f $host/audio/pro1x-audiotest ] && [ "${PRO1X_AUDIOTEST_HOST:-}" != 1 ]; then
+	echo "=== the newer pro1x-audiotest from $host/audio"
+	PRO1X_AUDIOTEST_HOST=1 exec sh $host/audio/pro1x-audiotest "$step"
+fi
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+[ -d $host/audio ] && PATH=$host/audio:$PATH
+export PATH
+route=$(kenv -q pro1x.audio_route)
+route=${route:-hph}
+opts=$(kenv -q pro1x.audio_opts)
+[ "$(kenv -q pro1x.audio_trace)" = 1 ] && opts="$opts -T"
+seq=/usr/local/share/pro1x/audio/pro1x-audio.seq
+[ -f $host/audio/pro1x-audio.seq ] && seq=$host/audio/pro1x-audio.seq
+log=/tmp/pro1x-audiod.log
+t() { echo "$(date +%T) $*"; }
+echo "=== audio test up to: $step (route $route, sequences $seq)"
+if [ -d $host/modules ]; then
+	kldconfig -i $host/modules
+	echo "modules from $host/modules first"
+fi
+
+echo "--- sound(4) and snd_pro1x"
+kldload qcom_dsp && echo "qcom_dsp loaded"
+kldload sound && echo "sound loaded"
+kldload snd_pro1x && echo "snd_pro1x loaded"
+dmesg | grep -E "^pcm|snd_pro1x|qcom_smmu" | tail -12
+cat /dev/sndstat 2>&1
+ls -la /dev/dsp* /dev/mixer* /dev/pro1x_pcm 2>&1
+sysctl dev.pcm.0.pro1x 2>&1
+mixer 2>&1
+if [ ! -c /dev/pro1x_pcm ]; then
+	echo "no /dev/pro1x_pcm: nothing more to test"
+	exit 0
+fi
+t "2 s of silence through the driver's clock"
+time dd if=/dev/zero of=/dev/dsp bs=7680 count=25 2>&1
+t "2 s recorded through the clock"
+time dd if=/dev/dsp of=/dev/null bs=3840 count=50 2>&1
+sysctl dev.pcm.0.pro1x hw.snd 2>&1 | head -20
+[ "$step" = pcm ] && exit 0
+
+echo "--- the ADSP"
+kldload qrtr && echo "qrtr loaded"
+kldload qcom_apr && echo "qcom_apr loaded"
+kldload qcom_lpass && echo "qcom_lpass loaded"
+service pd_mapper onestart
+pro1x-dsp start adsp
+echo "ADSP start: $?"
+i=0
+while [ $i -lt 30 ] && ! sysctl -n hw.qcom_apr | grep -q "^open"; do
+	sleep 1
+	i=$((i + 1))
+done
+echo "after $i s: hw.qcom_apr: $(sysctl -n hw.qcom_apr)"
+sleep 3
+sysctl net.qrtr.servers hw.qcom_lpass.windows 2>&1
+ctl() { t "audioctl $*"; pro1x-audioctl "$@"; }
+start_daemon() {	# options
+	rm -f /var/run/pro1x-audio.sock
+	pro1x-audiod -d -v -s $seq -r $route $opts "$@" >> $log 2>&1 &
+	daemon=$!
+	i=0
+	while [ ! -S /var/run/pro1x-audio.sock ] && [ $i -lt 20 ]; do
+		sleep 0.5
+		i=$((i + 1))
+	done
+	ctl status
+}
+stop_daemon() {
+	kill $daemon 2> /dev/null
+	i=0
+	while kill -0 $daemon 2> /dev/null && [ $i -lt 20 ]; do
+		sleep 0.5
+		i=$((i + 1))
+	done
+	echo "--- pro1x-audiod's log"
+	cat $log
+	: > $log
+}
+
+echo "--- pro1x-audiod -n: the back ends without sound(4)"
+start_daemon -n
+ctl up rx
+ctl status
+sleep 1
+ctl down rx
+sleep 4
+ctl up va
+sleep 1
+ctl down va
+sleep 4
+ctl status
+stop_daemon
+sysctl hw.qcom_apr
+[ "$step" = adsp ] && exit 0
+
+echo "--- pro1x-audiod with sound(4): playback"
+start_daemon
+mixer vol=60 2>&1
+ctl status
+t "tone: 1 kHz, -20 dBFS, 3 s"
+pro1x-audioctl tone 3 1000
+ctl status
+sysctl dev.pcm.0.pro1x 2>&1
+sleep 4
+ctl status
+if [ "$step" != play ]; then
+	echo "--- capture"
+	t "record 3 s"
+	pro1x-audioctl record 3
+	ctl status
+	sysctl dev.pcm.0.pro1x 2>&1
+fi
+if [ "$step" = codec ] || [ "$step" = voice ]; then
+	echo "--- the codec against Linux's registers"
+	ctl up rx
+	ctl seq check-$route
+	ctl swr dump swr0
+	ctl swr dump swr1
+	ctl down rx
+	ctl up va
+	ctl seq check-mic
+	ctl down va
+	sleep 4
+fi
+if [ "$step" = voice ]; then
+	echo "--- the voice session (no call)"
+	ctl voice start
+	sleep 2
+	ctl status
+	ctl voice stop
+fi
+ctl status
+stop_daemon
+dmesg | grep -E "snd_pro1x|qcom_(apr|smmu|lpass)|pcm0" | tail -20
