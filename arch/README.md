@@ -72,7 +72,11 @@ look's steps 2 to 4 (2026-10-28) up to date, in Leste with the image on
 
 or, without building, the packages of a release (`arch-hildon-*`, made by
 `OUT=/dir bash arch/42-meego-look.sh`) with `PKGS=/dir bash
-arch/42-meego-look.sh`; `MNT=/` runs 42 in the running Arch itself.
+arch/42-meego-look.sh`; `MNT=/` runs 42 in the running Arch itself. The
+first, arch-hildon-2026.10.30, has libhildon, hildon-status-menu and
+hildon-desktop with the MeeGo look's steps 2 to 4, calendar-backend with
+the fix, rtcom-eventlogger, the Events page, the volume bar and the FM
+radio (its notes say how to install them in Arch).
 `arch/pc-chroot.sh` makes a chroot of Arch Linux ARM on the PC (qemu) for
 the same builds there.
 
