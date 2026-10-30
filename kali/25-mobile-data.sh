@@ -41,7 +41,7 @@ done
 if [ -n "$missing" ]; then
 	if [ "$MNT" = / ]; then
 		log "installing$missing"
-		apt-get install -y -q $missing ||
+		{ apt-get update -q && apt-get install -y -q $missing; } ||
 			echo "!! apt-get failed (no network?): install$missing later; only gsm.auto-config and qmicli need them"
 	else
 		echo "!! missing in the image:$missing (in Kali: sudo apt install$missing)"

@@ -3,7 +3,7 @@
 #
 #   pro1x-modem-wait remoteproc [seconds]   for rmtfs: /dev/qcom_rmtfs_mem1
 #                                           and the modem's remoteproc
-#                                           (default 120 s)
+#                                           (default 60 s, as Leste)
 #   pro1x-modem-wait qmi [seconds]          for ModemManager: the modem's
 #                                           WDS, DMS and NAS services on
 #                                           QRTR (default 90 s)
@@ -21,7 +21,7 @@
 # Without qrtr-lookup (qrtr-tools) there is nothing to wait with: exit 0.
 mode=${1:-}
 case "$mode" in
-remoteproc) max=${2:-120} ;;
+remoteproc) max=${2:-60} ;;
 qmi) max=${2:-90} ;;
 *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac

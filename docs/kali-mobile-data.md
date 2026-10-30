@@ -96,7 +96,7 @@ and device tree and lists mobile data as working.
   `ExecStartPre`; a start before udev loaded `rmtfs_mem` was skipped. The
   drop-in clears the condition, orders rmtfs after tqftpserv, loads
   `rmtfs_mem` and `ipa` (the IPA before the modem starts), waits up to
-  120 s for the device node and the modem's remoteproc
+  60 s for the device node and the modem's remoteproc
   (`/usr/lib/pro1x/pro1x-modem-wait remoteproc`; `rmtfs -s` exits when
   the remoteproc is not there yet) and has no start limit.
 - `ModemManager.service.d/pro1x.conf`: after rmtfs and tqftpserv, and only
@@ -274,6 +274,7 @@ Back: `sudo nmcli connection down mobile`, then `sudo pro1x-boot next leste
 | `no IOMMU domain found`, GSI `timed out`, `bad state` | SMMU or GSI | dmesg to the kernel side |
 | no `modem is now up`, rmtfs restarting | modem start: `systemctl status rmtfs`, `journalctl -u rmtfs`, `cat /sys/class/remoteproc/*/{name,state}` | Wi-Fi is gone too in this case; compare with Leste |
 | modem up, no `rmnet_ipa0`, no service 49 in `qrtr-lookup` | the modem never finished its IPA side | `dmesg \| grep -i 'ipa\|qmi'` (`error ... init driver request`), send it |
+| `mmcli` times out right after boot | ModemManager still waits for the modem's QMI services (up to 90 s) | `systemctl status ModemManager` says activating: wait |
 | `mmcli -L`: no modems | ModemManager missed the QRTR node | `journalctl -u ModemManager -b \| grep -i qrtr` ("doesn't have required services"); `sudo systemctl restart ModemManager` |
 | modem `failed`, reason `sim-missing`, though a SIM is in | no SIM application selected | below |
 | `locked` | SIM PIN | step 4 |
