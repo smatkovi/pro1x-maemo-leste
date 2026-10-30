@@ -232,10 +232,16 @@ look(struct as_state *s)
 	s->display = get_int("dev.qcom_dpu.0.display", "display");
 	s->lpm = get_int("dev.qcom_dpu.0.lpm", "lpm");
 	s->acline = get_int("hw.acpi.acline", "acline");
+	s->net_bytes = net_bytes(&s->usbnet);
+	/*
+	 * with the display in use the rest does not matter: pro1x-audiod
+	 * is not woken for its status, the processes not listed
+	 */
+	if (s->display == 1 && (s->lpm != 1 || !conf.in_standby))
+		return;
 	s->call = running("pro1x-callaudio");
 	s->audio = audio_busy();
 	s->inhibit = access(INHIBIT, F_OK) == 0;
-	s->net_bytes = net_bytes(&s->usbnet);
 }
 
 /* the interrupt's name: "gic0,s68: qcom_glink0" from hw.intrnames */
