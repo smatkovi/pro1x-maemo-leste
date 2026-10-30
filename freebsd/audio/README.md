@@ -508,6 +508,8 @@ names the register).
   than an interrupt would, and the 3 s of corrections happen in steps
   between other work. A plug in at the daemon's start is seen when the
   mechanical detection fires (or not at all: then a re-plug).
+  In the VM devd logged the `JACK` notification; the `BUTTON` one reached
+  snd_pro1x's sysctl but not devd's log yet (to check: its quoted value).
 - **The ADSP's power domains** (LPI_CX, LPI_MX) are what the boot menu's
   Linux left voted (`freebsd/dsp/README.md`).
 - **Voice without a call**: untestable before the modem places one.
