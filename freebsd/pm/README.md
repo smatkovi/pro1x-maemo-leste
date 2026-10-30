@@ -367,8 +367,10 @@ what is missing:
   the convention of `scripts/40-make-rootfs.sh` for Leste; only a `.pub`
   file, never a private key). Host keys: `/etc/ssh`'s on the writable
   root, else made at each start in `/var/run/pro1x-sshd` (the read-only
-  root: a new host key each boot, so the PC's `ssh` wants
-  `-o UserKnownHostsFile=/dev/null` or its own known hosts file there).
+  root: a new host key each boot). Use a known hosts file of its own for
+  the phone (`-o UserKnownHostsFile=~/.ssh/known_hosts.pro1x-freebsd`),
+  so a changed key on the writable root still shows; on the read-only
+  root, delete that file when the key changed after a reboot.
   `service pro1x_usbnet status` shows the bring-up, the counters, `ue0`.
 - **Serial console:** `pro1x.usb=serial` (or `pro1x_usbnet_serial="YES"`):
   `usb_template` 8 (CDC Ethernet and a modem port), `ucom` and `umodem`
@@ -423,8 +425,9 @@ what is missing:
     `rc.d/pro1x_usbnet`, the modules and the key): in `freebsd/cmdline`
     `pro1x.usb=1` (or, with a serial port, `pro1x.usb=serial`), boot
     FreeBSD from the menu with the cable to the PC. On the PC: the
-    address as in 10, then `ssh -o UserKnownHostsFile=/dev/null
-    root@172.16.42.1` (the key of `SSH_PUBKEY`; passwords are refused),
+    address as in 10, then `ssh -o
+    UserKnownHostsFile=~/.ssh/known_hosts.pro1x-freebsd root@172.16.42.1`
+    (the key of `SSH_PUBKEY`; passwords are refused),
     with the serial port also `screen /dev/ttyACM0 115200`. Expected in
     the system log: `pro1x_usbnet: ...bring-up...`, `USB gadget: ue0
     172.16.42.1, sshd on it`. Failure signs: `no ue0 after 30 s` (as in
