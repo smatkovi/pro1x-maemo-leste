@@ -28,6 +28,12 @@ register written during a power-up is compared with the snapshot taken
 during the sound in a [check-<scenario>] section (pro1x-audioctl seq
 check-hph).
 
+Not taken from the trace: regmap_bulk_write and regmap_hw_write_start
+(a raw block write, e.g. a regcache sync over a bus that writes blocks,
+traces no regmap_reg_write): they are counted in a note, and their values
+are in the snapshot's registers dump (the check section compares them);
+if a note says so, those registers need w lines by hand from the dump.
+
 The base file (default seq/base.seq next to this directory) has the
 sections only code can give (power, pins, volume); it comes first in the
 output.
@@ -97,6 +103,12 @@ def parse_event(line):
         return Event(ts, 'w' if ev.endswith('write') else 'r',
                      dev=mm.group(1), tgt=target(mm.group(1)),
                      reg=int(mm.group(2), 16), val=int(mm.group(3), 16))
+    if ev in ('regmap_bulk_write', 'regmap_hw_write_start'):
+        mm = re.match(r'(\S+) reg=([0-9a-f]+)', rest)
+        if mm:
+            return Event(ts, 'bulk', dev=mm.group(1), tgt=target(mm.group(1)),
+                         reg=int(mm.group(2), 16), text=ev)
+        return None
     if ev == 'regmap_cache_only':
         mm = re.match(r'(\S+) flag=(\d)', rest)
         if mm:
@@ -432,6 +444,16 @@ def convert(sc, gpio_base, be_done):
         if t in snap and reg in snap[t]:
             chk.append('r %s %#x %#x' % (t, reg, snap[t][reg]))
     out['check-' + sc.name] = chk
+    # hw_write_start also comes with every plain write of a bus regmap:
+    # only those without a regmap_reg_write right before count
+    plain = {(e.dev, e.reg) for e in up + down if e.kind == 'w'}
+    raw = {}
+    for e in up + down:
+        if e.kind == 'bulk' and (e.dev, e.reg) not in plain:
+            raw[e.dev] = raw.get(e.dev, 0) + 1
+    for dev, n in sorted(raw.items()):
+        notes.append('%s: %d raw/bulk write(s) to %s without their values '
+                     '(see the snapshot)' % (sc.name, n, dev))
     unknown = {}
     for x in (em, em2, em3, em4):
         for dev, n in x.unknown.items():

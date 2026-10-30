@@ -398,6 +398,15 @@ names the register).
   daemon late by more than a block makes the ADSP run dry (a click). The
   daemon runs at real-time priority; `qcom_apr` queues 64 packets, about
   a second of data events.
+- **One thread**: the daemon serves the ADSP's done events while it waits
+  for an APR answer, but not during a sequence's delays, a SoundWire
+  enumeration (up to 1 s) or its command FIFO's polling. A route change
+  while music plays (the amplifiers' 40 ms), or a recording or call that
+  starts then (`va-up`), can let the playback run dry for that long (a
+  click): acceptable for now, a second thread for the sequences later.
+- **The amplifiers' bus**: the AW87339s answer only with their enable
+  line high; the daemon looks for their I2C bus at the first access (after
+  the sequence's `gpio 85 1`), `-i /dev/iicN` names it.
 - **Power**: the codec stays powered while a back end is up and 3 s
   after; the rails stay on. No jack detection (the WCD937x's MBHC needs
   its interrupts): the route is set (`route`, `-r`), the headset's

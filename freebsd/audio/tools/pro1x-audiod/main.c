@@ -239,19 +239,27 @@ iic_xfer(uint8_t addr, uint8_t reg, uint8_t *val, bool read)
 	return (ioctl(iic_fd, I2CRDWR, &rd) == 0 ? 0 : -errno);
 }
 
-/* the keyboard's bus (4a84000) has the AW87339s: the iic device whose
- * 0x59 answers with the chip id 0x39 (aw87339.c's check) */
-static void
+/*
+ * The keyboard's bus (4a84000) has the AW87339s: the iic device whose 0x59
+ * answers with the chip id 0x39 (aw87339.c's check). The chip answers only
+ * with its enable line high (aw87339_i2c_probe raises it 2-3 ms before the
+ * read), so the bus is looked for at the first access, which the
+ * sequence makes after its "gpio 85 1"; until it is found every access
+ * looks again.
+ */
+static int
 open_iic(void)
 {
 	char path[32];
 	uint8_t id = 0;
 	int i;
 
+	if (iic_fd >= 0)
+		return (0);
 	if (iic_path != NULL) {
 		if ((iic_fd = open(iic_path, O_RDWR)) < 0)
 			fma_log("%s: %s", iic_path, strerror(errno));
-		return;
+		return (iic_fd < 0 ? -ENXIO : 0);
 	}
 	for (i = 0; i < 4; i++) {
 		snprintf(path, sizeof(path), "/dev/iic%d", i);
@@ -259,19 +267,20 @@ open_iic(void)
 			continue;
 		if (iic_xfer(0x59, 0x00, &id, true) == 0 && id == 0x39) {
 			fma_log("AW87339s on %s", path);
-			return;
+			return (0);
 		}
 		close(iic_fd);
 		iic_fd = -1;
 	}
-	fma_log("no AW87339 on /dev/iic0-3 (the loudspeakers stay off)");
+	fma_log("no AW87339 on /dev/iic0-3 (its enable line low?)");
+	return (-ENXIO);
 }
 
 static int
 cb_i2c_write(void *ctx, int tgt, uint8_t reg, uint8_t val)
 {
 	(void)ctx;
-	if (iic_fd < 0)
+	if (open_iic() != 0)
 		return (-ENXIO);
 	if (D.cio.trace)
 		fma_log("i2c %#x: %#x <- %#x", aw_addr(tgt), reg, val);
@@ -282,7 +291,7 @@ static int
 cb_i2c_read(void *ctx, int tgt, uint8_t reg, uint8_t *val)
 {
 	(void)ctx;
-	if (iic_fd < 0)
+	if (open_iic() != 0)
 		return (-ENXIO);
 	return (iic_xfer(aw_addr(tgt), reg, val, true));
 }
@@ -587,7 +596,6 @@ main(int argc, char **argv)
 		return (1);
 	}
 	map_windows();
-	open_iic();
 	if (load_seq(msg, sizeof(msg)) != 0)
 		fma_log("sequences: %s: no codec path, the ADSP's side alone",
 		    msg);
