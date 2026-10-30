@@ -95,15 +95,19 @@ close_session(struct audiod *d, struct stream *st, int step)
 	    ADM_PATH_LIVE_REC;
 
 	(void)path;
-	/* in reverse of start(); step: how far it got */
+	/*
+	 * step: how far start() got. Linux's order (q6asm_dai_close, and
+	 * q6asm_dai_prepare's error path): CLOSE, unmap, then the routing's
+	 * COPP (q6routing_stream_close)
+	 */
 	if (step >= 3) {
 		len = asm_pkt_cmd(pkt, st->session, ASM_STREAM_CMD_CLOSE);
 		asm_cmd(&d->q, pkt, len, "close");
 	}
-	if (step >= 4)
-		adm_close(&d->q, st->afe_port, st->afe_idx, st->copp);
 	if (step >= 2)
 		asm_unmap(&d->q, st->session, st->chan, st->maphandle);
+	if (step >= 4)
+		adm_close(&d->q, st->afe_port, st->afe_idx, st->copp);
 	st->maphandle = 0;
 	st->copp = INVALID_COPP_ID;
 	if (step >= 1)

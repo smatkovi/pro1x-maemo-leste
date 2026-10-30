@@ -20,12 +20,14 @@
  *   vote <block|name> on|off           an LPASS core block (AFE vote)
  *   afe start|stop                     the back end's AFE port, here
  *   swr <words...>                     SoundWire: "init swr1", "enum swr0 3",
- *                                      "stream swr1 on 1:3 2:1" (swr.c)
+ *                                      "stream swr1 on 1:3 2:1" (swr.c),
+ *                                      "wcd-init" (the WCD9370's probe)
  *   call <section>                     another section, then on
  *   mark <text>                        a line in the log
  *
  * Targets: the LPASS windows of /dev/qcom_lpass by name (rxmacro, txmacro,
- * vamacro, swr0, swr1, lpass_tlmm, lpass_audiocc, lpasscc; byte offsets,
+ * vamacro, swr0, swr1, lpass_tlmm, lpass_tlmm_slew, lpass_audiocc,
+ * lpasscc; byte offsets,
  * 32-bit accesses), wcd (the WCD9370's registers, over SoundWire swr0 as
  * Linux's wcd937x regmap), wcdrx (its RX device on swr1), aw0 and aw1 (the
  * AW87339s at I2C 0x59 and 0x5a). Numbers are C style; a value may be
@@ -44,7 +46,8 @@
 static const char *const tgt_names[TGT_N] = {
 	[TGT_RXMACRO] = "rxmacro", [TGT_TXMACRO] = "txmacro",
 	[TGT_VAMACRO] = "vamacro", [TGT_SWR0] = "swr0", [TGT_SWR1] = "swr1",
-	[TGT_LPASS_TLMM] = "lpass_tlmm", [TGT_LPASS_AUDIOCC] = "lpass_audiocc",
+	[TGT_LPASS_TLMM] = "lpass_tlmm", [TGT_LPASS_TLMM_SLEW] = "lpass_tlmm_slew",
+	[TGT_LPASS_AUDIOCC] = "lpass_audiocc",
 	[TGT_LPASSCC] = "lpasscc", [TGT_WCD] = "wcd", [TGT_WCDRX] = "wcdrx",
 	[TGT_AW0] = "aw0", [TGT_AW1] = "aw1",
 };

@@ -178,6 +178,92 @@ swr_by_name(struct audiod *d, const char *name)
 	return (NULL);
 }
 
+/*
+ * The WCD9370's probe-time setup, which no run-time trace shows (Linux's
+ * wcd937x_soc_codec_probe: wcd937x_io_init with its efuse-dependent
+ * branches, then the interrupt levels), over its TX device (swr0). The
+ * registers of wcd937x.h.
+ */
+#define	WCD937X_ANA_BIAS			0x3001
+#define	WCD937X_BIAS_VBG_FINE_ADJ		0x3029
+#define	WCD937X_MICB1_TEST_CTL_1		0x306b
+#define	WCD937X_MICB1_TEST_CTL_2		0x306c
+#define	WCD937X_MICB2_TEST_CTL_1		0x306e
+#define	WCD937X_MICB2_TEST_CTL_2		0x306f
+#define	WCD937X_MICB3_TEST_CTL_1		0x3071
+#define	WCD937X_MICB3_TEST_CTL_2		0x3072
+#define	WCD937X_HPH_SURGE_HPHLR_SURGE_EN	0x30e2
+#define	WCD937X_SLEEP_CTL			0x3103
+#define	WCD937X_LDORXTX_CONFIG			0x312a
+#define	WCD937X_HPH_NEW_INT_RDAC_GAIN_CTL	0x3132
+#define	WCD937X_HPH_NEW_INT_RDAC_HD2_CTL_L	0x3133
+#define	WCD937X_HPH_NEW_INT_RDAC_HD2_CTL_R	0x3136
+#define	WCD937X_DIGITAL_INTR_LEVEL_0		0x3474
+#define	WCD937X_DIGITAL_EFUSE_REG_16		0x34c0
+#define	WCD937X_DIGITAL_EFUSE_REG_17		0x34c1
+#define	WCD937X_DIGITAL_EFUSE_REG_29		0x34cd
+
+static int
+wcd_upd(struct swr *s, uint16_t reg, uint8_t mask, uint8_t val)
+{
+	uint8_t old = 0;
+	int r;
+
+	if ((r = swr_read(s, s->devnum, reg, &old)) != 0)
+		return (r);
+	return (swr_write(s, s->devnum, reg, (uint8_t)((old & ~mask) |
+	    (val & mask))));
+}
+
+static int
+wcd_init(struct audiod *d)
+{
+	struct swr *s = &d->swr[0];
+	uint8_t v29 = 0, v16 = 0, v17 = 0;
+	int r = 0, i;
+
+	if (s->m == NULL || s->devnum == 0)
+		return (-ENXIO);
+	r |= swr_read(s, s->devnum, WCD937X_DIGITAL_EFUSE_REG_29, &v29);
+	r |= swr_read(s, s->devnum, WCD937X_DIGITAL_EFUSE_REG_16, &v16);
+	r |= swr_read(s, s->devnum, WCD937X_DIGITAL_EFUSE_REG_17, &v17);
+	if (v16 == 0x02 || v17 > 0x09)
+		r |= wcd_upd(s, WCD937X_SLEEP_CTL, 0x0e, v29 & 0x0f);
+	else
+		r |= wcd_upd(s, WCD937X_SLEEP_CTL, 0x0e, 0x0e);
+	r |= wcd_upd(s, WCD937X_SLEEP_CTL, 0x80, 0x80);
+	fma_sleep_ms(1);
+	r |= wcd_upd(s, WCD937X_SLEEP_CTL, 0x40, 0x40);
+	fma_sleep_ms(1);
+	r |= wcd_upd(s, WCD937X_LDORXTX_CONFIG, 0x10, 0x00);
+	r |= wcd_upd(s, WCD937X_BIAS_VBG_FINE_ADJ, 0xf0, 0x80);
+	r |= wcd_upd(s, WCD937X_ANA_BIAS, 0x80, 0x80);
+	r |= wcd_upd(s, WCD937X_ANA_BIAS, 0x40, 0x40);
+	fma_sleep_ms(10);
+	r |= wcd_upd(s, WCD937X_ANA_BIAS, 0x40, 0x00);
+	r |= wcd_upd(s, WCD937X_HPH_SURGE_HPHLR_SURGE_EN, 0xff, 0xd9);
+	r |= wcd_upd(s, WCD937X_MICB1_TEST_CTL_1, 0xff, 0xfa);
+	r |= wcd_upd(s, WCD937X_MICB2_TEST_CTL_1, 0xff, 0xfa);
+	r |= wcd_upd(s, WCD937X_MICB3_TEST_CTL_1, 0xff, 0xfa);
+	r |= wcd_upd(s, WCD937X_MICB1_TEST_CTL_2, 0x38, 0x00);
+	r |= wcd_upd(s, WCD937X_MICB2_TEST_CTL_2, 0x38, 0x00);
+	r |= wcd_upd(s, WCD937X_MICB3_TEST_CTL_2, 0x38, 0x00);
+	/* the bandgap +5 mV for the Tanggu SMIC part */
+	if (v16 == 0x01)
+		r |= wcd_upd(s, WCD937X_BIAS_VBG_FINE_ADJ, 0xf0, 0xb0);
+	else if (v16 == 0x02) {
+		r |= wcd_upd(s, WCD937X_HPH_NEW_INT_RDAC_HD2_CTL_L, 0x1f, 0x04);
+		r |= wcd_upd(s, WCD937X_HPH_NEW_INT_RDAC_HD2_CTL_R, 0x1f, 0x04);
+		r |= wcd_upd(s, WCD937X_BIAS_VBG_FINE_ADJ, 0xf0, 0xb0);
+		r |= wcd_upd(s, WCD937X_HPH_NEW_INT_RDAC_GAIN_CTL, 0xf0, 0x50);
+	}
+	for (i = 0; i < 3; i++)		/* wcd937x_regmap_irq_chip.num_regs */
+		r |= swr_write(s, s->devnum, WCD937X_DIGITAL_INTR_LEVEL_0 + i, 0);
+	fma_log("wcd: init (efuse 16 %#x, 17 %#x, 29 %#x)%s", v16, v17, v29,
+	    r ? ": with errors" : "");
+	return (r ? -EIO : 0);
+}
+
 /* "init swr1", "enum swr0 3", "stream swr1 on 1:3 2:1", "dump swr0" */
 static int
 cb_swr(void *ctx, const char *what)
@@ -191,6 +277,8 @@ cb_swr(void *ctx, const char *what)
 	snprintf(buf, sizeof(buf), "%s", what);
 	for (p = strtok(buf, " "); p != NULL && n < 12; p = strtok(NULL, " "))
 		w[n++] = p;
+	if (n == 1 && strcmp(w[0], "wcd-init") == 0)
+		return (wcd_init(d));
 	if (n < 2 || (s = swr_by_name(d, w[1])) == NULL)
 		return (-EINVAL);
 	if (s->m == NULL)

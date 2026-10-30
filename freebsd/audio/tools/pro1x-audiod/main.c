@@ -74,6 +74,7 @@ static const struct { uint64_t pa; size_t len; } wtab[TGT_NMMIO] = {
 	[TGT_SWR0] = { 0x0a740000, 0x10000 },
 	[TGT_SWR1] = { 0x0a610000, 0x10000 },
 	[TGT_LPASS_TLMM] = { 0x0a7c0000, 0x20000 },
+	[TGT_LPASS_TLMM_SLEW] = { 0x0a950000, 0x10000 },
 	[TGT_LPASS_AUDIOCC] = { 0x0a6a9000, 0x1000 },
 	[TGT_LPASSCC] = { 0x0a7e0000, 0x12000 },
 };

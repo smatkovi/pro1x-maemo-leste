@@ -234,7 +234,8 @@ struct seq {
 /* targets of register lines (README, "The sequences") */
 enum {
 	TGT_RXMACRO, TGT_TXMACRO, TGT_VAMACRO, TGT_SWR0, TGT_SWR1,
-	TGT_LPASS_TLMM, TGT_LPASS_AUDIOCC, TGT_LPASSCC, TGT_NMMIO,
+	TGT_LPASS_TLMM, TGT_LPASS_TLMM_SLEW, TGT_LPASS_AUDIOCC, TGT_LPASSCC,
+	TGT_NMMIO,
 	TGT_WCD = TGT_NMMIO,	/* the WCD9370's registers (SoundWire, swr0) */
 	TGT_WCDRX,		/* its RX device's (swr1): SCP, DPn */
 	TGT_AW0, TGT_AW1,	/* the AW87339s, I2C 0x59, 0x5a */

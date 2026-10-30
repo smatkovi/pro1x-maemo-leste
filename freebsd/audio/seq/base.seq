@@ -1,0 +1,54 @@
+# The sections of the Pro1X's sound that only Linux's code and the device
+# tree can give (no run-time trace shows them); tools/trace2seq.py puts
+# them first in pro1x-audio.seq, in front of what the Leste trace gives
+# (freebsd/audio/README.md, "The sequences"). Alone, this file brings no
+# codec path up: the ADSP's side runs, nothing is heard.
+
+[power]
+# The WCD9370's rails (sm6115-fxtec-pro1x.dts: vdd-buck L14A, vdd-rxtx and
+# vdd-px L9A, vdd-mic-bias L22A), at the RPM with the device tree's
+# minimum voltages (qcom_dsp's hw.qcom_rpm.regulator), as wcd937x_probe
+# enables them (devm_regulator_bulk_get_enable)
+rail l14 on
+rail l9 on
+rail l22 on
+# its reset, gpio 92 active low (reset-gpios): wcd937x_reset asserts it
+# for 20-30 us and releases it
+gpio 92 0
+udelay 30
+gpio 92 1
+udelay 30
+mark the WCD9370 powered and out of reset
+
+[pins]
+# The LPASS LPI pins of the device tree's default states
+# (lpass_tx_swr_active, lpass_rx_swr_active on the TX/RX macros,
+# lpass_dmic23_active on the VA macro), written as pinctrl-lpass-lpi.c's
+# lpi_gpio_set_mux and lpi_config_set write them: per pin a CFG register
+# at 0x1000 * pin (pull 1:0, function 5:2, drive (mA / 2 - 1) 8:6, output
+# enable 9), function 1 being the first of pinctrl-sm6115-lpass-lpi.c's
+# list; the slew rates in the second window at 0xa000, two bits per
+# SoundWire pin (its slew_offset). The block is clocked by the DCODEC vote
+# (the node's "audio" clock), which comes before this.
+# gpio0 swr_tx_clk: 10 mA, no bias; gpio1-2 swr_tx_data: 10 mA, bus hold
+u lpass_tlmm 0x0000 0x3ff 0x104
+u lpass_tlmm 0x1000 0x3ff 0x106
+u lpass_tlmm 0x2000 0x3ff 0x106
+# gpio3 swr_rx_clk; gpio4-5 swr_rx_data
+u lpass_tlmm 0x3000 0x3ff 0x104
+u lpass_tlmm 0x4000 0x3ff 0x106
+u lpass_tlmm 0x5000 0x3ff 0x106
+# slew rate 3 for gpio0-5 (offsets 0, 2, 4, 8, 10, 12)
+u lpass_tlmm_slew 0xa000 0x3f3f 0x3f3f
+# gpio8 dmic23_clk: 8 mA, output high (the value first, then OE); gpio9
+# dmic23_data: 8 mA, input
+w lpass_tlmm 0x8004 0x2
+u lpass_tlmm 0x8000 0x3ff 0x2c4
+u lpass_tlmm 0x9000 0x3ff 0x0c4
+
+[volume]
+# The master volume as the RX macro's digital gain of both interpolators
+# (lpass-rx-macro.c: "RX_RX0 Digital Volume" CDC_RX_RX0_RX_VOL_CTL 0x414,
+# RX1 0x494, signed dB): $vol_db from the mixer's volume (backend.c)
+w rxmacro 0x414 $vol_db
+w rxmacro 0x494 $vol_db

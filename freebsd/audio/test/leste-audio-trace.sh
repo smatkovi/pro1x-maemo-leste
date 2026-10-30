@@ -337,6 +337,8 @@ fi
 	echo "# soundwire: $(ls $D/soundwire 2> /dev/null | tr '\n' ' ') $(ls $D/soundwire/master-* 2> /dev/null | tr '\n' ' ')"
 	echo "# events: $(for e in $EVENTS; do [ -e $T/events/$e ] && printf '%s ' $e; done)"
 	echo "# controls: $(amixer -c "$card" controls 2> /dev/null | wc -l)"
+	echo "# tlmm gpio base: $(sed -n 's/^gpiochip[0-9]*: GPIOs \([0-9]*\)-.*500000\.pinctrl.*/\1/p' \
+	    $D/gpio 2> /dev/null | head -1)"
 	echo "--- amixer contents (before)"
 	amixer -c "$card" contents 2> /dev/null
 	echo "--- state (idle, before)"
