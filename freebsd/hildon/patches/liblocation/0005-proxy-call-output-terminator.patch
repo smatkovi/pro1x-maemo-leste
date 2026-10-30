@@ -4,7 +4,8 @@ output arguments and another G_TYPE_INVALID. The calls of location-ui's
 followed on the stack as the first output's type: on FreeBSD/arm64 that
 was no G_TYPE_INVALID, and every dialog request failed ("Too few arguments
 in reply") although location-ui showed it. Leste's build has the same
-calls; there the stack apparently held a zero.
+calls (fixed there in patches/fixes/liblocation.patch); its own package
+failed the same way under qemu in a chroot of Leste's image.
 
 --- a/src/location-gpsd-control.c
 +++ b/src/location-gpsd-control.c
