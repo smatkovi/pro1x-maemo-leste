@@ -99,7 +99,7 @@ osso-addressbook|runs (VM: All contacts, through D-Bus as Hildon starts it; Tele
 osso-abook|runs (VM, the address book)
 modest|runs (VM: the account setup wizard, through D-Bus)
 sphone|runs (VM: against pro1x-modemd and a simulated modem: a call in answered and ended, one dialled, SMS in and out, logged in rtcom-eventlogger; calls in landscape; 3: the DTMF keypad as SendTones, the Speaker button through route-pro1x; with pro1x-modem 1.1 for calls only, as on Leste: the SMS are Conversations')
-conversations|runs (VM: SMS in and out through telepathy-ring on pro1x-modemd and a simulated modem: the notification, the overview, the chat, a reply sent, logged in rtcom-eventlogger and no longer pending once sent (0001); started in the background by hildon-session)
+conversations|runs (VM: SMS in and out through telepathy-ring on pro1x-modemd and a simulated modem: the notification, the overview, the chat, a reply sent, logged in rtcom-eventlogger and no longer pending once sent (0001); started in the background by hildon-session, its launcher's child ending with it (0002))
 telepathy-ring|runs (VM: the account ring/tel/account0 from its Mission Control plugin, connected to pro1x-modemd; SMS only (0002), calls stay with sphone)
 nomweather|runs (VM: Vienna's forecast from the network)
 fahrplan2|runs (VM: the backend, stations)

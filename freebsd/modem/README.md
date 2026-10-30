@@ -497,6 +497,13 @@ telepathy-glib's message mixin never fills (it passes the token as
 `MessageSent`'s argument only): no `message-token` header, and every
 report was "the original message for this delivery report was not found".
 It takes the sent token now. Leste's Conversations has the same code.
+**Its launcher** (`0002`): `conversations` starts `conversations_qml` and
+waits; Linux kills the child with the launcher (`PR_SET_PDEATHSIG`), on
+FreeBSD it outlived it. hildon-session ends the background instance by
+ending the launcher, and X stays for the next desktop (pro1x-desktop): the
+old instance would have stayed on the dead session bus, and the next
+session's launcher only woken it over its socket, every 2 s, with no SMS
+received. FreeBSD's `procctl(PROC_PDEATHSIG_CTL)` does the same now.
 
 **Tried in the VM** (`test/vm-conversations.sh`, freebsd/vm; FreeBSD's
 telepathy-mission-control installed, telepathy-ring's files below
@@ -519,7 +526,10 @@ button (`bsd-conversations-sent.png`): `SendMessage` from ring, at the
 modem `Raw-Send` to the sender with the text, the event outgoing with
 the message's path as `message-token` and its pending flag cleared once
 the modem had sent it; refused by the network (`fail-sends 1`): the
-event's permanent error flag. A call coming in while ring is connected:
+event's permanent error flag. The launcher ended (as hildon-session ends
+it): `conversations_qml` gone with it at once, both started again by the
+session's respawn, the next SMS received and logged. A call coming in
+while ring is connected:
 sphone's call window (`bsd-conversations-call-in.png`), the call
 untouched until the far end hung up. Doing it again:
 

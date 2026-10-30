@@ -17,9 +17,10 @@
 # test runs (back at stop).
 #   start       the policy, the bus, the simulated modem (PIN 7395 in the
 #               PIN file; Raw Send answered after 1.5 s, as a network
-#               does), pro1x-modemd, the Hildon session (Mission Control
-#               and telepathy-ring with their debug logs in /tmp/conv),
-#               sphone for the calls
+#               does), pro1x-modemd, the Hildon session, sphone for the
+#               calls; DEBUG=1: Mission Control's and telepathy-ring's
+#               debug logs in /tmp/conv (mc.log, ring.log; GLib's debug
+#               messages on for the whole session)
 #   accounts    Mission Control's accounts and ring's connection
 #   shot NAME   the screen as /root/shots/NAME.xwd
 #   ctl CMD     a command to the simulated modem (fakemodem.py)
@@ -72,9 +73,12 @@ start)
 	sleep 15
 	umask 022
 	# the session (and its bus, so also what the bus starts: Mission
-	# Control, telepathy-ring) with the test's libraries and debug logs
-	PRO1X_TRY=1 LD_LIBRARY_PATH=$T/lib MC_DEBUG=all MC_LOGFILE=$F/mc.log \
-	    RING_DEBUG=all MODEM_DEBUG=all RING_LOGFILE=$F/ring.log \
+	# Control, telepathy-ring) with the test's libraries
+	dbg=
+	[ -n "${DEBUG:-}" ] && dbg="G_MESSAGES_DEBUG=all MC_DEBUG=all MC_LOGFILE=$F/mc.log
+	    RING_DEBUG=all MODEM_DEBUG=all RING_LOGFILE=$F/ring.log"
+	# shellcheck disable=SC2086
+	env PRO1X_TRY=1 LD_LIBRARY_PATH=$T/lib $dbg \
 	    daemon -f -o "$F/session.log" -p "$F/session.pid" sh "$T/hildon-session"
 	sleep "${WAIT:-60}"
 	hd=$(pgrep -x hildon-desktop | head -1)

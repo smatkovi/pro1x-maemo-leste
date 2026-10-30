@@ -293,7 +293,7 @@ licence statement. The sources are the pinned revisions in the table and
 | clutter-0.8 | 0.8.2.79 | LGPL20+ | [clutter-0.8](https://github.com/maemo-leste/clutter-0.8) | `ead56341b457` | builds |
 | codelockui | 1.6.20 | LGPL20+ | [codelockui](https://github.com/maemo-leste/codelockui) | `07c6654ae546` | builds |
 | comics-daily | 0.8.1.leste1 | GPLv3 | [comics-daily](https://github.com/maemo-leste-extras/comics-daily) | `54b5cd997f29` | runs (VM) |
-| conversations | 0.8.12_2 | UNKNOWN | [conversations](https://github.com/maemo-leste/conversations) | `f4ccce53bb08` | runs (VM: SMS in and out through telepathy-ring on pro1x-modemd and a simulated modem: the notification, the overview, the chat, a reply sent, logged in rtcom-eventlogger and no longer pending once sent (0001); started in the background by hildon-session) |
+| conversations | 0.8.12_2 | UNKNOWN | [conversations](https://github.com/maemo-leste/conversations) | `f4ccce53bb08` | runs (VM: SMS in and out through telepathy-ring on pro1x-modemd and a simulated modem: the notification, the overview, the chat, a reply sent, logged in rtcom-eventlogger and no longer pending once sent (0001); started in the background by hildon-session, its launcher's child ending with it (0002)) |
 | coolkbd | 0 | UNKNOWN | [coolkbd](https://git.maemo.org/leste-extras/coolkbd) | `194eb909c3b4` | builds |
 | countdowntimer | 0.6.1.2 | GPLv2+ | [countdowntimer](https://git.maemo.org/leste-extras/countdowntimer) | `ddc1f7027af9` | builds |
 | desktop-cmd-exec | 1.22 | GPLv2+ | [desktop-cmd-exec](https://github.com/maemo-leste-extras/desktop-cmd-exec) | `e3ac73e7b031` | builds |

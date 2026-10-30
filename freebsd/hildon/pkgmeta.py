@@ -490,7 +490,9 @@ REVISION = {
     'rtcom-eventlogger': 1,
     # 2026-10-29: its texts below /usr/local/share/locale (as above); 2
     # (2026-10-30): SMS through telepathy-ring and Mission Control
-    # (RUNTIME), started in the background by hildon-session
+    # (RUNTIME), started in the background by hildon-session; sent SMS no
+    # longer pending for ever (0001); the launcher's child ends with it
+    # (0002)
     'conversations': 2,
     # 2026-10-30: the lock in /var/run (0003), location-ui's dialogs asked
     # when it runs, without MCE (0004), the dialogs' answers (0005, 0006)
