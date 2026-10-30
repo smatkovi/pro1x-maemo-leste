@@ -218,7 +218,7 @@ afe_pkt_vote(uint8_t *pkt, uint32_t block, const char *client, bool vote,
  * *rsp, *rsplen hold it; a basic result for the command then only ends
  * the wait if it reports an error: both kernels wait for the answer
  * itself, e.g. the vote's handle). 0 done; > 0 the ADSP's status; < 0 an
- * errno (-ETIMEDOUT, or -ENODATA: only a basic success, no answer).
+ * errno (-ETIMEDOUT, or -ENOMSG: only a basic success, no answer).
  */
 static int
 afe_txn(struct afe *a, const uint8_t *pkt, size_t len, uint32_t want_opcode,
@@ -265,7 +265,7 @@ afe_txn(struct afe *a, const uint8_t *pkt, size_t len, uint32_t want_opcode,
 		fma_log("afe: from service %u: opcode %#x token %#x (%d bytes)",
 		    buf[4], le32dec_(buf + 16), le32dec_(buf + 12), n);
 	}
-	return (basic_ok ? -ENODATA : -ETIMEDOUT);
+	return (basic_ok ? -ENOMSG : -ETIMEDOUT);
 }
 
 static int
@@ -412,7 +412,7 @@ afe_vote(struct afe *a, uint32_t block, const char *client, uint32_t *handle)
 	*handle = 0;
 	r = afe_txn(a, pkt, len, AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST,
 	    rsp, &rlen);
-	if (r == -ENODATA) {
+	if (r == -ENOMSG) {
 		fma_log("afe: block %u: the vote acknowledged, but no handle "
 		    "came", block);
 		return (0);
