@@ -204,9 +204,10 @@ for e in $list; do
 	# the libraries its programs and libraries link, by the Arch packages
 	# that have them (those built here, without pacman, are left out)
 	deps=" ${EXTRA[$name]:-} "
+	ldconfig -p > "$B/ld.cache"
 	while IFS= read -r f; do
 		for lib in $(readelf -d "$f" 2> /dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
-			path=$(ldconfig -p | sed -n "s|^\t$lib (.*) => ||p" | head -1)
+			path=$(awk -v l="$lib" '$1 == l && !p { print $NF; p = 1 }' "$B/ld.cache")
 			[ -n "$path" ] || continue
 			owner=$(pacman -Qqo "$path" 2> /dev/null) || continue
 			case $deps in *" $owner "*) ;; *) deps="$deps$owner " ;; esac
@@ -214,7 +215,9 @@ for e in $list; do
 	done < <(find "$PR" -type f \( -perm -u+x -o -name '*.so*' \) -exec sh -c \
 	    'head -c4 "$1" | grep -q ELF' sh {} \; -print)
 	# GConf's schemas, registered as their packages do on Leste
-	schemas=$(cd "$PR" && find etc/gconf/schemas -name '*.schemas' 2> /dev/null | sed 's|^|/|' | tr '\n' ' ')
+	schemas=
+	[ ! -d "$PR/etc/gconf/schemas" ] ||
+	    schemas=$(cd "$PR" && find etc/gconf/schemas -name '*.schemas' | sed 's|^|/|' | tr '\n' ' ')
 	P=$B/pkg/$name
 	rm -rf "$P"
 	install -d -o alarm -g alarm "$P"
