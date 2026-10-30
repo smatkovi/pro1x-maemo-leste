@@ -299,16 +299,17 @@ print("--- recorded: %d frames, peak left %d right %d" % (len(l),
 	echo "--- after: $(pmstate)"
 }
 
-# Linux's jack: the card's jack controls and its input device
+# Linux's jack: the card's jack controls (interface CARD, which amixer
+# does not take by default) and its input device
 jack_state() {
-	echo "--- jack controls: $(amixer -c "$card" cget "name=Headphone Jack" \
+	echo "--- jack controls: $(amixer -c "$card" cget "iface=CARD,name=Headphone Jack" \
 	    2> /dev/null | sed -n 's/.*: values=//p') (headphone), $(amixer -c \
-	    "$card" cget "name=Mic Jack" 2> /dev/null | sed -n 's/.*: values=//p') (mic)"
+	    "$card" cget "iface=CARD,name=Mic Jack" 2> /dev/null | sed -n 's/.*: values=//p') (mic)"
 }
 jack_wait() {	# on|off, up to 15 s for Linux to see it
 	i=0
 	while [ $i -lt 30 ]; do
-		v=$(amixer -c "$card" cget "name=Headphone Jack" 2> /dev/null |
+		v=$(amixer -c "$card" cget "iface=CARD,name=Headphone Jack" 2> /dev/null |
 		    sed -n 's/.*: values=//p')
 		[ "$v" = "$1" ] && return 0
 		sleep 0.5

@@ -376,9 +376,9 @@ Leste and MeeGo on 7.1.0-pro1x.1, display off, on the battery):
 
 What it shows: whether the RPM takes the SoC into vlow/vmin once the MPM
 hands it over (patch 0011), and whether the RTC alarm (PMIC RTC over the
-SPMI arbiter, an MPM pin) wakes it again. The test runs on 7.1.0-pro1x.8
-(0001-0026: everything of pro1x.7, plus the loudspeaker pop change of
-`docs/audio.md`).
+SPMI arbiter, an MPM pin) wakes it again. The test runs on 7.1.0-pro1x.9
+(0001-0027: everything of pro1x.7, plus the loudspeaker pop change and
+the headset jack's thresholds of `docs/audio.md`).
 
 Before the flash, on the old kernel: the reference listening of
 `docs/audio.md` (its step 0). Then the kernel on the phone, from the build
@@ -386,11 +386,11 @@ host (Leste, over USB):
 
     WORK=/run/media/sebastian/2e638a7f-26db-4e89-9446-81d688464798/pro1x-leste
     PHONE="ssh ... root@172.16.42.1" \
-        WORK=$WORK OUT=$WORK/out-pro1x.8 bash scripts/65-kernel-update.sh prepare
-    PHONE=... WORK=$WORK OUT=$WORK/out-pro1x.8 bash scripts/65-kernel-update.sh flash
+        WORK=$WORK OUT=$WORK/out-pro1x.9 bash scripts/65-kernel-update.sh prepare
+    PHONE=... WORK=$WORK OUT=$WORK/out-pro1x.9 bash scripts/65-kernel-update.sh flash
 
 then a reboot with the owner there (trial boot, `pro1x-boot-trial`
-confirms it), `uname -r` 7.1.0-pro1x.8, Wi-Fi up, and its address. The
+confirms it), `uname -r` 7.1.0-pro1x.9, Wi-Fi up, and its address. The
 loudspeaker test (`docs/audio.md`, steps 1-6) fits in after the RPM test,
 with the cable in again.
 

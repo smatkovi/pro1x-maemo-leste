@@ -140,9 +140,10 @@ enum { MUX_CTL_AUTO, MUX_CTL_IN2P, MUX_CTL_IN3P, MUX_CTL_IN4P,
 
 /*
  * The button thresholds: the Pro1X's vendor kernel (bengal.c's
- * def_wcd_mbhc_cal: 75, 150, 237 mV, then 500); Leste's device tree has
- * no qcom,mbhc-buttons-vthreshold-microvolt, so its Linux uses 500 mV for
- * all eight.
+ * def_wcd_mbhc_cal: 75, 150, 237 mV, then 500). Leste's device tree had
+ * no qcom,mbhc-buttons-vthreshold-microvolt up to 7.1.0-pro1x.8, so its
+ * Linux wrote 0 mV to all eight (500000 "mV", truncated); patch 0027 has
+ * the vendor's values.
  */
 static const unsigned btn_high_mv[8] = { 75, 150, 237, 500, 500, 500, 500,
     500 };

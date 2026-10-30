@@ -152,7 +152,7 @@ the same address). Everything below runs there.
 
 ### 2. Kernel side
 
-    uname -r                                     # 7.1.0-pro1x.8 (or the kernel flashed)
+    uname -r                                     # 7.1.0-pro1x.9 (or the kernel flashed)
     findmnt /usr/lib/modules/$(uname -r)         # bound from /host/pro1x-modules/...
     lsmod | grep -E '^(ipa|qcom_q6v5_pas|rmtfs_mem|rmnet) '
     sudo dmesg | grep -E 'ipa|remoteproc|rmtfs'

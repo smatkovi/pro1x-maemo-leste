@@ -307,9 +307,11 @@ turns out a headset), buttons (short press, held after 400 ms). Not
 ported: impedance detection (a line-out counts as a headphone), moisture
 detection (off in Linux's default as well), the US/EU switch (the Pro1X
 has no `us-euro` GPIO). The button thresholds are the vendor kernel's
-(`bengal.c` `def_wcd_mbhc_cal`: 75, 150, 237, 500 mV): Leste's device tree
-has no `qcom,mbhc-buttons-vthreshold-microvolt`, so its Linux takes 500 mV
-for all eight (it logs "missing qcom,mbhc-buttons-vthreshold-microvolt").
+(`bengal.c` `def_wcd_mbhc_cal`: 75, 150, 237, 500 mV). Leste's device tree
+had no `qcom,mbhc-buttons-vthreshold-microvolt` up to 7.1.0-pro1x.8: its
+Linux logged "missing qcom,mbhc-buttons-vthreshold-microvolt" and took
+500000 "mV" for all eight, which the registers truncate to 0 mV. Patch 0027
+(pro1x.9) gives it the vendor's values (`docs/audio.md`).
 
 FreeBSD has no driver for the masters' interrupts, so the daemon reads
 `DIGITAL_INTR_STATUS_0` over SoundWire every 100 ms (one command), which
@@ -361,12 +363,12 @@ the jack on the `WCD Capture` link (`qcom_snd_wcd_jack_setup` for
 `TX_CODEC_DMA_TX_3`: the "Headset Jack" input device, the controls
 "Headphone Jack" and "Mic Jack", the buttons as above), `wcd937x` starts
 its MBHC with the defaults above, and its interrupts come over SoundWire
-as described. Whether it works on the phone is not known: the UCM files
-have no `JackControl`, so PulseAudio does not switch by it (it would need
-`JackControl "Headphone Jack"` in the Headphones device and a headset mic
-device with `JackControl "Mic Jack"`), and the device tree lacks the
-button thresholds (`qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000
-237000 500000 500000 500000 500000 500000>`, the vendor's). The trace's
+as described. Since 7.1.0-pro1x.9 (patch 0027) the device tree has the
+vendor's button thresholds, and the UCM profile's patch
+(`patches/nixos-audio/0002-ucm-headset-jack.patch`) has PulseAudio follow
+the jack (`JackControl "Headphone Jack"` on Headphones, a Headset
+microphone device with `JackControl "Mic Jack"`); `docs/audio.md` has both
+and the test. Whether it works on the phone is not known yet. The trace's
 `jack` scenario answers it: it prints whether Linux saw the removal and
 the insertion (the "Headphone Jack" control), the input device, and the
 MBHC's writes.

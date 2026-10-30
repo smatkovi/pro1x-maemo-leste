@@ -17,7 +17,7 @@ there, every boot image variant that was tested: [docs/HANDOFF.md](docs/HANDOFF.
 | Bluetooth | controller up | linux-firmware 2025 (`qca/cmbtfw12.tlv`); pairing not tested |
 | Modem in oFono | detected; mobile data prepared | oFono 2.18 `+pro1x1` (`scripts/49-mobile-data.sh`) sets up the IPA data path itself (DPM port, WDA format, `rmnet0..3` with MAPv4 checksums); calls/SMS/data untested (no SIM), test steps in `docs/leste-mobile-data.md` |
 | Loudspeaker, microphone | works | NixOS UCM profile, PulseAudio 48 kHz, suspend after 5 min (pops; fix in 7.1.0-pro1x.8 untested, `docs/audio.md`) |
-| Earpiece, headphones | untested | |
+| Earpiece, headphones | untested | headset jack prepared: the MBHC's button thresholds (kernel patch 0027, 7.1.0-pro1x.9), PulseAudio switching to headphones and a headset's microphone by the jack (`patches/nixos-audio/0002-ucm-headset-jack.patch`, on the phone with `scripts/64-ucm-install.sh`); test in `docs/audio.md` |
 | Battery, charging | works | upower |
 | Accelerometer, light, proximity, compass | works | ADSP sensors: hexagonrpcd + libssc + iio-sensor-proxy 3.9 |
 | Step counter | works (count while walking untested) | the ADSP's pedometer: libssc patch + `pro1x-steps` on D-Bus (`org.pro1x.Steps`) |
@@ -267,6 +267,7 @@ would otherwise lose its slot after seven starts.
 | `scripts/55-deploy-rootfs.sh` | device, root | first deployment: shrink, stream, grow again (additive) |
 | `scripts/56-update-rootfs.sh` | device, root | updates as rsync delta (`--inplace`) |
 | `scripts/60-flash-slot-b.sh` | device, root | **writes**: boot image into the inactive slot |
+| `scripts/64-ucm-install.sh` | build host | the UCM profile with the headset jack into every Linux system on the phone, the old one saved (`restore`) ([docs/audio.md](docs/audio.md)) |
 | `scripts/65-kernel-update.sh` | build host | a new kernel for all Linux systems on the phone: modules to `/host/pro1x-modules`, initramfs, boot image (`prepare`); **writes** boot_b only with `flash` ([docs/kernel-update.md](docs/kernel-update.md)) |
 | `scripts/70-switch-slot.sh` | PC | switch slots via fastboot |
 | `scripts/80-switch-and-connect.sh` | PC, detached | waits for fastboot, switches, boots, sets up the USB link, tests SSH |

@@ -238,7 +238,7 @@ only the device run proves it. If it fails (TX_MSG_SENT never comes, or
 no RX), a BAM pipe pair is the fallback: the BAM window is already in
 `/dev/qcom_lpass`, the descriptors would need a physically contiguous
 buffer from the kernel, and the stream ID of the BAM (the Linux run of
-pro1x.8 logs it if it is blocked, `docs/fm-radio.md`).
+pro1x.9 logs it if it is blocked, `docs/fm-radio.md`).
 
 ### 3b: the ADSP's side (`afe.c`)
 
