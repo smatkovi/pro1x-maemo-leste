@@ -83,8 +83,20 @@ struct pro1x_pcm_status {
 	uint64_t	paddr, dspaddr;
 };
 
+/*
+ * The headset jack as the daemon sees it (its MBHC): the driver keeps the
+ * plug for sysctl and passes the event to devd (devctl_notify: system
+ * PRO1X, subsystem audio, type JACK with "plug=headset", or BUTTON with
+ * "event=button 0x1 press").
+ */
+struct pro1x_pcm_jack {
+	uint32_t	plug;		/* 0 none, 1 headphone, 2 headset, ... */
+	char		event[60];	/* "jack headset", "button 0x1 press" */
+};
+
 #define	PRO1X_PCM_ADVANCE	_IOWR('P', 1, struct pro1x_pcm_advance)
 #define	PRO1X_PCM_FAIL		_IOWR('P', 2, struct pro1x_pcm_advance)
 #define	PRO1X_PCM_STATUS	_IOWR('P', 3, struct pro1x_pcm_status)
+#define	PRO1X_PCM_JACK		_IOW('P', 4, struct pro1x_pcm_jack)
 
 #endif /* _PRO1X_PCM_H_ */

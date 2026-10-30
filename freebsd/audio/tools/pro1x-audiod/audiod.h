@@ -179,6 +179,7 @@ struct stream {
 	uint16_t	copp;
 	uint16_t	afe_port;	/* the back end's */
 	unsigned	afe_idx;
+	int		be;		/* BE_*, as of the start */
 	uint32_t	hw;		/* the kernel's count of blocks done */
 	uint32_t	ready;		/* playback: blocks filled from hw on */
 	uint32_t	submitted;	/* blocks handed to the ADSP */
@@ -265,6 +266,8 @@ struct codec_io {
 	void	(*delay_us)(void *ctx, uint32_t us);
 	void	*ctx;
 	int	trace;		/* log every action */
+	/* a line to leave out (the jack holds its block): true */
+	bool	(*skip)(void *ctx, const struct seq_line *l);
 	/* variables for $name values: the volume's */
 	int	(*var)(void *ctx, const char *name, uint32_t *val);
 };
@@ -304,6 +307,39 @@ int swr_read(struct swr *w, uint8_t dev, uint16_t reg, uint8_t *val);
 int swr_stream(struct swr *w, const uint8_t *ports, unsigned nports,
     const uint8_t *chmask, bool on);
 void swr_dump(struct swr *w, const char *why);
+
+/* --- the headset jack (mbhc.c): the WCD9370's MBHC ---------------------- */
+
+enum { MBHC_PLUG_NONE, MBHC_PLUG_HEADPHONE, MBHC_PLUG_HEADSET,
+	MBHC_PLUG_HIGH_HPH, MBHC_PLUG_GND_MIC_SWAP };
+
+struct mbhc_io {
+	int	(*read)(void *ctx, uint16_t reg, uint8_t *val);	/* the WCD */
+	int	(*write)(void *ctx, uint16_t reg, uint8_t val);
+	void	(*sleep_ms)(void *ctx, unsigned ms);
+	uint64_t (*now_ms)(void *ctx);
+	void	(*report)(void *ctx, int plug);
+	void	(*button)(void *ctx, unsigned mask, bool pressed);
+	void	*ctx;
+};
+
+struct mbhc {
+	const struct mbhc_io *io;
+	bool		up, in_swch, is_btn_press, extn_cable_hph_rem;
+	bool		correcting, c_spl_hs, long_reported;
+	int		plug;		/* MBHC_PLUG_* reported */
+	int		c_plug, c_hs_thr, c_micbias_mv, c_swap_cnt, last_mv;
+	uint8_t		irq_enabled;	/* DIGITAL_INTR_STATUS_0 bits watched */
+	unsigned	micb_ref, buttons;	/* bit n: SND_JACK_BTN_n */
+	uint64_t	t_report, c_until, c_next, long_at;
+	unsigned	errors, polls, irqs, reports, adc_failures;
+};
+
+const char *mbhc_plug_name(int plug);
+int mbhc_adc_mv(unsigned val, int micbias_mv);
+int mbhc_plug_from_mv(int mv, int hph_thr, int hs_thr);
+int mbhc_init(struct mbhc *m);
+int mbhc_tick(struct mbhc *m);	/* < 0 error, 1 an interrupt handled */
 
 /* --- the daemon (backend.c, main.c) ----------------------------------- */
 
@@ -346,7 +382,29 @@ struct audiod {
 	uint16_t	fm_gain;
 	unsigned	blocks_out, blocks_in;
 	struct voice	*voice;
+	/* the jack (backend.c's jack_*) */
+	struct mbhc	mbhc;
+	struct mbhc_io	mbio;
+	bool		jack_enabled;	/* -J turns it off */
+	bool		jack_on;	/* [jack-up] ran, MBHC polled */
+	bool		in_jack_seq;	/* [jack-up]/[jack-down] running */
+	uint32_t	jack_regs[256];	/* target << 24 | reg the jack holds */
+	unsigned	njack_regs;
+	uint8_t		jack_swr;	/* 1 << master the jack holds */
+	int		voice_be;	/* the voice session's mic back end */
+	unsigned	clk_ref[0x20], vote_ref[8];
+	/* events for watchers, devd and evdev (main.c's) */
+	void		(*notify)(struct audiod *, const char *event);
 };
+
+const char *eff_route(struct audiod *d);
+const char *eff_recroute(struct audiod *d);
+int jack_start(struct audiod *d);
+void jack_stop(struct audiod *d);
+void jack_report(void *ctx, int plug);
+void jack_button(void *ctx, unsigned mask, bool pressed);
+int voice_up(struct audiod *d, struct voice *v);
+int voice_down(struct audiod *d, struct voice *v);
 
 int backend_get(struct audiod *d, int be);
 void backend_put(struct audiod *d, int be);

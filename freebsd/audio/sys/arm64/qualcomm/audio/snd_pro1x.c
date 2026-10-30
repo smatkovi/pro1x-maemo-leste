@@ -42,6 +42,7 @@
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/conf.h>
+#include <sys/devctl.h>
 #include <sys/fcntl.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
@@ -131,6 +132,8 @@ struct p1_softc {
 	u_int		mix[SOUND_MIXER_NRDEVICES];
 	uint32_t	recsrc;
 	bool		stopped;
+	uint32_t	jack;		/* the daemon's last plug */
+	char		jack_event[60];
 };
 
 static MALLOC_DEFINE(M_P1, "snd_pro1x", "snd_pro1x");
@@ -601,6 +604,8 @@ p1_ctl_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 	struct p1_softc *sc = cdev->si_drv1;
 	struct pro1x_pcm_advance *a = (struct pro1x_pcm_advance *)data;
 	struct pro1x_pcm_status *s = (struct pro1x_pcm_status *)data;
+	struct pro1x_pcm_jack *j = (struct pro1x_pcm_jack *)data;
+	char ev[80];
 	struct p1_chan *ch;
 	uint32_t i, n;
 	bool ok;
@@ -665,6 +670,20 @@ p1_ctl_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 		mtx_unlock(&sc->lock);
 		CHN_UNLOCK(ch->pc);
 		return (0);
+	case PRO1X_PCM_JACK:
+		j->event[sizeof(j->event) - 1] = '\0';
+		mtx_lock(&sc->lock);
+		sc->jack = j->plug;
+		strlcpy(sc->jack_event, j->event, sizeof(sc->jack_event));
+		mtx_unlock(&sc->lock);
+		if (strncmp(j->event, "jack ", 5) == 0) {
+			snprintf(ev, sizeof(ev), "plug=%s", j->event + 5);
+			devctl_notify("PRO1X", "audio", "JACK", ev);
+		} else {
+			snprintf(ev, sizeof(ev), "event=\"%s\"", j->event);
+			devctl_notify("PRO1X", "audio", "BUTTON", ev);
+		}
+		return (0);
 	default:
 		return (ENOTTY);
 	}
@@ -714,6 +733,7 @@ p1_state_sysctl(SYSCTL_HANDLER_ARGS)
 	struct p1_softc *sc = arg1;
 	struct p1_chan *ch, snap[PRO1X_PCM_NCHAN];
 	struct sbuf sb;
+	char jack[60];
 	bool open;
 	u_int i, dropped;
 	int error;
@@ -723,10 +743,12 @@ p1_state_sysctl(SYSCTL_HANDLER_ARGS)
 	memcpy(snap, sc->ch, sizeof(snap));
 	open = sc->ctl_open;
 	dropped = sc->qdropped;
+	strlcpy(jack, sc->jack_event[0] ? sc->jack_event : "jack unknown",
+	    sizeof(jack));
 	mtx_unlock(&sc->lock);
 	sbuf_new_for_sysctl(&sb, NULL, 512, req);
-	sbuf_printf(&sb, "daemon %s, %u events dropped", open ? "attached" :
-	    "absent", dropped);
+	sbuf_printf(&sb, "daemon %s, %u events dropped, last %s", open ?
+	    "attached" : "absent", dropped, jack);
 	for (i = 0; i < PRO1X_PCM_NCHAN; i++) {
 		ch = &snap[i];
 		if (ch->pc == NULL)

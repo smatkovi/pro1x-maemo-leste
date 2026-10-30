@@ -31,6 +31,12 @@
 #         spk   loudspeakers (HPH + both AW87339)    MultiMedia1 playback
 #         ear   earpiece (EAR PA from RX1, HPHL)     MultiMedia1 playback
 #         mic   built-in microphone (VA DMIC3)       MultiMedia2 capture
+#         jack  the headset jack, by hand: with the card idle, pull the
+#               headphones out and put them in again when told (15 s each;
+#               then, with a headset, press its button): what Linux does to
+#               serve the jack (the bus woken for the WCD9370's interrupt,
+#               the MBHC's detection), and whether its jack detection works
+#               ("Headphone Jack"/"Mic Jack" controls, the input device)
 #         probe the sound card unbound and bound again (its components'
 #               probe-time writes; sound may need a reboot afterwards)
 #       output: default /host/audio-trace.txt
@@ -293,6 +299,64 @@ print("--- recorded: %d frames, peak left %d right %d" % (len(l),
 	echo "--- after: $(pmstate)"
 }
 
+# Linux's jack: the card's jack controls and its input device
+jack_state() {
+	echo "--- jack controls: $(amixer -c "$card" cget "name=Headphone Jack" \
+	    2> /dev/null | sed -n 's/.*: values=//p') (headphone), $(amixer -c \
+	    "$card" cget "name=Mic Jack" 2> /dev/null | sed -n 's/.*: values=//p') (mic)"
+}
+jack_wait() {	# on|off, up to 15 s for Linux to see it
+	i=0
+	while [ $i -lt 30 ]; do
+		v=$(amixer -c "$card" cget "name=Headphone Jack" 2> /dev/null |
+		    sed -n 's/.*: values=//p')
+		[ "$v" = "$1" ] && return 0
+		sleep 0.5
+		i=$((i + 1))
+	done
+	return 1
+}
+
+jack() {	# the jack served from idle, by hand
+	echo "=== scenario jack"
+	echo "--- input devices"
+	grep -B1 -A4 -i 'jack' /proc/bus/input/devices 2> /dev/null
+	jack_state
+	wait_idle || echo "--- not idle after 30 s: $(pmstate)"
+	echo 0 > $T/tracing_on
+	echo > $T/trace
+	echo 16384 > $T/buffer_size_kb
+	events 1
+	echo 1 > $T/tracing_on
+	mark "jack start (cold: $(pmstate))"
+	echo ">>> pull the headphones out now (15 s)" > /dev/tty 2> /dev/null
+	mark "jack unplug"
+	jack_wait off && echo "--- Linux saw the removal" ||
+	    echo "--- no removal seen in 15 s (jack detection not working?)"
+	sleep 2
+	jack_state
+	echo ">>> put the headphones (or a headset) in again now (15 s)" > \
+	    /dev/tty 2> /dev/null
+	mark "jack plug"
+	jack_wait on && echo "--- Linux saw the insertion" ||
+	    echo "--- no insertion seen in 15 s"
+	sleep 5		# the detection's 3 s of corrections
+	jack_state
+	snap=/tmp/pro1x-audio-trace.state.$$
+	dump "jack, plugged" > $snap 2>&1
+	echo ">>> a headset: press its button once now (5 s)" > /dev/tty 2> /dev/null
+	mark "jack button"
+	sleep 5
+	wait_idle || mark "jack not idle again after 30 s"
+	mark "jack end ($(pmstate))"
+	echo 0 > $T/tracing_on
+	events 0
+	echo "--- trace"
+	grep -v '^#' $T/trace
+	cat $snap
+	rm -f $snap
+}
+
 probe() {	# the card's components probed again, under the trace
 	echo "=== scenario probe"
 	drv=/sys/bus/platform/drivers/snd-sm8250
@@ -347,6 +411,7 @@ fi
 for sc in $(echo "$scenarios" | tr ',' ' '); do
 	case $sc in
 	hph|spk|ear|mic) scenario $sc >> "$out" 2>&1 ;;
+	jack) jack >> "$out" 2>&1 ;;
 	probe) probe >> "$out" 2>&1 ;;
 	*) echo "unknown scenario $sc" ;;
 	esac

@@ -24,7 +24,9 @@
  * its socket instead (radio_open() and below). The sound is pro1x-fmd's
  * "audio on|off" there (pro1x-fmaudio: the SLIMbus and the DSP's
  * loopback), asked in the radio thread like the rest; FreeBSD has no
- * headphone output behind it yet.
+ * headphone output behind it yet. pro1x-audiod's jack detection
+ * (freebsd/audio) says whether a plug is in: without one the app says to
+ * plug in headphones, their cable being the antenna.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -74,12 +76,13 @@ struct result {
 	unsigned signal;	/* 0..100 */
 	gboolean stereo, rds;
 	char ps[9], rt[65];
+	int jack;		/* 1 a plug in, 0 none, -1 unknown */
 };
 
 static GAsyncQueue *requests;
 static int fd = -1;
 static unsigned freq = BAND_LOW;
-static gboolean muted, busy, opened;
+static gboolean muted, busy, opened, jack_hint;
 static GtkWidget *window, *freq_label, *ps_label, *rt_label, *signal_bar,
 		 *stereo_label, *status_label, *mute_button;
 static GKeyFile *conf;
@@ -254,11 +257,36 @@ static unsigned field(const char *s, const char *key)
 	return p ? strtoul(p + strlen(key), NULL, 10) : 0;
 }
 
+/*
+ * pro1x-audiod's headset jack ("jack": "ok plug=headset watched=1 ..."):
+ * 1 a plug in, 0 none, -1 when nobody watches the jack
+ */
+static int jack_plugged(void)
+{
+	struct sockaddr_un sun = { .sun_family = AF_UNIX };
+	char ans[256];
+	ssize_t n;
+	int s, r = -1;
+
+	g_strlcpy(sun.sun_path, "/var/run/pro1x-audio.sock", sizeof(sun.sun_path));
+	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
+		return -1;
+	if (connect(s, (struct sockaddr *)&sun, sizeof(sun)) == 0 &&
+	    write(s, "jack\n", 5) == 5 && (n = read(s, ans, sizeof(ans) - 1)) > 0) {
+		ans[n] = '\0';
+		if (strstr(ans, " watched=1"))
+			r = strstr(ans, "plug=none") ? 0 : 1;
+	}
+	close(s);
+	return r;
+}
+
 static void status(struct result *r)
 {
 	char ans[256];
 	int err;
 
+	r->jack = jack_plugged();
 	if ((err = fmd("status", ans, sizeof(ans)))) {
 		if (!r->err)
 			r->err = err;
@@ -283,6 +311,8 @@ static gpointer radio_thread(gpointer data)
 	for (;;) {
 		guint v = GPOINTER_TO_UINT(g_async_queue_pop(requests));
 		struct result *r = g_new0(struct result, 1);
+
+		r->jack = -1;
 
 		r->req = (v & 0xf) - 1;
 		switch (r->req) {
@@ -498,6 +528,14 @@ static gboolean result_cb(gpointer data)
 				   : "");
 	else if (r->err)
 		gtk_label_set_text(GTK_LABEL(status_label), strerr(r->err));
+	else if (r->req == POLL && r->jack == 0) {
+		gtk_label_set_text(GTK_LABEL(status_label),
+				   _("Plug in headphones: their cable is the antenna."));
+		jack_hint = TRUE;
+	} else if (r->req == POLL && r->jack == 1 && jack_hint) {
+		gtk_label_set_text(GTK_LABEL(status_label), "");
+		jack_hint = FALSE;
+	}
 	else if (r->req != POLL && r->req != AUDIO_OFF)
 		gtk_label_set_text(GTK_LABEL(status_label), "");
 

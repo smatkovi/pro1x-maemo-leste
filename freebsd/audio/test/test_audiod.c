@@ -1108,6 +1108,262 @@ test_voice(void)
 	printf("voice: done\n");
 }
 
+/* --- the jack: a simulated WCD9370 MBHC ------------------------------------ */
+
+static struct {
+	uint8_t r[0x4000];
+	uint8_t pending;		/* DIGITAL_INTR_STATUS_0 */
+	int mic_pm, hphl_mv;		/* IN2P in per mille of micbias 2, HPH L */
+	uint64_t now;
+	int reports[16], nreports;
+	unsigned btn[16], nbtn;
+	bool btn_down[16];
+} J;
+
+static int
+j_read(void *ctx, uint16_t reg, uint8_t *v)
+{
+	int mux, mv, micb;
+
+	(void)ctx;
+	switch (reg) {
+	case 0x346e:
+		*v = J.pending;
+		return (0);
+	case 0x3126:		/* the ADC's result for the mux's input */
+		mux = (J.r[0x3121] >> 4) & 7;
+		micb = 1000 + (J.r[0x3023] & 0x3f) * 50;
+		/* a divider on the mic line: it follows the bias */
+		mv = mux == 1 ? J.mic_pm * micb / 1000 : mux == 4 ? J.hphl_mv : 0;
+		*v = (uint8_t)(mv * 18000 / (125 * micb));
+		return (0);
+	case 0x3125:		/* ADC complete while enabled */
+		*v = (J.r[0x3120] & 0x08) ? 0x40 : 0;
+		return (0);
+	}
+	*v = J.r[reg & 0x3fff];
+	return (0);
+}
+
+static int
+j_write(void *ctx, uint16_t reg, uint8_t v)
+{
+	(void)ctx;
+	if (reg == 0x3471) {
+		J.pending &= (uint8_t)~v;
+		return (0);
+	}
+	J.r[reg & 0x3fff] = v;
+	return (0);
+}
+
+static void j_sleep(void *ctx, unsigned ms) { (void)ctx; J.now += ms ? ms : 1; }
+static uint64_t j_now(void *ctx) { (void)ctx; return (J.now); }
+static void
+j_report(void *ctx, int plug)
+{
+	(void)ctx;
+	if (J.nreports < 16)
+		J.reports[J.nreports++] = plug;
+}
+static void
+j_button(void *ctx, unsigned mask, bool pressed)
+{
+	(void)ctx;
+	if (J.nbtn < 16) {
+		J.btn_down[J.nbtn] = pressed;
+		J.btn[J.nbtn++] = mask;
+	}
+}
+
+static void
+j_ticks(struct mbhc *m, unsigned ms)
+{
+	uint64_t end = J.now + ms;
+
+	while (J.now < end) {
+		mbhc_tick(m);
+		J.now += 100;
+	}
+}
+
+static void
+test_mbhc(void)
+{
+	static const struct mbhc_io io = { j_read, j_write, j_sleep, j_now,
+	    j_report, j_button, NULL };
+	struct mbhc m;
+
+	memset(&J, 0, sizeof(J));
+	memset(&m, 0, sizeof(m));
+	J.now = 1000;
+	J.r[0x3014] = 0x20;		/* detecting an insertion */
+	m.io = &io;
+	CHECK(mbhc_init(&m) == 0 && m.up);
+	/* wcd_mbhc_initialise's registers */
+	CHECK((J.r[0x3014] & 0x9d) == (0x80 | 0x10 | 0x08 | 0x04 | 0x01));
+	CHECK((J.r[0x3122] & 0x0f) == 6 && (J.r[0x3120] & 0x83) == 0x82);
+	CHECK((J.r[0x3121] & 0x03) == 2 && (J.r[0x3015] & 0x01) == 1);
+	CHECK((J.r[0x31b1] & 0x1f) == 8);
+	CHECK(J.r[0x301a] >> 2 == 6 && J.r[0x301b] >> 2 == 12 &&
+	    J.r[0x301c] >> 2 == 18 && J.r[0x301d] >> 2 == 40);
+	CHECK((J.r[0x3022] & 0x3f) == 16 && (J.r[0x3023] & 0x3f) == 16);
+	CHECK(J.r[0x346b] == 0x4c && J.r[0x346c] == 0x1f);
+	/* a headphone: the mic line shorted, 0 mV */
+	J.mic_pm = 0;
+	J.pending = 0x10;
+	j_ticks(&m, 300);
+	CHECK(J.nreports == 1 && J.reports[0] == MBHC_PLUG_HEADPHONE);
+	CHECK(m.correcting && (J.r[0x3014] & 0x20) == 0);
+	j_ticks(&m, 3500);
+	CHECK(!m.correcting && m.plug == MBHC_PLUG_HEADPHONE &&
+	    J.nreports == 1);
+	CHECK((J.r[0x3023] & 0xc0) == 0);	/* micbias 2 off again */
+	CHECK((J.r[0x346b] & 0x08) == 0);	/* hs_ins watched */
+	/* out again */
+	J.pending = 0x10;
+	j_ticks(&m, 200);
+	CHECK(J.nreports == 2 && J.reports[1] == MBHC_PLUG_NONE &&
+	    (J.r[0x3014] & 0x20) == 0x20);
+	CHECK((J.r[0x346b] & 0x0c) == 0x0c);
+	/* a headset: 1 V on the mic line at 1.8 V */
+	J.mic_pm = 556;
+	J.pending = 0x10;
+	j_ticks(&m, 3700);
+	CHECK(J.nreports == 3 && J.reports[2] == MBHC_PLUG_HEADSET &&
+	    !m.correcting && (J.r[0x3120] & 0x04) == 0x04);
+	/* a short press of button 2 (volume up), then a long one of 0 */
+	J.r[0x3019] = 2;
+	J.pending = 0x01;
+	j_ticks(&m, 100);
+	J.pending = 0x02;
+	j_ticks(&m, 100);
+	CHECK(J.nbtn == 2 && J.btn[0] == 4 && J.btn_down[0] &&
+	    J.btn[1] == 4 && !J.btn_down[1]);
+	J.r[0x3019] = 0;
+	J.pending = 0x01;
+	j_ticks(&m, 600);
+	CHECK(J.nbtn == 3 && J.btn[2] == 1 && J.btn_down[2]);
+	J.pending = 0x02;
+	j_ticks(&m, 100);
+	CHECK(J.nbtn == 4 && J.btn[3] == 1 && !J.btn_down[3]);
+	/* buttons of a headphone are no buttons */
+	J.pending = 0x10;
+	j_ticks(&m, 200);
+	CHECK(m.plug == MBHC_PLUG_NONE);
+	/* near the bias: a high impedance plug (taken as a headphone) */
+	J.mic_pm = 990;
+	J.pending = 0x10;
+	j_ticks(&m, 3700);
+	CHECK(m.plug == MBHC_PLUG_HEADPHONE && J.r[0x3016] & 0x02);
+	J.pending = 0x10;
+	j_ticks(&m, 200);
+	/* ground and mic swapped: cross connection on HPH L, nothing */
+	J.mic_pm = 0;
+	J.hphl_mv = 300;
+	J.nreports = 0;
+	J.pending = 0x10;
+	j_ticks(&m, 3700);
+	CHECK(J.nreports == 0 && m.plug == MBHC_PLUG_NONE);
+	J.hphl_mv = 0;
+	J.pending = 0x10;	/* removed */
+	j_ticks(&m, 200);
+	/* a headphone that is a headset: the electrical interrupt */
+	J.pending = 0x10;
+	j_ticks(&m, 3700);
+	CHECK(m.plug == MBHC_PLUG_HEADPHONE);
+	J.r[0x3019] = 0;	/* no clamp */
+	J.pending = 0x08;
+	j_ticks(&m, 300);
+	CHECK(m.plug == MBHC_PLUG_HEADSET && (J.r[0x346b] & 0x08) == 0x08);
+	/* the thresholds */
+	CHECK(mbhc_plug_from_mv(49, 50, 1700) == MBHC_PLUG_HEADPHONE &&
+	    mbhc_plug_from_mv(50, 50, 1700) == MBHC_PLUG_HEADSET &&
+	    mbhc_plug_from_mv(1701, 50, 1700) == MBHC_PLUG_HIGH_HPH);
+	CHECK(mbhc_adc_mv(80, 1800) == 1000);
+	printf("jack: done\n");
+}
+
+/* the jack's policy in the daemon: routes, a call's microphone, holds */
+static struct {
+	char sect[64][24];
+	unsigned n;
+} P;
+
+static int
+p_afe(void *ctx, const char *w)
+{
+	(void)ctx, (void)w;
+	return (0);
+}
+
+static void
+test_jack_policy(void)
+{
+	static struct audiod d;
+	static struct mmio win;
+	struct voice v;
+	struct seq s;
+	char e[128];
+	unsigned i;
+	const char *text =
+	    "[rx-up]\nmark rx-up\nw txmacro 0x0 0x1\n"
+	    "[rx-down]\nmark rx-down\nw txmacro 0x0 0x0\n"
+	    "[spk-up]\nmark spk-up\n[spk-down]\nmark spk-down\n"
+	    "[hph-up]\nmark hph-up\n[hph-down]\nmark hph-down\n"
+	    "[ear-up]\nmark ear-up\n[ear-down]\nmark ear-down\n"
+	    "[va-up]\nmark va-up\n[tx-up]\nmark tx-up\n";
+
+	setup(&d);
+	memset(&C, 0, sizeof(C));
+	CHECK(seq_parse(&s, text, "j.seq", e, sizeof(e)) == 0);
+	d.seq = s;
+	d.have_seq = true;
+	win.rd = c_rd;
+	win.wr = c_wr;
+	win.priv = (void *)(intptr_t)TGT_TXMACRO;
+	d.cio.win[TGT_TXMACRO] = &win;
+	d.cio.afe = p_afe;
+	/* the jack holds the TX macro's register 0 */
+	d.jack_on = true;
+	d.njack_regs = 1;
+	d.jack_regs[0] = (uint32_t)TGT_TXMACRO << 24 | 0x0;
+	C.regs[TGT_TXMACRO][0] = 0x55;
+	CHECK(backend_get(&d, BE_RX) == 0);
+	CHECK(strcmp(d.be[BE_RX].route, "spk") == 0);
+	CHECK(C.regs[TGT_TXMACRO][0] == 0x55);	/* left to the jack */
+	/* a headset in: the route goes to hph, the recording to amic */
+	d.mbhc.plug = MBHC_PLUG_HEADSET;
+	jack_report(&d, MBHC_PLUG_HEADSET);
+	CHECK(strcmp(d.be[BE_RX].route, "hph") == 0);
+	CHECK(strcmp(eff_recroute(&d), "amic") == 0);
+	/* a call asks for the earpiece: the headset keeps it */
+	backend_route(&d, "ear");
+	CHECK(strcmp(d.be[BE_RX].route, "hph") == 0);
+	memset(&v, 0, sizeof(v));
+	d.voice = &v;
+	CHECK(voice_up(&d, &v) == 0 && v.tx_port == 0xb037 &&
+	    d.voice_be == BE_TX && d.be[BE_TX].up);
+	/* the headset out during the call: earpiece, DMIC3, a new session */
+	d.mbhc.plug = MBHC_PLUG_NONE;
+	jack_report(&d, MBHC_PLUG_NONE);
+	CHECK(strcmp(d.be[BE_RX].route, "ear") == 0);
+	CHECK(v.state == VP_UP && v.tx_port == 0xb021 && d.voice_be == BE_VA &&
+	    d.be[BE_VA].users == 1 && d.be[BE_TX].users == 0);
+	CHECK(voice_down(&d, &v) == 0 && d.be[BE_VA].users == 0);
+	/* the jack not watched: what was asked for */
+	d.jack_on = false;
+	d.mbhc.plug = MBHC_PLUG_HEADSET;
+	CHECK(strcmp(eff_route(&d), "ear") == 0 &&
+	    strcmp(eff_recroute(&d), "mic") == 0);
+	for (i = 0; i < BE_N; i++)
+		d.be[i].users = 0;
+	backend_put(&d, BE_RX);
+	seq_free(&d.seq);
+	d.have_seq = false;
+	printf("jack policy: done\n");
+}
+
 /* a file of tools/trace2seq.py (the Makefile's sample.seq), and base.seq */
 static void
 test_file(const char *path)
@@ -1136,6 +1392,8 @@ main(int argc, char **argv)
 	test_seq();
 	test_swr();
 	test_voice();
+	test_mbhc();
+	test_jack_policy();
 	if (failures != 0) {
 		printf("%d failure(s)\n", failures);
 		return (1);

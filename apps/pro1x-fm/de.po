@@ -67,6 +67,9 @@ msgstr "Bluetooth ist gesperrt oder ausgefallen: der Empfänger braucht es einge
 msgid "No FM sound yet: the receiver's SLIMbus path is missing."
 msgstr "Noch kein UKW-Ton: der SLIMbus-Weg des Empfängers fehlt."
 
+msgid "Plug in headphones: their cable is the antenna."
+msgstr "Bitte Kopfhörer anschließen: ihr Kabel ist die Antenne."
+
 msgid "Switching the receiver on (the headphone cable is the antenna)..."
 msgstr "Empfänger wird eingeschaltet (das Kopfhörerkabel ist die Antenne) …"
 

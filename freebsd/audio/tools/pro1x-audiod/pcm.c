@@ -111,8 +111,7 @@ close_session(struct audiod *d, struct stream *st, int step)
 	st->maphandle = 0;
 	st->copp = INVALID_COPP_ID;
 	if (step >= 1)
-		backend_put(d, st->chan == PRO1X_PCM_PLAY ? BE_RX :
-		    strcmp(d->recroute, "amic") == 0 ? BE_TX : BE_VA);
+		backend_put(d, st->be);
 }
 
 static int
@@ -123,8 +122,10 @@ start(struct audiod *d, struct stream *st, uint32_t ready)
 	int be, r, step = 0, path;
 	struct backend *b;
 
+	/* the microphone as the jack decides it, kept for the stop */
 	be = st->chan == PRO1X_PCM_PLAY ? BE_RX :
-	    strcmp(d->recroute, "amic") == 0 ? BE_TX : BE_VA;
+	    strcmp(eff_recroute(d), "amic") == 0 ? BE_TX : BE_VA;
+	st->be = be;
 	b = &d->be[be];
 	path = st->chan == PRO1X_PCM_PLAY ? ADM_PATH_PLAYBACK :
 	    ADM_PATH_LIVE_REC;

@@ -71,6 +71,19 @@ main(int argc, char **argv)
 		printf("FAIL: a second open succeeded\n");
 		return (1);
 	}
+	{
+		/* the jack's event, for devd and sysctl */
+		struct pro1x_pcm_jack j;
+
+		memset(&j, 0, sizeof(j));
+		j.plug = 2;
+		snprintf(j.event, sizeof(j.event), "jack headset");
+		if (ioctl(fd, PRO1X_PCM_JACK, &j) != 0)
+			perror("PRO1X_PCM_JACK");
+		snprintf(j.event, sizeof(j.event), "button 0x1 press");
+		if (ioctl(fd, PRO1X_PCM_JACK, &j) != 0)
+			perror("PRO1X_PCM_JACK");
+	}
 	buf = mmap(NULL, 2 * PRO1X_PCM_BUFMAX, PROT_READ | PROT_WRITE,
 	    MAP_SHARED, fd, 0);
 	if (buf == MAP_FAILED) {

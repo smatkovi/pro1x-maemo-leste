@@ -423,6 +423,12 @@ run(const struct seq *s, const struct seq_sect *sec, struct codec_io *io,
 
 	for (i = 0; i < sec->count; i++) {
 		l = &s->lines[sec->first + i];
+		if (io->skip != NULL && io->skip(io->ctx, l)) {
+			if (io->trace)
+				fma_log("seq %s:%d: left out (the jack's)",
+				    s->file, l->lineno);
+			continue;
+		}
 		val = l->val;
 		if (l->text != NULL && (l->op == SEQ_W || l->op == SEQ_U)) {
 			if (io->var == NULL || io->var(io->ctx, l->text, &val)) {

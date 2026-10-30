@@ -38,7 +38,9 @@ echo "--- 1. the clock alone: 2 s of playback, 1 s of recording"
 t start; /tmp/pro1x-audioctl tone 2 440; t end
 /tmp/pro1x-audioctl record 1
 sysctl dev.pcm.$u.pro1x
-echo "--- 2. the daemon with a simulated ADSP"
+echo "--- 2. the daemon with a simulated ADSP (and a jack event for devd)"
+( timeout 8 cat /var/run/devd.pipe | grep PRO1X > /tmp/devd.log ) 2> /dev/null &
+sleep 0.3
 /tmp/vm_pcm_test 6 > /tmp/vmt.log 2>&1 &
 d=$!
 sleep 0.5
@@ -50,6 +52,8 @@ mixer rec=line 2>&1 | tail -1
 wait $d
 cat /tmp/vmt.log
 sysctl dev.pcm.$u.pro1x
+sleep 2
+echo "devd: $(cat /tmp/devd.log)"
 echo "--- 3. the daemon gone after 20 blocks of a 3 s tone"
 /tmp/vm_pcm_test 10 20 > /tmp/vmt.log 2>&1 &
 d=$!

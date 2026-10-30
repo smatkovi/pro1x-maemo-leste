@@ -15,6 +15,7 @@ over APR) already have.
 | 2 | capture: VA macro DMIC3 to `VA_CODEC_DMA_TX_0` (the headset's analog mic on `TX_CODEC_DMA_TX_3`) | the same, the `mic` sequences | as stage 1 |
 | 3 | sound(4): `/dev/dsp`, `/dev/mixer` | `snd_pro1x.ko` (kernel) + `pro1x-audiod` | built; tried in the VM with a simulated ADSP |
 | 4 | Hildon: PulseAudio on `/dev/dsp`, the volume keys and bar; calls | `pro1x-volume-keys`; `voice` for the modem agent (`pro1x-callaudio`) | built; voice host tested |
+| jack | headphones and headsets: the WCD9370's MBHC, the routes following the plug, the headset's buttons; events for devd, evdev and the socket | `mbhc.c` (Linux's wcd-mbhc-v2.c), `[jack-up]` from the trace's `jack` scenario | built; host tested against a simulated MBHC; devd event tried in the VM |
 
 Nothing here has run on the phone (unreachable until 2026-10-31).
 Nothing is heard before the trace's sequences: without them the ADSP
@@ -28,6 +29,7 @@ phone under Leste, as root, headphones plugged in:
 
     scp freebsd/audio/test/leste-audio-trace.sh root@172.16.42.1:/tmp/
     sh /tmp/leste-audio-trace.sh                 # hph,spk,ear,mic -> /host/audio-trace.txt
+    sh /tmp/leste-audio-trace.sh jack /host/audio-trace-jack.txt     # by hand: unplug, plug when told
     sh /tmp/leste-audio-trace.sh probe /host/audio-trace-probe.txt   # optional, last: rebinds the card
 
 (`freebsd/fm/test/leste-hph-trace.sh` is a link to the same script; its
@@ -57,6 +59,7 @@ Back on the PC:
 
     scp root@172.16.42.1:/host/audio-trace.txt $WORK/audio/
     python3 -I freebsd/audio/tools/trace2seq.py $WORK/audio/audio-trace.txt \
+        $WORK/audio/audio-trace-jack.txt \
         -o freebsd/rootfs/usr/local/share/pro1x/audio/pro1x-audio.seq
     cp freebsd/rootfs/usr/local/share/pro1x/audio/pro1x-audio.seq $WORK/audio-test/audio/
 
@@ -280,6 +283,94 @@ comments; `[check-<scenario>]` compares every register written during the
 power-up with the snapshot (`pro1x-audioctl seq check-hph` while the back
 end is up). Until the trace exists the image carries `base.seq` alone.
 
+## The headset jack
+
+The Pro1X's 3.5 mm jack is the WCD9370's: its MBHC (multi-button headset
+control) detects a plug mechanically (the L-detect switch, normally open),
+tells a headphone from a headset by the ADC on the mic line with micbias 2
+on (below 50 mV a headphone, up to 1.7 V a headset, above a high
+impedance plug), and a headset's buttons by comparator thresholds. Its
+interrupts are in-band: the WCD node has no interrupt line; its TX device
+raises a SoundWire alert, which Linux's master (swr0, SPI 296, or its wake
+interrupt SPI 79 while the bus' clock is stopped) turns into the slave's
+interrupt callback, which reads `DIGITAL_INTR_STATUS_0-2` (regmap-irq).
+
+`tools/pro1x-audiod/mbhc.c` is Linux's `wcd-mbhc-v2.c` (ADC detection)
+with `wcd937x.c`'s callbacks and register fields: the setup of
+`wcd_mbhc_initialise` (2 uA pull-up, the switch types, 96 ms insertion
+debounce, 16 ms button debounce, the MBHC bias and RCO clock, HS_VREF for
+1.6 V), the micbias voltages of the device tree (1.8 V), the switch
+interrupt's plug detection, `wcd_correct_swch_plug` (cross connection,
+plug type, the special headset at 2.7 V, 3 s of corrections every 180 ms:
+here one step per tick), the electrical interrupts (a headphone that
+turns out a headset), buttons (short press, held after 400 ms). Not
+ported: impedance detection (a line-out counts as a headphone), moisture
+detection (off in Linux's default as well), the US/EU switch (the Pro1X
+has no `us-euro` GPIO). The button thresholds are the vendor kernel's
+(`bengal.c` `def_wcd_mbhc_cal`: 75, 150, 237, 500 mV): Leste's device tree
+has no `qcom,mbhc-buttons-vthreshold-microvolt`, so its Linux takes 500 mV
+for all eight (it logs "missing qcom,mbhc-buttons-vthreshold-microvolt").
+
+FreeBSD has no driver for the masters' interrupts, so the daemon reads
+`DIGITAL_INTR_STATUS_0` over SoundWire every 100 ms (one command), which
+needs swr0's bus running all the time: `[jack-up]` (from the trace's
+`jack` scenario: what Linux wakes to serve the WCD's interrupt, the TX
+macro's clocks and resume, swr0's CGCR reset and master) runs at the
+daemon's start and stays up; the registers it wrote are held: other
+sections leave those very registers and that master alone (a route's
+back end would otherwise switch the TX macro off under the jack), and the
+q6afe clocks and votes are counted. Without `[jack-up]` (no trace yet) the
+jack is not watched. `-J` turns it off (the power of the TX macro's
+clocks and the bus, not measured). Later: SoundWire clock stop and the
+wake interrupt in a small kernel driver, or the bus started for a poll
+every few seconds (the MBHC runs on its own RCO clock and latches its
+interrupts meanwhile).
+
+What follows a plug:
+
+- **Routes**: a plug takes the playback (`hph`), a headset's microphone
+  the recording (`amic`, `TX_CODEC_DMA_TX_3`); without one, what was asked
+  for (`route`, `rec`; default `spk`, `mic`). A playing rx back end is
+  switched at once (the old route's down, the new one's up); a recording
+  takes its microphone at its next start.
+- **Calls**: `voice start` takes the headset's microphone if one is in
+  (the CVP session's tx port is `TX_CODEC_DMA_TX_3`), else DMIC3
+  (`VA_CODEC_DMA_TX_0`), and the earpiece the modem agent asks for
+  (`route ear`) only without a plug; a plug or unplug during the call
+  switches the playback at once and starts the session anew with the
+  other microphone (its port is fixed at the session's creation). The
+  speaker toggle (`route spk`) has no effect while a plug is in.
+- **Events**: on the control socket (`pro1x-audioctl watch`: `event jack
+  headset`, `event button 0x4 press`), in `status` (`jack=headset
+  in_use=hph/amic`) and `jack` (`ok plug=headset watched=1 mv=... polls=...`);
+  to devd through snd_pro1x (`!system=PRO1X subsystem=audio type=JACK
+  plug=headset`, `type=BUTTON event="button 0x1 press"`; `sysctl
+  dev.pcm.0.pro1x` has the last one); to evdev through `/dev/uinput`
+  ("Pro1X headset jack": `SW_HEADPHONE_INSERT`, `SW_MICROPHONE_INSERT`,
+  `SW_LINEOUT_INSERT`, the buttons as Linux maps them: `KEY_MEDIA`,
+  `KEY_VOICECOMMAND`, `KEY_VOLUMEUP`, `KEY_VOLUMEDOWN`), so X sees the
+  buttons as keys (the volume buttons reach `pro1x-volume-keys`).
+  PulseAudio's OSS module has no jack: the switching happens below it, its
+  volume bar is unaffected.
+- **The FM app** (`apps/pro1x-fm`, FreeBSD part) asks the daemon's `jack`
+  each second while it plays: without a plug it says "Plug in headphones:
+  their cable is the antenna."
+
+**Linux on the Pro1X (Leste)**: the pieces are there. The sound card sets
+the jack on the `WCD Capture` link (`qcom_snd_wcd_jack_setup` for
+`TX_CODEC_DMA_TX_3`: the "Headset Jack" input device, the controls
+"Headphone Jack" and "Mic Jack", the buttons as above), `wcd937x` starts
+its MBHC with the defaults above, and its interrupts come over SoundWire
+as described. Whether it works on the phone is not known: the UCM files
+have no `JackControl`, so PulseAudio does not switch by it (it would need
+`JackControl "Headphone Jack"` in the Headphones device and a headset mic
+device with `JackControl "Mic Jack"`), and the device tree lacks the
+button thresholds (`qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000
+237000 500000 500000 500000 500000 500000>`, the vendor's). The trace's
+`jack` scenario answers it: it prints whether Linux saw the removal and
+the insertion (the "Headphone Jack" control), the input device, and the
+MBHC's writes.
+
 ## Hildon
 
 PulseAudio, which `hildon-session` starts, finds `/dev/dsp` as on any
@@ -360,6 +451,7 @@ out as `/host/freebsd/` wants them, with the command lines
 | audio-rec | `pro1x.test=audio pro1x.audio=rec hint.qcom_wdt.0.lifetime=420` | play, then `pcm: capture started: session 2, ... port 0xb021`; `record: 144000 frames in 3.0 s, peak P` (P above the noise floor with the `mic` sequences) |
 | audio-codec | `pro1x.test=audio pro1x.audio=codec hint.qcom_wdt.0.lifetime=480` (needs the trace's sequences) | rec, then `seq check-hph`: no `... is 0x.., Linux had 0x..` lines (or the registers that differ), `swr0 (sequence): version 0x1060000, status 0x1, ... slaves 0x..`, the same for swr1, `check-mic` |
 | audio-voice | `pro1x.test=audio pro1x.audio=voice hint.qcom_wdt.0.lifetime=540` | codec, then `voice: up (MVM 0x.., CVP 0x..)` or the ADSP's status of the refused step (without a call the passive session may be refused); `voice stop` |
+| audio-jack | `pro1x.test=audio pro1x.audio=jack hint.qcom_wdt.0.lifetime=600` (by hand, the screen says when: headphones out, in, a headset in, its button short and held, out, headphones in; needs the trace's `[jack-up]`) | play, then `jack: MBHC set up`, `jack: watched (N registers held, masters 0x1)`; per change `jack: removed`/`jack: something inserted`, `jack: headphone`/`headset`, `jack: detection done: headset (NNN mV)`, `route hph -> spk` and back, `jack: button 0x1 pressed`/`released`; `status` with `in_use=hph/amic`; a tone after each change on the route in use; the watcher's `event jack ...` lines; `check-jack`: the MBHC's registers against Linux's |
 
 `pro1x.audio_trace=1` logs every register access (`-T`);
 `pro1x.audio_opts=` passes options to the daemon. A new trace's sequences
@@ -408,9 +500,14 @@ names the register).
   line high; the daemon looks for their I2C bus at the first access (after
   the sequence's `gpio 85 1`), `-i /dev/iicN` names it.
 - **Power**: the codec stays powered while a back end is up and 3 s
-  after; the rails stay on. No jack detection (the WCD937x's MBHC needs
-  its interrupts): the route is set (`route`, `-r`), the headset's
-  microphone is `rec amic`.
+  after; the rails stay on. The jack keeps swr0's bus and the TX macro's
+  clocks running (`-J` without).
+- **The jack**: `mbhc.c` was tested against a simulated MBHC only (its
+  ADC as a divider on the mic line, its interrupt status latched until
+  cleared); the polling makes an insertion's report up to 100 ms later
+  than an interrupt would, and the 3 s of corrections happen in steps
+  between other work. A plug in at the daemon's start is seen when the
+  mechanical detection fires (or not at all: then a re-plug).
 - **The ADSP's power domains** (LPI_CX, LPI_MX) are what the boot menu's
   Linux left voted (`freebsd/dsp/README.md`).
 - **Voice without a call**: untestable before the modem places one.
@@ -428,6 +525,7 @@ names the register).
 | `tools/pro1x-audiod/codec.c` | the sequences: parser and runner |
 | `tools/pro1x-audiod/swr.c` | the SoundWire masters |
 | `tools/pro1x-audiod/voice.c` | the voice session |
+| `tools/pro1x-audiod/mbhc.c` | the headset jack (MBHC) |
 | `tools/pro1x-audiod/main.c` | the loop, the platform (windows, GPIOs, rails, I2C), the control socket |
 | `tools/pro1x-audioctl/` | the client; `tone`, `record` |
 | `tools/pro1x-volume-keys/` | the volume keys in Hildon |

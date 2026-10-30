@@ -4,7 +4,7 @@
 sequences for pro1x-audiod and the FM radio's stage 3c
 (freebsd/audio/README.md, "The sequences"):
 
-    python3 -I freebsd/audio/tools/trace2seq.py TRACE [-b BASE.seq] [-o OUT.seq]
+    python3 -I freebsd/audio/tools/trace2seq.py TRACE... [-b BASE.seq] [-o OUT.seq]
     python3 -I freebsd/audio/tools/trace2seq.py --selftest
 
 Per scenario of the trace (hph, spk, ear, mic) the events between the
@@ -16,6 +16,14 @@ port's configuration (an 84-byte APR packet, then its 24-byte
 DEVICE_START), and the route's part (hph-up, ...: the SoundWire stream,
 "afe start", DAPM's sequence, the amplifiers). Down the other way: the
 route's part up to the first suspend, the back end's after it.
+
+The jack scenario (its own trace file, made by hand: leste-audio-trace.sh
+jack) gives [jack-up], what Linux woke to serve the WCD9370's interrupt
+(the TX macro's clocks and resume, swr0's reset and master) up to the
+first access of the WCD itself, [jack-down] the suspends after its last,
+and [check-jack]: the MBHC's registers while plugged, as Linux left them.
+Linux's MBHC writes in between are left to mbhc.c (the daemon's port of
+wcd-mbhc-v2.c) and kept as comments in [jack-linux].
 
 What the trace cannot show is inserted from Linux's code: the SoundWire
 masters' init and enumeration after their CGCR reset (qcom.c's writel()s
@@ -464,15 +472,72 @@ def convert(sc, gpio_base, be_done):
     return out, notes
 
 
+# the MBHC's registers (wcd937x.h) for the jack's check
+MBHC_REGS = set(range(0x3014, 0x3026)) | set(range(0x3120, 0x3127)) | \
+    {0x305a, 0x31b1, 0x346b}
+
+
+def convert_jack(sc, gpio_base):
+    """[jack-up], [jack-down], [jack-linux], [check-jack]."""
+    ev = sc.events
+    start = end = None
+    for i, e in enumerate(ev):
+        if e.kind == 'mark' and e.text.startswith('jack start'):
+            start = i
+        elif e.kind == 'mark' and e.text.startswith('jack end'):
+            end = i
+    body = ev[(start + 1 if start is not None else 0):
+              (end if end is not None else len(ev))]
+    wcd = [i for i, e in enumerate(body) if e.tgt in ('wcd', 'wcdrx') and
+           e.kind in ('w', 'r')]
+    out, notes = {}, []
+    if not wcd:
+        notes.append('jack: no access to the WCD9370 in the trace (Linux '
+                     'did not serve the jack?)')
+        return out, notes
+    up = Emitter(sc, gpio_base)
+    for e in body[:wcd[0]]:
+        if e.kind != 'mark':
+            up.emit(e)
+    if 'swr0' not in up.inited:
+        up.swr_init('swr0')
+    out['jack-up'] = up.lines
+    lin = []
+    for e in body[wcd[0]:wcd[-1] + 1]:
+        if e.kind == 'w' and e.tgt:
+            lin.append('# w %s %#x %#x' % (e.tgt, e.reg, e.val))
+        elif e.kind == 'mark':
+            lin.append('# mark %s' % e.text)
+    out['jack-linux'] = lin or ['mark nothing']
+    down = Emitter(sc, gpio_base)
+    down.inited = {'swr0', 'swr1'}
+    for e in body[wcd[-1] + 1:]:
+        if e.kind != 'mark':
+            down.emit(e, hooks=False)
+    out['jack-down'] = down.lines
+    chk = []
+    for path, regs in sc.state.items():
+        mm = re.search(r'/regmap/([^/]+)/registers$', path)
+        if mm and target(mm.group(1)) == 'wcd':
+            for reg in sorted(regs):
+                if reg in MBHC_REGS:
+                    chk.append('r wcd %#x %#x' % (reg, regs[reg]))
+    out['check-jack'] = chk
+    return out, notes
+
+
 def generate(text, base_text='', source='trace'):
     scen, gpio_base = parse_trace(text)
     head = text.splitlines()[0] if text else ''
     sections = {}
     notes = []
     be_done = set()
-    order = [s for s in ('hph', 'spk', 'ear', 'mic') if s in scen]
+    order = [s for s in ('hph', 'spk', 'ear', 'mic', 'jack') if s in scen]
     for name in order:
-        out, n = convert(scen[name], gpio_base, be_done)
+        if name == 'jack':
+            out, n = convert_jack(scen[name], gpio_base)
+        else:
+            out, n = convert(scen[name], gpio_base, be_done)
         notes += n
         for k, v in out.items():
             if k not in sections:
@@ -575,6 +640,24 @@ Bank0
      kworker/1:1-50      [001] .....   206.000000: regmap_reg_write: a730000.codec reg=400 val=0
      kworker/1:1-50      [001] .....   207.000000: clk_unprepare: LPASS_CLK_ID_TX_CORE_MCLK
             bash-900     [001] .....   208.600000: tracing_mark_write: pro1x-audio: mic end
+=== scenario jack
+--- trace
+            bash-900     [001] .....   300.000000: tracing_mark_write: pro1x-audio: jack start (cold)
+            bash-900     [001] .....   300.100000: tracing_mark_write: pro1x-audio: jack unplug
+     kworker/0:1-40      [000] .....   301.000000: clk_prepare: LPASS_CLK_ID_TX_CORE_MCLK
+     kworker/0:1-40      [000] .....   301.000100: regmap_reg_write: a620000.codec reg=0 val=1
+     kworker/0:1-40      [000] .....   301.000200: regmap_reg_write: a7e0000.clock-controller reg=c100 val=2
+     kworker/0:1-40      [000] .....   301.000700: regmap_reg_write: a7e0000.clock-controller reg=c100 val=0
+     kworker/0:1-40      [000] .....   301.002000: regmap_reg_read: sdw:0:0:0217:010a:00:3 reg=346e val=10
+     kworker/0:1-40      [000] .....   301.003000: regmap_reg_write: sdw:0:0:0217:010a:00:3 reg=3014 val=bd
+     kworker/0:1-40      [000] .....   304.000000: regmap_cache_only: a620000.codec flag=1
+     kworker/0:1-40      [000] .....   304.001000: clk_unprepare: LPASS_CLK_ID_TX_CORE_MCLK
+            bash-900     [001] .....   320.000000: tracing_mark_write: pro1x-audio: jack end
+--- state (jack, plugged)
+>>> /sys/kernel/debug/regmap/sdw:0:0:0217:010a:00:3/registers
+3014: bd
+3120: 86
+3400: 00
 """
 
 
@@ -629,6 +712,16 @@ def selftest():
           'the VA clock\'s default rate')
     check('[power]' in out and out.index('[power]') < out.index('[rx-up]'),
           'the base first')
+    ju = sec['jack-up']
+    check(ju[0] == 'clock LPASS_CLK_ID_TX_CORE_MCLK 19200000' and
+          'w txmacro 0x0 0x1' in ju and any(l.startswith('swr init swr0')
+                                            for l in ju) and
+          not any(' wcd ' in l for l in ju), 'jack-up: %r' % ju)
+    check('# w wcd 0x3014 0xbd' in sec['jack-linux'], 'jack-linux')
+    check(sec['jack-down'][-1] == 'clock LPASS_CLK_ID_TX_CORE_MCLK 0',
+          'jack-down: %r' % sec['jack-down'])
+    check(sec['check-jack'] == ['r wcd 0x3014 0xbd', 'r wcd 0x3120 0x86'],
+          'check-jack: %r' % sec['check-jack'])
     # the daemon's parser takes it: write it, parse it with a minimal check
     with tempfile.NamedTemporaryFile('w', suffix='.seq', delete=False) as f:
         f.write(out)
@@ -658,7 +751,7 @@ def main(argv):
     out_path = None
     here = os.path.dirname(os.path.abspath(__file__))
     base_path = os.path.join(here, '..', 'seq', 'base.seq')
-    trace = None
+    traces = []
     while args:
         a = args.pop(0)
         if a == '-o':
@@ -666,12 +759,15 @@ def main(argv):
         elif a == '-b':
             base_path = args.pop(0)
         else:
-            trace = a
-    if trace is None:
+            traces.append(a)
+    if not traces:
         print(__doc__)
         return 2
-    with open(trace, errors='replace') as f:
-        text = f.read()
+    text = ''
+    for t in traces:     # one after the other: their scenarios together
+        with open(t, errors='replace') as f:
+            text += f.read() + '\n'
+    trace = ' '.join(traces)
     base = ''
     if base_path and os.path.exists(base_path):
         with open(base_path) as f:

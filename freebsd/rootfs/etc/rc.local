@@ -4,7 +4,7 @@
 # to the boot menu.
 # pro1x.test=dsp: only the DSP stack (pro1x-dsptest), then back
 # pro1x.test=fm: the FM radio (pro1x-fmtest, pro1x.fm=uart|bt|radio|audio|slim|afe)
-# pro1x.test=audio: the sound (pro1x-audiotest, pro1x.audio=pcm|adsp|play|rec|codec|voice)
+# pro1x.test=audio: the sound (pro1x-audiotest, pro1x.audio=pcm|adsp|play|rec|codec|voice|jack)
 # pro1x.test=cam: the cameras (pro1x-camtest, pro1x.cam=id|raw|jpeg|app)
 # pro1x.test=modem: the modem's calls, SMS, GPS (pro1x-modemtest,
 # pro1x.modem=modem|sms|call|gps, pro1x.modem_wait=SECONDS)

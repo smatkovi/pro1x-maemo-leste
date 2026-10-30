@@ -50,6 +50,7 @@ static const struct swr_port swr0_ports[] = {	/* soundwire@a740000, VA_TX */
 #define	WCD_RX_UNIQUE	4
 
 static uint32_t vote_handle[8];
+static bool cb_skip(void *ctx, const struct seq_line *l);
 
 int
 afe_cmd(struct q6 *q, const uint8_t *pkt, size_t len, const char *what)
@@ -118,6 +119,11 @@ cb_afe(void *ctx, const char *what)
 	return (be_port(d, d->cur, strcmp(what, "start") == 0) < 0 ? -EIO : 0);
 }
 
+/*
+ * Clocks and votes are counted, as Linux's clock framework counts its
+ * prepares: the jack's [jack-up] and a route's sequences turn on the same
+ * TX macro clocks, and only the last off reaches the ADSP.
+ */
 static int
 cb_clock(void *ctx, uint32_t id, uint32_t hz)
 {
@@ -125,6 +131,16 @@ cb_clock(void *ctx, uint32_t id, uint32_t hz)
 	uint8_t pkt[128], cfg[20];
 	char what[48];
 	size_t len;
+	unsigned i = id & 0x1f;
+
+	if (hz != 0 && d->clk_ref[i]++ > 0)
+		return (0);
+	if (hz == 0) {
+		if (d->clk_ref[i] == 0)
+			return (0);
+		if (--d->clk_ref[i] > 0)
+			return (0);
+	}
 
 	afe_cfg_clock(cfg, id, hz, LPASS_CLK_ATTRIBUTE_COUPLE_NO,
 	    Q6AFE_LPASS_CLK_ROOT_DEFAULT);
@@ -144,7 +160,11 @@ cb_vote(void *ctx, uint32_t block, bool on)
 
 	if (block >= nitems(vote_handle))
 		return (-EINVAL);
+	if (on && d->vote_ref[block]++ > 0)
+		return (0);
 	if (!on) {
+		if (d->vote_ref[block] == 0 || --d->vote_ref[block] > 0)
+			return (0);
 		if (vote_handle[block] == 0)
 			return (0);
 		len = afe_pkt_vote(pkt, block, NULL, false, vote_handle[block]);
@@ -382,6 +402,8 @@ backend_init(struct audiod *d)
 	io->sdw_write = cb_sdw_write;
 	io->sdw_read = cb_sdw_read;
 	io->var = cb_var;
+	io->skip = cb_skip;
+	d->jack_enabled = true;
 }
 
 /* --- up and down ---------------------------------------------------------- */
@@ -417,10 +439,36 @@ has_afe(struct audiod *d, const char *name)
 	return (false);
 }
 
+/*
+ * The routes as the jack decides them: a plug in the jack takes the
+ * playback (hph), a headset's microphone the recording (amic); without
+ * one, what was asked for (route, rec; default spk and mic)
+ */
+const char *
+eff_route(struct audiod *d)
+{
+	switch (d->mbhc.plug) {
+	case MBHC_PLUG_HEADPHONE:
+	case MBHC_PLUG_HEADSET:
+	case MBHC_PLUG_HIGH_HPH:
+		if (d->jack_on)
+			return ("hph");
+	}
+	return (d->route);
+}
+
+const char *
+eff_recroute(struct audiod *d)
+{
+	if (d->jack_on && d->mbhc.plug == MBHC_PLUG_HEADSET)
+		return ("amic");
+	return (d->recroute);
+}
+
 static const char *
 be_route(struct audiod *d, int be)
 {
-	return (be == BE_RX ? d->route : be == BE_VA ? "mic" : "amic");
+	return (be == BE_RX ? eff_route(d) : be == BE_VA ? "mic" : "amic");
 }
 
 static int
@@ -532,26 +580,258 @@ backend_tick(struct audiod *d)
 			backend_down(d, i);
 }
 
+/* the rx back end on the effective route, if it is up on another */
+static void
+apply_route(struct audiod *d)
+{
+	struct backend *b = &d->be[BE_RX];
+	const char *route = eff_route(d);
+	char name[32];
+
+	if (!b->up || !b->codec || strcmp(b->route, route) == 0)
+		return;
+	d->cur = b;
+	snprintf(name, sizeof(name), "%s-down", b->route);
+	section(d, name);
+	snprintf(name, sizeof(name), "%s-up", route);
+	section(d, name);
+	section(d, "volume");
+	fma_log("route %s -> %s", b->route, route);
+	snprintf(b->route, sizeof(b->route), "%s", route);
+}
+
 int
 backend_route(struct audiod *d, const char *route)
 {
-	struct backend *b = &d->be[BE_RX];
-	char name[32];
-
 	if (strcmp(route, "spk") && strcmp(route, "hph") && strcmp(route, "ear"))
 		return (-EINVAL);
-	if (b->up && b->codec && strcmp(b->route, route) != 0) {
-		d->cur = b;
-		snprintf(name, sizeof(name), "%s-down", b->route);
-		section(d, name);
-		snprintf(name, sizeof(name), "%s-up", route);
-		section(d, name);
-		section(d, "volume");
-		snprintf(b->route, sizeof(b->route), "%s", route);
-	}
 	snprintf(d->route, sizeof(d->route), "%s", route);
-	fma_log("route %s", route);
+	fma_log("route %s asked for, %s in use", route, eff_route(d));
+	apply_route(d);
 	return (0);
+}
+
+/* --- the jack ------------------------------------------------------------- */
+
+/*
+ * While the jack is watched its [jack-up] holds what it brought up (swr0's
+ * bus: the TX macro's clock registers, the CGCR reset, the master): the
+ * other sections' lines on those very registers (a route's back end
+ * bringing the TX macro up again, or down) and on that master are left
+ * out, as Linux's clocks and runtime PM count their users; their other
+ * registers of the same blocks still go. The WCD9370 and the amplifiers
+ * stay every route's.
+ */
+static bool
+jack_holds(struct audiod *d, int target, uint32_t reg)
+{
+	uint32_t key = (uint32_t)target << 24 | (reg & 0xffffff);
+	unsigned i;
+
+	for (i = 0; i < d->njack_regs; i++)
+		if (d->jack_regs[i] == key)
+			return (true);
+	return (false);
+}
+
+static bool
+cb_skip(void *ctx, const struct seq_line *l)
+{
+	struct audiod *d = ctx;
+	int m;
+
+	if (!d->jack_on || d->in_jack_seq)
+		return (false);
+	switch (l->op) {
+	case SEQ_W:
+	case SEQ_U:
+	case SEQ_R:
+	case SEQ_POLL:
+		return (l->target >= 0 && l->target < TGT_NMMIO &&
+		    jack_holds(d, l->target, l->reg));
+	case SEQ_SWR:
+		if (strncmp(l->text, "init swr", 8) == 0 ||
+		    strncmp(l->text, "enum swr", 8) == 0) {
+			m = l->text[8] - '0';
+			return (m >= 0 && m < 2 && (d->jack_swr & (1u << m)));
+		}
+		return (false);
+	default:
+		return (false);
+	}
+}
+
+static int
+mb_read(void *ctx, uint16_t reg, uint8_t *val)
+{
+	struct audiod *d = ctx;
+
+	return (swr_read(&d->swr[0], d->swr[0].devnum, reg, val));
+}
+
+static int
+mb_write(void *ctx, uint16_t reg, uint8_t val)
+{
+	struct audiod *d = ctx;
+
+	return (swr_write(&d->swr[0], d->swr[0].devnum, reg, val));
+}
+
+static void
+mb_sleep(void *ctx, unsigned ms)
+{
+	(void)ctx;
+	fma_sleep_ms(ms);
+}
+
+static uint64_t
+mb_now(void *ctx)
+{
+	(void)ctx;
+	return (fma_now_ms());
+}
+
+int
+jack_start(struct audiod *d)
+{
+	const struct seq_sect *sec;
+	const struct seq_line *l;
+	unsigned i;
+	int r;
+
+	if (!d->jack_enabled || d->jack_on)
+		return (0);
+	if (!d->have_seq || (sec = seq_find(&d->seq, "jack-up")) == NULL) {
+		fma_log("jack: no [jack-up] in the sequences: not watched");
+		return (-ENOENT);
+	}
+	if (!d->q.core_ready && (r = q6_core_ready(&d->q, 5000)) != 0)
+		return (r);
+	if (!d->powered) {
+		section(d, "power");
+		d->powered = true;
+	}
+	d->njack_regs = 0;
+	d->jack_swr = 0;
+	for (i = 0; i < sec->count; i++) {
+		l = &d->seq.lines[sec->first + i];
+		if ((l->op == SEQ_W || l->op == SEQ_U) && l->target >= 0 &&
+		    l->target < TGT_NMMIO && !jack_holds(d, l->target, l->reg) &&
+		    d->njack_regs < nitems(d->jack_regs))
+			d->jack_regs[d->njack_regs++] =
+			    (uint32_t)l->target << 24 | (l->reg & 0xffffff);
+		if (l->op == SEQ_SWR && strncmp(l->text, "init swr", 8) == 0)
+			d->jack_swr |= 1u << ((l->text[8] - '0') & 1);
+	}
+	d->cur = NULL;
+	d->in_jack_seq = true;
+	r = section(d, "jack-up");
+	d->in_jack_seq = false;
+	if (r < 0 || d->swr[0].devnum == 0) {
+		fma_log("jack: [jack-up] did not bring the WCD9370 up (swr0 "
+		    "device %u): not watched", d->swr[0].devnum);
+		return (-EIO);
+	}
+	d->mbio = (struct mbhc_io){ mb_read, mb_write, mb_sleep, mb_now,
+	    jack_report, jack_button, d };
+	d->mbhc.io = &d->mbio;
+	if ((r = mbhc_init(&d->mbhc)) != 0)
+		return (r);
+	d->jack_on = true;
+	fma_log("jack: watched (%u registers held, masters %#x)",
+	    d->njack_regs, d->jack_swr);
+	return (0);
+}
+
+void
+jack_stop(struct audiod *d)
+{
+	if (!d->jack_on)
+		return;
+	d->jack_on = false;
+	d->in_jack_seq = true;
+	section(d, "jack-down");
+	d->in_jack_seq = false;
+	d->mbhc.up = false;
+}
+
+void
+jack_report(void *ctx, int plug)
+{
+	struct audiod *d = ctx;
+	struct voice *v = d->voice;
+	char ev[64];
+	int be;
+
+	snprintf(ev, sizeof(ev), "jack %s", mbhc_plug_name(plug));
+	if (d->notify != NULL)
+		d->notify(d, ev);
+	apply_route(d);
+	/* a call's microphone: the session's tx port is fixed, so anew */
+	be = strcmp(eff_recroute(d), "amic") == 0 ? BE_TX : BE_VA;
+	if (v != NULL && v->state == VP_UP && be != d->voice_be) {
+		fma_log("voice: the microphone changes: the session anew");
+		voice_down(d, v);
+		voice_up(d, v);
+	}
+}
+
+void
+jack_button(void *ctx, unsigned mask, bool pressed)
+{
+	struct audiod *d = ctx;
+	char ev[64];
+
+	snprintf(ev, sizeof(ev), "button %#x %s", mask, pressed ? "press" :
+	    "release");
+	if (d->notify != NULL)
+		d->notify(d, ev);
+}
+
+/*
+ * A call's sound: the voice session with the microphone's port (the
+ * headset's, TX_CODEC_DMA_TX_3, or the built-in DMIC3, VA_CODEC_DMA_TX_0),
+ * then the back ends behind it (Linux's order: the front end's startup,
+ * then the back ends' prepare); the playback route is what the caller
+ * asked for (ear) unless the jack has a plug.
+ */
+int
+voice_up(struct audiod *d, struct voice *v)
+{
+	int r;
+
+	d->voice_be = strcmp(eff_recroute(d), "amic") == 0 ? BE_TX : BE_VA;
+	v->tx_port = d->be[d->voice_be].afe_port;
+	v->rx_port = AFE_PORT_ID_RX_CODEC_DMA_RX_0;
+	if (v->state == VP_UP)
+		return (0);
+	if ((r = voice_start(&d->q, v)) != 0)
+		return (r);
+	if ((r = backend_get(d, BE_RX)) != 0) {
+		voice_stop(&d->q, v);
+		return (r);
+	}
+	if ((r = backend_get(d, d->voice_be)) != 0) {
+		backend_put(d, BE_RX);
+		voice_stop(&d->q, v);
+		return (r);
+	}
+	fma_log("voice: %s, microphone %s (port %#x)", eff_route(d),
+	    d->be[d->voice_be].name, v->tx_port);
+	return (0);
+}
+
+int
+voice_down(struct audiod *d, struct voice *v)
+{
+	int r;
+
+	if (v->state != VP_UP)
+		return (0);
+	r = voice_stop(&d->q, v);
+	backend_put(d, BE_RX);
+	backend_put(d, d->voice_be);
+	return (r);
 }
 
 void

@@ -6,7 +6,7 @@ CFLAGS = -g -O1 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
 D = ../tools/pro1x-audiod
 FM = ../../fm/tools/pro1x-fmaudio
 SRCS = test_audiod.c $(D)/apr.c $(D)/q6.c $(D)/pcm.c $(D)/codec.c \
-	$(D)/swr.c $(D)/voice.c $(D)/backend.c $(FM)/afe.c $(FM)/mmio.c
+	$(D)/swr.c $(D)/voice.c $(D)/backend.c $(D)/mbhc.c $(FM)/afe.c $(FM)/mmio.c
 
 all: test_audiod trace2seq
 	python3 -I ../tools/trace2seq.py --sample > sample.seq

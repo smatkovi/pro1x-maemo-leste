@@ -20,6 +20,11 @@
 #          registers against Linux's), the SoundWire masters' state
 #   voice  codec, then the voice session started and stopped (no call:
 #          what the ADSP says to a session without the modem's)
+#   jack   play, then the headset jack for 90 s, by hand (the console
+#          says when): headphones out, in again, a headset in, its button;
+#          every event, the route in use, a tone after each change, the
+#          MBHC's registers against Linux's (check-jack); needs the
+#          trace's [jack-up]
 # pro1x.audio_trace=1: every register access in the log (-T);
 # pro1x.audio_opts: more options for pro1x-audiod. A newer copy of this
 # script, pro1x-audiod, pro1x-audioctl and the sequences
@@ -137,7 +142,30 @@ ctl status
 sysctl dev.pcm.0.pro1x 2>&1
 sleep 4
 ctl status
-if [ "$step" != play ]; then
+if [ "$step" = jack ]; then
+	echo "--- the headset jack"
+	ctl jack
+	pro1x-audioctl watch > /tmp/pro1x-jack-events.log 2>&1 &
+	watcher=$!
+	say() { t ">>> $*"; echo ">>> $*" > /dev/ttyv0 2> /dev/null; }
+	for a in "pull the headphones out" "put the headphones in again" \
+	    "pull them out, put a headset in" "press the headset's button" \
+	    "hold the button for a second" "pull the headset out"; do
+		say "$a (15 s)"
+		sleep 15
+		ctl jack
+		ctl status
+		pro1x-audioctl tone 1 600
+	done
+	say "put headphones in once more (15 s), then leave them"
+	sleep 15
+	ctl seq check-jack
+	ctl jack
+	kill $watcher 2> /dev/null
+	echo "--- the jack's events"
+	cat /tmp/pro1x-jack-events.log
+	sysctl dev.pcm.0.pro1x
+elif [ "$step" != play ]; then
 	echo "--- capture"
 	t "record 3 s"
 	pro1x-audioctl record 3

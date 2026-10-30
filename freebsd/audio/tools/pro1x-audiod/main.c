@@ -14,6 +14,10 @@
  *   volume 0-100               the master volume (the RX macro's gain)
  *   fm on [gain]|off           the FM radio's loopback (SLIMBUS_8_TX)
  *   voice start|stop           a call's voice session and its back ends
+ *                              (the microphone: the headset's if one is in)
+ *   jack [on|off]              the headset jack: "ok plug=headset ..."
+ *   watch                      the connection stays: "event jack headset",
+ *                              "event button 0x1 press" lines
  *   up rx|va|tx, down ...      hold a back end (tests)
  *   seq <section>              run a section of the sequences (tests)
  *   reload                     read the sequences again
@@ -21,10 +25,18 @@
  *   wr <target> <reg> <val>    write one
  *   swr <words>                SoundWire: init, enum, stream, dump
  *
- *   pro1x-audiod [-d] [-v] [-T] [-n] [-s seqfile] [-r route] [-i iicdev]
- *                [-t idle_ms] [-S socket]
+ *   pro1x-audiod [-d] [-v] [-T] [-n] [-J] [-s seqfile] [-r route]
+ *                [-i iicdev] [-t idle_ms] [-S socket]
  *     -d  stay in the foreground, log to stdout   -v  every command
  *     -T  every register access                   -n  no /dev/pro1x_pcm
+ *     -J  no jack detection (it keeps swr0's bus and the TX macro's clocks
+ *         running to poll the WCD9370)
+ *
+ * The jack's events also go to devd (snd_pro1x: system PRO1X, subsystem
+ * audio, type JACK or BUTTON) and to evdev: /dev/uinput's "Pro1X headset
+ * jack" with SW_HEADPHONE_INSERT, SW_MICROPHONE_INSERT and the buttons as
+ * KEY_MEDIA, KEY_VOICECOMMAND, KEY_VOLUMEUP, KEY_VOLUMEDOWN (Linux's
+ * qcom_snd_wcd_jack_setup).
  *
  * Needs (freebsd/dsp, freebsd/fm): the ADSP running (pro1x-dsp start adsp)
  * with pd-mapper, qcom_apr.ko (/dev/apr: one user, so pro1x-q6 and
@@ -42,6 +54,8 @@
 #include <sys/sysctl.h>
 #include <sys/un.h>
 
+#include <dev/evdev/input.h>
+#include <dev/evdev/uinput.h>
 #include <dev/iicbus/iic.h>
 
 #include <errno.h>
@@ -62,7 +76,9 @@
 static struct audiod D;
 static struct voice V;
 static volatile sig_atomic_t stop;
-static int apr_fd = -1, pcm_fd = -1, gpio_fd = -1, iic_fd = -1;
+static int apr_fd = -1, pcm_fd = -1, gpio_fd = -1, iic_fd = -1, ui_fd = -1;
+#define	NWATCH	8
+static int watchers[NWATCH];
 static const char *seq_path, *sock_path = SOCK_PATH, *iic_path;
 static struct mmio windows[TGT_NMMIO];
 
@@ -321,6 +337,90 @@ on_async(struct q6 *q, const uint8_t *pkt, size_t len)
 	}
 }
 
+/* --- the jack's events: watchers, devd, evdev ---------------------------- */
+
+static const int jack_keys[] = { KEY_MEDIA, KEY_VOICECOMMAND, KEY_VOLUMEUP,
+    KEY_VOLUMEDOWN };
+
+static void
+ui_open(void)
+{
+	struct uinput_setup us;
+	unsigned i;
+
+	if ((ui_fd = open("/dev/uinput", O_RDWR | O_NONBLOCK)) < 0) {
+		fma_log("/dev/uinput: %s (no evdev device for the jack)",
+		    strerror(errno));
+		return;
+	}
+	ioctl(ui_fd, UI_SET_EVBIT, EV_KEY);
+	ioctl(ui_fd, UI_SET_EVBIT, EV_SW);
+	for (i = 0; i < nitems(jack_keys); i++)
+		ioctl(ui_fd, UI_SET_KEYBIT, jack_keys[i]);
+	ioctl(ui_fd, UI_SET_SWBIT, SW_HEADPHONE_INSERT);
+	ioctl(ui_fd, UI_SET_SWBIT, SW_MICROPHONE_INSERT);
+	ioctl(ui_fd, UI_SET_SWBIT, SW_LINEOUT_INSERT);
+	memset(&us, 0, sizeof(us));
+	us.id.bustype = BUS_VIRTUAL;
+	strlcpy(us.name, "Pro1X headset jack", sizeof(us.name));
+	if (ioctl(ui_fd, UI_DEV_SETUP, &us) != 0 ||
+	    ioctl(ui_fd, UI_DEV_CREATE) != 0) {
+		fma_log("uinput: %s", strerror(errno));
+		close(ui_fd);
+		ui_fd = -1;
+	}
+}
+
+static void
+ui_emit(int type, int code, int value)
+{
+	struct input_event ie;
+
+	if (ui_fd < 0)
+		return;
+	memset(&ie, 0, sizeof(ie));
+	ie.type = (uint16_t)type;
+	ie.code = (uint16_t)code;
+	ie.value = value;
+	(void)write(ui_fd, &ie, sizeof(ie));
+}
+
+static void
+on_notify(struct audiod *d, const char *event)
+{
+	struct pro1x_pcm_jack j;
+	char line[96];
+	unsigned mask, i;
+	int plug = d->mbhc.plug;
+
+	snprintf(line, sizeof(line), "event %s\n", event);
+	for (i = 0; i < NWATCH; i++)
+		if (watchers[i] > 0 && write(watchers[i], line, strlen(line)) < 0) {
+			close(watchers[i]);
+			watchers[i] = 0;
+		}
+	/* devd, through the kernel */
+	memset(&j, 0, sizeof(j));
+	snprintf(j.event, sizeof(j.event), "%s", event);
+	j.plug = (uint32_t)plug;
+	if (pcm_fd >= 0)
+		(void)ioctl(pcm_fd, PRO1X_PCM_JACK, &j);
+	/* evdev */
+	if (strncmp(event, "jack ", 5) == 0) {
+		ui_emit(EV_SW, SW_HEADPHONE_INSERT, plug == MBHC_PLUG_HEADPHONE ||
+		    plug == MBHC_PLUG_HEADSET);
+		ui_emit(EV_SW, SW_MICROPHONE_INSERT, plug == MBHC_PLUG_HEADSET);
+		ui_emit(EV_SW, SW_LINEOUT_INSERT, plug == MBHC_PLUG_HIGH_HPH);
+		ui_emit(EV_SYN, SYN_REPORT, 0);
+	} else if (sscanf(event, "button %x", &mask) == 1) {
+		for (i = 0; i < nitems(jack_keys); i++)
+			if (mask & (1u << i))
+				ui_emit(EV_KEY, jack_keys[i],
+				    strstr(event, "press") != NULL);
+		ui_emit(EV_SYN, SYN_REPORT, 0);
+	}
+}
+
 /* --- the control socket ----------------------------------------------------- */
 
 static const char *
@@ -388,6 +488,28 @@ request(char *line, char *ans, size_t alen)
 		    D.q.async_pkts, D.q.timeouts, D.q.refused,
 		    D.swr[0].up ? "up" : "down", D.swr[0].devnum,
 		    D.swr[1].up ? "up" : "down", D.swr[1].devnum);
+		snprintf(msg, sizeof(msg), " jack=%s in_use=%s/%s",
+		    !D.jack_on ? "off" : mbhc_plug_name(D.mbhc.plug),
+		    eff_route(&D), eff_recroute(&D));
+		strlcat(ans, msg, alen);
+		return;
+	}
+	if (strcmp(w[0], "jack") == 0) {
+		if (n == 2 && strcmp(w[1], "on") == 0) {
+			D.jack_enabled = true;
+			r = jack_start(&D);
+		} else if (n == 2 && strcmp(w[1], "off") == 0) {
+			jack_stop(&D);
+			D.jack_enabled = false;
+			r = 0;
+		} else
+			r = 0;
+		snprintf(ans, alen, "%s plug=%s watched=%d mv=%d polls=%u "
+		    "interrupts=%u reports=%u errors=%u adc_failures=%u "
+		    "held=%u", r == 0 ? "ok" : "error EIO",
+		    mbhc_plug_name(D.mbhc.plug), D.jack_on, D.mbhc.last_mv,
+		    D.mbhc.polls, D.mbhc.irqs, D.mbhc.reports, D.mbhc.errors,
+		    D.mbhc.adc_failures, D.njack_regs);
 		return;
 	}
 	if (strcmp(w[0], "route") == 0 && n == 2) {
@@ -420,18 +542,10 @@ request(char *line, char *ans, size_t alen)
 		return;
 	}
 	if (strcmp(w[0], "voice") == 0 && n == 2) {
-		if (strcmp(w[1], "start") == 0) {
-			if ((r = voice_start(&D.q, &V)) == 0) {
-				if (backend_get(&D, BE_RX) == 0)
-					backend_get(&D, BE_VA);
-			}
-		} else {
-			r = voice_stop(&D.q, &V);
-			if (D.be[BE_RX].users > 0)
-				backend_put(&D, BE_RX);
-			if (D.be[BE_VA].users > 0)
-				backend_put(&D, BE_VA);
-		}
+		if (strcmp(w[1], "start") == 0)
+			r = voice_up(&D, &V);
+		else
+			r = voice_down(&D, &V);
 		if (r == 0)
 			snprintf(ans, alen, "ok voice=%s mvm=%#x cvp=%#x",
 			    V.state == VP_UP ? "up" : "idle", V.mvm, V.cvp);
@@ -508,13 +622,28 @@ serve(int ls)
 {
 	char line[256], ans[1024];
 	ssize_t n;
-	int c;
+	int c, i;
 
 	if ((c = accept(ls, NULL, NULL)) < 0)
 		return;
 	n = read(c, line, sizeof(line) - 1);
 	if (n > 0) {
 		line[n] = '\0';
+		if (strncmp(line, "watch", 5) == 0) {
+			for (i = 0; i < NWATCH; i++)
+				if (watchers[i] <= 0) {
+					watchers[i] = c;
+					snprintf(ans, sizeof(ans), "ok watching: "
+					    "jack=%s\n", !D.jack_on ? "off" :
+					    mbhc_plug_name(D.mbhc.plug));
+					(void)write(c, ans, strlen(ans));
+					return;
+				}
+			snprintf(ans, sizeof(ans), "error EBUSY watchers\n");
+			(void)write(c, ans, strlen(ans));
+			close(c);
+			return;
+		}
 		request(line, ans, sizeof(ans));
 		strlcat(ans, "\n", sizeof(ans));
 		(void)write(c, ans, strlen(ans));
@@ -558,15 +687,16 @@ main(int argc, char **argv)
 	struct pollfd pfd[3];
 	struct rtprio rt = { RTP_PRIO_REALTIME, 10 };
 	char msg[256];
-	int c, ls, n, i, fg = 0, nopcm = 0, timeout;
-	uint64_t now, next;
+	int c, ls, n, i, fg = 0, nopcm = 0, nojack = 0, timeout;
+	uint64_t now, next, jack_next = 0;
 
-	while ((c = getopt(argc, argv, "dvTns:r:i:t:S:")) != -1)
+	while ((c = getopt(argc, argv, "dvTnJs:r:i:t:S:")) != -1)
 		switch (c) {
 		case 'd': fg = 1; break;
 		case 'v': fma_verbose = 1; break;
 		case 'T': D.cio.trace = 1; break;
 		case 'n': nopcm = 1; break;
+		case 'J': nojack = 1; break;
 		case 's': seq_path = optarg; break;
 		case 'r': snprintf(D.route, sizeof(D.route), "%s", optarg); break;
 		case 'i': iic_path = optarg; break;
@@ -576,6 +706,8 @@ main(int argc, char **argv)
 		}
 	backend_init(&D);
 	D.voice = &V;
+	D.jack_enabled = !nojack;
+	D.notify = on_notify;
 	D.cio.gpio = cb_gpio;
 	D.cio.rail = cb_rail;
 	D.cio.i2c_write = cb_i2c_write;
@@ -613,8 +745,10 @@ main(int argc, char **argv)
 	signal(SIGTERM, on_signal);
 	signal(SIGINT, on_signal);
 	signal(SIGPIPE, SIG_IGN);
-	fma_log("pro1x-audiod: ready (route %s, idle %u ms)", D.route,
-	    D.idle_ms);
+	ui_open();
+	jack_start(&D);
+	fma_log("pro1x-audiod: ready (route %s, idle %u ms, jack %s)", D.route,
+	    D.idle_ms, D.jack_on ? "watched" : "not watched");
 	while (!stop) {
 		n = 0;
 		pfd[n++] = (struct pollfd){ apr_fd, POLLIN, 0 };
@@ -626,6 +760,9 @@ main(int argc, char **argv)
 		for (i = 0; i < BE_N; i++)
 			if (D.be[i].idle_at != 0 && D.be[i].idle_at < next)
 				next = D.be[i].idle_at;
+		/* the jack: the WCD9370's interrupt status every 100 ms */
+		if (D.jack_on && jack_next < next)
+			next = jack_next > now ? jack_next : now;
 		timeout = next > now ? (int)(next - now) : 0;
 		if (poll(pfd, (nfds_t)n, timeout) < 0 && errno != EINTR)
 			break;
@@ -641,13 +778,18 @@ main(int argc, char **argv)
 		if (pfd[1].revents & POLLIN)
 			serve(ls);
 		backend_tick(&D);
+		if (D.jack_on && fma_now_ms() >= jack_next) {
+			mbhc_tick(&D.mbhc);
+			jack_next = fma_now_ms() + 100;
+		}
 	}
 	fma_log("pro1x-audiod: stopping");
 	pcm_stop_all(&D);
 	if (D.fm_on)
 		backend_fm(&D, false);
 	if (V.state == VP_UP)
-		voice_stop(&D.q, &V);
+		voice_down(&D, &V);
+	jack_stop(&D);
 	for (i = 0; i < BE_N; i++) {
 		D.be[i].users = 0;
 		D.be[i].idle_at = 1;
