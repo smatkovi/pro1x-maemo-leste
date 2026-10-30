@@ -125,12 +125,20 @@ done
 declare -A T_DEPENDS=(
 	[gtk2-maemo]=gtk-update-icon-cache
 	[harmattan-system-ui]=ngfd
-	[harmattan-meego-phone]=libpulse
-	[harmattan-meego-mail]=ca-certificates [harmattan-meego-maps]=ca-certificates
-	[harmattan-meego-music]="gst-plugins-base gst-plugins-good"
-	[harmattan-meego-video]="gst-plugins-base gst-plugins-good"
-	[harmattan-meego-camera]="gst-plugins-base gst-plugins-good"
-	[meego-clock]="alarmd clockd"
+	[harmattan-meego-browser]=qt-components
+	[harmattan-meego-calculator]=qt-components
+	[harmattan-meego-calendar]=qt-components
+	[harmattan-meego-contacts]=qt-components
+	[harmattan-meego-gallery]=qt-components
+	[harmattan-meego-messages]=qt-components
+	[harmattan-meego-notes]=qt-components
+	[harmattan-meego-phone]="qt-components libpulse"
+	[harmattan-meego-mail]="qt-components ca-certificates"
+	[harmattan-meego-maps]="qt-components ca-certificates"
+	[harmattan-meego-music]="qt-components gst-plugins-base gst-plugins-good"
+	[harmattan-meego-video]="qt-components gst-plugins-base gst-plugins-good"
+	[harmattan-meego-camera]="qt-components gst-plugins-base gst-plugins-good"
+	[meego-clock]="qt-components alarmd clockd"
 	[osso-chess-ui]=gnuchess [osso-lmarbles]=ttf-dejavu
 	[gpodder-leste]="python python-pyotherside qt5-declarative qt5-multimedia qt5-graphicaleffects gst-plugins-good fontconfig"
 	[wifi-assistant]="python python-dbus python-gobject"

@@ -329,13 +329,15 @@ def depends(stage, own):
                     if o:
                         add(o)
                         break
-    # QML in the N9's components (in .qml files or compiled into resources)
+    # QML importing the N9's components (in .qml files, or in resources
+    # where they are not compressed; DEPENDS names it for those that are)
     if NAME != 'qt-components':
+        imp = re.compile(rb'import\s+com\.nokia\.meego(?![\w.])')
         for rel in files:
             p = os.path.join(stage, rel)
             if os.path.isfile(p) and not os.path.islink(p):
                 with open(p, 'rb') as f:
-                    if b'com.nokia.meego' in f.read():
+                    if imp.search(f.read()):
                         add('qt-components')
                         break
     for d in (E('DEPENDS') or '').split():
