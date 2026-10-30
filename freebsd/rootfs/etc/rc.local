@@ -4,6 +4,8 @@
 # to the boot menu.
 # pro1x.test=dsp: only the DSP stack (pro1x-dsptest), then back
 # pro1x.test=fm: the FM radio (pro1x-fmtest, pro1x.fm=uart|bt|radio|audio|slim|afe)
+# pro1x.test=modem: the modem's calls, SMS, GPS (pro1x-modemtest,
+# pro1x.modem=modem|sms|call|gps, pro1x.modem_wait=SECONDS)
 # pro1x.test=panel: the DCS commands of qcom_dpu (patches/0022), each step
 # with its time on the console: brightness 100/10/50 %, the low power mode
 # (idle mode), partial mode (one half of the panel), the panel off and on,
@@ -45,6 +47,11 @@ elif [ "$(kenv -q pro1x.test)" = fm ]; then
 	/usr/local/libexec/pro1x-fmtest 2>&1
 	echo "=== test done, rebooting in 20 s"
 	(sleep 20; shutdown -r now "pro1x fm test done") > /dev/null 2>&1 &
+elif [ "$(kenv -q pro1x.test)" = modem ]; then
+	echo "=== FreeBSD multi-user: modem test ==="
+	/usr/local/libexec/pro1x-modemtest 2>&1
+	echo "=== test done, rebooting in 20 s"
+	(sleep 20; shutdown -r now "pro1x modem test done") > /dev/null 2>&1 &
 elif [ -n "$(kenv -q pro1x.test)" ]; then
 	echo "=== FreeBSD multi-user: test report ==="
 	uname -a

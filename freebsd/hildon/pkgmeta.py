@@ -50,6 +50,12 @@ LOCAL = {
                    "pro1x-gnss starts the modem's location service over QMI and "
                    'writes its NMEA sentences for gpsd (tools/pro1x-gnss).',
                    ['UNKNOWN']),
+    'pro1x-modem': ('1.0', "The Pro1X modem's calls and SMS as oFono's D-Bus API",
+                    "pro1x-modemd talks QMI over QRTR to the modem (DMS, UIM, NAS, WMS, "
+                    "VOICE) and offers the calls, SMS, SIM and network registration as "
+                    "oFono's D-Bus API, for sphone and the other apps written for oFono; "
+                    "pro1x-callaudio sets up the voice path of a call on the ADSP "
+                    '(freebsd/modem).', ['GPLv2']),
     'pro1x-proximity': ('1.0', "The Pro1X's proximity sensor on D-Bus, while watched",
                         "pro1x-proximity reads the ADSP's proximity sensor through "
                         'libssc while a client watches it and serves it as '
@@ -205,6 +211,8 @@ RUNTIME = {
     # the light meter asks the Pro1X's light sensor (pro1x-light)
     'photolightmeter': ['pro1x-light'],
     'pro1x-gnss': ['gpsd'],
+    # the modem started by pro1x_modem (rmtfs, tqftpserv, pd-mapper), the bus
+    'pro1x-modem': ['rmtfs', 'dbus'],
     # the page is a home widget of hildon-desktop's MeeGo-like look; the
     # certificates for Mastodon's https
     'pro1x-events': ['hildon-desktop', 'hildon-control-panel', 'rtcom-eventlogger-plugins',

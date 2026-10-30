@@ -1,0 +1,166 @@
+#!/bin/sh
+# pro1x-modemtest [STEP]: the modem's device runs of freebsd/modem/README.md
+# (kernel environment pro1x.modem, set in the boot menu's freebsd/cmdline
+# with pro1x.test=modem), each on the one before:
+#   modem  the modem started (pro1x-dsptest modem, run dsp6), its services
+#          (qrtr-lookup), qmicli's view, then pro1x-modemd on the system
+#          bus: identity, SIM (the PIN file), registration, signal
+#   sms    modem, then for pro1x.modem_wait seconds (default 180) every
+#          message that comes in; one sent if the test file names a number
+#   call   modem with the call audio program, then for pro1x.modem_wait
+#          seconds the calls: one coming in answered and ended after 20 s
+#          if the test file says answer=1, one dialled if it names dial=
+#   gps    modem, then gpsd with pro1x-gnss and location-daemon: the
+#          engine, NMEA, positions for pro1x.modem_wait seconds
+# Nothing is sent or dialled unless the user's test file
+# /dev/pro1x-host/freebsd/modem-test.conf says so (to=NUMBER, dial=NUMBER,
+# answer=1). The SIM PIN comes from the user's /dev/pro1x-host/freebsd/
+# sim-pin (pro1x-modemd: once per boot, never logged). The IMEI, IMSI and
+# ICCID are left out of the output. Everything goes to the console, which
+# the RAM console keeps for Linux.
+step=${1:-$(kenv -q pro1x.modem)}
+step=${step:-modem}
+wait=$(kenv -q pro1x.modem_wait)
+wait=${wait:-180}
+host=/dev/pro1x-host/freebsd
+conf=$host/modem-test.conf
+M=/qrtr_0
+echo "=== modem test: $step (window $wait s)"
+
+conf_get() {
+	[ -f "$conf" ] && sed -n "s/^$1=\([+0-9*#]*\)[[:space:]]*$/\1/p" "$conf" | head -1
+}
+
+# GetProperties of one interface, without the identities
+props() {
+	dbus-send --system --print-reply --dest=org.ofono $M org.ofono.$1.GetProperties 2>&1 |
+	    awk '/string "(Serial|SubscriberIdentity|CardIdentifier)"/ { print; hide = 1; next }
+		hide && /variant/ { print "         variant (left out)"; hide = 0; next }
+		{ print }' | grep -vE '^[[:space:]]*(array \[|\]|dict entry\(|\))[[:space:]]*$'
+}
+
+prop() {
+	dbus-send --system --print-reply --dest=org.ofono $M org.ofono.$1.GetProperties 2>/dev/null |
+	    awk -v k="\"$2\"" '$0 ~ "string " k { getline; sub(/^ *variant +/, ""); print; exit }'
+}
+
+# 1. the modem (dsp6) and what QMI sees of it
+/usr/local/libexec/pro1x-dsptest modem 2>&1
+echo "--- qrtr-lookup"
+qrtr-lookup 2>&1 | head -60
+echo "--- qmicli"
+for a in --dms-get-revision --dms-get-operating-mode --uim-get-card-status \
+    --nas-get-serving-system --nas-get-signal-strength --wms-list-messages=nv \
+    --voice-get-config; do
+	echo "- qmicli $a"
+	timeout 15 qmicli -d qrtr://0 "$a" 2>&1 | grep -vE "IMEI|ICCID|IMSI|ESN|MEID" | head -40
+done
+
+# 2. pro1x-modemd
+echo "--- pro1x-modemd"
+service dbus onestatus > /dev/null 2>&1 || service dbus onestart
+ls -la $host/sim-pin 2>&1 | awk '{ print $1, $NF }'
+flags="-v"
+if [ "$step" = call ] && [ -x /usr/local/sbin/pro1x-callaudio ]; then
+	flags="$flags -A /usr/local/sbin/pro1x-callaudio"
+fi
+# the script itself, not service(8), which clears the environment
+pro1x_modemd_flags="$flags" /usr/local/etc/rc.d/pro1x_modemd onestart
+i=0
+while [ $i -lt 90 ]; do
+	st=$(prop NetworkRegistration Status)
+	case "$st" in *'"registered"'*|*'"roaming"'*|*'"denied"'*) break ;; esac
+	sleep 1
+	i=$((i + 1))
+done
+echo "after $i s: registration $st"
+for f in Modem SimManager NetworkRegistration; do
+	echo "- $f"
+	props $f
+done
+sleep 5
+echo "- signal: $(prop NetworkRegistration Strength)"
+
+case "$step" in
+sms)
+	echo "--- SMS: messages to this phone for $wait s"
+	timeout "$wait" dbus-monitor --system \
+	    "type='signal',interface='org.ofono.MessageManager'" 2>&1 |
+	    grep -A12 -E "member=(IncomingMessage|ImmediateMessage)" &
+	to=$(conf_get to)
+	if [ -n "$to" ]; then
+		sleep 5
+		echo "- sending one to the test file's number"
+		dbus-send --system --print-reply --dest=org.ofono $M \
+		    org.ofono.MessageManager.SendMessage string:"$to" \
+		    string:"Pro1X FreeBSD modem test $(date '+%F %T')" 2>&1 | tail -2
+	else
+		echo "- nothing sent: no to= in $conf"
+	fi
+	sleep "$wait"
+	;;
+call)
+	echo "--- calls for $wait s"
+	answer=$(conf_get answer)
+	dial=$(conf_get dial)
+	timeout "$wait" dbus-monitor --system \
+	    "type='signal',interface='org.ofono.VoiceCallManager'" \
+	    "type='signal',interface='org.ofono.VoiceCall'" 2>&1 |
+	    grep -A3 -E "member=(CallAdded|CallRemoved|PropertyChanged)" &
+	if [ -n "$dial" ]; then
+		sleep 5
+		echo "- dialling the test file's number"
+		dbus-send --system --print-reply --dest=org.ofono $M \
+		    org.ofono.VoiceCallManager.Dial string:"$dial" string:"" 2>&1 | tail -1
+		sleep 30
+		dbus-send --system --print-reply --dest=org.ofono $M \
+		    org.ofono.VoiceCallManager.HangupAll > /dev/null 2>&1
+	fi
+	t=0
+	while [ $t -lt "$wait" ]; do
+		c=$(dbus-send --system --print-reply --dest=org.ofono $M \
+		    org.ofono.VoiceCallManager.GetCalls 2>/dev/null |
+		    awk '/object path/ { p = $3 } /"incoming"/ { print p; exit }' | tr -d '"')
+		if [ -n "$c" ] && [ "$answer" = 1 ]; then
+			echo "- answering $c in 3 s, ending it 20 s later"
+			sleep 3
+			dbus-send --system --print-reply --dest=org.ofono "$c" \
+			    org.ofono.VoiceCall.Answer 2>&1 | tail -1
+			sleep 20
+			sysctl hw.qcom_apr 2>/dev/null
+			dbus-send --system --print-reply --dest=org.ofono "$c" \
+			    org.ofono.VoiceCall.Hangup 2>&1 | tail -1
+			answer=done
+		fi
+		sleep 1
+		t=$((t + 1))
+	done
+	;;
+gps)
+	echo "--- GPS for $wait s"
+	# gpsd on pro1x-gnss's NMEA (as Leste's /etc/conf.d/gpsd), polling at once (-n)
+	/usr/local/sbin/gpsd -n -P /var/run/gpsd.pid udp://127.0.0.1:29470 2>&1
+	/usr/local/bin/pro1x-gnss -v > /var/log/pro1x-gnss.log 2>&1 &
+	gnss=$!
+	if [ -x /usr/local/sbin/location-daemon ]; then
+		timeout "$wait" dbus-monitor --system \
+		    "type='signal',interface='org.maemo.LocationDaemon.Position'" \
+		    "type='signal',interface='org.maemo.LocationDaemon.Device'" 2>&1 |
+		    grep -A4 -E "member=(PositionChanged|FixStatusChanged)" | head -40 &
+		/usr/local/sbin/location-daemon > /var/log/location-daemon.log 2>&1 &
+	fi
+	timeout "$wait" gpspipe -r 2>&1 | grep -E '^\$G[PNL](GGA|RMC)' | awk 'NR % 10 == 1' | head -30
+	echo "- pro1x-gnss"
+	kill "$gnss" 2>/dev/null
+	sleep 2
+	grep -vE "^\\\$G" /var/log/pro1x-gnss.log | tail -20
+	grep -c '^\$G' /var/log/pro1x-gnss.log | sed 's/^/NMEA sentences: /'
+	tail -10 /var/log/location-daemon.log 2>/dev/null
+	;;
+esac
+
+echo "--- pro1x-modemd's log"
+/usr/local/etc/rc.d/pro1x_modemd onestop > /dev/null 2>&1
+sleep 2
+grep -v "^[[:space:]]*$" /var/log/pro1x-modemd.log | tail -80
+dmesg | grep -E "qcom_(pas|smp2p|glink)|qrtr|qcom_apr" | tail -15

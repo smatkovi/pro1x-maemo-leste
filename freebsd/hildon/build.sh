@@ -605,6 +605,33 @@ dsp_tool() {
 	cp -a "$PR/." "$STAGE/"
 }
 
+# The modem's calls, SMS and network as oFono's D-Bus API (pro1x-modemd,
+# libqmi over QRTR) and the voice path of a call on the ADSP
+# (pro1x-callaudio, APR through /dev/apr): freebsd/modem, with their rc.d
+# scripts and D-Bus policy (freebsd/modem/extra)
+modem_part() {
+	local b=$BUILD/pro1x-modem src=$REPO/freebsd/modem
+	log "pro1x-modem"
+	mkdir -p "$b"
+	# shellcheck disable=SC2046
+	$CC $CPPFLAGS $CFLAGS $LDFLAGS -Wall -o "$b/pro1x-modemd" "$src"/pro1x-modemd/*.c \
+	    $(pkg-config --cflags --libs qmi-glib qrtr-glib gio-2.0 gio-unix-2.0) \
+	    > "$b/make.out" 2>&1 || { grep -m20 error "$b/make.out"; return 1; }
+	if [ -d "$src/pro1x-callaudio" ]; then
+		$CC $CPPFLAGS $CFLAGS $LDFLAGS -Wall -I"$REPO/freebsd/fm/tools/pro1x-fmaudio" \
+		    -o "$b/pro1x-callaudio" "$src"/pro1x-callaudio/*.c \
+		    "$REPO/freebsd/fm/tools/pro1x-fmaudio/afe.c" >> "$b/make.out" 2>&1 ||
+		    { grep -m20 error "$b/make.out"; return 1; }
+	fi
+	PR=$H/pkgroot/pro1x-modem
+	rm -rf "$PR"
+	install -D -m 755 "$b/pro1x-modemd" "$PR/usr/local/sbin/pro1x-modemd"
+	[ ! -f "$b/pro1x-callaudio" ] ||
+	    install -D -m 755 "$b/pro1x-callaudio" "$PR/usr/local/sbin/pro1x-callaudio"
+	cp -a "$src/extra/." "$PR/"
+	cp -a "$PR/." "$STAGE/"
+}
+
 # pkg-config puts the sysroot in front of path variables, which some
 # parts install to: those files back where they belong
 unsysroot() {
@@ -778,6 +805,9 @@ if [ $# -eq 0 ] || [[ " $* " == *" pro1x-steps "* ]]; then
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-gnss "* ]]; then
 	dsp_tool pro1x-gnss bin "qmi-glib qrtr-glib" || failed+=(pro1x-gnss)
+fi
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-modem "* ]]; then
+	modem_part || failed+=(pro1x-modem)
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-proximity "* ]]; then
 	dsp_tool pro1x-proximity sbin "libssc gio-unix-2.0" ||
