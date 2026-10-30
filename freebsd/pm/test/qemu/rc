@@ -50,7 +50,7 @@ dmesg | sed -n '/psci_idle/p' | tail -5
 # suspend-to-idle (pro1x_pm): pm.suspend=N seconds, epochs of pm.epoch
 s=$(kenv -q pm.suspend)
 if [ -n "$s" ]; then
-	sysctl hw.pro1x_pm.epoch=$(kenv -q pm.epoch || echo 15)
+	e=$(kenv -q pm.epoch) && sysctl hw.pro1x_pm.epoch=$e
 	n=0
 	while [ $n -lt "$(kenv -q pm.suspend_n || echo 1)" ]; do
 		echo "=== pm-qemu: suspend $s s at $(date +%T)"

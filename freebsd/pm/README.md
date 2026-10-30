@@ -225,9 +225,11 @@ bound to CPU 0, does the same until its deadline (its own timer and the
 broadcast frame). A device interrupt (the power key: PON through the
 SPMI arbiter, INTID 215) ends it, on whichever CPU it comes: that CPU
 tells CPU 0 by an IPI. The suspend runs in epochs of
-`hw.pro1x_pm.epoch` seconds (15): between them the callouts run 50 ms,
-which feeds the watchdog (the boot menu arms it, `qcom_wdt` feeds it
-from a callout). With `hw.pro1x_pm.mpm=1` and the sleep set the SoC can
+`hw.pro1x_pm.epoch` seconds (5): between them the callouts run 50 ms,
+which feeds the watchdog (the boot menu arms it to bite about 32 s after
+a feed, `qcom_wdt` feeds it from a callout every 15 s with 5 s of slack,
+`patches/0023`; a freeze that starts just before a feed delays the feed
+by the freeze's length, hence 5 s and not more). With `hw.pro1x_pm.mpm=1` and the sleep set the SoC can
 reach vlow/vmin while frozen. `hw.pro1x_pm.last` says how long, what
 ended it (the deadline, or the INTID), the power-downs and wake-ups of
 CPU 0, how many CPUs froze, and the RPM's counts; `hw.pro1x_pm.debug=1`
@@ -247,7 +249,9 @@ let the SoC sleep shows in the RPM's counts.
 susp "... pm.suspend=40 pm.epoch=15"`: suspended 40.0 s in three
 freezes, 3 power-downs of CPU 0 (one per freeze), the other 7 CPUs
 frozen within 300 us, each woken once per freeze; the work check
-afterwards without a wrong result. Four suspends of 40 s in a row
+afterwards without a wrong result (with the epochs at 15 s; at the
+default 5 s: 30 s in 6 freezes, twice in a row, the same). Four
+suspends of 40 s in a row
 (`pm.suspend_n=4`), the same. The device test `pro1x.test=suspend` (A,
 B, D with `pro1x.power_min=2` and `5`, no MPM or RPM in QEMU): three
 runs through, 16 and 24 freezes, every one ended by its deadline with
@@ -403,7 +407,10 @@ phone N seconds after the start whatever happens.
    `pro1x_rpmsleep.ko` into it (the RAM root loads them from userdata,
    read only). Then:
 
-       pro1x.test=suspend hw.psci_idle.enable=1 pro1x.power_min=10 hint.qcom_wdt.0.lifetime=1500
+       pro1x.test=suspend hw.psci_idle.enable=1 hw.pro1x_pm.debug=1 pro1x.power_min=10 hint.qcom_wdt.0.lifetime=1500
+
+   (`hw.pro1x_pm.debug=1`: each freeze on the console, so that a stop
+   shows which one it was; one of five QEMU runs stopped once, below.)
 
    Expected: `pro1x_pm: vMPM at 0x45f01b8 (96 pins), doorbell 0xf111008
    bit 1, RPM statistics yes; the hand-over off (hw.pro1x_pm.mpm=1), wake
@@ -412,7 +419,7 @@ phone N seconds after the start whatever happens.
    `qcom_rpm: message RAM 0x45f0000 ...`, `pro1x_rpmsleep: the sleep set:
    12 of 12 resources at 0; none refused`. A (60 s idle with the
    hand-over): `MPM hand-overs` growing, and the real question, `vlow`
-   or `vmin` counting up. B: `hw.pro1x_pm.last: suspended 60.0xx s in 3
+   or `vmin` counting up. B: `hw.pro1x_pm.last: suspended 60.0xx s in 11
    epochs, ended by the deadline 0; ... at least 7 other CPUs frozen`
    (0 with one CPU), the RPM's counts `+N`. D: ten `power:` lines with
    the current read right after each minute's wake-up (the current
@@ -421,8 +428,7 @@ phone N seconds after the start whatever happens.
    each. Failure signs: the console ending after `B: suspend 60 s` (the
    SoC does not wake from its sleep: no timer reached the RPM, or the
    frame does not wake CPU 0): the watchdog resets after 25 minutes
-   (it keeps running while frozen; if it bites during B, the epochs are
-   too long for it: `hw.pro1x_pm.epoch=10`); `ended by INTID N` early in
+   (it keeps running while frozen; the epochs of 5 s keep it fed); `ended by INTID N` early in
    B: a device interrupt that keeps coming (N - 32 is its SPI: which
    driver's is in the device tree); `vlow +0, vmin +0` with hand-overs:
    another master or a vote holds the SoC up, as on Leste

@@ -42,7 +42,7 @@
  *                            device interrupt): the power_suspend handlers,
  *                            then every CPU in its deepest state with its
  *                            timer masked (psci_idle_freeze) in epochs of
- *                            hw.pro1x_pm.epoch seconds (15), between which
+ *                            hw.pro1x_pm.epoch seconds (5), between which
  *                            the callouts run (the watchdog is fed); a
  *                            device interrupt (the power key: PON through
  *                            the SPMI arbiter, INTID 215) or the deadline
@@ -111,7 +111,12 @@ static struct {
 	char		pins_str[96];
 	char		last[320];
 } pm = {
-	.epoch = 15,
+	/*
+	 * the watchdog bites about 32 s after a feed, fed every 15 s with
+	 * 5 s of slack (patches/0023): a freeze that starts just before a
+	 * feed delays it by its length, so at most 5 s
+	 */
+	.epoch = 5,
 	.pins_str = "86:h",
 };
 

@@ -207,7 +207,7 @@ suspend)
 	sysctl hw.pro1x_pm.rpm_stats
 	pm_stats
 	pm_bat "after A"
-	# B: suspend-to-idle for 60 s, woken by the deadline (epochs of 15 s)
+	# B: suspend-to-idle for 60 s, woken by the deadline (epochs of 5 s)
 	pm_log "B: suspend 60 s"
 	sysctl hw.pro1x_pm.suspend=60 > /dev/null
 	sysctl hw.pro1x_pm.last hw.pro1x_pm.rpm_stats
