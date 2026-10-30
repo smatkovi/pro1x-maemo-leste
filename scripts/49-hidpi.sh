@@ -37,6 +37,9 @@ PARTS=(
   # to its libraries, location-ui's dialogs without an answer at the start
   "liblocation|d1ae86503411|1"
   "location-ui|55b9700aed33|1"
+  # repeating appointments on 64-bit (patches/fixes): none was expanded,
+  # in qalendar's views and on the Events page (pro1x-events)
+  "calendar-backend|7a149bfc9f76|1"
 )
 if [ -n "$ONLY" ]; then
   sel=()

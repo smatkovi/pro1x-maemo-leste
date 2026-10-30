@@ -1,0 +1,66 @@
+From 60c668168bd757a072c25d24c6f4334ba3ad2f73 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 30 Oct 2026 07:43:56 +0100
+Subject: [PATCH 1/2] Fix repeating events on 64-bit: string::size_type for
+ find()
+
+CMulticalendar::getRecurrentTimes(), CMulticalendar::getInstanceBeyond()
+and CUtility::getRecurrentTimes() kept the result of
+szRRule.find("UNTIL=") in an unsigned int. On LP64 platforms (arm64,
+amd64) string::npos does not fit into it, so "pos != string::npos" was
+always true: for a rule without UNTIL the search for "T" started at
+pos + 6, which wrapped around to 5, and replace(pos + 1, 6, "235959")
+then overwrote the rule's beginning, "FREQ=WEEKLY" becoming
+"235959EEKLY" (or, with a "T" further on as in INTERVAL, six characters
+after it). libical found no recurrence in that, so no instance of a
+repeating event was generated and getAllEventsTodos() left such events
+out of every view; only birthdays, which have a yearly path of their
+own for short ranges, still showed.
+
+Keep the positions in string::size_type, as c6e9ef0 did for the
+converters.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/CMulticalendar.cpp | 4 ++--
+ src/CUtility.cpp       | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/CMulticalendar.cpp b/src/CMulticalendar.cpp
+index cbe627a..71f6474 100644
+--- a/src/CMulticalendar.cpp
++++ b/src/CMulticalendar.cpp
+@@ -632,7 +632,7 @@ bool CMulticalendar::getRecurrentTimes(string szRRule,
+      */
+     //icaltimezone* pTz = 0;
+     //icaltimezone* pTz = CMulticalendar::getSystemTimeZoneAsIcalTimeZone();
+-    unsigned int pos = 0;
++    string::size_type pos = 0;
+     pos = szRRule.find(UNTIL_ICAL,0);
+     if(pos != string::npos)
+     {
+@@ -706,7 +706,7 @@ time_t CMulticalendar::getInstanceBeyond(string szRRule,
+     bool loopexit = false;
+     bool instanceIndicator = false;
+     
+-    unsigned int pos = 0;
++    string::size_type pos = 0;
+     pos = szRRule.find(UNTIL_ICAL,0);
+     if(pos != string::npos)
+     {
+diff --git a/src/CUtility.cpp b/src/CUtility.cpp
+index 1e4ac57..c4700b4 100644
+--- a/src/CUtility.cpp
++++ b/src/CUtility.cpp
+@@ -174,7 +174,7 @@ std::vector < time_t > CUtility::getRecurrentTimes(string szRRule,
+     time_t utc_tim = 0;
+     vector < time_t > listtime;
+     bool loopexit = false;
+-    unsigned int pos = 0;
++    string::size_type pos = 0;
+     pos = szRRule.find(UNTIL_ICAL,0);
+     if(pos != string::npos)
+     {
+-- 
+2.56.0
+
