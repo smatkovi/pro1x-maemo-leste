@@ -781,6 +781,21 @@ ipa_smp2p_notify(struct ipa_softc *sc)
 	    on ? "enabled" : "not enabled");
 }
 
+/* ipa_smp2p_notify_reset(): the valid flag and the answer cleared */
+void
+ipa_os_modem_gone(struct ipa *ipa)
+{
+	struct ipa_softc *sc = sc_of(ipa);
+
+	if (!sc->notified)
+		return;
+	qcom_smp2p_out_update(sc->valid_xref, 1U << sc->valid_bit, 0);
+	qcom_smp2p_out_update(sc->enabled_xref, 1U << sc->enabled_bit, 0);
+	sc->notified = false;
+	device_printf(sc->dev, "SMP2P clock answer reset for the modem's next "
+	    "boot\n");
+}
+
 static void
 ipa_smp2p_cb(void *arg, u_int bit, bool set)
 {
@@ -806,6 +821,8 @@ ipa_smp2p_watch(struct ipa_softc *sc)
 		return;
 	error = qcom_smp2p_in_watch(sc->query_xref, sc->query_bit,
 	    ipa_smp2p_cb, sc);
+	device_printf(sc->dev, "SMP2P: watching the modem's clock query: %s "
+	    "(%d)\n", error == 0 ? "yes" : "not yet", error);
 	if (error == 0) {
 		sc->watching = true;
 		if (sc->ready_xref != 0)

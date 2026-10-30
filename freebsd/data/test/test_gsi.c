@@ -568,6 +568,8 @@ ipa_os_tx_done(struct ipa *ipa, struct ipa_endpoint *ep, void *cookie)
 
 void ipa_os_modem_up(struct ipa *ipa) { modem_up_n++; }
 void ipa_os_modem_down(struct ipa *ipa) { modem_down_n++; }
+static int modem_gone_n;
+void ipa_os_modem_gone(struct ipa *ipa) { modem_gone_n++; }
 bool ipa_os_powered(struct ipa *ipa) { return (true); }
 void ipa_os_schedule(struct ipa *ipa, enum ipa_work w) { }
 
@@ -829,8 +831,8 @@ check_crash(struct ipa *ipa)
 	int before = ncmds, i;
 
 	ipa_modem_crashed(ipa);
-	CHK(modem_down_n == 1 && ipa->modem_state == IPA_MODEM_STATE_STOPPED,
-	    "modem stop");
+	CHK(modem_down_n == 1 && ipa->modem_state == IPA_MODEM_STATE_STOPPED &&
+	    modem_gone_n == 1, "modem stop, the SMP2P answer reset");
 	/* flow control on, then off, for the modem's TX channels (0 and 1) */
 	for (i = 0; i <= 1; i++)
 		CHK(generic_ops[i][GSI_GENERIC_ENABLE_FLOW_CONTROL] == 1 &&

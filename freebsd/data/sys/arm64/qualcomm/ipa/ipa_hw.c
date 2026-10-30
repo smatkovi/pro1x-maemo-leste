@@ -1185,6 +1185,8 @@ ipa_modem_crashed(struct ipa *ipa)
 		ipa_os_log(ipa, "error %d stopping modem\n", error);
 	if ((error = ipa_mem_zero_modem(ipa)) != 0)
 		ipa_os_log(ipa, "error %d zeroing modem memory regions\n", error);
+	/* Linux does this when the modem starts again (BEFORE_POWERUP) */
+	ipa_os_modem_gone(ipa);
 }
 
 /* --- init, config, setup ------------------------------------------------------------- */

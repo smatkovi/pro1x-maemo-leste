@@ -264,6 +264,9 @@ void	ipa_os_tx_done(struct ipa *, struct ipa_endpoint *, void *cookie);
 /* the modem's data path is up (the QMI handshake), or gone */
 void	ipa_os_modem_up(struct ipa *);
 void	ipa_os_modem_down(struct ipa *);
+/* the modem is gone: its next boot gets a fresh SMP2P answer
+ * (ipa_smp2p_notify_reset) */
+void	ipa_os_modem_gone(struct ipa *);
 /* is the IPA powered (the SMP2P clock query's answer) */
 bool	ipa_os_powered(struct ipa *);
 /* work that may sleep, on the driver's own thread: ipa_work_run(ipa, w) */

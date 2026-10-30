@@ -139,8 +139,10 @@ ipa_qmi_modem_gone(struct ipa_qmi *q, const char *why)
 	q->st.indication_requested = false;
 	q->st.indication_sent = false;
 	ipa_sunlock(&q->lock);
-	if (was || q->ipa->modem_state != IPA_MODEM_STATE_STOPPED)
-		ipa_os_schedule(q->ipa, IPA_WORK_MODEM_GONE);
+	/* the crash path even before the data path was up, as Linux's
+	 * BEFORE_SHUTDOWN once the IPA is set up */
+	(void)was;
+	ipa_os_schedule(q->ipa, IPA_WORK_MODEM_GONE);
 }
 
 static void
