@@ -180,6 +180,9 @@ declare -A LICENSE=([libhildon]=LGPL-2.1-or-later [hildon-status-menu]=LGPL-2.1-
 # what the files need besides the libraries they link (those go by the
 # packages that have them, below)
 declare -A EXTRA=([pro1x-fm]="libpulse alsa-utils python")
+# left out: the event log's test suite (Leste packages it apart; it wants
+# the check library)
+declare -A DROP=([rtcom-eventlogger]="usr/bin/rtcom-eventlogger-testsuite usr/lib/tests")
 for e in $list; do
 	name=${e%%=*} v=${e#*=} PR=$B/root/$name
 	case $name in
@@ -203,6 +206,7 @@ for e in $list; do
 	fi
 	# the libraries its programs and libraries link, by the Arch packages
 	# that have them (those built here, without pacman, are left out)
+	for d in ${DROP[$name]:-}; do rm -rf "${PR:?}/$d"; done
 	deps=" ${EXTRA[$name]:-} "
 	ldconfig -p > "$B/ld.cache"
 	while IFS= read -r f; do
@@ -216,8 +220,10 @@ for e in $list; do
 	    'head -c4 "$1" | grep -q ELF' sh {} \; -print)
 	# GConf's schemas, registered as their packages do on Leste
 	schemas=
-	[ ! -d "$PR/etc/gconf/schemas" ] ||
-	    schemas=$(cd "$PR" && find etc/gconf/schemas -name '*.schemas' | sed 's|^|/|' | tr '\n' ' ')
+	for d in etc/gconf/schemas usr/share/gconf/schemas; do
+		[ ! -d "$PR/$d" ] ||
+		    schemas="$schemas$(cd "$PR" && find "$d" -name '*.schemas' | sed 's|^|/|' | tr '\n' ' ')"
+	done
 	P=$B/pkg/$name
 	rm -rf "$P"
 	install -d -o alarm -g alarm "$P"
