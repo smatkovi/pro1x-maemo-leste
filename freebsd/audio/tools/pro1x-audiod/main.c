@@ -444,6 +444,7 @@ request(char *line, char *ans, size_t alen)
 		return;
 	}
 	if (strcmp(w[0], "seq") == 0 && n == 2) {
+		/* by hand: the caller knows which blocks are clocked */
 		D.cur = &D.be[BE_RX];
 		r = seq_run(&D.seq, w[1], &D.cio);
 		snprintf(ans, alen, r == 0 ? "ok [%s] done" : r == -ENOENT ?

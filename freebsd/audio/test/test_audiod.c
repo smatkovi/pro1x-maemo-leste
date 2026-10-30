@@ -727,6 +727,32 @@ test_pcm(void)
 	    count_op(ADM_CMD_MATRIX_MAP_ROUTINGS_V5, 0) == 0 &&
 	    count_op(ASM_DATA_CMD_WRITE_V2, 0) == 0);
 	CHECK(d.be[BE_RX].users == 0);
+	/* sequences without rx-up: no macro register is touched (volume) */
+	setup(&d);
+	{
+		struct seq s;
+		char e[128];
+		static struct mmio trap;
+
+		CHECK(seq_parse(&s, "[power]\nmark p\n[volume]\n"
+		    "w rxmacro 0x414 $vol_db\n", "b.seq", e, sizeof(e)) == 0);
+		d.seq = s;
+		d.have_seq = true;
+		trap.name = "trap";
+		trap.rd = NULL;
+		trap.wr = NULL;
+		trap.base = NULL;	/* a write would crash the test */
+		d.cio.win[TGT_RXMACRO] = &trap;
+		CHECK(backend_get(&d, BE_RX) == 0 && d.be[BE_RX].up &&
+		    !d.be[BE_RX].codec);
+		backend_mixer(&d, 0, 50);
+		backend_route(&d, "hph");
+		backend_put(&d, BE_RX);
+		backend_tick(&d);
+		CHECK(!d.be[BE_RX].up);
+		seq_free(&d.seq);
+		d.have_seq = false;
+	}
 	printf("pcm: done\n");
 }
 

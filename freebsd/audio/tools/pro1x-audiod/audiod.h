@@ -321,6 +321,7 @@ struct backend {
 	unsigned	channels;	/* the port's (sm8250_be_hw_params_fixup) */
 	int		users;
 	bool		up, port_started;
+	bool		codec;		/* its <backend>-up ran: the macro clocked */
 	uint64_t	idle_at;	/* power down then; 0: not pending */
 	char		route[16];	/* the codec path it is up for */
 };

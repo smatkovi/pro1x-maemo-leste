@@ -441,7 +441,11 @@ backend_up(struct audiod *d, int be)
 	}
 	snprintf(name, sizeof(name), "%s-up", b->name);
 	afe_in_seq = has_afe(d, name);
-	section(d, name);
+	/*
+	 * Only after it are the macro's registers clocked: without it no
+	 * sequence touches them (a read of a gated block hangs the bus)
+	 */
+	b->codec = section(d, name) >= 0;
 	snprintf(name, sizeof(name), "%s-up", route);
 	afe_in_seq |= has_afe(d, name);
 	if (!afe_in_seq && (r = be_port(d, b, true)) != 0) {
@@ -450,9 +454,12 @@ backend_up(struct audiod *d, int be)
 		return (r);
 	}
 	snprintf(name, sizeof(name), "%s-up", route);
-	if (section(d, name) == -ENOENT && d->have_seq)
-		fma_log("codec: no path [%s]: the ADSP's side alone", name);
-	if (be == BE_RX)
+	if (!b->codec)
+		fma_log("codec: no [%s-up]: the ADSP's side alone, no codec "
+		    "path", b->name);
+	else if (section(d, name) == -ENOENT)
+		fma_log("codec: no path [%s]", name);
+	if (be == BE_RX && b->codec)
 		section(d, "volume");
 	if (!b->port_started) {
 		fma_log("codec: [%s] said nothing of the AFE port: started "
@@ -475,11 +482,14 @@ backend_down(struct audiod *d, int be)
 	d->cur = b;
 	/* Linux: the back end's shutdown stops the port, DAPM follows */
 	be_port(d, b, false);
-	snprintf(name, sizeof(name), "%s-down", b->route);
-	section(d, name);
-	snprintf(name, sizeof(name), "%s-down", b->name);
-	section(d, name);
+	if (b->codec) {
+		snprintf(name, sizeof(name), "%s-down", b->route);
+		section(d, name);
+		snprintf(name, sizeof(name), "%s-down", b->name);
+		section(d, name);
+	}
 	b->up = false;
+	b->codec = false;
 	b->idle_at = 0;
 	fma_log("backend %s down", b->name);
 }
@@ -530,7 +540,7 @@ backend_route(struct audiod *d, const char *route)
 
 	if (strcmp(route, "spk") && strcmp(route, "hph") && strcmp(route, "ear"))
 		return (-EINVAL);
-	if (b->up && strcmp(b->route, route) != 0) {
+	if (b->up && b->codec && strcmp(b->route, route) != 0) {
 		d->cur = b;
 		snprintf(name, sizeof(name), "%s-down", b->route);
 		section(d, name);
@@ -551,7 +561,8 @@ backend_mixer(struct audiod *d, unsigned dev, unsigned left)
 		return;
 	d->mix[dev] = left;
 	fma_dbg("mixer %u: %u", dev, left);
-	if (dev == 0 && d->be[BE_RX].up) {	/* SOUND_MIXER_VOLUME */
+	if (dev == 0 && d->be[BE_RX].up && d->be[BE_RX].codec) {
+		/* SOUND_MIXER_VOLUME: only while the RX macro is clocked */
 		d->cur = &d->be[BE_RX];
 		section(d, "volume");
 	}
