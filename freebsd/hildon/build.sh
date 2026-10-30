@@ -606,9 +606,9 @@ dsp_tool() {
 }
 
 # The modem's calls, SMS and network as oFono's D-Bus API (pro1x-modemd,
-# libqmi over QRTR) and the voice path of a call on the ADSP
-# (pro1x-callaudio, APR through /dev/apr): freebsd/modem, with their rc.d
-# scripts and D-Bus policy (freebsd/modem/extra)
+# libqmi over QRTR) and the voice of a call (pro1x-callaudio, through
+# pro1x-audiod's control socket): freebsd/modem, with the rc.d script, the
+# D-Bus policy and sphone's settings (freebsd/modem/extra)
 modem_part() {
 	local b=$BUILD/pro1x-modem src=$REPO/freebsd/modem
 	log "pro1x-modem"
@@ -617,17 +617,13 @@ modem_part() {
 	$CC $CPPFLAGS $CFLAGS $LDFLAGS -Wall -o "$b/pro1x-modemd" "$src"/pro1x-modemd/*.c \
 	    $(pkg-config --cflags --libs qmi-glib qrtr-glib gio-2.0 gio-unix-2.0) \
 	    > "$b/make.out" 2>&1 || { grep -m20 error "$b/make.out"; return 1; }
-	if [ -d "$src/pro1x-callaudio" ]; then
-		$CC $CPPFLAGS $CFLAGS $LDFLAGS -Wall -I"$REPO/freebsd/fm/tools/pro1x-fmaudio" \
-		    -o "$b/pro1x-callaudio" "$src"/pro1x-callaudio/*.c \
-		    "$REPO/freebsd/fm/tools/pro1x-fmaudio/afe.c" >> "$b/make.out" 2>&1 ||
-		    { grep -m20 error "$b/make.out"; return 1; }
-	fi
+	$CC $CPPFLAGS $CFLAGS $LDFLAGS -Wall -o "$b/pro1x-callaudio" \
+	    "$src"/pro1x-callaudio/*.c >> "$b/make.out" 2>&1 ||
+	    { grep -m20 error "$b/make.out"; return 1; }
 	PR=$H/pkgroot/pro1x-modem
 	rm -rf "$PR"
 	install -D -m 755 "$b/pro1x-modemd" "$PR/usr/local/sbin/pro1x-modemd"
-	[ ! -f "$b/pro1x-callaudio" ] ||
-	    install -D -m 755 "$b/pro1x-callaudio" "$PR/usr/local/sbin/pro1x-callaudio"
+	install -D -m 755 "$b/pro1x-callaudio" "$PR/usr/local/sbin/pro1x-callaudio"
 	cp -a "$src/extra/." "$PR/"
 	cp -a "$PR/." "$STAGE/"
 }

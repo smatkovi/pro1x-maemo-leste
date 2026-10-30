@@ -3,7 +3,8 @@
 # on a private D-Bus, its clients' view checked by test_ofono.py:
 #   main        the PIN from the PIN file, the network, SMS in and out
 #               (one part, three parts, class 0), a call out (DTMF, the
-#               call audio program started and stopped), a call in, offline
+#               pro1x-callaudio: the voice up and down at pro1x-audiod's
+#               stand-in), a call in, offline
 #   wrongpin    a wrong PIN file: one attempt, then none after a restart
 #   lowretries  fewer than 3 tries left: no attempt
 #   nofile      no PIN file: the PIN over D-Bus (wrong, then right)
@@ -13,10 +14,13 @@ set -eu
 T=$(mktemp -d /tmp/pro1x-modem-test.XXXXXX)
 D=$(cd "$(dirname "$0")" && pwd)
 B=${B:-$T/pro1x-modemd}
+CA=${CA:-$T/pro1x-callaudio}
 trap 'kill $(cat "$T"/*.pid 2>/dev/null) 2>/dev/null || :; rm -rf "$T"' EXIT
 [ -x "$B" ] || cc -O1 -g -Wall -Wextra -Wno-unused-parameter -fsanitize=address,undefined \
     -fno-omit-frame-pointer -o "$B" "$D"/../pro1x-modemd/*.c \
     $(pkg-config --cflags --libs qmi-glib qrtr-glib gio-2.0 gio-unix-2.0)
+[ -x "$CA" ] || cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -o "$CA" \
+    "$D"/../pro1x-callaudio/*.c
 cat > "$T/bus.conf" <<CONF
 <busconfig>
   <type>session</type>
@@ -34,7 +38,12 @@ echo $! > "$T/bus.pid"
 for i in 1 2 3 4 5 6 7 8 9 10; do [ -S "$T/bus" ] && break; sleep 0.2; done
 # sphone and pro1x-modemd look for the system bus here
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=$T/bus
-export FAKE_AUDIO_LOG=$T/audio.log
+# pro1x-callaudio as pro1x-modemd runs it (-A), against a stand-in for
+# pro1x-audiod's control socket, which logs its requests in audio.log
+python3 "$D/fakeaudiod.py" "$T/audio.sock" "$T/audio.log" > /dev/null 2>&1 &
+echo $! > "$T/audiod.pid"
+printf '#!/bin/sh\nexec "%s" -v -S "%s"\n' "$CA" "$T/audio.sock" > "$T/callaudio"
+chmod +x "$T/callaudio"
 PIN=7395
 fails=0
 
@@ -59,7 +68,7 @@ scenario() {
 	fi
 }
 start_modemd() {
-	"$B" -v -d "$T/modem" -s 2 -A "$D/fake-callaudio.sh" -P "$T/pin-tried" $1 \
+	"$B" -v -d "$T/modem" -s 2 -A "$T/callaudio" -P "$T/pin-tried" $1 \
 	    > "$T/modemd.log" 2>&1 &
 	echo $! > "$T/modemd.pid"
 }

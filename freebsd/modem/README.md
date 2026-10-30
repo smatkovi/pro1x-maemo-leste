@@ -11,7 +11,7 @@ QMI to the modem and oFono's D-Bus API to the applications:
 | Stage | What | Here | State |
 | --- | --- | --- | --- |
 | 1 | the modem's calls, SMS, SIM and network as oFono's D-Bus API | `pro1x-modemd` (libqmi over QRTR) | built for FreeBSD/arm64; host tested against a simulated modem; device runs prepared |
-| 2 | the voice of a call: the ADSP's voice path (MVM, CVP, the AFE's codec DMA ports) | `pro1x-callaudio` over `/dev/apr` | see "Stage 2" |
+| 2 | the voice of a call: the ADSP's voice session and the codec's earpiece and microphone | `pro1x-callaudio`, through pro1x-audiod (freebsd/audio, the one user of `/dev/apr`) | built; host tested against a stand-in for pro1x-audiod; needs the audio stack on the phone |
 | 3 | GPS: the modem's GNSS (QMI LOC) into gpsd, positions for Hildon's apps | `pro1x-gnss`, gpsd, Leste's `location-daemon` | see "Stage 3" |
 
 Nothing here has run on the phone (unreachable until 2026-10-31). No call
@@ -277,7 +277,71 @@ Risks, in the order they would show:
 
 ## Stage 2: call audio
 
-Not written yet.
+A call's voice does not pass the application processor: the modem hands
+it to the ADSP, which runs it through its voice processing (MVM, CVP) to
+the codec DMA ports, and from there through the codec to the earpiece, and
+from the microphone back (KolibriOS's `docs/pro1x-audio.md`). What the
+application processor does is set this up: the codec's paths, the ADSP's
+ports, and for each call a voice session.
+
+**KolibriOS's way does not carry over.** `pro1x-kexec.sh -a` keeps what
+a running Leste left: the ADSP with its AFE ports started and the codec
+powered by two streams held open across the kexec, Linux's APR channel
+adopted. FreeBSD is kexec'd from the boot menu's initramfs, where no sound
+card exists (no ADSP driver, no UCM, no PulseAudio: nothing to leave
+running); and it is not kexec'd from a running Leste instead, since the
+menu rebinds UFS with an identity mapping before the jump
+(`initramfs/local-top/pro1x-loop-root`), which a Leste running from UFS
+could not do under itself. And FreeBSD starts the ADSP itself (PAS, `pro1x-dsp start
+adsp`, dsp3), which begins with no ports, clocks or codec set up. So on
+FreeBSD the whole path is set up from scratch: the AFE's votes, clocks and
+codec DMA ports, the codec (RX macro, SoundWire, WCD9370's EAR; VA macro
+and DMIC3), then the voice session.
+
+**Who does it.** `/dev/apr` (`qcom_apr.ko`) takes one process, and on
+FreeBSD that is `pro1x-audiod` (freebsd/audio, the audio stack's daemon:
+ASM, ADM, the AFE, the codec's replay sequences from the Leste trace,
+SoundWire). Its `voice start` is the session as Linux's q6voice and
+KolibriOS run it (MVM `CREATE_PASSIVE_CONTROL_SESSION` "11C05000", dual
+control, CVP `CREATE_FULL_CONTROL_SESSION_V2` with tx `VA_CODEC_DMA_TX_0`
+0xB021 and rx `RX_CODEC_DMA_RX_0` 0xB030, enable, attach, `START_VOICE`;
+the way back in reverse), then the two back ends with the codec's paths of
+the current route; `voice stop` takes it down. So `pro1x-callaudio` is a
+client of pro1x-audiod's control socket (`/var/run/pro1x-audio.sock`, one
+request per connection, as `pro1x-audioctl`):
+
+| When | pro1x-callaudio asks |
+| --- | --- |
+| a call exists (pro1x-modemd starts it: dialling, ringing either way, active, held, as Linux's `pro1x-voice-call`) | `status` (the route of before), `route ear`, `voice start`; then "callaudio: ready" |
+| SIGUSR1 | `route spk`, again: `route ear` (the loudspeaker; not wired to sphone's Speaker button, which switches PulseAudio's port) |
+| the last call is over (SIGTERM from pro1x-modemd) | `voice stop`, the route of before |
+
+Without pro1x-audiod (none within 5 s) or when `voice start` fails it
+says so ("the call has no sound") and exits 1; pro1x-modemd then does not
+start it again for these calls. The codec's earpiece and microphone paths
+and the `route ear` they hang on are the audio stack's (freebsd/audio,
+from its Leste trace of 2026-10-31: `ear`, `mic`).
+
+Tests on the PC (`make -C freebsd/modem/test`): `test_callaudio.sh` runs
+pro1x-callaudio against `fakeaudiod.py` (pro1x-audiod's answers as its
+`main.c` writes them): the requests of a call in order (status, route
+ear, voice start, route spk and back on SIGUSR1, voice stop, the route of
+before), a refused `voice start` (exit 1, the route restored), no daemon
+(exit 1). In `run.sh` pro1x-modemd runs the real pro1x-callaudio per call
+against the same stand-in: `route ear`, `voice start` while the call
+exists, `voice stop` after it.
+
+What the device run adds (`pro1x.modem=call`): the ADSP started
+(`pro1x-dsp start adsp`, unless running) and pro1x-audiod
+(`rc.d/pro1x_audiod`, when freebsd/audio has one), `pro1x-audioctl
+status`, then the call with pro1x-callaudio (`callaudio: ready (ok
+voice=up mvm=... cvp=...)` in pro1x-modemd's log), pro1x-audiod's status
+during the call, `callaudio: down` after it. The risks: the ADSP and the
+modem started by FreeBSD both (dsp3 and dsp6 have not run); the passive
+MVM session needs the modem's own voice session to exist (Linux's
+pro1x-voice-call found it to work only when started while a call exists,
+which is when pro1x-modemd starts it); the codec's paths from the trace.
+A call without sound still connects (stage 1).
 
 ## Stage 3: GPS
 

@@ -262,7 +262,8 @@ def call_state(p):
 
 
 check(wait_for(lambda: call_state(cp) == 'alerting'), 'alerting')
-check(wait_for(lambda: 'start' in open(AUDIOLOG).read()), 'call audio started with the call')
+check(wait_for(lambda: 'route ear\nvoice start' in open(AUDIOLOG).read()),
+      'pro1x-callaudio: route ear, voice start with the call')
 ctl('remote-answer')
 check(wait_for(lambda: call_state(cp) == 'active'), 'active once answered')
 check(props(cp, 'org.ofono.VoiceCall').get('StartTime'), 'StartTime')
@@ -277,7 +278,7 @@ check(dbus_error(vcm.SendTones, '12x') == 'org.ofono.Error.InvalidFormat', 'Send
 iface(cp, 'org.ofono.VoiceCall').Hangup()
 check(wait_for(lambda: call_state(cp) == 'disconnected'), 'disconnected after Hangup')
 check(wait_for(lambda: sigs('org.ofono.VoiceCallManager', 'CallRemoved', MP)), 'CallRemoved')
-check(wait_for(lambda: 'stop' in open(AUDIOLOG).read()), 'call audio stopped after the call')
+check(wait_for(lambda: 'voice stop' in open(AUDIOLOG).read()), 'pro1x-callaudio: voice stop after the call')
 check(len(vcm.GetCalls()) == 0, 'no calls left')
 
 # --- a call in ---------------------------------------------------------------

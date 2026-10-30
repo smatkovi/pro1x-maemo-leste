@@ -56,4 +56,13 @@ $WORK/audio/`) for `tools/trace2seq.py` (below).
 | 3 | sound(4): `/dev/dsp`, `/dev/mixer` | `snd_pro1x.ko` (kernel) + `pro1x-audiod` |
 | 4 | Hildon (PulseAudio's OSS module, the volume keys and bar), calls | config, `voice` for the modem agent |
 
+Calls (freebsd/modem, stage 2): pro1x-modemd runs `pro1x-callaudio` while
+a call exists; it sends `status`, `route ear` and `voice start` on this
+daemon's control socket, `route spk`/`route ear` on SIGUSR1, and `voice
+stop` and the route of before after the last call. It needs the earpiece
+(`ear`) and the microphone (`mic`, VA DEC0 to `VA_CODEC_DMA_TX_0`) paths
+for the voice session's back ends; the modem's device run `pro1x.modem=call`
+starts the ADSP and `rc.d/pro1x_audiod` when `pro1x-audioctl status` does
+not answer.
+
 The rest of this file grows with the stages.
