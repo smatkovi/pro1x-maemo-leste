@@ -22,10 +22,14 @@ rcvar=pro1x_modemd_enable
 load_rc_config $name
 : ${pro1x_modemd_enable:=NO}
 
+: ${pro1x_modemd_flags:=}
+
 pidfile=/var/run/${name}.pid
 procname=/usr/local/sbin/pro1x-modemd
 command=/usr/sbin/daemon
-command_args="-r -R 10 -C 5 -P ${pidfile} -o /var/log/pro1x-modemd.log ${procname}"
+command_args="-r -R 10 -C 5 -P ${pidfile} -o /var/log/pro1x-modemd.log ${procname} ${pro1x_modemd_flags}"
+# rc.subr would put ${name}_flags before command_args, i.e. on daemon(8)
+pro1x_modemd_flags=""
 start_precmd=pro1x_modemd_prestart
 
 pro1x_modemd_prestart()

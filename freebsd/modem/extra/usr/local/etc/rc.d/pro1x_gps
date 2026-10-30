@@ -39,7 +39,7 @@ pro1x_gps_start()
 		    return 1
 	fi
 	# daemon(8) passes SIGTERM on to pro1x-gnss, which stops the session
-	if ! pgrep -qF $gnss_pid 2> /dev/null; then
+	if ! pgrep -qF $gnss_pid daemon 2> /dev/null; then
 		/usr/sbin/daemon -r -R 10 -P $gnss_pid -o /var/log/pro1x-gnss.log \
 		    /usr/local/bin/pro1x-gnss -p ${pro1x_gps_port}
 	fi
@@ -57,7 +57,7 @@ pro1x_gps_stop()
 pro1x_gps_status()
 {
 	pgrep -lF $gpsd_pid 2> /dev/null || echo "gpsd not running"
-	pgrep -lF $gnss_pid 2> /dev/null || echo "pro1x-gnss not running"
+	pgrep -lF $gnss_pid daemon 2> /dev/null || echo "pro1x-gnss not running"
 }
 
 run_rc_command "$1"
