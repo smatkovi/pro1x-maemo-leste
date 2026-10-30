@@ -232,7 +232,12 @@ system does not use.
     oFono kept in `/root/ofono-orig`, `pro1x-modem-wait` in the runlevel;
   - `--with harmattan,waydroid`: dry run only. Its apt plan showed
     ModemManager among the recommended packages, which is why nothing
-    recommended is installed.
+    recommended is installed;
+  - from a clone (`scripts/leste-chroot.sh repo`) with the published
+    manifest: nothing left to do. `--with waydroid --yes` installed
+    `pro1x-waydroid` (not held) with weston from the archive;
+  - without the chroot's own policy-rc.d: the tool put its own there for
+    the install and removed it afterwards.
 - **Arch**: on the PC with a stand-in `pacman` (answers `-Q`, passes `-Qo` to the
   real one, refuses installs) and a stand-in 42: the table, download and
   checks, a crafted package with `/usr/bin/ls` (stopped: belongs to
@@ -242,6 +247,7 @@ system does not use.
   `pkg` and `fetch`: the tag from GitHub's API, the table from
   freebsd-hildon-2026.10.30.3's real catalogue, the rewrite of
   `pro1x.conf` (and a new one), the old file back when `pkg update`
-  fails. Not yet run against the real `pkg` on FreeBSD.
+  fails, `freebsd.manifest` when the API does not answer. Not yet run
+  against the real `pkg` on FreeBSD.
 
 Not tried on the phone.
