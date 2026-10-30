@@ -92,7 +92,8 @@ sums_of() {
   awk -v n="$name" '{ f = $2; sub(/^\*/, "", f) } f == n { print $1 }' "$f"
 }
 
-# Every package of the releases with PREFIX (leste- or arch-): downloaded,
+# Every package (file pattern EXT) of the releases with PREFIX (leste- or
+# arch-; pacman's packages may be .xz or .zst): downloaded,
 # checked, its control data read. Writes rows of
 #   name version arch sha256 size tag created url
 collect() {
@@ -102,7 +103,8 @@ collect() {
   while IFS=$'\t' read -r tag created name size digest url; do
     case $tag in "$prefix"*) ;; *) continue ;; esac
     [ "$tag" != "$POINTER" ] || continue
-    case $name in *"$ext") ;; *) continue ;; esac
+    # shellcheck disable=SC2254
+    case $name in $ext) ;; *) continue ;; esac
     f=$CACHE/pkgs/$tag/$name
     if [ ! -s "$f" ] || [ "$(stat -c %s "$f")" != "$size" ]; then
       mkdir -p "$CACHE/pkgs/$tag"
@@ -118,7 +120,7 @@ collect() {
       die "$tag/$name: SHA-256 $sha, its SHA256SUMS says $sums"
     fi
     [ "$digest" != "-" ] || [ -n "$sums" ] || log "note: $tag/$name has neither a digest nor SHA256SUMS"
-    if [ "$ext" = .deb ]; then
+    if [ "$ext" = '*.deb' ]; then
       meta=$(bsdtar -xOf "$f" 'control.tar*' | bsdtar -xOf - ./control 2> /dev/null ||
         bsdtar -xOf "$f" 'control.tar*' | bsdtar -xOf - control)
       pn=$(printf '%s\n' "$meta" | sed -n 's/^Package: *//p')
@@ -277,7 +279,7 @@ fi
 
 # --- Leste ------------------------------------------------------------------
 log "Leste: leste-* packages"
-collect leste- .deb "$CACHE/leste.rows"
+collect leste- '*.deb' "$CACHE/leste.rows"
 newest deb "$CACHE/leste.rows" > "$CACHE/leste.newest"
 files_tar leste-files.tar.gz "$LESTE_FILES"
 {
@@ -299,7 +301,7 @@ files_tar leste-files.tar.gz "$LESTE_FILES"
 # from steps 40/41 without pacman, 42-meego-look.sh's PKGS mode puts the
 # packages over them and installs the session's files.
 log "Arch: arch-* packages"
-collect arch- .pkg.tar.xz "$CACHE/arch.rows"
+collect arch- '*.pkg.tar.*' "$CACHE/arch.rows"
 newest pac "$CACHE/arch.rows" > "$CACHE/arch.newest"
 files_tar arch-files.tar.gz "$ARCH_FILES"
 {
