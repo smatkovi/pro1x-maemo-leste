@@ -9,11 +9,15 @@
 # WCN3950 up when the app (or pro1x-fmctl) switches the receiver on; the
 # chip's rails go through qcom_dsp's RPM votes. Its firmware is
 # linux-firmware's qca/cmbtfw12.tlv and qca/cmnv12.bin, next to the kernel
-# on userdata (freebsd/firmware/qca) or in the image. Off until the
-# device tests pass.
+# on userdata (freebsd/firmware/qca) or in the image. Its "audio on" runs
+# pro1x-fmaudio (the SLIMbus and the ADSP's AFE: qrtr, qcom_apr,
+# qcom_lpass), which needs the ADSP started (pro1x-dsp start adsp, with
+# pd_mapper); nothing starts it at boot yet. Off until the device tests
+# pass.
 #
 #   pro1x_fmd_enable="YES"
 #   pro1x_fmd_flags="-s 115200"    the chip at its boot rate throughout
+#   pro1x_fmd_flags="-a -N"        pro1x-fmaudio without its output side
 
 . /etc/rc.subr
 
@@ -22,11 +26,11 @@ desc="FM radio daemon (WCN3950)"
 rcvar=pro1x_fmd_enable
 load_rc_config $name
 : ${pro1x_fmd_enable:=NO}
-: ${pro1x_fmd_modules:="qcom_dsp qcom_geni_uart"}
+: ${pro1x_fmd_modules:="qcom_dsp qcom_geni_uart qrtr qcom_apr qcom_lpass"}
 : ${pro1x_fmd_firmware:="/dev/pro1x-host/freebsd/firmware:/usr/local/share/pro1x/firmware"}
 
 command=/usr/local/sbin/pro1x-fmd
-command_args="-f ${pro1x_fmd_firmware}"
+command_args="-f ${pro1x_fmd_firmware} -A /usr/local/sbin/pro1x-fmaudio"
 start_precmd=pro1x_fmd_prestart
 
 pro1x_fmd_prestart()

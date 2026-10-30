@@ -73,8 +73,11 @@ msgstr "Empfänger wird eingeschaltet (das Kopfhörerkabel ist die Antenne) …"
 msgid "The FM sound does not start (see the kernel log)."
 msgstr "Der UKW-Ton startet nicht (siehe Kernel-Protokoll)."
 
-msgid "No FM sound on FreeBSD yet: the receiver tunes, the SLIMbus audio path is missing."
-msgstr "Unter FreeBSD noch kein UKW-Ton: Der Empfänger stimmt ab, der SLIMbus-Tonweg fehlt."
+msgid "No FM sound: its path did not come up (see pro1x-fmd's log)."
+msgstr "Kein UKW-Ton: Sein Weg ist nicht zustande gekommen (siehe Protokoll von pro1x-fmd)."
+
+msgid "The FM sound reaches the DSP; FreeBSD has no headphone output for it yet."
+msgstr "Der UKW-Ton erreicht den DSP; FreeBSD hat für ihn noch keinen Kopfhörerausgang."
 
 msgid "The FM daemon pro1x-fmd is not running."
 msgstr "Der UKW-Dienst pro1x-fmd läuft nicht."

@@ -8,6 +8,7 @@
 set -u
 OUT=${OUT:-/tmp/pro1x-fm-test}
 S=$OUT/fm.sock
+FAKEAUDIO=$(cd "$(dirname "$0")" && pwd)/fakeaudio.sh
 fail=0
 
 ctl() { "$OUT/pro1x-fmctl" -S "$S" "$@"; }
@@ -32,7 +33,7 @@ start() {
 	i=0
 	while [ ! -s "$OUT/pty" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 	"$OUT/pro1x-fmd" -F -d "$(cat "$OUT/pty")" -r none -S "$S" \
-	    -f "$OUT/fw" ${2:-} 2> "$OUT/fmd-$1.log" &
+	    -f "$OUT/fw" -A "$FAKEAUDIO" ${2:-} 2> "$OUT/fmd-$1.log" &
 	fmd=$!
 	i=0
 	while [ ! -S "$S" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
@@ -77,6 +78,32 @@ grep -q "^event ps TESTFM" "$OUT/watch.log" || { echo "FAIL: no ps event"; fail=
 sleep 3
 expect "ok on=1 freq=99900 rssi=-70 *" station
 expect "ok up=1 soc=0x40070120 rom=0x0102 * files=qca/cmbtfw12.tlv,qca/cmnv12.bin *" info
+# the sound path (a stand-in for pro1x-fmaudio): on, its state, off
+expect "ok audio=off" audio
+ctl -t 3 watch > "$OUT/watch-audio.log" &
+w=$!
+sleep 0.3
+expect "ok (fake)" audio on
+expect "ok * slimbus=1 audio=1" status
+expect "ok audio=on" audio status
+expect "ok (fake)" audio on
+expect "ok" audio off
+expect "ok * audio=0" status
+wait $w
+grep -q "^event audio on" "$OUT/watch-audio.log" &&
+    grep -q "^event audio off" "$OUT/watch-audio.log" ||
+    { echo "FAIL: no audio events"; fail=1; }
+grep -q "audio: fmaudio: ready (fake)" "$OUT/fmd-stations.log" &&
+    grep -q "audio: .*the way back" "$OUT/fmd-stations.log" ||
+    { echo "FAIL: its output not in the log"; fail=1; }
+# the receiver off takes the sound path down
+expect "ok (fake)" audio on
+expect "ok" off
+expect "ok audio=off" audio
+expect "error ENETDOWN *" audio on
+expect "ok" on
+expect "ok 99900" tune 99.9
+expect "error EINVAL *" audio loud
 info=$(ctl info)
 sl=$(echo "$info" | sed -n 's/.*ibs_sleeps=\([0-9]*\)\/\([0-9]*\).*/\1 \2/p')
 set -- $sl
@@ -94,6 +121,15 @@ expect "ok on=0 *" status
 expect "error ENETDOWN *" tune 99.9
 expect "ok" on
 expect "ok 99900" tune 99.9
+expect "ok" off
+stop stations
+
+echo "--- the sound path failing"
+start stations "-a fail"
+expect "ok" on
+expect "error EIO audio: slimbus" audio on
+expect "ok audio=off" audio
+expect "ok * audio=0" status
 expect "ok" off
 stop stations
 

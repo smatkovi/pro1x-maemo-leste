@@ -20,8 +20,9 @@
 #          160/161 for 5 s (slim)
 #   afe    slim, then the ADSP's AFE: SLIMBUS_8_TX started alone (afe -N),
 #          the output path's clock votes (clocks), then Android's play-fm
-#          (clocks, loopback, RX_CODEC_DMA_RX_0, SLIMBUS_8_TX: afe); no
-#          codec behind it yet, so nothing to hear
+#          (clocks, loopback, RX_CODEC_DMA_RX_0, SLIMBUS_8_TX: afe), then
+#          the same through pro1x-fmd ("audio on", "audio off"); no codec
+#          behind it yet, so nothing to hear
 # pro1x.fm_debug=1: every frame on the UART in the log; pro1x.fm_speed=
 # 115200: the chip left at its boot rate throughout; pro1x.fm_audio_opts:
 # more options for pro1x-fmaudio (-T: every register access, -c, -p, -g).
@@ -87,7 +88,7 @@ kldload qcom_dsp && echo "qcom_dsp loaded"
 sysctl hw.qcom_rpm.edge 2>&1
 ls -la $host/firmware/qca /usr/local/share/pro1x/firmware/qca 2>&1
 rm -f /var/run/pro1x-fm.sock
-pro1x-fmd -F $v -d $tty -s "$speed" \
+pro1x-fmd -F $v -d $tty -s "$speed" -a "-v $(kenv -q pro1x.fm_audio_opts)" \
     -f $host/firmware:/usr/local/share/pro1x/firmware > $log 2>&1 &
 fmd=$!
 i=0
@@ -182,6 +183,15 @@ if [ "$step" = slim ] || [ "$step" = afe ]; then
 		step_t "pro1x-fmaudio afe (play-fm)"
 		pro1x-fmaudio -v $o -t 5 afe 2>&1
 		echo "afe: $?"
+		# stage 4: the same through pro1x-fmd, as the app asks for it
+		# (its output in pro1x-fmd's log below)
+		step_t "pro1x-fmd: audio on"
+		pro1x-fmctl audio on
+		pro1x-fmctl status
+		sleep 3
+		step_t "pro1x-fmd: audio off"
+		pro1x-fmctl audio off
+		pro1x-fmctl audio
 	fi
 	pro1x-fmctl status
 	sysctl hw.qcom_apr hw.qcom_lpass.windows 2>&1

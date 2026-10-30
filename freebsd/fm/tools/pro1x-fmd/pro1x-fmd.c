@@ -21,12 +21,18 @@
  *   info                        the chip, the firmware, the counters
  *   debug 0|1|2                 frames (2: and in-band sleep) to the log
  *   watch                       from now on "event <what>" lines too
+ *   audio on | off | status     the receiver's sound path: "ok", "ok
+ *                               audio=on|starting|off"
  *
  * The audio does not come this way: the chip sends it over SLIMbus to the
- * ADSP (freebsd/fm/README.md), which FreeBSD does not drive yet.
+ * ADSP, and pro1x-fmaudio sets that path up (freebsd/fm/README.md, stage
+ * 3). "audio on" runs "pro1x-fmaudio [-a options] start" as a child and
+ * answers once it says "fmaudio: ready" (or "error ..."); its output goes
+ * to this log; "audio off", "off" and the daemon's end stop it (SIGTERM:
+ * it takes its path down). "status" says audio=1 while it runs.
  *
  *   pro1x-fmd [-F] [-d tty] [-s speed] [-f fwdir:...] [-r l9,l16,...|none]
- *             [-S socket] [-v]
+ *             [-S socket] [-A pro1x-fmaudio] [-a "options"] [-v]
  *   pro1x-fmd -L 115200,3000000 [-d tty]
  *             a test of the UART alone, without the chip: bytes through
  *             its internal loopback (dev.uart.0.loopback=1 first), with
@@ -38,6 +44,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #ifdef __FreeBSD__
 #include <sys/param.h>
 #include <sys/sysctl.h>
@@ -65,6 +72,8 @@
 			"/usr/local/share/pro1x/firmware:/boot/firmware"
 #define	MAX_CLIENTS	8
 #define	LINE_MAX_	256
+#define	DEF_AUDIO	"pro1x-fmaudio"
+#define	AUDIO_STOP_MS	10000	/* its way back: some 30 messages */
 
 static struct {
 	int		fd;		/* the UART */
@@ -93,6 +102,19 @@ struct client {
 	size_t	len;
 };
 static struct client clients[MAX_CLIENTS];
+
+/* the sound path: pro1x-fmaudio as a child */
+static struct {
+	const char	*prog;
+	const char	*opts;
+	pid_t		pid;
+	int		fd;		/* its stdout */
+	char		buf[512];
+	size_t		len;
+	bool		ready;
+	struct client	*waiter;	/* the "audio on" not yet answered */
+	char		note[96];	/* what it said after "ready" */
+} au = { .prog = DEF_AUDIO, .pid = -1, .fd = -1 };
 
 /* --- the OS hooks of qcabt ------------------------------------------------ */
 
@@ -528,9 +550,13 @@ radio_on(void)
 	return (error);
 }
 
+static void audio_stop(void);
+
 static void
 radio_off(void)
 {
+	/* the chip leaves the bus: its stream first */
+	audio_stop();
 	qfm_off(&fm);
 	if (bt.up)
 		qbt_power_off(&bt);
@@ -542,10 +568,10 @@ static void
 status_line(char *out, size_t size)
 {
 	snprintf(out, size, "ok on=%d freq=%u rssi=%d signal=%d stereo=%u "
-	    "rds=%u mute=%d mono=%d pty=%u sinr=%d slimbus=%d", fm.on,
+	    "rds=%u mute=%d mono=%d pty=%u sinr=%d slimbus=%d audio=%d", fm.on,
 	    fm.freq, fm.st.rssi, fm.on ? qfm_signal(fm.st.rssi) : 0,
 	    fm.st.stereo, fm.st.rds_sync, fm.mute, fm.mono, fm.pty,
-	    fm.st.sinr, fm.slimbus);
+	    fm.st.sinr, fm.slimbus, au.pid > 0 && au.ready);
 }
 
 static void
@@ -559,6 +585,164 @@ broadcast(const char *line)
 				/* the next poll notices it gone */
 			}
 		}
+}
+
+/* --- the sound path: pro1x-fmaudio as a child ------------------------------ */
+
+static void
+audio_answer(const char *line)
+{
+	char buf[LINE_MAX_ + 2];
+
+	if (au.waiter == NULL)
+		return;
+	if (au.waiter->fd >= 0) {
+		snprintf(buf, sizeof(buf), "%s\n", line);
+		if (write(au.waiter->fd, buf, strlen(buf)) < 0) {
+			/* the next poll notices it gone */
+		}
+	}
+	au.waiter = NULL;
+}
+
+/* "pro1x-fmaudio [options] start", its stdout to us */
+static int
+audio_start(void)
+{
+	char *argv[16], opts[128], *save, *a;
+	int p[2], argc = 0, error;
+	pid_t pid;
+
+	if (pipe(p) != 0)
+		return (-errno);
+	argv[argc++] = (char *)au.prog;
+	if (au.opts != NULL) {
+		snprintf(opts, sizeof(opts), "%s", au.opts);
+		for (a = strtok_r(opts, " \t", &save); a != NULL && argc < 14;
+		    a = strtok_r(NULL, " \t", &save))
+			argv[argc++] = a;
+	}
+	argv[argc++] = "start";
+	argv[argc] = NULL;
+	if ((pid = fork()) < 0) {
+		error = -errno;
+		close(p[0]);
+		close(p[1]);
+		return (error);
+	}
+	if (pid == 0) {
+		dup2(p[1], STDOUT_FILENO);
+		/* nothing of the daemon's: the UART, the socket, the clients */
+		closefrom(3);
+		execvp(au.prog, argv);
+		printf("fmaudio: error %s: %s\n", au.prog, strerror(errno));
+		_exit(127);
+	}
+	close(p[1]);
+	fcntl(p[0], F_SETFL, O_NONBLOCK);
+	fcntl(p[0], F_SETFD, FD_CLOEXEC);
+	au.pid = pid;
+	au.fd = p[0];
+	au.len = 0;
+	au.ready = false;
+	au.note[0] = '\0';
+	logmsg("audio: %s started (pid %d)", au.prog, (int)pid);
+	return (0);
+}
+
+static void
+audio_reap(void)
+{
+	int st;
+
+	if (au.fd >= 0)
+		close(au.fd);
+	au.fd = -1;
+	if (au.pid > 0 && waitpid(au.pid, &st, 0) == au.pid)
+		logmsg("audio: %s ended (%s %d)", au.prog, WIFEXITED(st) ?
+		    "exit" : "signal", WIFEXITED(st) ? WEXITSTATUS(st) :
+		    WTERMSIG(st));
+	au.pid = -1;
+	audio_answer("error EIO audio: pro1x-fmaudio ended");
+	if (au.ready)
+		broadcast("event audio off\n");
+	au.ready = false;
+}
+
+/* one line of its output: logged; "ready" and "error" answer "audio on" */
+static void
+audio_line(const char *line)
+{
+	char ans[LINE_MAX_];
+
+	logmsg("audio: %s", line);
+	if (strncmp(line, "fmaudio: ready", 14) == 0) {
+		au.ready = true;
+		snprintf(au.note, sizeof(au.note), "%s", line[14] == ' ' ?
+		    line + 15 : line + 14);
+		snprintf(ans, sizeof(ans), "ok%s%s", au.note[0] ? " " : "",
+		    au.note);
+		audio_answer(ans);
+		broadcast("event audio on\n");
+	} else if (strncmp(line, "fmaudio: error", 14) == 0) {
+		snprintf(ans, sizeof(ans), "error EIO audio:%s", line + 14);
+		audio_answer(ans);
+	}
+}
+
+static void
+audio_input(void)
+{
+	char *nl;
+	ssize_t n;
+
+	n = read(au.fd, au.buf + au.len, sizeof(au.buf) - 1 - au.len);
+	if (n < 0 && (errno == EAGAIN || errno == EINTR))
+		return;
+	if (n <= 0) {
+		if (au.len > 0) {
+			au.buf[au.len] = '\0';
+			audio_line(au.buf);
+		}
+		au.len = 0;
+		audio_reap();
+		return;
+	}
+	au.len += (size_t)n;
+	au.buf[au.len] = '\0';
+	while ((nl = strchr(au.buf, '\n')) != NULL) {
+		*nl = '\0';
+		audio_line(au.buf);
+		au.len -= (size_t)(nl + 1 - au.buf);
+		memmove(au.buf, nl + 1, au.len + 1);
+	}
+	if (au.len == sizeof(au.buf) - 1) {
+		audio_line(au.buf);	/* a line too long: as it is */
+		au.len = 0;
+	}
+}
+
+/* SIGTERM: it takes its path down; its output logged meanwhile */
+static void
+audio_stop(void)
+{
+	struct pollfd pfd;
+	uint64_t until;
+
+	if (au.pid <= 0)
+		return;
+	kill(au.pid, SIGTERM);
+	until = mono_ms() + AUDIO_STOP_MS;
+	while (au.fd >= 0 && mono_ms() < until) {
+		pfd = (struct pollfd){ .fd = au.fd, .events = POLLIN };
+		if (poll(&pfd, 1, 100) > 0)
+			audio_input();
+	}
+	if (au.pid > 0) {
+		logmsg("audio: %s does not end: killed", au.prog);
+		kill(au.pid, SIGKILL);
+		audio_reap();
+	}
 }
 
 static void
@@ -662,6 +846,29 @@ request(struct client *c, char *line, char *out, size_t size)
 		bt.debug = arg != NULL ? atoi(arg) : 1;
 	} else if (strcmp(cmd, "watch") == 0) {
 		c->watch = true;
+	} else if (strcmp(cmd, "audio") == 0) {
+		if (arg == NULL || strcmp(arg, "status") == 0) {
+			snprintf(out, size, "ok audio=%s", au.pid <= 0 ? "off" :
+			    au.ready ? "on" : "starting");
+			return;
+		}
+		if (strcmp(arg, "off") == 0)
+			audio_stop();
+		else if (strcmp(arg, "on") != 0)
+			error = -EINVAL;
+		else if (!fm.on)
+			error = -ENETDOWN;	/* no receiver, nothing on the bus */
+		else if (au.pid > 0 && au.ready) {
+			snprintf(out, size, "ok%s%s", au.note[0] ? " " : "",
+			    au.note);
+			return;
+		} else if (au.waiter != NULL)
+			error = -EBUSY;
+		else if (au.pid > 0 || (error = audio_start()) == 0) {
+			au.waiter = c;
+			out[0] = '\0';		/* answered when it says so */
+			return;
+		}
 	} else {
 		snprintf(out, size, "error EINVAL unknown request %s", cmd);
 		return;
@@ -705,6 +912,8 @@ client_input(struct client *c)
 	if (n <= 0) {
 		close(c->fd);
 		c->fd = -1;
+		if (au.waiter == c)
+			au.waiter = NULL;
 		return;
 	}
 	c->len += (size_t)n;
@@ -715,11 +924,16 @@ client_input(struct client *c)
 			nl[-1] = '\0';
 		out[0] = '\0';
 		request(c, c->buf, out, sizeof(out) - 1);
-		strcat(out, "\n");
-		if (write(c->fd, out, strlen(out)) < 0) {
-			close(c->fd);
-			c->fd = -1;
-			return;
+		/* nothing yet: answered later ("audio on") */
+		if (out[0] != '\0') {
+			strcat(out, "\n");
+			if (write(c->fd, out, strlen(out)) < 0) {
+				close(c->fd);
+				c->fd = -1;
+				if (au.waiter == c)
+					au.waiter = NULL;
+				return;
+			}
 		}
 		c->len -= (size_t)(nl + 1 - c->buf);
 		memmove(c->buf, nl + 1, c->len + 1);
@@ -797,6 +1011,7 @@ usage(void)
 {
 	fprintf(stderr, "usage: pro1x-fmd [-Fv] [-d tty] [-s speed] "
 	    "[-f fwdir:...] [-r rail,...|none] [-S socket]\n"
+	    "                 [-A pro1x-fmaudio] [-a \"its options\"]\n"
 	    "       pro1x-fmd -L speed,... [-d tty]\n");
 	exit(2);
 }
@@ -804,14 +1019,16 @@ usage(void)
 int
 main(int argc, char **argv)
 {
-	struct pollfd pfd[2 + MAX_CLIENTS];
+	struct pollfd pfd[3 + MAX_CLIENTS];
 	int ch, ls, i, n, timeout, fd, verbose = 0;
 	const char *loop = NULL;
 
 	d.t0 = mono_ms();
 
-	while ((ch = getopt(argc, argv, "Fd:f:L:r:s:S:v")) != -1) {
+	while ((ch = getopt(argc, argv, "Fd:f:L:r:s:S:vA:a:")) != -1) {
 		switch (ch) {
+		case 'A':	au.prog = optarg; break;
+		case 'a':	au.opts = optarg; break;
 		case 'F':	d.foreground = true; break;
 		case 'L':	loop = optarg; break;
 		case 'd':	d.tty = optarg; break;
@@ -847,6 +1064,7 @@ main(int argc, char **argv)
 		n = 0;
 		pfd[n++] = (struct pollfd){ .fd = ls, .events = POLLIN };
 		pfd[n++] = (struct pollfd){ .fd = d.fd, .events = POLLIN };
+		pfd[n++] = (struct pollfd){ .fd = au.fd, .events = POLLIN };
 		for (i = 0; i < MAX_CLIENTS; i++)
 			pfd[n++] = (struct pollfd){ .fd = clients[i].fd,
 			    .events = POLLIN };
@@ -857,6 +1075,8 @@ main(int argc, char **argv)
 			qbt_pump(&bt, 0);
 		else if (d.fd >= 0 && (pfd[1].revents & POLLIN))
 			o_flush_input(NULL);
+		if (au.fd >= 0 && (pfd[2].revents & (POLLIN | POLLHUP)))
+			audio_input();
 		if (pfd[0].revents & POLLIN) {
 			fd = accept(ls, NULL, NULL);
 			for (i = 0; fd >= 0 && i < MAX_CLIENTS; i++)
@@ -869,7 +1089,7 @@ main(int argc, char **argv)
 		}
 		for (i = 0; i < MAX_CLIENTS; i++)
 			if (clients[i].fd >= 0 &&
-			    (pfd[2 + i].revents & (POLLIN | POLLHUP)))
+			    (pfd[3 + i].revents & (POLLIN | POLLHUP)))
 				client_input(&clients[i]);
 	}
 	logmsg("stopping");

@@ -14,7 +14,7 @@ code the Leste kernel runs:
 | 1 | the Bluetooth UART, the chip's bring-up | `qcom_geni_uart.ko` (uart(4) class), `pro1x-fmd` (Linux's hci_qca/btqca in user space) | built; host tested (protocol, arithmetic); not run on the phone |
 | 2 | FM control: tune, seek, signal, stereo, RDS | `pro1x-fmd` (Linux's radio-qca-fm in user space), its socket, `pro1x-fmctl` | built; host tested against a simulated chip |
 | 3 | FM sound: SLIMbus, the ADSP's AFE, the output | `qcom_lpass.ko` (`/dev/qcom_lpass`), `pro1x-fmaudio`; `qcom_apr.ko` (`/dev/apr`), `pro1x-q6` (in `freebsd/dsp`) | SLIMbus and AFE written, host tested, device runs prepared; the output (RX macro, SoundWire, WCD9370) not written; see "Stage 3" |
-| 4 | the app on FreeBSD's Hildon | `apps/pro1x-fm` with a pro1x-fmd backend, part `pro1x-fm` of `hildon/build.sh` | built; its backend host tested; no sound |
+| 4 | the app on FreeBSD's Hildon, the sound switched with the radio | `apps/pro1x-fm` with a pro1x-fmd backend (part `pro1x-fm` of `hildon/build.sh`); pro1x-fmd's `audio on\|off` runs pro1x-fmaudio | built; backend and `audio` host tested; nothing to hear before 3c |
 
 Nothing here has run on the phone (unreachable until 2026-10-31). What
 can be checked on the PC is checked: `make -C freebsd/fm/test` (below).
@@ -136,7 +136,8 @@ per request and per answer:
     ps, rt                      "ok <station name>", "ok <radio text>"
     info                        the chip's versions, the files, in-band sleep and error counters
     debug 0|1|2                 every frame (2: and in-band sleep) to the log
-    watch                       "event tune|ps|rt|on|off ..." lines from then on
+    watch                       "event tune|ps|rt|on|off|audio ..." lines from then on
+    audio on | off | status     the sound path (stage 4): "ok ...", "ok audio=on|starting|off"
 
 `pro1x-fmctl` sends one request and prints the answer (`pro1x-fmctl tune
 99.9`, `pro1x-fmctl -t 15 watch`). `rc.d/pro1x_fmd` starts the daemon
@@ -314,14 +315,35 @@ DAPM power sequence of one headphone playback — the exact register
 sequence 3c has to repeat (the SoundWire masters' own registers are
 `writel`, not regmap; they come from `qcom.c`).
 
-## Stage 4: the app
+## Stage 4: the app and the sound
 
 `apps/pro1x-fm` keeps its V4L2 code unchanged under `__linux__`; on
 FreeBSD the same requests (on, tune, seek, mute, status, station name,
-radio text) go to pro1x-fmd's socket, and the window says that there is
-no FM sound on FreeBSD yet. `hildon/build.sh pro1x-fm` builds it (with
-its German texts and menu entry); the daemon itself comes with `build.sh`
-(the DSP tools, `/usr/local/sbin`).
+radio text) go to pro1x-fmd's socket. `hildon/build.sh pro1x-fm` builds
+it (with its German texts and menu entry); the daemon itself comes with
+`build.sh` (the DSP tools, `/usr/local/sbin`).
+
+The sound is switched where Linux's app switches its PulseAudio loopback
+(`sound()`: on with the receiver, off when muted or closed): on FreeBSD
+that is pro1x-fmd's `audio on` / `audio off`, sent in the app's radio
+thread like the other requests. pro1x-fmd runs `pro1x-fmaudio [-a
+options] start` (`-A` names the program; the rc.d script passes
+`/usr/local/sbin/pro1x-fmaudio`) as a child, logs its output, and answers
+`audio on` once the child prints `fmaudio: ready` (`ok` with the rest of
+that line) or `fmaudio: error ...` (`error EIO audio: ...`); until then
+the other requests are served (the answer is deferred, the UART's
+in-band sleep keeps running). `audio off`, `off` and the daemon's end
+send the child SIGTERM, on which it takes its path down in reverse; a
+child that has not ended after 10 s is killed. `status` has `audio=1`
+while it runs; watchers get `event audio on|off`. `audio on` with the
+receiver off is `ENETDOWN` (nothing on the bus then).
+
+The app says what came of it: "the FM sound reaches the DSP; FreeBSD has
+no headphone output for it yet" as long as pro1x-fmaudio says so (3c),
+or that the path did not come up. The rc.d script loads `qrtr`,
+`qcom_apr` and `qcom_lpass` with the daemon; the ADSP itself (with
+`pd_mapper`) is not started at boot yet, so `audio on` needs `pro1x-dsp
+start adsp` first.
 
 ## Tests on the PC
 
@@ -365,9 +387,12 @@ under ASan and UBSan:
   the socket: on, tune, RDS, station, seek up (and around the band),
   seek down, mute, mono, the events, idle sleep both ways and waking
   again, off and on again; a run without any station (`ENODATA`); a run
-  at 115200 baud throughout; the app's FreeBSD backend (`test_app.c`:
-  the app's file with libhildon stubbed); the UART loopback test against
-  an echo.
+  at 115200 baud throughout; `audio on|off|status` with a stand-in for
+  pro1x-fmaudio (`fakeaudio.sh`: its answers, its output in the log, the
+  events, `off` taking it down, `ENETDOWN` without the receiver, a failing
+  one); the app's FreeBSD backend (`test_app.c`: the app's file with
+  libhildon stubbed, `audio on|off` included); the UART loopback test
+  against an echo.
 
 Built for FreeBSD/arm64: the three modules (in the kernel's object tree,
 every symbol resolved by the PRO1X kernel and `qcom_dsp.ko`), pro1x-fmd,
@@ -394,7 +419,7 @@ need no new image. `$WORK/fm-test/` has them laid out as
 | fm-radio | `pro1x.test=fm pro1x.fm=radio hint.qcom_wdt.0.lifetime=360` (headphones in: the cable is the antenna; `pro1x.fm_freq=` a local station) | `tune` answers `ok`, `station` with an RSSI above -100 dBm on a real station, RDS `event ps ...` within 15 s, seeks ending on stations or `ENODATA` |
 | fm-audio | `pro1x.test=fm pro1x.fm=audio hint.qcom_wdt.0.lifetime=480` | the radio run, then `qcom_apr: apr_audio_svc open on lpass`, `core: ADSP state 1 (ready)`, the framework's services; `slim: service 769 ...` and `select instance ...: result 0`, `power active: result 0` — or the evidence that the ADSP does not offer what the sound needs |
 | fm-slim | `pro1x.test=fm pro1x.fm=slim hint.qcom_wdt.0.lifetime=480` (headphones in) | the chip up, tuned; the ADSP up; `qcom_lpass loaded`; `probe`: `slim: QMI ... power active: result 0`, `controller version 0x...`, `NGD before: ...`, `the manager's capability`, `satellite reported; NGD status 0x2`, `WCN3950 generic device at LA 0x.., interface device at LA 0x..`, `slave revision ...`, `probe: 0`; `slim`: `FM ports 1,2 enabled`, `connect port 1 to channel 160: acknowledged` (with `-v`), `FM stream active: 48000 Hz ...`, then the way back, `slim: 0` |
-| fm-afe | `pro1x.test=fm pro1x.fm=afe hint.qcom_wdt.0.lifetime=600` (headphones in) | fm-slim, then `afe -N`: `core: ADSP ready`, `afe: port 0x4011 started`, `afe -N: 0`; `clocks`: `block 4 voted on, handle N`, `the output path's clocks on`, `clocks: 0`; `afe`: the clocks, the loopback's gain and configuration done, `port 0xb030 started`, `port 0x4011 started`, `afe: 0` — or which command the ADSP refused (`ADSP status 0x..`) |
+| fm-afe | `pro1x.test=fm pro1x.fm=afe hint.qcom_wdt.0.lifetime=600` (headphones in) | fm-slim, then `afe -N`: `core: ADSP ready`, `afe: port 0x4011 started`, `afe -N: 0`; `clocks`: `block 4 voted on, handle N`, `the output path's clocks on`, `clocks: 0`; `afe`: the clocks, the loopback's gain and configuration done, `port 0xb030 started`, `port 0x4011 started`, `afe: 0` — or which command the ADSP refused (`ADSP status 0x..`); then stage 4: `audio on` answers `ok (no codec path yet: ...)`, `status` with `audio=1`, `audio off` `ok`, pro1x-fmaudio's output in pro1x-fmd's log |
 
 `pro1x.fm_debug=1` logs every frame on the UART; `pro1x.fm_speed=115200`
 keeps the chip at its boot rate (if 3000000 baud fails: the QUP's core
@@ -466,7 +491,7 @@ stream's parameters).
 | `sys/modules/qcom_geni_uart/` | the module: uart(4)'s core with the class |
 | `tools/pro1x-fmd/qcabt.[ch]` | H4, in-band sleep, HCI commands, the chip's bring-up (hci_qca, btqca) |
 | `tools/pro1x-fmd/qcafm.[ch]` | the FM receiver (radio-qca-fm) |
-| `tools/pro1x-fmd/pro1x-fmd.c` | the daemon: the tty, the rails, the firmware files, the socket, `-L` |
+| `tools/pro1x-fmd/pro1x-fmd.c` | the daemon: the tty, the rails, the firmware files, the socket, `audio` (pro1x-fmaudio as a child), `-L` |
 | `tools/pro1x-fmctl/` | the command line client |
 | `test/` | the host tests |
 | `../dsp/sys/arm64/qualcomm/dsp/qcom_apr.c`, `../dsp/sys/modules/qcom_apr/` | `/dev/apr` |
@@ -476,6 +501,7 @@ stream's parameters).
 | `tools/pro1x-fmaudio/afe.c` | the AFE over APR: ports, loopback, clocks, votes |
 | `tools/pro1x-fmaudio/pro1x-fmaudio.c`, `mmio.c`, `fmaudio.h` | the steps, the QMI client, the windows, the daemon |
 | `test/test_fmaudio.c` | its host test (simulated NGD, manager, chip, ADSP) |
+| `test/fakeaudio.sh` | a stand-in for pro1x-fmaudio in `run.sh` |
 | `test/leste-hph-trace.sh` | for 3c: Linux's register sequence of one headphone playback, recorded under Leste |
 | `../rootfs/usr/local/libexec/pro1x-fmtest`, `../rootfs/etc/rc.local` | the device runs |
 | `../rootfs/usr/local/etc/rc.d/pro1x_fmd` | the daemon at boot (off) |

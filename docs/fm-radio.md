@@ -209,9 +209,13 @@ Written, built and tested on the PC, not yet on the phone:
   hci_qca/btqca (with patch 0013) and radio-qca-fm do here: power pulses,
   download, in-band sleep, then the FM commands; the app and
   `pro1x-fmctl` talk to it over a Unix socket instead of `/dev/radio0`.
-- **Audio:** only the first bricks: `/dev/apr` (`qcom_apr.ko`) and
-  `pro1x-q6` (the ADSP's core service, its SLIMbus QMI service). The NGD
-  (with a BAM DMA driver), the SLIMbus core, the WCN3950's ports, the AFE
-  port and any audio output are missing on FreeBSD.
-- **App:** `apps/pro1x-fm` builds for FreeBSD's Hildon (`pro1x-fm` part),
-  without sound.
+- **Audio:** `pro1x-fmaudio` programs Android's `play-fm` path from user
+  space: the SLIMbus NGD as the ADSP's satellite over its message
+  registers (no BAM DMA), the WCN3950's FM ports and channels 160/161,
+  then over `/dev/apr` the AFE's SLIMBUS_8_TX, RX_CODEC_DMA_RX_0, the AFE
+  loopback between them and the LPASS clock votes; `qcom_lpass.ko` maps
+  the LPASS registers for it. Host tested, device runs `fm-slim` and
+  `fm-afe` prepared. The output behind RX_CODEC_DMA_RX_0 (RX macro,
+  SoundWire, WCD9370) is not written yet: nothing to hear.
+- **App:** `apps/pro1x-fm` builds for FreeBSD's Hildon (`pro1x-fm` part)
+  and switches the sound path with pro1x-fmd's `audio on|off`.

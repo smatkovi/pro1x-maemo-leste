@@ -21,8 +21,10 @@
  *
  * On FreeBSD (freebsd/fm/README.md) there is no V4L2 and no radio driver:
  * pro1x-fmd drives the chip from user space, and the same requests go to
- * its socket instead (radio_open() and below). There is no FM sound there
- * yet.
+ * its socket instead (radio_open() and below). The sound is pro1x-fmd's
+ * "audio on|off" there (pro1x-fmaudio: the SLIMbus and the DSP's
+ * loopback), asked in the radio thread like the rest; FreeBSD has no
+ * headphone output behind it yet.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -61,11 +63,13 @@
 #define STEP 100
 #define POLL_MS 1500
 
-enum req { OPEN, TUNE, SEEK_UP, SEEK_DOWN, MUTE, UNMUTE, POLL, QUIT };
+enum req { OPEN, TUNE, SEEK_UP, SEEK_DOWN, MUTE, UNMUTE, POLL, QUIT,
+	   AUDIO_ON, AUDIO_OFF };
 
 struct result {
 	enum req req;
 	int err;		/* errno of the request, 0 */
+	char note[96];		/* AUDIO_ON: what the daemon said after "ok" */
 	unsigned freq;		/* kHz */
 	unsigned signal;	/* 0..100 */
 	gboolean stereo, rds;
@@ -236,6 +240,12 @@ static int seek(int up)
 	return fmd(up ? "seek up" : "seek down", NULL, 0);
 }
 
+/* the sound path (pro1x-fmaudio behind pro1x-fmd) on or off */
+static int audio(int on, char *ans, size_t size)
+{
+	return fmd(on ? "audio on" : "audio off", ans, size);
+}
+
 /* "on=1 freq=99900 rssi=-85 signal=87 stereo=1 rds=1 ..." */
 static unsigned field(const char *s, const char *key)
 {
@@ -293,6 +303,12 @@ static gpointer radio_thread(gpointer data)
 			r->err = set_mute(r->req == MUTE);
 			break;
 		case POLL:
+			break;
+		case AUDIO_ON:
+		case AUDIO_OFF:
+#ifndef __linux__
+			r->err = audio(r->req == AUDIO_ON, r->note, sizeof(r->note));
+#endif
 			break;
 		case QUIT:
 			radio_close();
@@ -406,12 +422,10 @@ static void sound(gboolean on)
 				 "latency_msec=100");
 }
 #else
-/* FreeBSD drives neither SLIMbus nor the ADSP's audio yet: no sound */
+/* pro1x-fmd's "audio on|off", in the radio thread; result_cb says how it went */
 static void sound(gboolean on)
 {
-	if (on)
-		gtk_label_set_text(GTK_LABEL(status_label),
-				   _("No FM sound on FreeBSD yet: the receiver tunes, the SLIMbus audio path is missing."));
+	push(on ? AUDIO_ON : AUDIO_OFF, 0);
 }
 #endif
 
@@ -474,11 +488,17 @@ static gboolean result_cb(gpointer data)
 		push(muted ? MUTE : UNMUTE, 0);
 		sound(!muted);
 	}
-	if (r->req != POLL)
+	if (r->req != POLL && r->req != AUDIO_ON && r->req != AUDIO_OFF)
 		busy = FALSE;
-	if (r->err)
+	if (r->req == AUDIO_ON)
+		gtk_label_set_text(GTK_LABEL(status_label),
+				   r->err ? _("No FM sound: its path did not come up (see pro1x-fmd's log).")
+				   : strstr(r->note, "no codec") || strstr(r->note, "no output")
+				   ? _("The FM sound reaches the DSP; FreeBSD has no headphone output for it yet.")
+				   : "");
+	else if (r->err)
 		gtk_label_set_text(GTK_LABEL(status_label), strerr(r->err));
-	else if (r->req != POLL)
+	else if (r->req != POLL && r->req != AUDIO_OFF)
 		gtk_label_set_text(GTK_LABEL(status_label), "");
 
 	if (opened) {

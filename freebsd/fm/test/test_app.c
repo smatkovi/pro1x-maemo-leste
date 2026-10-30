@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * The FM app's FreeBSD backend (apps/pro1x-fm/pro1x-fm.c without
- * __linux__: requests to pro1x-fmd's socket) against the daemon and the
- * simulated chip of run.sh, without its window: the app's file is
+ * __linux__: requests to pro1x-fmd's socket, the sound's "audio on|off")
+ * against the daemon and the simulated chip of run.sh, without its window: the app's file is
  * included with its main renamed, libhildon's calls are stubs.
  */
 #define main app_main
@@ -53,6 +53,14 @@ main(void)
 	status(&r);
 	CHECK(r.freq == 103800);
 	CHECK(set_mute(1) == 0 && set_mute(0) == 0);
+	/* the sound path: run.sh's stand-in for pro1x-fmaudio behind the daemon */
+	{
+		char note[96];
+
+		CHECK(audio(1, note, sizeof(note)) == 0 &&
+		    strcmp(note, "(fake)") == 0);
+		CHECK(audio(0, NULL, 0) == 0);
+	}
 	radio_close();
 	CHECK(fd == -1);
 	/* the daemon gone: the app says so */
