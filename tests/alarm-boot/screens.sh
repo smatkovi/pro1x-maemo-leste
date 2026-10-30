@@ -21,7 +21,9 @@
 # <cookie> 1") and the question comes 5 s later; "Keep on" ends it. A tap
 # on Snooze with no status after it: the screen steps aside after 3 s.
 # Status 6 (silent) takes the screen away; status 5 brings it back. With
-# OWN=1 also its own ringing (1.5 min). KEEP=dir keeps the logs and PNGs.
+# MeeGo (-s meego): timed's next_bootup_event 1 and then another value
+# give the question, with nothing over timed's own screen. With OWN=1 also
+# its own ringing (1.5 min). KEEP=dir keeps the logs and PNGs.
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}
 OUT=${OUT:-$HOME/ps/pro1x-screens}
@@ -172,6 +174,27 @@ EOF
   printf 'system=test\nrtc_alarm=1002\ndue=%s\n' "$(date +%s)" > "$T/note"
   "$T/pro1x-alarmboot" -f "$T/note" -s test -v 2> "$T/run3.log" || true
   check "the same alarm again: nothing" "handled already" "$T/run3.log"
+  # 5: the MeeGo system: timed's next_bootup_event 1 (its dialog rings,
+  # nothing over it), then the next alarm's time: the question
+  printf 'system=meego\nrtc_alarm=1005\ndue=%s\n' "$(($(date +%s) - 20))" > "$T/note"
+  "$T/pro1x-alarmboot" -f "$T/note" -s meego -v -g 2160x1080 "${args[@]}" 2> "$T/run5.log" &
+  p=$!
+  sleep 1.5
+  gdbus emit --system --object-path /com/nokia/time \
+    --signal com.nokia.time.next_bootup_event "int32 1" > /dev/null
+  sleep 1
+  check "MeeGo: timed's dialog seen" "boot-up event 1" "$T/run5.log"
+  if grep -q "N9 screen over" "$T/run5.log"; then echo "FAIL MeeGo: covered timed's own screen"; fails=$((fails + 1)); else echo "ok   MeeGo: timed's own screen not covered"; fi
+  gdbus emit --system --object-path /com/nokia/time \
+    --signal com.nokia.time.next_bootup_event "int32 $(($(date +%s) + 600))" > /dev/null
+  sleep 6
+  check "MeeGo: its end, the question" "asking whether to switch off" "$T/run5.log"
+  tap "${ask_y[1]}"
+  sleep 1
+  check "MeeGo: Keep on" "staying on" "$T/run5.log"
+  kill "$p" 2> /dev/null || true
+  wait "$p" 2> /dev/null || true
+
   # 4 (OWN=1, 1.5 min): no dialog: it rings itself after 90 s with the
   # alarm's text, Snooze, the system UI's dialog after all (its own ringing
   # gives way), gone: the question

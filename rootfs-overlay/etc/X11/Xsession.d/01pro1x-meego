@@ -8,5 +8,12 @@ if [ "$(/usr/local/sbin/pro1x-boot current 2>/dev/null)" = meego ]; then
 	# job, and icd2 behind it) see Harmattan's as the desktop.
 	mkdir -p /tmp/hildon-desktop
 	touch /tmp/hildon-desktop/desktop-started.stamp
+	# After a start by MeeGo's own RTC alarm (timed's): the question to
+	# switch off again once timed's alarm dialog is over (pro1x-alarmboot,
+	# docs/alarm-power-on.md; Xsession.d/02pro1x-alarmboot does not run
+	# here). Its log: /tmp/pro1x-alarmboot.log
+	if [ -x /usr/bin/pro1x-alarmboot ]; then
+		/usr/bin/pro1x-alarmboot -v > /dev/null 2> /tmp/pro1x-alarmboot.log &
+	fi
 	exec sleep infinity
 fi

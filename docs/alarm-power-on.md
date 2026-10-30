@@ -3,12 +3,16 @@
 An alarm set in Maemo Leste's (or FreeBSD's) clock rings even when the
 phone was switched off: the PMIC's RTC alarm powers the phone on, the boot
 menu sees that and starts the system that set the alarm at once, without
-the menu, and that system rings. Once the alarm is stopped it asks whether
-to switch the phone off again, as the N900 asked whether to switch it on
-in its "acting dead" mode.
+the menu, and that system rings. It looks as on the Nokia N9 when an
+alarm switched that on: a black screen with the time, the alarm's text,
+Snooze and Stop. Once the alarm is over it asks, in the look of the N9's
+query dialogs, whether to switch the phone off again (the N9 itself
+switched off without asking: [below](#what-the-n9-did-when-an-alarm-switched-it-on)).
 
 Status (2026-10-30): built and tested on the PC (below); the power-on
-itself is untested on the phone. To be flashed with kernel pro1x.10.
+itself is untested on the phone. To be flashed with kernel pro1x.10;
+`pro1x-alarmboot` 1.1 (the N9 look) in the pre-release
+`leste-alarmboot-2026.10.30.1`.
 
 ## Is it possible on this hardware?
 
@@ -22,6 +26,191 @@ phone (step 1 of the test).
 | Does the alarm survive the power off? | Yes: the RTC is in the PMIC's always-on part (it keeps counting while off; `pro1x-rtc` relies on that). Linux's `rtc-pm8xxx` shutdown writes only an nvmem/UEFI offset (none here); the RTC core keeps a set wake alarm; Leste's `hwclock --systohc` at shutdown gets -ENODEV (no `allow-set-time`) and touches nothing. FreeBSD's `qcom_rtc` leaves it on too ("as Linux keeps it", `freebsd/pm/README.md`); FreeBSD's alarmd switches it off only when no alarm needs it (`patches/alarmd/0006`). | `drivers/rtc/rtc-pm8xxx.c`, `drivers/rtc/interface.c` |
 | How is "powered on by the RTC" seen? | `PON_REASON1`, bit 2 (GEN2 at 0x8c0, GEN1 at 0x808); `WARM_RESET_REASON1` (0x8c2) 0 means a cold start. The vendor kernel reads them at probe, after XBL and ABL, and logs "Power-on reason: Triggered from RTC (RTC Alarm Expiry)": they are still valid then. ABL reads them too (`GetPonReason`) but clears only the reboot reason (`ClearResetReason`, the soft reset spare register), not these. | vendor `qpnp-power-on.c` (`PON_OFFSET`, `qpnp_pon_reason[]`); Qualcomm ABL `LinuxLoader.c` |
 | What does ABL boot after an RTC power-on? | The active slot's boot partition, as for any power-on: boot_b, the menu. ABL's "alarm boot" (`androidboot.alarmboot=true`) is a different thing, a reboot reason (0x03) Android writes before a reboot. The only special case of a cold start is off-mode charging (`androidboot.mode=charger` when the charger caused it), which loads the same boot image; this kernel ignores `androidboot.*`. The start is one of the slot's tries, as any start (the trial below is not changed). | Qualcomm ABL (`QcomModulePkg`: `UpdateCmdLine.c` `TargetPauseForBatteryCharge`, `LinuxLoader.c`); the Pro1X's own ABL is F(x)tec's build of it, not public |
+
+## What the N9 did when an alarm switched it on
+
+In short: it rang in its "acting dead" mode on a black screen (a large
+title, a line of text, Snooze, Stop), snoozed itself after a minute
+without an answer, and after Stop, or after Snooze until the snoozed
+time, switched itself off again. It asked nothing; to use the phone one
+held the power key. Put together from Harmattan's open source packages
+and from the N9's own firmware as the owner extracted it on the PC
+(PR1.3, `DFL61_HARMATTAN_40.2012.21-3`, `~/n950/extract/n9-root`): its
+data files only (start scripts, D-Bus service files, package lists,
+style sheets, theme pictures, message catalogues read with `lconvert`),
+as a reference; no Nokia program was taken apart, and nothing of the
+firmware is in this repository or its packages.
+
+1. **Switched on.** A clock alarm carries timed's boot flag: the device
+   is powered on and booted into the acting-dead state 60 seconds before
+   the trigger time if it is off (timed 2.54, `libtimed.3`,
+   `setBootFlag()`). At boot `getbootstate` says `ACT_DEAD`, and
+   `/etc/init/rc-default.conf` goes to runlevel 5.
+2. **Acting dead.** `/etc/init/runlevel-switch.conf` marks the state
+   (`/tmp/ACT_DEAD`) and starts the X session, which in that state
+   (`xsession.conf`: `XSESSION_ACTDEAD_STARTING`) starts only the group
+   `xsession/group-actd-daemons.conf`: D-Bus, timed, the ohm session
+   agent, the vibra and key daemons, mthemedaemon, applauncherd in boot
+   mode, mfeedbackd, ngfd (tones) and the charging animation
+   (`act-dead-charging-indicator`, its style a black background), and
+   neither the compositor nor the system UI nor the home screen.
+3. **The ringing screen.** timed hands the alarm to its notification
+   service, D-Bus `com.nokia.voland` (`usr/share/dbus-1/services/
+   com.nokia.voland.service`: `/usr/bin/reminderservice`, package
+   visualreminders), with the clock's plugin for it
+   (`/usr/lib/voland/plugins/libclockalarm.so`, package
+   clockreminderplugin). The clock's style sheet for that notification
+   (`usr/share/themes/base/meegotouch/libclockwidgets/style/
+   libclockwidgets.css`, `AlarmNotification`) gives, in the N9's pixels
+   (0.1 mm, the theme's unit): a title in bold 64 (bottom margin 12), a
+   text in light 32 (42 from the sides), a Snooze button and a Stop
+   button, each 408 x 64 with a bold 32 white label, Snooze 40 below
+   what is above it on the dialog's negative button picture
+   (`meegotouch-dialog-button-negative`: black with a grey rim), Stop 36
+   below on the positive one (dark blue with a lighter blue rim); the
+   open base theme styles the clock's query dialog as
+   `LargeButtonsQueryDialog`, "as specified in the Clock ALG", with its
+   buttons one below the other (`mmessageboxstyle.css`). No compositor
+   ran under it, so all around was black. The clock's catalogue
+   (`usr/share/l10n/meegotouch/clock_*.qm`) has the button words
+   (`qtn_cloc_alarm_snooze`, `qtn_cloc_alarm_stop`) and the name of an
+   alarm without one (`qtn_cloc_alarm_title`); the German ones are what
+   the N9's German catalogue has for them. When the screen was locked in
+   normal use, the alarm showed on the lock screen instead (the plugin's
+   `libclockalarm.css`: a large panel with the alarm's title in bold 48
+   and a subtitle in light 26).
+4. **Without an answer.** timed's dialogs snooze themselves after a
+   minute unless the event says otherwise (`libtimed.3`,
+   `suppressTimeoutSnooze()`; timed's own default snooze is 300 s, the
+   clock's alarms bring theirs, 10 minutes as the clock sets them). The
+   user guide (issue 1.2, "Snooze an alarm") adds that turning the phone
+   face down snoozes it too (issue 1.0: that it mutes it).
+5. **Off again, without a question.** dsme starts an acting-dead boot
+   with a shutdown pending (dsme 0.62.3, `set_initial_state_bits()`:
+   `ACT_DEAD` sets `shutdown_requested`) and stays in acting dead only
+   while an alarm rings or is due within 2 minutes (`alarmtracker.c`,
+   libdsme's `dsme_snooze_timeout_in_seconds()`, 120 s) or the charger
+   is connected (`select_state()`). After Stop the N9 therefore switched
+   itself off within seconds (`SHUTDOWN_TIMER_TIMEOUT`, 2 s); after
+   Snooze too, and the RTC switched it on again a minute before the
+   snoozed time. With the charger connected it stayed in acting dead,
+   showing the charging animation (`shutdown.conf`: a USB charger at
+   shutdown means a "minireboot" into `ACT_DEAD`; unplugged, dsme ends
+   it after 15 s).
+6. **Switched on by the power key only.** In acting dead mce asks dsme to
+   power up after a press of its "medium" length (mce 1.11.20,
+   `powerkey.c`: `MCE_STATE_ACTDEAD` → `request_powerup()`; the N9's
+   `/etc/mce/mce.ini`: `PowerKeyMediumDelay=1000`, 1 s, with the
+   power-on LED pattern meanwhile). dsme switches to runlevel 2,
+   `runlevel-switch.conf` marks `USER`, stops the acting-dead session
+   and starts the normal one with the boot progress indicator.
+7. **No question anywhere.** No start script asks; none of the N9's 99
+   English message catalogues has a "switch on?" text; the charging
+   animation's style knows only battery icons. The user guide (issues
+   1.0 and 1.2, and the copy on the phone, `/usr/share/userguide`)
+   explains setting, snoozing and removing alarms, not the phone that is
+   off. The owner's N9 clock screenshots (`~/ps/n9-clock-ref`, private)
+   show the clock and the alarm editor, not the ringing screen. The N900
+   asked: Fremantle's `osso-systemui-alarm` shows
+   `cloc_fi_power_up_note_description` for 15 s after an alarm in acting
+   dead (Leste's system UI has that plugin, but Leste here is never in
+   acting dead).
+
+Sources: Nokia N9 User Guide, issue 1.2
+(<http://altehandys.de/downloads/man-no-n9-00.pdf>, p. 89) and issue 1.0
+(<https://one.nz/MEDIA_CustomProductCatalog/m5670124_N9_UG_en.pdf>);
+Harmattan PR1.2 open source packages timed 2.54+0m7, dsme 0.62.3+0m7,
+libdsme 0.61.6+0m6, mce 1.11.20+0m7, meegotouchtheme 0.24.13-1+0m7 (base
+theme: `mmessageboxstyle.css`, `commonlabelstyle.css`, `constants.ini`:
+"32px" = 3.2 mm); the N9's firmware's data files named above; Leste's
+`osso-systemui-alarm` 0.3.3 for the N900's question.
+
+### What the Pro1X shows
+
+The Pro1X starts its full system for an alarm (no acting-dead mode), and
+the Hildon system UI rings it; `pro1x-alarmboot` puts the N9's screens on
+top ([how](#how-it-works), step 5):
+
+| Screen | Picture (PC, Xvfb, 2160 x 1080 at 403 dpi) |
+| --- | --- |
+| the alarm rings: time, text, Snooze (black), Stop (blue) | `alarmboot-ring-{en,de}-{landscape,portrait}.png` |
+| after it: "Switch the phone off again?" / "Telefon wieder ausschalten?", Switch off, Keep on | `alarmboot-ask-*.png` |
+| `after-alarm=switch-off`: "Switching off" / "Wird ausgeschaltet" with 10 s, Keep on | `alarmboot-off-*.png` |
+| "Switching off" while it shuts down | `alarmboot-switching-*.png` |
+
+The pictures are in the owner's `~/ps/pro1x-screens/` (`*-n9assets.png`
+with the N9's font and button pictures installed); make them with
+`tests/alarm-boot/screens.sh shots`.
+
+- **Sizes:** the N9's pixels are 0.1 mm; at the Pro1X's 403 dpi one is
+  1.59 screen pixels, so the alarm screen is as large in mm as on the N9.
+  The dpi is X's (the screen's width in mm), `-d` otherwise; where that
+  is unknown or absurd the N9's 480 pixels (its short side) take three
+  quarters of the short side.
+- **Landscape and portrait:** everything is centred in one column, as the
+  N9 had it in either; the window follows the screen: when hildon-desktop
+  has turned it to portrait (the keyboard closed, the phone upright, as
+  with the MeeGo look) the screens are laid out in portrait.
+- **Fonts and pictures:** Nokia Pure Text where installed (fontconfig),
+  else Open Sans (Leste's `fonts-open-sans`), else Sans; the N9's
+  `meegotouch-dialog-button-{negative,positive}[-pressed].png` from an
+  installed blanco theme (`/usr/local/share/themes/blanco`, as the
+  private meego-hildon-assets install it, or `/usr/share/themes/blanco`,
+  or `-t`), else the buttons drawn alike (2 px rim, a gradient: black
+  with a grey rim, dark blue with a blue rim, corner radius 19). Nothing
+  of Nokia's is in the package.
+- **Words:** English and German by the session's language (`LANG`),
+  short labels of our own that say what the N9's clock and shutdown
+  screen said (Snooze, Stop, Alarm, Switching off, and their German
+  counterparts); the question is new (the N9 had none).
+- **Order and contents:** the time as the title and the alarm's name as
+  the text, Snooze above Stop: the style sheet gives the sizes and
+  distances, not which label shows what nor the buttons' order, so these
+  are ours.
+- **The question stays** (no answer keeps the phone on, as decided for
+  1.0): a phone that switches itself off after an unanswered alarm is
+  surprising when the alarm only woke one up to use it. The N9's way is
+  the option `after-alarm=switch-off`.
+- **A look without an alarm:** `pro1x-alarmboot -D ring` (or `ask`,
+  `off`, `switching`; `-L de`), in the session as its user; a tap prints
+  0 (the upper button) or 1 and ends it.
+
+## Which systems
+
+The boot menu starts whichever system set the RTC alarm (the owner
+detection needs nothing from the systems) and leaves the note
+`/host/pro1x-boot/alarmboot` (FreeBSD: the kernel environment); what
+rings then is each system's own.
+
+| System | Alarm clock | Switched on by its alarm | N9-look screens | Tested |
+| --- | --- | --- | --- | --- |
+| Maemo Leste | clock-ui, meego-clock (alarmd, the system UI's alarm dialog) | yes: alarmd sets the RTC (`pro1x-rtc`, `librtc-realtime`) | yes: the alarm screen over the dialog, then the question | PC (stub alarmd, test bus, Xvfb), the package built in the image's chroot; phone 2026-10-31 |
+| MeeGo (N9 UI on Leste's copy) | the N9's clock (timed and its own alarm screen) | yes: timed through `librtc-realtime` | the N9's own ringing screen; then the question in the N9 look (`-T`) | PC (timed's signal on a test bus); phone open |
+| FreeBSD | clock-ui, meego-clock (alarmd, the system UI) | yes: `qcom_rtc`'s wakealarm, `kenv pro1x.alarmboot` | yes, as Leste | PC; the FreeBSD VM against the real alarmd and system UI (`freebsd/vm/try-alarmboot.sh`: Stop, Snooze, the question, three runs) |
+| Arch | GNOME Clocks in Phosh; in Hildon meego-clock is installed, but Arch's Hildon session starts neither alarmd nor the system UI, so its alarms do not ring | no: GNOME Clocks sets no RTC alarm, nothing else does | no (no alarm to switch it on) | sources (`arch/20-pro1x-hardware.sh`, `arch/hildon/hildon-session`) |
+| Kali | none installed | no | no | sources |
+| LuneOS | its own clock (sleepd's alarms) | open: whether sleepd leaves an RTC alarm set when LuneOS is switched off; if it does, the menu starts LuneOS for it | no, by choice: LuneOS keeps its own alarm look (and has no switch-off question) | not yet (needs the phone: an alarm in LuneOS's clock, then `cat /sys/class/rtc/rtc0/wakealarm` before switching off) |
+| KolibriOS | none (the ARM port has no alarm clock and no RTC alarm) | no | no | sources (smatkovi/kolibrios-arm) |
+| Sailfish OS (slot a) | its own clock (timed, its own acting-dead handling) | its own: with slot a active ABL boots Sailfish, which handles its alarm itself; our menu (slot b) cannot hand an alarm start to it (a slot switch is a reboot: the RTC power-on reason is gone) | no (Sailfish is not changed) | not tested |
+
+In the images built on the PC the parts are there by default:
+
+- **Leste:** `scripts/40-make-rootfs.sh` runs `49-alarmboot.sh` after
+  `49-hidpi.sh`: the `pro1x-alarmboot` package built by `mkdeb-tools.sh`
+  (`ONLY=pro1x-alarmboot`, its build dependencies only) and installed
+  with apt, so that `pro1x-update` upgrades it. `45-pro1x-hardware.sh`
+  puts `pro1x-boot` and the boot menu, `46-sensor-stack.sh` `pro1x-rtc`
+  in place.
+- **MeeGo:** `meego/45-meego-image.sh` copies that Leste system, with the
+  package and `Xsession.d/01pro1x-meego` (from `45-pro1x-hardware.sh`'s
+  `rootfs-overlay`).
+- **FreeBSD:** `freebsd/hildon/build.sh` puts `pro1x-alarmboot` and
+  `rc.d/pro1x_alarmboot` into the Hildon stage (package `pro1x-alarmboot`,
+  in hildon-meta's list), `freebsd/rootfs.sh` copies the stage and
+  `freebsd/hildon/rootfs` (`hildon-session`) into the image; with the
+  private assets (`HARMATTAN=`) the N9's blanco theme and Nokia Pure go to
+  `/usr/local/share/themes` and `/usr/local/share/fonts/nokia`, where
+  `pro1x-alarmboot` finds them.
 
 ## How it works
 
@@ -67,30 +256,84 @@ phone (step 1 of the test).
 5. **The system rings.**
    - **Leste:** alarmd and the system UI ring as always (a clock-ui alarm
      has `ALARM_EVENT_POSTPONE_DELAYED`: even one that comes late after a
-     slow start rings, up to a day late). `pro1x-alarmboot` (package
-     `pro1x-alarmboot`, started by `Xsession.post/48pro1x-alarmboot`)
-     watches the alarm dialog (`alarm_dialog_status` on the system bus).
-     Should none come within 2 minutes of the alarm's time while alarmd
-     still has an alarm then (or does not answer), it rings by itself: a
-     dialog and a tone through PulseAudio, until Stop or for 5 minutes.
-     Once the alarm dialog is gone (Stop, or Snooze, which sets the RTC
-     for the snooze and switches the phone on again), it asks "Switch it
-     off again?"; no answer in 60 s keeps the phone on. An alarm that was
-     deleted after the RTC was set (Leste's alarmd leaves the RTC alarm
-     then) does not ring; the question comes all the same.
+     slow start rings, up to a day late): their tone, their snoozes, their
+     queue. `pro1x-alarmboot` (package `pro1x-alarmboot`, started by
+     `Xsession.d/02pro1x-alarmboot`, before the system UI, so that it sees
+     the dialog of an alarm that is due already come up; what it does goes
+     to `/tmp/pro1x-alarmboot.log`) watches the alarm dialog
+     (`alarm_dialog_status` on the system bus) and shows the N9's screens
+     ([what they are](#what-the-pro1x-shows)):
+     - **While the system UI's alarm dialog rings** (status 5): the N9's
+       alarm screen as a full-screen window over it (hildon-desktop's
+       stacking layer 10, above the screen lock's 9), with the time and
+       text of the alarm that rings (from alarmd). A tap answers through
+       the system UI itself: mce's `sig_device_orientation_ind` with
+       `face_up`, then `face_down` (the orientation as mce gives it, so
+       nothing turns), which the ringing dialog takes as the phone turned
+       over: it snoozes, stopping its tone as with its own button. For
+       Stop, once that dialog has gone (status 7), alarmd gets the Stop
+       button as the answer (`alarmd_ack_dialog`, the index of the
+       event's Stop action): alarmd takes the last answer, so the snoozed
+       alarm ends stopped (a repeating one moves to its next day, a single
+       one is switched off), as when a snoozed alarm is stopped later.
+       Should the dialog not have gone 3 s after a tap, the window steps
+       aside for good and the Hildon dialog's own buttons are used. Should
+       hildon-desktop not have given the window the screen's size within
+       2 s (seen in the FreeBSD VM for a second program's window in the
+       same session: no answer to its configure request, GTK's drawing
+       area left at 1 x 1), it becomes an override-redirect window, which
+       hildon-desktop shows blurred under the alarm dialog's dimming but
+       which works the same. The
+       dialog stops its tone after a minute and rings again every 5
+       minutes (3 times); while it is silent (status 6) it no longer
+       listens for the face-down signal, so the window is away then and
+       the Hildon dialog shows; it comes back when the dialog rings again.
+       (Answering alarmd directly while the dialog rings would be simpler
+       but is not safe: alarmd closes the system UI's dialog only for a
+       deleted alarm, and the system UI then drops the alarm's
+       notification without closing it, so its repeating tone could go on;
+       `alarm_remove()` in osso-systemui-alarm.)
+     - **Should no dialog come** within 2 minutes of the alarm's time
+       while alarmd still has an alarm then (or does not answer), it rings
+       by itself: the same N9 alarm screen and a tone through PulseAudio,
+       5 minutes at most; Snooze rings again after the alarm's snooze time
+       (10 minutes where alarmd does not say), Stop ends it. Without a
+       display it still rings (the tone alone) and keeps the phone on.
+     - **Once the alarm is over** (the dialog gone 5 s, or its own
+       ringing stopped): "Switch the phone off again?" in the N9's query
+       dialog look, Switch off (the positive, blue button) and Keep on;
+       no answer in 60 s keeps the phone on. Switch off shows "Switching
+       off" and asks dsme to shut down; a snoozed alarm's RTC alarm stays
+       set and switches the phone on again. With `after-alarm=switch-off`
+       in `/etc/pro1x-alarmboot.conf` (group `[pro1x-alarmboot]`, or `-N`)
+       it does what the N9 did instead: "Switching off", off after 10 s
+       unless Keep on is tapped.
+     - An alarm that was deleted after the RTC was set (Leste's alarmd
+       leaves the RTC alarm then) does not ring; the question comes all
+       the same.
    - **FreeBSD:** `rc.d/pro1x_alarmboot` (package `pro1x-alarmboot`)
      writes the note `/var/run/pro1x-alarmboot` and starts the Hildon
-     session (`startx hildon`, as root, as on the console). alarmd and the
-     system UI ring there; alarmd's queue is kept only on the writable
-     pool (`pro1x.rootrw`), with the read-only root `pro1x-alarmboot` rings
-     by itself after 2 minutes, then asks; "Switch off" is
-     `shutdown -p now`.
-   - **MeeGo** (Harmattan's session): timed rings in its own session (its
-     wake alarms go through `librtc-realtime` too); no switch-off
-     question.
-   - **Arch, Kali, LuneOS** set no RTC alarms (Arch builds libalarm only
-     for its calendar). If something sets one there (`rtcwake`), the menu
-     starts that system all the same.
+     session (`startx hildon`, as root, as on the console), which starts
+     `pro1x-alarmboot` before the system UI (log
+     `/tmp/pro1x-alarmboot.log`). The same screens; alarmd's queue is kept
+     only on the writable pool (`pro1x.rootrw`), with the read-only root
+     `pro1x-alarmboot` rings by itself after 2 minutes, then asks;
+     "Switch off" is `shutdown -p now`; the configuration file is
+     `/usr/local/etc/pro1x-alarmboot.conf`.
+   - **MeeGo** (the N9's user interface on Leste's copy, system key
+     `meego`): the N9's own timed rings with the N9's own alarm screen (its
+     reminder service, from the N950 image under `/host/harmattan.img`);
+     timed's wake alarms reach the RTC through `librtc-realtime` too
+     (`meego/38-hardware-adaptation.sh`). Nothing is put over that screen.
+     `pro1x-alarmboot` (started by `Xsession.d/01pro1x-meego`, which ends
+     Leste's X session there before `02pro1x-alarmboot`; log
+     `/tmp/pro1x-alarmboot.log`) runs with `-T`: timed's signal
+     `com.nokia.time.next_bootup_event` is 1 while a boot-up alarm is in
+     its dialog (timed's `machine_t::calculate_bootup()`); once it is
+     something else (stopped or snoozed) the question comes 5 s later, in
+     the N9 look. Its own ringing should no such signal come in 2 minutes
+     (it does not ask Leste's alarmd there).
+   - **The others:** [below](#which-systems).
 
 Kernel patch 0028 (`device/kernel/patches/0028-power-reset-qcom-pon-...`,
 in pro1x.10) adds what the running systems may want: `qcom-pon` logs the
@@ -138,17 +381,24 @@ package. **Writing boot_b needs the owner's OK on the day.**
    ends in Sailfish after three tries; back with
    `TARGET=b IMG=/host/boot_b-before-7.1.0-pro1x.10.img VBMETA= sh scripts/60-flash-slot-b.sh flash`
    or `fastboot flash boot_b $OUT/boot_b-before-7.1.0-pro1x.10.img`.
-3. The package, from the pre-release `leste-alarmboot-2026.10.30`
-   (built by `scripts/mkdeb-tools.sh`, `ONLY=pro1x-alarmboot`):
+3. The package, from the pre-release `leste-alarmboot-2026.10.30.1`
+   (1.1, the N9 look; built by `scripts/mkdeb-tools.sh`,
+   `ONLY=pro1x-alarmboot`; `pro1x-update` sees it too):
    ```sh
-   gh release download leste-alarmboot-2026.10.30 -R smatkovi/pro1x-maemo-leste -D /tmp/alarmboot
+   gh release download leste-alarmboot-2026.10.30.1 -R smatkovi/pro1x-maemo-leste -D /tmp/alarmboot
    (cd /tmp/alarmboot && sha256sum -c SHA256SUMS)
-   scp /tmp/alarmboot/pro1x-alarmboot_1.0_arm64.deb root@172.16.42.1:/root/
-   # in Leste, as root
-   apt install /root/pro1x-alarmboot_1.0_arm64.deb
+   scp /tmp/alarmboot/pro1x-alarmboot_1.1_arm64.deb root@172.16.42.1:/root/
+   # in Leste, as root (1.0's Xsession.post/48pro1x-alarmboot goes)
+   apt install /root/pro1x-alarmboot_1.1_arm64.deb
    ```
-   then log out of Hildon or reboot. FreeBSD gets `pro1x-alarmboot` and
-   the new `hildon-session` with the next FreeBSD Hildon release.
+   then log out of Hildon or reboot. FreeBSD gets `pro1x-alarmboot` 1.1
+   and the new `hildon-session` with the next FreeBSD Hildon release.
+   MeeGo's copy (`/host/meego-leste.img`, from Leste with the copy
+   mounted, e.g. on `/mnt/ml`): the same package (`chroot /mnt/ml apt
+   install /root/pro1x-alarmboot_1.1_arm64.deb` after copying it there)
+   and the new `rootfs-overlay/etc/X11/Xsession.d/01pro1x-meego` into its
+   `/etc/X11/Xsession.d/`; a newly made copy (`meego/45-meego-image.sh`)
+   has both from Leste.
 
 ## The test on the phone
 
@@ -157,13 +407,34 @@ package. **Writing boot_b needs the owner's OK on the day.**
    after the next power off and on, `pro1x-boot pmic` again: whether the
    PMIC kept it (if not, the rc scripts would have to set it at every
    start; FreeBSD has no such switch yet).
-2. **Leste:** clock, an alarm 5 minutes ahead. `cat
-   /sys/class/rtc/rtc0/wakealarm` is a count (the RTC's own, not the real
-   time) and `pro1x-boot pmic` says `alarm at ... (on, in ~240 s)`.
-   Switch off with the power key menu. Expected: about 60 s before the
-   alarm the phone switches itself on, no boot menu, Leste starts, the
-   alarm dialog rings at the alarm's time; Stop, then "Switch it off
-   again?": Switch off, and the phone is off.
+2. **Leste:** first the look alone: in the session's terminal (as
+   `user`) `pro1x-alarmboot -D ring`, then `-D ask` and `-L de`: the
+   screens fill the display, a tap prints 0 or 1. Then clock, an alarm 5
+   minutes ahead. `cat /sys/class/rtc/rtc0/wakealarm` is a count (the
+   RTC's own, not the real time) and `pro1x-boot pmic` says `alarm at ...
+   (on, in ~240 s)`. Switch off with the power key menu. Expected: about
+   60 s before the alarm the phone switches itself on, no boot menu,
+   Leste starts, at the alarm's time Leste's alarm tone and the N9's
+   alarm screen (black, the time, the alarm's name, Snooze, Stop) over
+   the Hildon alarm dialog.
+   - a) Stop: the tone stops, the screen goes, 5 s later "Switch the
+     phone off again?": Keep on. `cat /tmp/pro1x-alarmboot.log`: `stop
+     tapped`, `alarm dialog status 7`, `stop for alarm N (button 1)`;
+     the clock: a single alarm switched off, a repeating one at its next
+     day; nothing rings 10 minutes later.
+   - b) The same with an alarm 5 minutes ahead again, power off, on by
+     the alarm: Snooze, then Switch off: "Switching off", the phone is
+     off and switches itself on again a minute before the snoozed time,
+     rings with the N9 screen: Stop.
+   - c) Let it ring: after a minute its tone stops and the Hildon dialog
+     shows (the N9 screen goes with the tone); about 5 minutes later it
+     rings again with the N9 screen.
+   - d) Portrait: the keyboard closed, the phone upright while it rings:
+     the screen turns with hildon-desktop, everything in one column.
+   - Should a tap leave the Hildon dialog on screen: the log says `the
+     alarm dialog did not go`; the face-down signal did not reach the
+     system UI (`dbus-monitor --system "interface='com.nokia.mce.signal'"`
+     while tapping); its own buttons work, the question comes after.
 3. **FreeBSD:** the same from FreeBSD's Hildon (`startx hildon`; with
    the writable pool alarmd keeps the alarm, else `pro1x-alarmboot`
    rings 2 minutes after its time), then `shutdown -p now`. Expected: the
@@ -180,7 +451,8 @@ If it does not work:
 | The phone stays off | `pro1x-boot pmic` before the power off: the alarm `on`, in the future? "power-on sources" with "RTC alarm"? (step 1) |
 | It comes on, but the menu shows | `/host/pro1x-boot/last-boot`, the `alarm-check:` line: `pmic-unreadable` (no debugfs, no `0-00` regmap), `not-by-the-rtc` (the `pon=` value: another reason bit), `not-this-alarm` (`late=` beyond 600 s or negative), `owner-not-installed`, `alarm-used-already`; `/host/pro1x-boot/rtc-alarm` (who owns it) |
 | The system starts, nothing rings | Leste: `/host/pro1x-boot/alarmboot` there? `pro1x-alarmboot -v` by hand in the session's terminal; alarmd's queue (`alarmclient -i`, package alarmclient); FreeBSD: `kenv pro1x.alarmboot`, `/var/run/pro1x-alarmboot`, `/var/log/startx.log` |
-| The question to switch off does not come | `pro1x-alarmboot -v`: it waits for the alarm dialog to show and go (or for its own ringing to stop) |
+| The question to switch off does not come | `/tmp/pro1x-alarmboot.log`: it waits for the alarm dialog to show and go (or for its own ringing to stop) |
+| The Hildon alarm dialog rings without the N9 screen | `/tmp/pro1x-alarmboot.log`: no `alarm dialog status 5` (started too late or not at all: `/etc/X11/Xsession.d/02pro1x-alarmboot`), `no clock alarm with Snooze and Stop rings` (alarmd did not give the ringing alarm), `did not go` (a tap was not taken: it stepped aside) |
 
 ## Tested on the PC
 
@@ -214,6 +486,45 @@ INITRD=$WORK/out-pro1x.5/initrd.img-7.1.0-pro1x.5 LINUX=$WORK/build/linux \
     bash tests/alarm-boot/run.sh
 ```
 
+`tests/alarm-boot/screens.sh` (2026-10-30): `pro1x-alarmboot` 1.1 built on
+the PC against a stub of alarmd's libalarm (`tests/alarm-boot/stub`), in
+an Xvfb and with a D-Bus daemon of its own as the system bus: `shots`
+makes the screens' pictures (both languages, landscape and portrait);
+`test` checks the answers, 20 checks, 0 failures with `OWN=1`: status 5
+puts the N9 screen over the dialog with the alarm's text; a tap on Stop
+sends `face_up` and `face_down`; status 7 gives alarmd the Stop button
+(`ack 77 1`) and the question follows 5 s later; Keep on ends it; status
+6 takes the screen away, status 5 brings it back; a tap without a status
+after it steps aside after 3 s and leaves alarmd to the system UI; Switch
+off asks dsme; the same alarm a second time does nothing; without a
+dialog it rings itself after 90 s with the alarm's text, Snooze, and
+gives way to a dialog that comes after all; in MeeGo's mode (`-s meego`)
+timed's `next_bootup_event` 1 puts nothing over timed's screen and its
+end brings the question. The Leste package built by `49-alarmboot.sh` in
+the chroot of the official image (`gcc -Wall`, no warnings) and installed
+there with apt over 1.0 (whose `Xsession.post/48pro1x-alarmboot` dpkg
+removed).
+
+`freebsd/vm/try-alarmboot.sh` (2026-10-30, the FreeBSD VM, its Hildon
+session on Xvfb with the real alarmd and osso-systemui-alarm 0.3.3, the
+N9's theme and fonts from the private assets installed): an alarm as
+clock-ui sets one, due in 30 s; the system UI's dialog rings, the N9
+screen covers it; a tap on Stop: the system UI took the face-down
+signal, the dialog went, alarmd got the Stop and the single alarm was
+switched off; a tap on Snooze: the alarm snoozed by 10 minutes; each
+time the question, Keep on. Three runs in one session: the second and
+third program's window was not sized by hildon-desktop (1 x 1) and fell
+back to the override-redirect window as described, which worked the
+same (shown blurred under the dialog's dimming). The pictures:
+`~/ps/pro1x-screens/alarmboot-vm-freebsd-*.png`.
+
+```sh
+bash tests/alarm-boot/screens.sh shots      # OUT=~/ps/pro1x-screens
+OWN=1 bash tests/alarm-boot/screens.sh test
+# in the FreeBSD VM, with the packages installed, the source in /tmp:
+sh freebsd/vm/try-alarmboot.sh /tmp/pro1x-alarmboot.c
+```
+
 Not tested: anything on the phone (the PMIC registers through debugfs,
 the power-on itself, ABL's behaviour after it, the ringing and the
 switch-off question in a real session), and FreeBSD's side in the VM
@@ -231,6 +542,14 @@ switch-off question in a real session), and FreeBSD's side in the VM
   while the phone was on), that start goes straight to the system that
   ran anyway, and `pro1x-alarmboot` there asks to switch off. Each count
   starts a system only once.
+- The N9 screen answers the Hildon alarm dialog through its "turned
+  face down" snooze (osso-systemui-alarm 0.3.3: only while the dialog
+  rings, from anyone on the system bus); a system UI without it makes
+  the screen step aside after the first tap. Between the rings (its tone
+  stops after a minute) the Hildon dialog shows. Stop is that snooze
+  followed by alarmd's Stop: for a moment the RTC is set for the snooze,
+  then for the next alarm. Only clock alarms with Snooze and Stop get
+  the N9 screen (not calendar reminders).
 - Leste's alarmd leaves the RTC alarm of a deleted alarm set: the phone
   then switches on for nothing, `pro1x-alarmboot` does not ring (alarmd
   has no such alarm) and only asks to switch off again.

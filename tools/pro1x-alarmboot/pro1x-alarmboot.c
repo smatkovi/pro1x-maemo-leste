@@ -14,9 +14,10 @@
  *     (their sound, snoozes and queue). While the system UI's alarm dialog
  *     rings (com.nokia.system_ui.signal alarm_dialog_status 5), a full
  *     screen window covers it with the N9's alarm screen: the time, the
- *     alarm's text, Snooze and Stop (Harmattan's clock alarm view, in the
- *     N9's pixels of 0.1 mm, drawn with cairo; the N9's own font and button
- *     pictures where the owner installed them, -t, else free ones). A tap
+ *     alarm's text, Snooze and Stop (sized as the N9 clock's style sheet
+ *     sizes its alarm notification, in the N9's pixels of 0.1 mm, drawn
+ *     with cairo; the N9's own font and button pictures where the owner
+ *     installed them, -t, else free ones). A tap
  *     answers through the system UI itself: the "turned face down" signal
  *     it listens for while it rings (mce's sig_device_orientation_ind)
  *     snoozes, as turning the phone over does; for Stop, once that dialog
@@ -41,14 +42,23 @@
  *     after-alarm=switch-off in the configuration file) this does that:
  *     "Switching off", 10 s to keep it on.
  *
+ * In the MeeGo system (Leste's copy under the N9's own user interface,
+ * system key meego, or -T) the N9's own timed and alarm screen ring:
+ * there is nothing to cover. What tells the alarm's dialog there is timed's
+ * next_bootup_event signal (com.nokia.time; 1 while a boot-up alarm is in
+ * its dialog): once that ends, the question; its own ringing as above
+ * should none come in 2 minutes (alarmd is not asked: Leste's alarmd is
+ * not that system's).
+ *
  * Without a note for this system it ends at once. Once per alarm (a note
  * in the user's runtime directory). Without a display it still rings (the
  * tone alone) and keeps the phone on.
  *
- *   pro1x-alarmboot [-f NOTE] [-s SYSTEM] [-N] [-t THEME] [-d DPI] [-v]
+ *   pro1x-alarmboot [-f NOTE] [-s SYSTEM] [-N] [-T] [-t THEME] [-d DPI] [-v]
  *       -f  the note (default as above), -s  this system's key
  *       (default: /host/pro1x-boot/current; FreeBSD: freebsd),
  *       -N  switch off after the alarm as the N9 did (10 s to keep it on),
+ *       -T  timed's alarms, as in the MeeGo system (its default),
  *       -t  a "blanco" theme directory (default: /usr/local/share/themes/
  *       blanco or /usr/share/themes/blanco, where installed),
  *       -d  the screen's dots per inch (default: X's), -v  say what it
@@ -108,7 +118,7 @@
  * dialog button), Stop (its positive one) */
 enum { BTN_SNOOZE, BTN_STOP };
 
-static gboolean verbose, n9_off;
+static gboolean verbose, n9_off, use_timed;
 static GDBusConnection *sysbus;
 static time_t due;		/* the alarm's real time */
 static gboolean have_display, dialog_seen, asked, ringing, own_snoozed;
@@ -119,8 +129,8 @@ static GThread *tone;
 
 #define say(...) do { if (verbose) { fprintf(stderr, "pro1x-alarmboot: " __VA_ARGS__); fputc('\n', stderr); } } while (0)
 
-/* --- texts: the N9's own where it had them (its clock's and its shutdown
- * screen's catalogues), in English and German ----------------------------- */
+/* --- texts: our own short words for what the N9's clock and shutdown
+ * screen said, in English and German --------------------------------------- */
 
 static const struct texts {
 	const char *snooze, *stop, *alarm;
@@ -176,17 +186,18 @@ static void format_time(time_t t, char *buf, size_t n)
 
 /* --- the N9 look ----------------------------------------------------------
  *
- * Harmattan's clock alarm view (libclockwidgets' AlarmNotificationView and
- * its style) and query dialog (libmeegotouch's open base theme), in the
- * N9's pixels, which its theme counts as 0.1 mm (251 dpi). The alarm: the
- * time (bold 64), 12 below it the alarm's text (light 32, 42 from the
- * sides, cut short), 40 below that Snooze, 36 below that Stop, both 408 x
- * 64 with bold 32 white labels, Snooze the dialog's negative (black)
- * button, Stop its positive (dark blue) one, all centred on black: what
- * the N9 showed in its acting-dead mode, where no compositor ran under the
- * dialog. The question: the query dialog with its buttons one below the
- * other and not cut to 322 (LargeButtonsQueryDialog): the title bold 32,
- * 17 below it the text light 24, 26 below that the buttons, 16 apart.
+ * The sizes of the N9 clock's style sheet for its alarm notification and
+ * of the query dialog of libmeegotouch's open base theme, in the N9's
+ * pixels, which its theme counts as 0.1 mm (251 dpi). The alarm: the time
+ * as the title (bold 64), 12 below it the alarm's text (light 32, 42 from
+ * the sides, cut short), 40 below that Snooze, 36 below that Stop, both
+ * 408 x 64 with bold 32 white labels, Snooze on the dialog's negative
+ * (black) button, Stop on its positive (dark blue) one, all centred on
+ * black: as in the N9's acting-dead mode, where no compositor ran under
+ * the dialog (which label shows what and the buttons' order are ours).
+ * The question: the query dialog with its buttons one below the other and
+ * not cut to 322 (LargeButtonsQueryDialog): the title bold 32, 17 below it
+ * the text light 24, 26 below that the buttons, 16 apart.
  */
 
 #define FONT_BOLD "Nokia Pure Text,Open Sans,Sans Bold"
@@ -212,7 +223,7 @@ static struct {
 	void (*clicked)(int index);
 	double dpi;
 	int width, height;		/* -g, else the screen's */
-	gboolean demo;
+	gboolean demo, popup;
 	cairo_surface_t *pic[2][2];	/* [positive][pressed] */
 } scr = { .pressed = -1 };
 
@@ -514,46 +525,101 @@ static void set_cardinal(GtkWidget *w, const char *name, gulong value)
 			    (const guchar *)&value, 1);
 }
 
+/* The window's size: -g's, else the screen's (also after the screen
+ * turned: the override-redirect window resizes itself) */
+static void fit_window(GdkScreen *gs, gpointer unused)
+{
+	(void)unused;
+	if (!scr.win || scr.width || !scr.popup)
+		return;
+	gtk_window_move(GTK_WINDOW(scr.win), 0, 0);
+	gtk_window_resize(GTK_WINDOW(scr.win), gdk_screen_get_width(gs),
+			  gdk_screen_get_height(gs));
+	gtk_widget_set_size_request(scr.area, gdk_screen_get_width(gs),
+				    gdk_screen_get_height(gs));
+}
+
 /* The screen's window: full screen, above Hildon's dialogs and its screen
  * lock (hildon-desktop's stacking layer 10, the system UI's power key
  * menu's; the lock's is 9), turned with the screen when hildon-desktop
- * turns it to portrait (the keyboard closed, as the MeeGo look does) */
+ * turns it to portrait (the keyboard closed, as the MeeGo look does).
+ * Managed by hildon-desktop as the system UI's own such windows are; an
+ * override-redirect one where hildon-desktop did not size it (seen once in
+ * the FreeBSD VM: no answer to its configure request, GTK's drawing area
+ * left at 1 x 1), which hildon-desktop then shows blurred under a dialog */
+static void screen_create(void)
+{
+	GdkScreen *gs = gdk_screen_get_default();
+	int w = scr.width ? scr.width : gdk_screen_get_width(gs);
+	int h = scr.height ? scr.height : gdk_screen_get_height(gs);
+
+	scr.win = gtk_window_new(scr.popup ? GTK_WINDOW_POPUP : GTK_WINDOW_TOPLEVEL);
+	gtk_window_set_title(GTK_WINDOW(scr.win), "Alarm");
+	gtk_window_set_decorated(GTK_WINDOW(scr.win), FALSE);
+	gtk_window_move(GTK_WINDOW(scr.win), 0, 0);
+	gtk_window_set_default_size(GTK_WINDOW(scr.win), w, h);
+	g_signal_connect(scr.win, "delete-event", G_CALLBACK(gtk_true), NULL);
+	scr.area = gtk_drawing_area_new();
+	if (scr.popup)
+		gtk_widget_set_size_request(scr.area, w, h);
+	gtk_widget_add_events(scr.area, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK);
+	g_signal_connect(scr.area, "expose-event", G_CALLBACK(on_expose), NULL);
+	g_signal_connect(scr.area, "button-press-event", G_CALLBACK(on_press), NULL);
+	g_signal_connect(scr.area, "button-release-event", G_CALLBACK(on_release), NULL);
+	gtk_container_add(GTK_CONTAINER(scr.win), scr.area);
+	gtk_widget_realize(scr.win);
+	set_cardinal(scr.win, "_HILDON_STACKING_LAYER", 10);
+	set_cardinal(scr.win, "_HILDON_PORTRAIT_MODE_SUPPORT", 1);
+	/* (-g: a window of that size alone, for pictures) */
+	if (!scr.popup && !scr.width)
+		gtk_window_fullscreen(GTK_WINDOW(scr.win));
+}
+
+static guint size_check;
+
+/* 2 s after it was shown: has it the screen's size? */
+static gboolean check_size(gpointer unused)
+{
+	GtkAllocation al;
+
+	(void)unused;
+	size_check = 0;
+	if (!scr.win || scr.popup || !gtk_widget_get_visible(scr.win))
+		return FALSE;
+	gtk_widget_get_allocation(scr.area, &al);
+	if (al.width >= 100 && al.height >= 100)
+		return FALSE;
+	say("the window manager did not size the screen (%d x %d): override-redirect",
+	    al.width, al.height);
+	gtk_widget_destroy(scr.win);
+	scr.popup = TRUE;
+	screen_create();
+	gtk_widget_show_all(scr.win);
+	gdk_window_raise(gtk_widget_get_window(scr.win));
+	return FALSE;
+}
+
 static void screen_show(enum screen_kind kind, void (*clicked)(int))
 {
-	GdkScreen *gs;
-
 	if (!have_display)
 		return;
 	if (!scr.win) {
-		gs = gdk_screen_get_default();
-		scr.win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-		gtk_window_set_title(GTK_WINDOW(scr.win), "Alarm");
-		gtk_window_set_decorated(GTK_WINDOW(scr.win), FALSE);
-		gtk_window_set_default_size(GTK_WINDOW(scr.win),
-					    scr.width ? scr.width : gdk_screen_get_width(gs),
-					    scr.height ? scr.height : gdk_screen_get_height(gs));
-		gtk_window_move(GTK_WINDOW(scr.win), 0, 0);
-		g_signal_connect(scr.win, "delete-event", G_CALLBACK(gtk_true), NULL);
-		scr.area = gtk_drawing_area_new();
-		gtk_widget_add_events(scr.area, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK);
-		g_signal_connect(scr.area, "expose-event", G_CALLBACK(on_expose), NULL);
-		g_signal_connect(scr.area, "button-press-event", G_CALLBACK(on_press), NULL);
-		g_signal_connect(scr.area, "button-release-event", G_CALLBACK(on_release), NULL);
-		gtk_container_add(GTK_CONTAINER(scr.win), scr.area);
-		gtk_widget_realize(scr.win);
-		if (!scr.demo) {
-			set_cardinal(scr.win, "_HILDON_STACKING_LAYER", 10);
-			gtk_window_fullscreen(GTK_WINDOW(scr.win));
-		}
-		set_cardinal(scr.win, "_HILDON_PORTRAIT_MODE_SUPPORT", 1);
+		screen_create();
+		g_signal_connect(gdk_screen_get_default(), "size-changed",
+				 G_CALLBACK(fit_window), NULL);
 	}
 	scr.kind = kind;
 	scr.clicked = clicked;
 	scr.pressed = -1;
 	scr.busy = FALSE;
 	gtk_widget_show_all(scr.win);
-	gtk_window_present(GTK_WINDOW(scr.win));
+	if (scr.popup)
+		gdk_window_raise(gtk_widget_get_window(scr.win));
+	else
+		gtk_window_present(GTK_WINDOW(scr.win));
 	gtk_widget_queue_draw(scr.area);
+	if (!scr.popup && !scr.width && !size_check)
+		size_check = g_timeout_add_seconds(2, check_size, NULL);
 }
 
 static void screen_hide(void)
@@ -850,9 +916,12 @@ static void own_ring_clicked(int button)
 /* alarmd's answer for the alarm: 1 there is one, 0 it has none, -1 no answer */
 static int alarmd_has_alarm(time_t now)
 {
-	cookie_t *c = alarmd_event_query(due - 600, now + 900, 0, 0, NULL);
+	cookie_t *c;
 	int n = 0;
 
+	if (use_timed)
+		return -1;
+	c = alarmd_event_query(due - 600, now + 900, 0, 0, NULL);
 	if (!c)
 		return -1;
 	for (int i = 0; c[i]; i++) {
@@ -879,10 +948,13 @@ struct alarm_info {
 
 static gboolean find_alarm(time_t now, gboolean ringing_only, struct alarm_info *ai)
 {
-	cookie_t *c = alarmd_event_query(due - 600, now + 900, 0, 0, NULL);
+	cookie_t *c;
 	gboolean found = FALSE, best_rings = FALSE;
 	time_t best = 0;
 
+	if (use_timed)
+		return FALSE;
+	c = alarmd_event_query(due - 600, now + 900, 0, 0, NULL);
 	if (!c)
 		return FALSE;
 	for (int i = 0; c[i]; i++) {
@@ -1124,10 +1196,49 @@ static void dialog_status(GDBusConnection *c, const gchar *sender, const gchar *
 	}
 }
 
+/* The MeeGo system: timed's next boot-up event, 1 while a boot-up alarm
+ * is in its dialog (timed's machine_t::calculate_bootup()) */
+static gboolean timed_rings;
+
+static void timed_bootup(GDBusConnection *c, const gchar *sender, const gchar *path,
+			 const gchar *iface, const gchar *signal, GVariant *params,
+			 gpointer unused)
+{
+	gint32 v = 0;
+
+	(void)c; (void)sender; (void)path; (void)iface; (void)signal; (void)unused;
+	if (!g_variant_is_of_type(params, G_VARIANT_TYPE("(i)")))
+		return;
+	g_variant_get(params, "(i)", &v);
+	say("timed's next boot-up event %d", v);
+	if (v == 1 && !timed_rings) {
+		timed_rings = TRUE;
+		dialog_seen = TRUE;
+		/* our own ringing gives way to timed's */
+		if (own_snooze_timer)
+			g_source_remove(own_snooze_timer);
+		own_snooze_timer = 0;
+		own_snoozed = FALSE;
+		if (ringing) {
+			asked = TRUE;
+			ring_end(FALSE);
+			asked = FALSE;
+		}
+		if (ask_timer)
+			g_source_remove(ask_timer);
+		ask_timer = 0;
+	} else if (v != 1 && timed_rings) {
+		/* stopped or snoozed */
+		timed_rings = FALSE;
+		if (!asked && !ask_timer)
+			ask_timer = g_timeout_add_seconds(5, ask_later, NULL);
+	}
+}
+
 static gboolean give_up(gpointer unused)
 {
 	(void)unused;
-	if (ringing || asked || own_snoozed || ov.shown)
+	if (ringing || asked || own_snoozed || ov.shown || timed_rings)
 		return FALSE;
 	say("no alarm dialog in %d min: done", LIFETIME / 60);
 	quit();
@@ -1186,7 +1297,7 @@ static void read_conf(void)
 static void usage(void)
 {
 	fprintf(stderr,
-		"usage: pro1x-alarmboot [-f note] [-s system] [-N] [-t theme] [-d dpi] [-v]\n"
+		"usage: pro1x-alarmboot [-f note] [-s system] [-N] [-T] [-t theme] [-d dpi] [-v]\n"
 		"       pro1x-alarmboot -D ring|ask|off|switching [-L en|de] [-g WxH] [-t theme] [-d dpi]\n");
 }
 
@@ -1213,12 +1324,13 @@ int main(int argc, char **argv)
 
 	setlocale(LC_ALL, "");
 	read_conf();
-	while ((opt = getopt(argc, argv, "f:s:vND:L:g:t:d:")) != -1) {
+	while ((opt = getopt(argc, argv, "f:s:vNTD:L:g:t:d:")) != -1) {
 		switch (opt) {
 		case 'f': note_path = optarg; break;
 		case 's': self = optarg; break;
 		case 'v': verbose = TRUE; break;
 		case 'N': n9_off = TRUE; break;
+		case 'T': use_timed = TRUE; break;
 		case 'D': demo_what = optarg; break;
 		case 'L': lang = optarg; break;
 		case 'g':
@@ -1267,6 +1379,8 @@ int main(int argc, char **argv)
 		say("the alarm was %s's, this is %s", sys, self);
 		return 0;
 	}
+	if (!strcmp(self, "meego"))
+		use_timed = TRUE;
 	note_get(note, "rtc_alarm", rtc, sizeof(rtc));
 	done_path = g_build_filename(g_get_user_runtime_dir(), "pro1x-alarmboot.done", NULL);
 	if (g_file_get_contents(done_path, &done, NULL, NULL) && !strcmp(g_strstrip(done), rtc)) {
@@ -1286,9 +1400,14 @@ int main(int argc, char **argv)
 		fprintf(stderr, "pro1x-alarmboot: system bus: %s\n", err->message);
 		return 1;
 	}
-	g_dbus_connection_signal_subscribe(sysbus, NULL, "com.nokia.system_ui.signal",
-					   "alarm_dialog_status", "/com/nokia/system_ui/signal",
-					   NULL, G_DBUS_SIGNAL_FLAGS_NONE, dialog_status, NULL, NULL);
+	if (use_timed)
+		g_dbus_connection_signal_subscribe(sysbus, NULL, "com.nokia.time",
+						   "next_bootup_event", "/com/nokia/time", NULL,
+						   G_DBUS_SIGNAL_FLAGS_NONE, timed_bootup, NULL, NULL);
+	else
+		g_dbus_connection_signal_subscribe(sysbus, NULL, "com.nokia.system_ui.signal",
+						   "alarm_dialog_status", "/com/nokia/system_ui/signal",
+						   NULL, G_DBUS_SIGNAL_FLAGS_NONE, dialog_status, NULL, NULL);
 	have_display = gtk_init_check(&argc, &argv);
 	if (have_display)
 		display_ready(theme);

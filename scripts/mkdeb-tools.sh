@@ -46,13 +46,20 @@ log() { echo ">> $*"; }
 # packages of what 49-hidpi.sh rebuilt (+pro1xN, held) from that build,
 # where they are missing: the archive's want the archive's libraries
 # exactly
-pkgs=(gcc g++ libc6-dev pkg-config make gettext binutils dpkg-dev libgconf2-dev
-  libjson-glib-dev librtcom-eventlogger-dev hildon-control-panel-dev libosso-dev
-  libx11-dev libpulse-dev libtime-dev libical-dev
-  libsqlite3-dev libdbus-1-dev libalarm-dev)
-pkg-config --exists libcurl 2> /dev/null || pkgs+=(libcurl4-openssl-dev)
+if [ "$ONLY" = pro1x-alarmboot ]; then
+  # alone (49-alarmboot.sh, an image): only its own
+  pkgs=(gcc libc6-dev pkg-config binutils dpkg-dev libpulse-dev libalarm-dev)
+  devs=(libgtk2.0-dev)
+else
+  pkgs=(gcc g++ libc6-dev pkg-config make gettext binutils dpkg-dev libgconf2-dev
+    libjson-glib-dev librtcom-eventlogger-dev hildon-control-panel-dev libosso-dev
+    libx11-dev libpulse-dev libtime-dev libical-dev
+    libsqlite3-dev libdbus-1-dev libalarm-dev)
+  pkg-config --exists libcurl 2> /dev/null || pkgs+=(libcurl4-openssl-dev)
+  devs=(libgtk2.0-dev libhildon1-dev calendar-backend-dev)
+fi
 debs=()
-for p in libgtk2.0-dev libhildon1-dev calendar-backend-dev; do
+for p in "${devs[@]}"; do
   dpkg-query -W -f='${Status}' "$p" 2> /dev/null | grep -q "ok installed" && continue
   f=$(ls "$SRC"/"$p"_*+pro1x*_*.deb 2> /dev/null | tail -1 || true)
   if [ -n "$f" ]; then debs+=("$f"); else pkgs+=("$p"); fi

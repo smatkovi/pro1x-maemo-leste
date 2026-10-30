@@ -544,16 +544,34 @@ See `docs/alarm-power-on.md`, "The test on the phone". It needs pro1x.10
   once the package is in a `leste-*` pre-release (`fetch.sh` again)
 - or `dpkg -i` of the deb
 
+Use `pro1x-alarmboot` 1.1 (pre-release `leste-alarmboot-2026.10.30.1`:
+the N9's alarm screen); after installing it, log out of Hildon or reboot.
+
 Steps:
 1. `pro1x-boot pmic`: "power-on sources" must name "RTC alarm".
-2. An alarm 5 minutes ahead in Leste's clock. Then [OK][HAND] switch off
+2. The look alone, in the session's terminal as `user`:
+   `pro1x-alarmboot -D ring`, `-D ask`, `-L de -D ring`. A tap ends each.
+3. An alarm 5 minutes ahead in Leste's clock. Then [OK][HAND] switch off
    from the power key menu.
    - Expected: the phone comes on about 60 s before the alarm, without a
-     menu, and rings.
-   - Then "Switch it off again?".
-3. Counter-check: a start by the power key shows the menu
+     menu, and rings: Leste's tone, the N9 screen (black, time, name,
+     Snooze, Stop) over the Hildon dialog.
+   - Stop: tone and screen go; 5 s later "Switch the phone off again?":
+     Keep on. Nothing rings 10 minutes later.
+   - `cat /tmp/pro1x-alarmboot.log` (`stop tapped`, `status 7`, `stop
+     for alarm N (button 1)`).
+4. Once more, with Snooze, then Switch off: the phone is off, comes on
+   again a minute before the snoozed time and rings with the N9 screen.
+   Optional: let it ring over a minute (the Hildon dialog shows while it
+   is silent), portrait with the keyboard closed.
+5. Counter-check: a start by the power key shows the menu
    (`last-boot`: `alarm-check: none not-by-the-rtc`).
-4. `collect.sh 08-alarm /host/pro1x-boot/last-boot`.
+   Optional, MeeGo (its copy with the 1.1 package and the new
+   `01pro1x-meego`, see the document): an alarm in the N9 clock, switch
+   off; the phone starts MeeGo, the N9's own alarm screen rings; after
+   Stop the question in the N9 look.
+6. `collect.sh 08-alarm /host/pro1x-boot/last-boot /tmp/pro1x-alarmboot.log`
+   (the log of the last run; /tmp may not outlive a switch off).
 
 The FreeBSD part of the test belongs in block 12, after G1.
 

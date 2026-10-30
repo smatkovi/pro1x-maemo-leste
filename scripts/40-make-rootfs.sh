@@ -140,7 +140,7 @@ if [ "${WITH_HARDWARE:-1}" = 1 ]; then
   sudo -n mount --bind "$REPO" "$DST_MNT/mnt/pro1x-repo"
   sudo -n mount --bind "$NIXOS" "$DST_MNT/mnt/nixos-pro1x"
   sudo -n cp -L /etc/resolv.conf "$DST_MNT/etc/resolv.conf"
-  for s in 45-pro1x-hardware 46-sensor-stack 47-libcal 48-camera-stack 49-apps 49-hidpi 49-mobile-data; do
+  for s in 45-pro1x-hardware 46-sensor-stack 47-libcal 48-camera-stack 49-apps 49-hidpi 49-alarmboot 49-mobile-data; do
     in_target "REPO=/mnt/pro1x-repo NIXOS=/mnt/nixos-pro1x SRC=/root/src bash /mnt/pro1x-repo/scripts/$s.sh"
   done
   sudo -n umount "$DST_MNT/mnt/pro1x-repo" "$DST_MNT/mnt/nixos-pro1x"
