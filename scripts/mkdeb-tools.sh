@@ -77,14 +77,13 @@ mkdeb() {
     esac
   done < <(find "$d" -type f ! -path "$d/DEBIAN/*" -print0)
   # Depends from the libraries they link (dpkg-shlibdeps wants a
-  # debian/control and the files below debian/<package>)
+  # debian/control, and the package's root, which has DEBIAN)
+  install -d -m 755 "$d/DEBIAN"
   t=$(mktemp -d)
   mkdir "$t/debian"
-  ln -s "$d" "$t/debian/$name"
   printf 'Source: %s\nMaintainer: %s\n\nPackage: %s\nArchitecture: %s\n' \
     "$name" "$MAINTAINER" "$name" "$ARCH" > "$t/debian/control"
-  elfs=("${elfs[@]/#$d/-edebian/$name}")
-  shlibs=$(cd "$t" && dpkg-shlibdeps -O "${elfs[@]}" 2> "$t/warnings" |
+  shlibs=$(cd "$t" && dpkg-shlibdeps -O "${elfs[@]/#/-e}" 2> "$t/warnings" |
     sed -n 's/^shlibs:Depends=//p')
   sed 's/^/   /' "$t/warnings"
   rm -rf "$t"
@@ -104,7 +103,6 @@ EOF
     "$(date -R -u -d "@$SOURCE_DATE_EPOCH")" | gzip -9n > "$d/usr/share/doc/$name/changelog.gz"
   chmod 644 "$d/usr/share/doc/$name/copyright" "$d/usr/share/doc/$name/changelog.gz"
 
-  install -d -m 755 "$d/DEBIAN"
   {
     echo "Package: $name"
     echo "Version: $version"
