@@ -12,6 +12,8 @@
 #          master into memory; frame counts, errors, levels; one frame kept
 #   jpeg   raw, then a picture (stage 3): raw -> debayer -> JPEG, autofocus
 #          on the rear camera
+#   app    id, then Hildon with the camera app (pro1x-camera) for 30 s:
+#          its viewfinder as the screenshot in /dev/pro1xshot
 # pro1x.cam_sensor=rear|front (raw, jpeg: one camera; default both, one
 # after the other), pro1x.cam_debug=1 (every step), pro1x.cam_opts (more
 # options for pro1x-cam). Everything goes to the console, which the RAM
@@ -73,6 +75,21 @@ sysctl dev.qcom_cci.0.xfers dev.qcom_cci.0.nacks dev.qcom_cci.0.errors \
     dev.qcom_cci.0.timeouts 2>&1
 dmesg | grep -E "camss_gcc|camss_tlmm" | tail -30
 [ "$step" = id ] && exit 0
+
+if [ "$step" = app ]; then
+	echo "--- app: Hildon with pro1x-camera"
+	(cd /root && HOME=/root startx hildon > /var/log/startx.log 2>&1 &)
+	sleep 20
+	(DISPLAY=:0 XAUTHORITY=/root/.Xauthority HOME=/root \
+	    pro1x-camera > /tmp/pro1x-camera.log 2>&1 &)
+	sleep 30
+	tail -20 /tmp/pro1x-camera.log
+	ps ax | grep -E "pro1x-camera|Xorg|hildon-desktop" | grep -v grep
+	XAUTHORITY=/root/.Xauthority xwd -root -silent -display :0 |
+	    gzip -9 > /dev/pro1xshot && echo "screenshot kept in /dev/pro1xshot"
+	dmesg | grep -E "camss" | tail -20
+	exit 0
+fi
 
 keep() {
 	# the pictures for Linux: the smallest first, as many as fit in

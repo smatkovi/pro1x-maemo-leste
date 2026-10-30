@@ -17,8 +17,8 @@ test_cci: test_cci.c $(K)/qcom_cci.c cci_host_shim.h
 test_calc: test_calc.c $(K)/camss_gcc.c $(K)/camss_stream.c $(U)/calc.c
 	$(CC) $(CFLAGS) -o $@ test_calc.c $(K)/camss_gcc.c $(K)/camss_stream.c $(U)/calc.c
 
-test_image: test_image.c $(U)/image.c $(U)/jpeg.c
-	$(CC) $(CFLAGS) -I$(K) -o $@ test_image.c $(U)/image.c $(U)/jpeg.c -lz -lm
+test_image: test_image.c $(U)/image.c $(U)/jpeg.c $(U)/util.c
+	$(CC) $(CFLAGS) -I$(K) -o $@ test_image.c $(U)/image.c $(U)/jpeg.c $(U)/util.c -lz -lm
 
 clean:
 	rm -rf test_cci test_calc test_image test-out *.o

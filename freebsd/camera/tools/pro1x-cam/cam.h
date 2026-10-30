@@ -101,4 +101,17 @@ int	jpeg_write(FILE *fp, const uint8_t *rgb, uint32_t w, uint32_t h,
 	    int quality);
 double	sharpness(const uint16_t *px, uint32_t w, uint32_t h);
 
+/* --- a picture (shot.c) ------------------------------------------------------- */
+struct shot_opts {
+	const char	*out;		/* the JPEG */
+	const char	*mode;		/* NULL: full size */
+	int		af;		/* the contrast sweep first */
+	int		focus;		/* lens position, -1: 100; out: used */
+	int		quality;
+	int		rotation;	/* -1000: pro1x-camera's */
+	int		small;		/* also <out>-small.jpg */
+};
+void	shot_defaults(struct shot_opts *o);
+int	take_picture(struct cam *c, int s, struct shot_opts *o);
+
 #endif

@@ -15,9 +15,9 @@
 
 #include "../tools/pro1x-cam/cam.h"
 
-int verbose;
-void msg(const char *fmt, ...) { (void)fmt; }
-void vmsg(const char *fmt, ...) { (void)fmt; }
+
+
+
 
 static int fails;
 #define	CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, \

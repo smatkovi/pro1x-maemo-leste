@@ -14,7 +14,7 @@ FreeBSD way, from Linux's drivers for this SoC (the Leste kernel tree,
 | --- | --- | --- | --- |
 | 1 | the sensors: power, MCLK, reset, the CCI, chip IDs | `qcom_camss.ko` (`qcom_cci`, `/dev/camss0`), `pro1x-cam id` | built; host tested (CCI protocol against a model, clock encodings); not run on the phone |
 | 2 | raw frames: CSIPHY, CSID, the TFE's RDI write master | `qcom_camss.ko` (`camss_stream.c`, `/dev/camss0` streaming ioctls, mmap), `pro1x-cam raw` | built; host tested (clock rates against camss.c's formulas); not run on the phone |
-| 3 | pictures: raw -> debayer -> PNG/JPEG, exposure, focus | `pro1x-cam shot` (`-a`: autofocus), `focus` | built; host tested (RAW10, demosaicing, PNG and JPEG decoded by Pillow, the focus measure); not run on the phone; no Hildon app yet |
+| 3 | pictures: raw -> debayer -> PNG/JPEG, exposure, focus; the app | `pro1x-cam shot` (`-a`: autofocus), `focus`; `app/pro1x-camera` (Hildon) | built; host tested (RAW10, demosaicing, PNG and JPEG decoded by Pillow, the focus measure); the app only built; not run on the phone |
 
 Nothing here has run on the phone (unreachable until 2026-10-31). What can
 be checked on the PC is: `make -C freebsd/camera/test`.
@@ -132,6 +132,7 @@ command lines (`build-camera.sh` makes it; `modules/` there holds only
 | cam-id | `pro1x.test=cam pro1x.cam=id pro1x.pool=off hint.qcom_wdt.0.lifetime=180` | `camss_gcc: cci: GDSC 0x58004: ... -> 0x8...` (PWR_ON), `gcc_camss_top_ahb_clk on`, `gcc_camss_cci_0_clk on ..., 37500000 Hz` (or a refused GPLL0 AUX2: then 19.2 MHz and a slower bus), `camss_tlmm: cci: gpio22 cci_i2c: CTL ... -> ...` (function 1), `qcom_cci0: CCI HW version 0x...`, two `qcom_ccim` with iicbus/iic each; `/dev/camss0`; `info` with both sensors, their rails resolved (pca9534 pins 0/4 on the keyboard bus, pm8008 ldo1/2/4/5/6/7); `rear: IMX582 chip ID 0x0582: ok`, `rear: lens ... status 0x00: ok`, `front: S5K4H7 chip ID 0x487b: ok`; `nacks 0 errors 0 timeouts 0` |
 
 | cam-raw | `pro1x.test=cam pro1x.cam=raw pro1x.pool=off hint.qcom_wdt.0.lifetime=300` (`pro1x.cam_sensor=rear` or `front`: one camera) | the id run, then per camera: `stream: sensor 0 CSIPHY0 4 lanes, 1920x1080 RAW10, link 286400000 Hz ...: CPHY 240000000, timer 100000000, CSID 192000000, TFE 153600000 Hz`, `camss_gcc: camss: gpll10 ... voted on` (if it was off), `qcom_smmu`-style `camss_smmu: camss: stream 0x800 ...`, `CSIPHY0 HW version`, `CSID0 ... reset done`, `TFE0 HW version`, `stream on: ...`; then `rear: frame N: means RGGB ...` for 8 frames with plausible levels (black about 64, not all 0 or 1023), `kept frame ...`, `8 frames, 0 with bus errors, 0 timeouts`; `stream off: 10 frames` |
+| cam-app | `pro1x.test=cam pro1x.cam=app pro1x.pool=off hint.qcom_wdt.0.lifetime=240` | the id run, then Hildon (`startx hildon`) and `pro1x-camera` for 30 s: its log (no `No /dev/camss0`, no `No frames`), the processes, and the screen in `/dev/pro1xshot` (xwd, gzip): the rear camera's viewfinder |
 | cam-jpeg | `pro1x.test=cam pro1x.cam=jpeg pro1x.pool=off hint.qcom_wdt.0.lifetime=480` | the raw run, then `rear: exposure N lines, gain G`, `rear: focus P (contrast C)`, `rear: frame N as /tmp/pro1x-cam/rear.jpg: 4000x3000, quality 90` (turned by 180 degrees), the same for the front camera without focus |
 
 What comes back: the console (RAM console, as for every run) and, for
@@ -244,11 +245,25 @@ does it on the GPU):
 
 `pro1x-cam focus CAM POS`: the lens to POS, its status, back to 0.
 
-What is not there yet: a Hildon camera app. `apps/pro1x-camera` is built
-on Qt, GStreamer and libcamera; libcamera has no FreeBSD backend. The
-plan is a small GTK app on `pro1x-cam`'s code (viewfinder from the
-1920x1080 mode at half size, tap to focus, the camera key to take the
-picture at full size).
+The picture's code (`shot.c`: exposure, focus sweep, demosaicing,
+JPEG) is shared by `pro1x-cam shot` and the app.
+
+### The camera app
+
+`apps/pro1x-camera` (Leste's) is built on Qt, GStreamer and libcamera,
+which has no FreeBSD backend; `app/pro1x-camera.c` is a small Hildon
+(GTK 2) app on pro1x-cam's code instead, as on Fremantle: the viewfinder
+fills the window (the smaller mode, rear 1920x1080, front 1632x1224,
+demosaicked at half size, turned as pro1x-camera turns it for Hildon's
+landscape), a tap focuses (rear: the same contrast sweep, in the
+viewfinder), "Take picture", Enter or the camera key take one at full
+size with exposure and the focus found into `~/MyDocs/DCIM/<date>.jpg`,
+"Switch camera" changes cameras. A worker thread owns the camera; GTK is
+only touched from the main loop. `app/build-app.sh` builds it against
+`hildon/build.sh`'s sysroot (`build-camera.sh` calls it); it is not yet a
+part of `hildon/build.sh` (that build was running), so it is not in the
+image: for the device run it comes from `/host/freebsd/camera/`. Built,
+not run anywhere: no viewfinder without the phone.
 
 ## Host tests
 
@@ -297,6 +312,7 @@ into the image). For the device runs without a full build:
 | `sys/modules/qcom_camss/Makefile` | the module |
 | `tools/pro1x-cam/` | the tool: power (`power.c`), sensors and lens (`sensor.c`), streams (`capture.c`), pictures (`image.c`, `jpeg.c`) |
 | `tools/pro1x-camfetch` | on Leste: the pictures from `/dev/pro1xshot` |
+| `app/pro1x-camera.c`, `app/build-app.sh`, `app/pro1x-camera.desktop` | the Hildon camera app |
 | `../rootfs/usr/local/libexec/pro1x-camtest`, `../rootfs/etc/rc.local` | the device runs |
 | `build-camera.sh` | module and tools into `$WORK/cam-test` |
 | `test/` | host tests |

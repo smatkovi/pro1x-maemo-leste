@@ -69,10 +69,12 @@ if [ "$WHAT" = tools ] || [ "$WHAT" = all ]; then
 	# cameras each, one after the other); pro1x.pool=off: the read-only
 	# root.zfs, so that userdata stays mounted at /dev/pro1x-host and the
 	# newer module and tools there are found (the writable pool unmounts it)
-	for run in id:180 raw:300 jpeg:480; do
+	for run in id:180 raw:300 jpeg:480 app:240; do
 		echo "pro1x.test=cam pro1x.cam=${run%:*} pro1x.pool=off" \
 		    "hint.qcom_wdt.0.lifetime=${run#*:}" > "$T/cmdline.cam-${run%:*}"
 	done
 	cp "$REPO/freebsd/camera/tools/pro1x-camfetch" "$T/"
+	# the camera app (needs the Hildon sysroot of freebsd/hildon/build.sh)
+	bash "$REPO/freebsd/camera/app/build-app.sh" || echo ">> no camera app built"
 	ls -la "$T/camera"
 fi
