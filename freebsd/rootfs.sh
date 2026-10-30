@@ -193,6 +193,9 @@ if [ -d "$OUT/modules" ]; then
 	cp "$OUT"/modules/*.ko "$R/boot/modules/"
 	cp "$OUT"/dsp-tools/* "$R/usr/local/sbin/"
 fi
+# Power management (pm/README.md): the Pro1X's zzz
+mkdir -p "$R/usr/local/sbin"
+install -m 755 "$REPO/freebsd/pm/tools/pro1x-suspend" "$R/usr/local/sbin/"
 LESTE_IMG=${LESTE_IMG:-$WORK/../out/maemo-leste.img}
 FW_CHECKOUT=${FW_CHECKOUT:-$WORK/../build/firmware-fxtec-qx1050/lib/firmware}
 FW_ATH10K=${FW_ATH10K:-/usr/lib/firmware/ath10k/WCN3990}

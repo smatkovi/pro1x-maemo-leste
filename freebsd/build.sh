@@ -92,7 +92,9 @@ cp -a "$REPO/freebsd/camera/sys/." "$SRC/sys/"
 # The sound (freebsd/audio/README.md): sound(4) as a module (the kernel has
 # no "device sound") and its device over the ADSP, snd_pro1x
 cp -a "$REPO/freebsd/audio/sys/." "$SRC/sys/"
-MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss sound/sound snd_pro1x}
+# Power management (pm/): the RPM sleep set (pro1x_rpmsleep, on qcom_dsp)
+PM_MODULES="pro1x_rpmsleep"
+MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss sound/sound snd_pro1x $PM_MODULES}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
 	buildkernel)
