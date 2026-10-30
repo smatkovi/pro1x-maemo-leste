@@ -1,9 +1,13 @@
-FreeBSD: no linux/rtc.h and no RTC wake-up alarm: alarms ring while the
-system runs (the software timeout); setting the hardware one is a no-op.
+FreeBSD (the F(x)tec Pro1X): the wake-up alarm through qcom_rtc's sysctl
+dev.qcom_rtc.0.wakealarm (the real time in seconds, 0 off, as Linux's
+/sys/class/rtc/rtc0/wakealarm; no linux/rtc.h), and hwrtc_set_next: the
+next event that wakes the system into /var/run/alarmd-wakeup for
+pro1x-suspend (freebsd/pm/README.md), with none the RTC's alarm off.
+Without the sysctl (no PMIC RTC) alarms ring while the system runs.
 
 --- a/src/hwrtc.c
 +++ b/src/hwrtc.c
-@@ -34,11 +34,14 @@
+@@ -34,11 +34,28 @@
  #include <stdlib.h>
  #include <errno.h>
  
@@ -12,13 +16,27 @@ system runs (the software timeout); setting the hardware one is a no-op.
  #include <linux/rtc.h>
  
  static const char hwrtc_path[] = "/dev/rtc0";
-+#endif
++#else
++/* FreeBSD (the F(x)tec Pro1X): the PMIC RTC's alarm through qcom_rtc's
++ * sysctl, the real time in seconds since the epoch, 0 off (as Linux's
++ * /sys/class/rtc/rtc0/wakealarm; the kernel converts it for the RTC that
++ * cannot be set, as librtc-realtime does on Leste). The next event that
++ * wakes the system also goes to a file, for pro1x-suspend, which sets
++ * the alarm from it before it suspends (freebsd/pm/README.md). */
++#include <sys/types.h>
++#include <sys/sysctl.h>
++#include <stdint.h>
++#include <stdio.h>
  
++static const char hwrtc_sysctl[]    = "dev.qcom_rtc.0.wakealarm";
++static const char hwrtc_next_path[] = "/var/run/alarmd-wakeup";
++#endif
++
 +#ifdef __linux__
  static
  void
  rtc_from_tm(struct rtc_time *rtc, const struct tm *tm)
-@@ -54,6 +57,7 @@
+@@ -54,6 +71,7 @@
    X(tm_year)
  #undef X
  }
@@ -26,7 +44,7 @@ system runs (the software timeout); setting the hardware one is a no-op.
  
  #ifdef DEAD_CODE
  static
-@@ -119,10 +123,12 @@
+@@ -119,10 +137,21 @@
  
    int error = -1;
  
@@ -35,30 +53,114 @@ system runs (the software timeout); setting the hardware one is a no-op.
    {
      log_warning("%s: read access -> %s\n", hwrtc_path, strerror(errno));
    }
++#else
++  int64_t t = 0;
++  size_t  n = sizeof t;
++
++  if( sysctlbyname(hwrtc_sysctl, &t, &n, 0, 0) == -1 )
++  {
++    log_warning("%s: %s: alarms ring while the system runs, they do not "
++                "wake it\n", hwrtc_sysctl, strerror(errno));
++  }
 +#endif
    error = 0;
  
    return error;
-@@ -221,6 +227,16 @@
+@@ -218,9 +247,81 @@
+ }
+ #endif
+ 
++#ifndef __linux__
++/* The alarm through the sysctl: 0 off; a warning for its absence once */
++static
++int
++hwrtc_set_wakealarm(int64_t t)
++{
++  static int warned = 0;
++
++  if( sysctlbyname(hwrtc_sysctl, 0, 0, &t, sizeof t) == -1 )
++  {
++    if( !warned++ )
++    {
++      log_warning("%s = %lld -> %s\n", hwrtc_sysctl, (long long)t,
++                  strerror(errno));
++    }
++    return -1;
++  }
++  log_debug("hwrtc: %s = %lld\n", hwrtc_sysctl, (long long)t);
++  return 0;
++}
++#endif
++
++/* The next event that wakes the system (0: none), for pro1x-suspend on
++ * FreeBSD; with none, the RTC's alarm is switched off there too (an alarm
++ * left from a deleted event would wake the phone for nothing) */
++void
++hwrtc_set_next(time_t when)
++{
++#ifdef __linux__
++  (void)when;
++#else
++  static time_t last = -1;
++  char  tmp[sizeof hwrtc_next_path + 4];
++  FILE *f;
++  int   ok;
++
++  if( when == last )
++  {
++    return;
++  }
++  snprintf(tmp, sizeof tmp, "%s.new", hwrtc_next_path);
++  if( (f = fopen(tmp, "w")) == 0 )
++  {
++    log_warning("%s: %s\n", tmp, strerror(errno));
++    return;
++  }
++  ok = fprintf(f, "%lld\n", (long long)when) > 0;
++  ok = (fclose(f) == 0) && ok;
++  if( !ok || rename(tmp, hwrtc_next_path) == -1 )
++  {
++    log_warning("%s: %s\n", hwrtc_next_path, strerror(errno));
++    unlink(tmp);
++    return;
++  }
++  log_debug("hwrtc: next wake-up %lld\n", (long long)when);
++  if( when == 0 )
++  {
++    hwrtc_set_wakealarm(0);
++  }
++  last = when;
++#endif
++}
++
  int
  hwrtc_set_alarm(const struct tm *utc, int enabled)
  {
 +#ifndef __linux__
-+  /* FreeBSD has no RTC wake-up alarm: the device does not power up for an
-+   * alarm, it rings while running (the software timeout) */
-+  log_debug("hwrtc: no wake-up alarm on this system: %04d-%02d-%02d "
-+            "%02d:%02d:%02d %s\n",
++  struct tm tm = *utc;
++  int64_t   t  = enabled ? (int64_t)hwrtc_mktime(&tm) : 0;
++
++  log_debug("hwrtc: alarm at: %04d-%02d-%02d %02d:%02d:%02d (%lld)\n",
 +            utc->tm_year + 1900, utc->tm_mon + 1, utc->tm_mday,
-+            utc->tm_hour, utc->tm_min, utc->tm_sec,
-+            enabled ? "on" : "off");
-+  return 0;
++            utc->tm_hour, utc->tm_min, utc->tm_sec, (long long)t);
++  return hwrtc_set_wakealarm(t);
 +#else
    int err = -1;
    int fd  = -1;
  
-@@ -258,4 +274,5 @@
+@@ -258,4 +359,5 @@
    if( fd != -1 ) close(fd);
  
    return err;
 +#endif
  }
+--- a/src/hwrtc.h
++++ b/src/hwrtc.h
+@@ -39,6 +39,7 @@
+ time_t hwrtc_get_time (struct tm *utc);
+ time_t hwrtc_get_alarm(struct tm *utc, int *enabled);
+ int    hwrtc_set_alarm(const struct tm *utc, int enabled);
++void   hwrtc_set_next (time_t when);
+ 
+ #ifdef __cplusplus
+ };

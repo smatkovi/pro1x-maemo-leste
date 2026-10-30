@@ -4,12 +4,51 @@
 # asleep, the keyboard light off; once per boot the RPM's sleep set at 0
 # (pro1x_rpmsleep.ko, if it loads) and the MPM's hand-over on; then the
 # CPUs frozen in their deepest states (hw.pro1x_pm.suspend) until a device
-# interrupt (the power key) or SECONDS (0: no limit); then everything back.
-# What ended it: hw.pro1x_pm.last, also in the system log.
+# interrupt (the power key, the RTC alarm) or SECONDS (0: no limit); then
+# everything back. What ended it: hw.pro1x_pm.last, also in the system log.
+#
+# The alarm clock: alarmd's next event that wakes the phone (its FreeBSD
+# patch writes it to /var/run/alarmd-wakeup) becomes the PMIC RTC's alarm
+# (dev.qcom_rtc.0.wakealarm) PRO1X_ALARM_LEAD (60) seconds before it, as
+# alarmd sets it, and the suspend ends at the event's time at the latest:
+# the RTC wakes the phone a minute early, the deadline in time should the
+# RTC not. An event closer than the lead and 10 s: no suspend (exit 3),
+# so that the alarm rings (alarmd's own timeout does not run while frozen).
+# No file (no alarmd): the RTC's alarm as it is.
 secs=${1:-0}
 case "$secs" in ''|*[!0-9]*) echo "usage: pro1x-suspend [SECONDS]" >&2; exit 2 ;; esac
 sysctl -q hw.pro1x_pm.suspend > /dev/null 2>&1 ||
     { echo "pro1x-suspend: no pro1x_pm in this kernel" >&2; exit 1; }
+rtc=dev.qcom_rtc.0
+next=${PRO1X_ALARM_FILE:-/var/run/alarmd-wakeup}
+lead=${PRO1X_ALARM_LEAD:-60}
+now=$(date +%s)
+event=
+if [ -r "$next" ]; then
+	read -r event < "$next" || event=
+	case "$event" in ''|*[!0-9]*) event= ;; esac
+fi
+if [ -n "$event" ] && [ "$event" -gt "$now" ]; then
+	left=$((event - now))
+	if [ "$left" -le $((lead + 10)) ]; then
+		msg="an alarm in $left s: not suspended"
+		echo "pro1x-suspend: $msg" >&2
+		logger -t pro1x-suspend "$msg"
+		exit 3
+	fi
+	if sysctl -q $rtc.wakealarm=$((event - lead)) > /dev/null 2>&1; then
+		wake="the RTC alarm at $(date -r $((event - lead)) +%T)"
+	else
+		wake="no RTC alarm"
+	fi
+	[ "$secs" -ne 0 ] && [ "$secs" -le "$left" ] || secs=$left
+	echo "pro1x-suspend: the next alarm at $(date -r "$event" +%T): $wake," \
+	    "the deadline in $secs s"
+elif [ -n "$event" ]; then
+	# none (0), or one already past: no alarm left over from it
+	sysctl -q $rtc.wakealarm=0 > /dev/null 2>&1
+fi
+alarms=$(sysctl -n $rtc.alarms 2>/dev/null)
 if [ "$(sysctl -n hw.pro1x_rpmsleep.result 2>/dev/null)" != "" ] ||
     kldload -n pro1x_rpmsleep 2>/dev/null; then
 	case "$(sysctl -n hw.pro1x_rpmsleep.result 2>/dev/null)" in
@@ -28,6 +67,9 @@ r=$?
 sysctl -q dev.goodix.0.sleep=0 dev.qcom_dpu.0.display=1 > /dev/null 2>&1
 [ -z "$bl" ] || backlight -f /dev/backlight/backlight0 "$bl" 2>/dev/null
 last=$(sysctl -n hw.pro1x_pm.last)
+if [ -n "$alarms" ] && [ "$(sysctl -n $rtc.alarms 2>/dev/null)" != "$alarms" ]; then
+	last="$last; the RTC alarm fired"
+fi
 logger -t pro1x-suspend "$last"
 echo "$last"
 exit $r

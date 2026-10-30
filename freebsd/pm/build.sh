@@ -16,26 +16,29 @@
 #
 # KERNFAST=1: the kernel again without a clean build (no config: not after a
 # change to the config or the env file); NOCLEAN=1: config again, no clean
-# build. Takes $WORK/.kbuild-lock
-# (freebsd/build.sh's sources and objects are shared), waiting for it.
+# build. PMOUT=<directory>: the results there instead of $WORK/pm-out.
+# Takes $WORK/.kbuild-lock (freebsd/build.sh's sources and objects are
+# shared), waiting for it; LOCKNAME (pm-agent): the name in it, a lock that
+# starts with it is taken as one's own.
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}
 WORK=${WORK:?set WORK=<build directory>}
 SRC=$WORK/src
-PMOUT=$WORK/pm-out
+PMOUT=${PMOUT:-$WORK/pm-out}
 JOBS=${JOBS:-$(nproc)}
 TARGETS=${*:-qemu phone}
 log() { echo ">> $*"; }
 mkdir -p "$PMOUT"
 
 LOCK=$WORK/.kbuild-lock
-while [ -e "$LOCK" ] && ! grep -q "^pm-agent" "$LOCK"; do
+LOCKNAME=${LOCKNAME:-pm-agent}
+while [ -e "$LOCK" ] && ! grep -q "^$LOCKNAME" "$LOCK"; do
 	log "waiting for $(cat "$LOCK")"
 	sleep 30
 done
 mine=
 if [ ! -e "$LOCK" ]; then
-	echo "pm-agent (freebsd/pm/build.sh) $(date -Iseconds)" > "$LOCK"
+	echo "$LOCKNAME (freebsd/pm/build.sh) $(date -Iseconds)" > "$LOCK"
 	mine=1
 fi
 trap '[ -z "$mine" ] || rm -f "$LOCK"' EXIT

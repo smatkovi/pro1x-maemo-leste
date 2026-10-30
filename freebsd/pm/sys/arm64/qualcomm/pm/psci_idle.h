@@ -86,14 +86,23 @@ struct psci_idle_freeze_info {
 	uint64_t	wakes;		/* its wake-ups */
 	uint64_t	timer;		/* of them by its timer or the frame */
 	u_int		intid;		/* the interrupt that ended it, or 0 */
+	u_int		seen;		/* the last INTID this CPU woke to */
 };
 /*
  * The CPUs in their deepest states, their timers masked, until until
- * (sbinuptime) or a device interrupt; from a thread bound to its CPU.
- * 0 the deadline, the INTID of the device interrupt, -1 an IPI to this
- * CPU (call again), -2 not possible.
+ * (sbinuptime), a device interrupt or *stop (when not NULL) set; from a
+ * thread bound to its CPU. 0 the deadline, the INTID of the device
+ * interrupt, -1 an IPI to this CPU or *stop (call again unless *stop),
+ * -2 not possible.
  */
-int	psci_idle_freeze(sbintime_t until, struct psci_idle_freeze_info *fi);
+int	psci_idle_freeze(sbintime_t until, volatile u_int *stop,
+	    struct psci_idle_freeze_info *fi);
+/*
+ * After *stop was set (pro1x_pm.ko's power_wakeup handler: the RTC alarm,
+ * the power key, from an interrupt thread): the CPU in psci_idle_freeze
+ * gets an IPI and looks at *stop; nothing when there is no freeze.
+ */
+void	psci_idle_freeze_kick(void);
 
 /* the broadcast timer (arm_tmr_mem.c): wake cpu at the latest after sbt */
 bool	arm_tmr_mem_ok(void);

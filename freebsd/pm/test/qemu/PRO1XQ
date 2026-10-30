@@ -20,6 +20,9 @@ device		pl011
 # the phone's kernel's power management (freebsd/PRO1X)
 device		psci_idle
 device		pro1x_pm
+# the PMIC RTC's alarm as the suspend's wake-up: qcom_rtc on QEMU's PL031
+# (dev/qcom_spmi/qcom_rtc_sim.c)
+device		qcom_rtc_sim
 
 # the frameworks std.arm64's drivers need (as in freebsd/PRO1X)
 device		clk

@@ -742,16 +742,18 @@ pidle_freeze_idle(u_int cpu, struct pidle_cpu *pc)
 }
 
 /*
- * Freeze the CPUs until until (sbinuptime()) or a device interrupt,
+ * Freeze the CPUs until until (sbinuptime()), a device interrupt or *stop,
  * from a thread bound to its CPU (pro1x_pm.ko): every other CPU stays in
  * its deepest state with its timer masked (pidle_freeze_idle), this one
  * too between its wake-ups, woken by its deadline (its own timer, and the
- * broadcast frame) or an interrupt. The result: 0 the deadline, the
- * INTID of the device interrupt that ended it, -1 an IPI to this CPU
- * (call again), -2 not possible here.
+ * broadcast frame) or an interrupt; *stop is looked at after each wake-up
+ * (psci_idle_freeze_kick's IPI). The result: 0 the deadline, the INTID of
+ * the device interrupt that ended it, -1 an IPI to this CPU or *stop
+ * (call again unless *stop), -2 not possible here.
  */
 int
-psci_idle_freeze(sbintime_t until, struct psci_idle_freeze_info *fi)
+psci_idle_freeze(sbintime_t until, volatile u_int *stop,
+    struct psci_idle_freeze_info *fi)
 {
 	struct pidle_choice c;
 	struct pidle_cpu *pc;
@@ -773,6 +775,8 @@ psci_idle_freeze(sbintime_t until, struct psci_idle_freeze_info *fi)
 	pidle_freeze_cpu = cpu;
 	atomic_store_int(&pidle_freeze_wake, 0);
 	atomic_store_rel_int(&pidle_freeze, 1);
+	/* pidle_freeze before *stop (psci_idle_freeze_kick: the other way) */
+	atomic_thread_fence_seq_cst();
 	ipi_all_but_self(IPI_AST);
 	for (i = 0; i < 1000 && atomic_load_int(&pidle_frozen) <
 	    (u_int)mp_ncpus - 1; i++)
@@ -788,6 +792,10 @@ psci_idle_freeze(sbintime_t until, struct psci_idle_freeze_info *fi)
 		now = sbinuptime();
 		if (now >= until)
 			break;
+		if (stop != NULL && atomic_load_acq_int(stop)) {
+			reason = -1;
+			break;
+		}
 		/* the deadline on the own timer and on the frame */
 		WRITE_SPECIALREG(cntv_cval_el0, READ_SPECIALREG(cntvct_el0) +
 		    pidle_ticks(until - now));
@@ -802,6 +810,15 @@ psci_idle_freeze(sbintime_t until, struct psci_idle_freeze_info *fi)
 		intid = pidle_pending();
 		WRITE_SPECIALREG(cntv_ctl_el0, CNTV_IMASK);
 		isb();
+		if (!PIDLE_NONE(intid))
+			fi->seen = intid;
+		/*
+		 * another CPU saw a device interrupt: its IPI may be pending
+		 * here behind a higher-priority PPI that the highest pending
+		 * one shows (seen so in QEMU)
+		 */
+		if ((reason = atomic_load_int(&pidle_freeze_wake)) != 0)
+			break;
 		if (PIDLE_NONE(intid) || PIDLE_PPI(intid) ||
 		    intid == arm_tmr_mem_intid()) {
 			/* the deadline (or nothing): on until it is there */
@@ -826,6 +843,15 @@ psci_idle_freeze(sbintime_t until, struct psci_idle_freeze_info *fi)
 	spinlock_exit();
 	fi->intid = reason > 0 ? reason : 0;
 	return (reason);
+}
+
+void
+psci_idle_freeze_kick(void)
+{
+	/* the caller's *stop before pidle_freeze (psci_idle_freeze: after) */
+	atomic_thread_fence_seq_cst();
+	if (atomic_load_int(&pidle_freeze))
+		ipi_cpu(pidle_freeze_cpu, IPI_AST);
 }
 
 static int

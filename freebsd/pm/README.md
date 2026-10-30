@@ -9,6 +9,7 @@ This directory adds, in stages:
 | 2 | CPU idle: the PSCI idle states of the device tree, OS-initiated mode, the core's context across a power-down, the memory-mapped timer as the wake-up | built, tried in QEMU with every power-down played (`simulate`); device runs prepared |
 | 3 | the SoC's sleep (RPM sleep set, MPM hand-over) and suspend-to-idle | built; the freeze tried in QEMU (no RPM there); device runs prepared |
 | 4 | USB device mode (CDC ethernet to the PC) | dwc3dci (a DWC_usb3 device controller driver) and the SM6115 glue built, the encodings tested on the PC; a probe and the gadget run prepared |
+| 5 | the PMIC RTC's alarm as the suspend's wake-up, alarmd's alarms through it | built; the registers tested on the PC against Linux's rtc-pm8xxx, the wake-up in QEMU (a PL031 in the PMIC's place), alarmd's side in the VM; device runs prepared |
 
 Nothing here has run on the phone yet (it is unreachable until
 2026-10-31). Everything is off by default: the phone's normal start is
@@ -26,11 +27,15 @@ unchanged until the device runs below pass.
 | `../patches/0033-files.arm64-pro1x_pm.patch` | the file for `device pro1x_pm` |
 | `sys/dev/usb/controller/dwc3dci*.{c,h}`, `sys/modules/pro1x_usb` | `pro1x_usb.ko`: the DWC_usb3 device controller driver and its SM6115 glue (stage 4) |
 | `../patches/0034-usb-usbus-on-dwc3dci.patch` | `usbus` on `dwc3dci` |
+| `../patches/0035-qcom_rtc-alarm.patch` | `qcom_rtc`'s alarm (`dev.qcom_rtc.0.wakealarm`), `power_wakeup` (`qcom_spmi.h`) from it and from `qcom_pon`'s power key (stage 5) |
+| `sys/dev/qcom_spmi/qcom_rtc_alarm.h` | the RTC alarm's registers, the conversion from the real time, the register sequences (Linux's `rtc-pm8xxx.c`) |
+| `sys/dev/qcom_spmi/qcom_rtc_sim.c` | QEMU's stand-in (`device qcom_rtc_sim`, PRO1XQ only): `qcom_rtc.c` on QEMU virt's PL031 |
+| `test/qcom_rtc_test.c` | the host test of `qcom_rtc_alarm.h` against Linux's `rtc-pm8xxx` and Leste's `librtc-realtime` |
 | `test/dwc3dci_test.c` | the host test of `dwc3dci_hw.h` |
 | `../patches/0032-arm64-cpu_idle-hook-psci-idle.patch` | `cpu_idle()` asks `arm64_cpu_idle_hook` first; the files for `device psci_idle` |
 | `../mfsroot/etc/pro1x-pmtest.sh` | the device tests in the RAM root (`pro1x.test=smp`, `idle`), sourced by `mfsroot/etc/rc` |
-| `build.sh` | the kernels: `qemu` (PRO1XQ) and `phone` (PRO1XPM = `freebsd/PRO1X` with `device psci_idle`) into `$WORK/pm-out` |
-| `tools/pro1x-suspend` | the Pro1X's `zzz`: panel, touch and keyboard light off, the sleep set and the hand-over, suspend until the power key or N seconds, everything back (for the root image's `/usr/local/sbin`) |
+| `build.sh` | the kernels: `qemu` (PRO1XQ) and `phone` (PRO1XPM = `freebsd/PRO1X` with `device psci_idle`) into `$WORK/pm-out` (`PMOUT=`: elsewhere; `LOCKNAME=`: the name in `$WORK/.kbuild-lock`) |
+| `tools/pro1x-suspend` | the Pro1X's `zzz`: panel, touch and keyboard light off, the sleep set and the hand-over, the next alarm as the RTC's alarm, suspend until the power key, the alarm or N seconds, everything back (for the root image's `/usr/local/sbin`) |
 | `test/qemu/` | PRO1XQ, its device tree (`mkdtb.py`: QEMU's virt with the SM6115's idle topology), its rc, `run.sh` |
 
 `freebsd/build.sh` copies `sys/` into the sources like `dsp/` and `fm/`;
@@ -227,7 +232,8 @@ wakes it, is handled as usual, and it goes back); the calling thread,
 bound to CPU 0, does the same until its deadline (its own timer and the
 broadcast frame). A device interrupt (the power key: PON through the
 SPMI arbiter, INTID 215) ends it, on whichever CPU it comes: that CPU
-tells CPU 0 by an IPI. The suspend runs in epochs of
+tells CPU 0 by an IPI; the RTC alarm (stage 5) comes the same way.
+The suspend runs in epochs of
 `hw.pro1x_pm.epoch` seconds (5): between them the callouts run 50 ms,
 which feeds the watchdog (the boot menu arms it to bite about 32 s after
 a feed, `qcom_wdt` feeds it from a callout every 15 s with 5 s of slack,
@@ -240,10 +246,7 @@ prints each freeze on the console. The panel, the touch
 screen and the charger input are quiesced from user space beforehand
 (`patches/0022`, `0028`, `0030`; the device test's `pm_quiet`).
 
-Not done: the PMIC's RTC alarm as a wake-up (`qcom_rtc` has no alarm:
-the alarm registers at 0x6140 and their interrupt through the arbiter,
-Linux's `rtc-pm8xxx.c`); the suspend's deadline is the timer's (the
-frame, the vMPM's timer), which wakes the same way for a test.
+The PMIC's RTC alarm as a wake-up: stage 5. Not done:
 `DEVICE_SUSPEND` of the device tree (no Pro1X driver has suspend
 methods). The modem, ADSP and CDSP run their own firmware: whether they
 let the SoC sleep shows in the RPM's counts.
@@ -436,6 +439,126 @@ what is missing:
     without the PC's public key: `SSH_PUBKEY=... freebsd/rootfs.sh`).
     Afterwards `pro1x.usb=1` out of `cmdline` again until it works.
 
+## Stage 5: the RTC alarm, the alarm clock's wake-up
+
+Goal: an alarm set in the alarm clock (clock-ui, alarmd) wakes the phone
+from the suspend and rings.
+
+**How Leste does it.** alarmd (`src/hwrtc.c`, `server.c`'s
+`server_rethink_queued`) opens `/dev/rtc0` and sets `RTC_WKALM_SET` to
+the next event that may wake the device (`ALARM_EVENT_BOOT` or
+`ALARM_EVENT_ACTDEAD`; clock-ui's alarms have `ACTDEAD`), 60 s before it
+(`POWERUP_COMPENSATION_SECS`), at least 60 s from now
+(`ALARM_INTERRUPT_LIMIT_SECS`), on every look at its queue; dsme is not
+involved (alarmd only asks it to power up, reboot or shut down). On the
+Pro1X the RTC's count cannot be set, so Leste preloads
+`librtc-realtime.so` into alarmd (`tools/pro1x-rtc`), which translates the
+alarm's real time by the system clock's difference to the count;
+`rtc-pm8xxx` (its offset 0 there) writes it to the alarm registers, and
+the alarm's interrupt (`<0 0x61 1 IRQ_TYPE_EDGE_RISING>`, through the SPMI
+arbiter, MPM pin 86) wakes the suspend (`docs/power-management.md`,
+the notify_rpm test).
+
+**The kernel** (`patches/0035`, `sys/dev/qcom_spmi/qcom_rtc_alarm.h`):
+`qcom_rtc` takes the node's second reg (0x6100, the alarm peripheral) and
+Linux 7.1's `pm8941_regs`: ALARM_RW at 0x40 (the count it fires at, four
+bytes little endian), ALARM_CTRL 0x46 (bit 7 on), ALARM_CTRL2 0x48 (bit 0
+the status clear). Setting it is Linux's `pm8xxx_rtc_set_alarm` (off, the
+four bytes, on; then read back), switching it off its
+`alarm_irq_enable(0)` (off, the count zeroed), its interrupt its
+`pm8xxx_alarm_trigger` (off, the status: Linux 7.1 does
+`regmap_update_bits(CTRL2, CLEAR, 0)`, a write only when the bit reads 1,
+so there the switching off clears it; Linux before 6.3 and Qualcomm's
+qpnp-rtc write the bit 1: `hw.qcom_rtc.alarm_clear=1`). The count cannot
+be set, the alarm can:
+
+| | |
+| --- | --- |
+| `dev.qcom_rtc.0.wakealarm` | Linux's `/sys/class/rtc/rtc0/wakealarm`: the alarm's real time (seconds since the epoch, UTC), 0 while it is off; a time not in the future (0) switches it off. Converted as count + (time - now), the count and the system clock read together, as `librtc-realtime` does (`test/qcom_rtc_test.c` checks it gives the same four bytes as Linux's path); at least 2 s, at most 2^31 - 1 s ahead |
+| `dev.qcom_rtc.0.alarm` | the counter, the alarm (on at counter N, in S s, its real time) or off, the alarms that fired, the interrupt |
+| `dev.qcom_rtc.0.alarms` | the alarms that fired |
+| `hw.qcom_rtc.alarm_clear` | 1: the status cleared as qpnp-rtc does (CTRL2 written 1) |
+
+The interrupt (an ithread on the arbiter's, which is INTID 215, SPI 183,
+and MPM pin 86 while the SoC sleeps, the power key's too) switches the
+alarm off, counts it, prints `qcom_rtc0: alarm: counter N, set for N`,
+tells devd (`!system=PMIC subsystem=RTC type=ALARM`) and raises
+`power_wakeup` (an event handler declared in `qcom_spmi.h`), which
+`qcom_pon` raises for a press of the power key too. An alarm the previous
+system left on stays on, as Linux keeps it, and is named at the attach.
+
+**The suspend** (`pro1x_pm`, `psci_idle`): the RTC alarm comes as the
+same device interrupt as the power key (INTID 215), which ends a freeze
+(`ended by INTID 215 (a device: the RTC alarm)`: which source it was,
+from `power_wakeup`, once its interrupt thread has run). `pro1x_pm`
+handles `power_wakeup`: a wake-up that comes while the CPUs are awake,
+between the 5 s freezes (50 ms of every 5 s), also ends the suspend (`ended by a
+wake-up (the RTC alarm)`; before, it was lost and the suspend went on to
+its deadline), and kicks a freeze in progress (`psci_idle_freeze`'s new
+`stop` flag, looked at after each wake-up). Found in QEMU: when another
+CPU takes the device interrupt and wakes CPU 0 by an IPI, CPU 0's highest
+pending interrupt (ICC_HPPIR1) showed a PPI or nothing, not the IPI, and
+the freeze went back to sleep until the IPI was seen; the freeze now ends
+as soon as another CPU has noted the device interrupt. The vMPM side is
+the default wake pin `86:h`: the arbiter's line, which carries the RTC
+alarm as well as the keys; nothing new is handed over.
+
+**Userland.** alarmd (`../hildon/patches/alarmd/0002`, `0006`, revision
+2): `hwrtc_set_alarm` writes the wake-up time to
+`dev.qcom_rtc.0.wakealarm` (`sysctlbyname`; alarmd runs as root like the
+session; without the sysctl a warning once, the alarm rings while the
+system runs), and the next event that wakes the system goes to
+`/var/run/alarmd-wakeup` (seconds, 0 for none; with none the RTC's alarm is
+switched off too, so that an alarm deleted in the clock does not wake the
+phone). `tools/pro1x-suspend` sets the RTC's alarm from that file before
+it suspends, 60 s before the event (`PRO1X_ALARM_LEAD`), as alarmd does,
+with the clock as it is then, and ends the suspend at the event's time at
+the latest (the deadline, through the timer and the vMPM, should the RTC
+not wake it); an event within 70 s: `an alarm in N s: not suspended`,
+exit 3 (alarmd's own timeout, which makes it ring, does not run while
+frozen, and its RTC alarm may already be past); no file (no alarmd): the
+RTC's alarm as it is. Its last line has `; the RTC alarm fired` when
+`dev.qcom_rtc.0.alarms` grew.
+
+**Tested on the PC (2026-10-30):**
+
+- `test/qcom_rtc_test.c` (`cc -I freebsd/pm/sys -o /tmp/qrtct
+  freebsd/pm/test/qcom_rtc_test.c && /tmp/qrtct`): the register addresses
+  against `pm8941_regs`; the count and the four bytes for alarms 2 s to a
+  year ahead, counts 0 to 2^31 and the unset clock, against alarmd's
+  `gmtime` through `librtc-realtime` into `pm8xxx_rtc_set_alarm`, and the
+  read back against `read_alarm`; the write order (off, the bytes, on),
+  nothing written to the count, the alarm firing at its count on a model
+  of the two peripherals, both ways of the clear, a second alarm, off, the
+  carry between the count's bytes: 159 checks, 0 failures.
+- QEMU (`run.sh rtc "pro1x.test=rtcalarm hw.psci_idle.enable=1
+  hw.psci_idle.simulate=1 hw.pro1x_pm.debug=1 pro1x.rtc_sleep=30"`, PMOUT
+  as build.sh's): `qcom_rtc_sim` is `qcom_rtc.c` on QEMU virt's PL031 (its
+  count less 1700000000 as the PMIC's, the alarm's count, enable and clear
+  as its match, mask and clear registers, its interrupt, INTID 34, as the
+  alarm's: a real device interrupt), `hint.qcom_rtc.0.offset=1700000000`
+  in `pro1xq.env`. The device test below: A, B, C, D PASS, B `suspended
+  59.980 s in 11 epochs, ended by INTID 34 (a device: the RTC alarm)` with
+  7 CPUs frozen, D after 30 s the same. Before the freeze's change above
+  the same run ended B and D by the wake-up path (`ended by a wake-up (the
+  RTC alarm)`, CPU 0 woken 7 times to a PPI in the last freeze).
+- The VM (alarmd 1.1.23_2 built with the patches, on a session bus there,
+  `-lstderr -Ldebug`): alarms as clock-ui makes them 600 s and 200 s
+  ahead: `hwrtc: alarm at: ... (T - 60)` for the earlier one, the file
+  `T`; `pro1x-suspend` with a stand-in sysctl (no `pro1x_pm` there): `the
+  next alarm at ...: the RTC alarm at ..., the deadline in 197 s`,
+  `dev.qcom_rtc.0.wakealarm=T-60`, `hw.pro1x_pm.suspend=197`; with 30 s
+  given, 30; an alarm 50 s ahead: `an alarm in 47 s: not suspended`, exit
+  3 (alarmd itself set the RTC to now + 60 there, after the alarm); all
+  deleted: the file 0, `wakealarm=0`. Without the sysctl alarmd says so
+  once and runs on.
+
+Not tested: the PMIC's alarm registers and interrupt themselves (whether
+this EE may write the alarm peripheral and owns its interrupt: the
+attach line says), the MPM waking the SoC from vlow/vmin for it, a
+power-up from off by the alarm (the PMIC's power-on trigger; Leste's is
+untested too).
+
 ## Device runs (prepared, for 2026-10-31)
 
 The kernel: `WORK=... bash freebsd/pm/build.sh phone` gives
@@ -560,6 +683,72 @@ phone N seconds after the start whatever happens.
 9. The USB probe (`pro1x.test=usb`), 10. the gadget
    (`pro1x.test=usbnet`) and 11. the full system over the cable
    (`pro1x.usb=1`): see stage 4 above.
+
+12. **The RTC alarm** (`rtcalarm`, stage 5; needs 6 to have woken by its
+    deadline), unplugged, about 7 minutes, nobody needed at the phone.
+    The kernel with `patches/0035` (PRO1XPM from `pm/build.sh phone`, as
+    in 6; `$WORK/rtc-out/kernel.bin` of 2026-10-30), `qcom_dsp.ko` and
+    `pro1x_rpmsleep.ko` in `/host/freebsd/pm/` as for 6. Then:
+
+        pro1x.test=rtcalarm hw.psci_idle.enable=1 hw.pro1x_pm.debug=1 hint.qcom_wdt.0.lifetime=900
+
+    Expected at the attach: `qcom_rtc0: counter N, offset M`, `qcom_rtc0:
+    alarm at 0x6100 (type 0xb/3), irq K; off` (or `on, as the previous
+    system left it: at counter X, in S s`: an alarm Leste set, which may
+    end a suspend early), `dev.qcom_rtc.0.alarm: counter N, alarm off; 0
+    alarms; interrupt set up`. Then A: `qcom_rtc0: alarm at counter N+20,
+    in 20 s (counter N)`, 20 s later `qcom_rtc0: alarm: counter N+20, set
+    for N+20`, `A: PASS: the alarm's interrupt while awake`; B: `suspend
+    180 s`, the freezes (`hw.pro1x_pm.debug`), after 60 s
+    `hw.pro1x_pm.last: suspended about 60 s in 11 epochs, ended by INTID 215
+    (a device: the RTC alarm); ...`, `B: PASS: woken after 60 s, the RTC
+    alarm`; C: `alarm off (counter ...)`, `ended by the deadline 0`, `C:
+    PASS: 40 s, the deadline, no alarm`; D: the sleep set and the
+    hand-over as in 6, `D: alarm in 120 s`, `ended by INTID 215 (a
+    device: the RTC alarm)` within 2 s of the alarm, `RPM: vlow +N, vmin
+    +N` if the SoC slept, `MPM hand-overs +N`, and in
+    `hw.pro1x_pm.rpm_stats` the pins seen with pin 86 (`00000000 00000000
+    00400000`). Failure signs: `alarm at 0x6100 not writable from this
+    EE` or `no interrupt (not this EE's?)` at the attach (the arbiter's
+    tables give the alarm peripheral to another EE: then only Linux can
+    use it); `A: FAIL: no alarm interrupt` with `alarm on at counter ...
+    (in -N s)` (the alarm's count reached, no interrupt: its QPNPINT
+    enable or the arbiter's accumulator; the attach's irq line and
+    `vmstat -i` on the console); A passes, B fails with `alarms` not
+    grown and `ended by the deadline 0` after 180 s (a second alarm does
+    not fire: the status not cleared; again with
+    `hw.qcom_rtc.alarm_clear=1` on the line); B ends at once by INTID 215
+    with another source or none (a Leste alarm left on: the attach line;
+    or the power key); D woken up to 5 s late, without pin 86 in the pins
+    seen (the MPM did not wake the SoC for the arbiter's line: the
+    5 s epoch's timer did, and the pending interrupt was seen then: on
+    the phone the alarm is then late by up to 5 s, no more); a reset
+    (the watchdog: a freeze hung, `hw.pro1x_pm.debug` shows which).
+
+13. **The alarm clock in the full system** (needs 12; the joint image
+    with alarmd 1.1.23_2, `pro1x-suspend` and the kernel with
+    `patches/0035`), someone at the phone, about 10 minutes. In
+    `freebsd/cmdline` `hint.qcom_wdt.0.lifetime=900` for the run (out
+    again afterwards), boot FreeBSD into Hildon, unplugged. In the clock
+    an alarm 3 minutes ahead (whole minutes: at the minute after next
+    plus one), then in X Terminal as root `pro1x-suspend`. Expected:
+    `pro1x-suspend: the next alarm at HH:MM:00: the RTC alarm at
+    HH:MM-1:00, the deadline in N s`, the display off; a minute before the
+    alarm the display back on (`... ended by INTID 215 (a device: the RTC
+    alarm); ...; the RTC alarm fired`, also in `/var/log/messages` and
+    on the RAM console's `pro1x_pm:` line), at the alarm's minute the alarm
+    dialog and its sound, Stop ends it. Failure signs: the display back
+    only at the alarm's minute with `ended by the deadline 0` (the RTC did
+    not wake it, the deadline did: run 12 shows why) and the alarm still
+    ringing; `no RTC alarm` in the first line (`dev.qcom_rtc.0.wakealarm`
+    missing: the attach line); no `the next alarm` line at all
+    (`/var/run/alarmd-wakeup` missing or 0: alarmd 1.1.23_1, or the alarm
+    not an `ACTDEAD` one); `an alarm in N s: not suspended` (set it
+    further ahead); the dialog but no sound (the sound daemon decodes the tones
+    90 s after the session's start, an alarm before is silent:
+    `../hildon/README.md`; else the profile's alarm volume). The power key ends the suspend as before (`ended by INTID 215
+    (a device: the power key)`); the RTC's alarm then stays set and fires
+    while awake, which is harmless.
 
 The vMPM hand-over and the sleep set are the parts with the most
 unknowns: they are copied from Linux and KolibriOS, neither of which

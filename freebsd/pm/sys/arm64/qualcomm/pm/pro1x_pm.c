@@ -45,8 +45,12 @@
  *                            hw.pro1x_pm.epoch seconds (5), between which
  *                            the callouts run (the watchdog is fed); a
  *                            device interrupt (the power key: PON through
- *                            the SPMI arbiter, INTID 215) or the deadline
- *                            ends it. hw.pro1x_pm.last: what it did
+ *                            the SPMI arbiter, INTID 215; the PMIC's RTC
+ *                            alarm the same way) or the deadline ends it;
+ *                            so does a wake-up source's power_wakeup
+ *                            (qcom_rtc's alarm, qcom_pon's power key) that
+ *                            came while the CPUs were awake, between the
+ *                            freezes. hw.pro1x_pm.last: what it did
  *
  * The sleep set's votes are pro1x_rpmsleep.ko's (it needs the RPM channel
  * of freebsd/dsp's qcom_dsp.ko).
@@ -76,6 +80,7 @@
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus_subr.h>
 #include <dev/ofw/ofw_subr.h>
+#include <dev/qcom_spmi/qcom_spmi.h>
 
 #include "psci_idle.h"
 
@@ -109,7 +114,11 @@ static struct {
 	/* suspend */
 	int		epoch;
 	char		pins_str[96];
-	char		last[320];
+	char		last[384];
+	/* a wake-up source's power_wakeup (qcom_spmi.h) */
+	eventhandler_tag wake_tag;
+	volatile u_int	wake_req;
+	const char * volatile wake_what;
 } pm = {
 	/*
 	 * the watchdog bites about 32 s after a feed, fed every 15 s with
@@ -301,6 +310,19 @@ pm_sysctl_pins(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 
+/*
+ * power_wakeup (qcom_spmi.h), from a driver's interrupt thread: the RTC
+ * alarm, the power key. Whatever the CPUs are doing, a suspend in progress
+ * ends: its freeze is kicked, or the next one is not begun.
+ */
+static void
+pm_wakeup(void *arg __unused, const char *what)
+{
+	pm.wake_what = what;
+	atomic_store_rel_int(&pm.wake_req, 1);
+	psci_idle_freeze_kick();
+}
+
 static int
 pm_sysctl_suspend(SYSCTL_HANDLER_ARGS)
 {
@@ -309,7 +331,9 @@ pm_sysctl_suspend(SYSCTL_HANDLER_ARGS)
 	sbintime_t t0, end, until, dt;
 	uint64_t downs = 0, wakes = 0, timer = 0, hand0;
 	u_int intid = 0, frozen = UINT_MAX, wait = 0;
-	int secs = 0, error, r, epochs = 0, nb, na;
+	int secs = 0, error, r, epochs = 0, nb, na, woken = 0, i;
+	const char *what;
+	char how[96];
 
 	error = sysctl_handle_int(oidp, &secs, 0, req);
 	if (error != 0 || req->newptr == NULL)
@@ -321,6 +345,9 @@ pm_sysctl_suspend(SYSCTL_HANDLER_ARGS)
 	memset(a, 0, sizeof(a));
 	nb = pm_rpm_stats(b);
 	hand0 = pm.handovers;
+	/* a wake-up from now on ends it (one before is the system's) */
+	pm.wake_what = NULL;
+	atomic_store_rel_int(&pm.wake_req, 0);
 	EVENTHANDLER_INVOKE(power_suspend_early);
 	EVENTHANDLER_INVOKE(power_suspend);
 	thread_lock(curthread);
@@ -329,14 +356,19 @@ pm_sysctl_suspend(SYSCTL_HANDLER_ARGS)
 	t0 = sbinuptime();
 	end = secs > 0 ? t0 + secs * SBT_1S : SBT_MAX;
 	for (;;) {
+		if (atomic_load_acq_int(&pm.wake_req)) {
+			woken = 1;
+			break;
+		}
 		until = MIN(end, sbinuptime() + pm.epoch * SBT_1S);
 		if (pm_debug)
 			printf("pro1x_pm: freeze %d until +%jd ms\n", epochs,
 			    (intmax_t)((until - sbinuptime()) / SBT_1MS));
-		r = psci_idle_freeze(until, &fi);
+		r = psci_idle_freeze(until, &pm.wake_req, &fi);
 		if (pm_debug)
-			printf("pro1x_pm: freeze %d: %d, %ju wake-ups, %u frozen\n",
-			    epochs, r, (uintmax_t)fi.wakes, fi.frozen);
+			printf("pro1x_pm: freeze %d: %d, %ju wake-ups (the last "
+			    "to INTID %u), %u frozen\n", epochs, r,
+			    (uintmax_t)fi.wakes, fi.seen, fi.frozen);
 		downs += fi.downs;
 		wakes += fi.wakes;
 		timer += fi.timer;
@@ -350,6 +382,10 @@ pm_sysctl_suspend(SYSCTL_HANDLER_ARGS)
 			intid = r;
 			break;
 		}
+		if (atomic_load_acq_int(&pm.wake_req)) {
+			woken = 1;
+			break;
+		}
 		if (sbinuptime() >= end)
 			break;
 		/* between the epochs: the callouts run, the watchdog is fed */
@@ -361,15 +397,30 @@ pm_sysctl_suspend(SYSCTL_HANDLER_ARGS)
 	sched_unbind(curthread);
 	thread_unlock(curthread);
 	EVENTHANDLER_INVOKE(power_resume);
+	/*
+	 * ended by a device interrupt: which source it was, once its
+	 * interrupt thread has run (the RTC alarm and the power key share the
+	 * SPMI arbiter's INTID 215), at most 200 ms
+	 */
+	for (i = 0; intid != 0 && i < 20 && pm.wake_what == NULL; i++)
+		pause("pmwhat", MAX(1, hz / 100));
+	what = pm.wake_what;
+	if (intid != 0)
+		snprintf(how, sizeof(how), "INTID %u (a device%s%s)", intid,
+		    what != NULL ? ": " : "", what != NULL ? what : "");
+	else if (woken)
+		snprintf(how, sizeof(how), "a wake-up (%s)",
+		    what != NULL ? what : "?");
+	else
+		strlcpy(how, "the deadline 0", sizeof(how));
 	na = pm_rpm_stats(a);
 	snprintf(pm.last, sizeof(pm.last), "%s %ju.%03ju s in %d epochs, "
-	    "ended by %s %u%s; %ju power-downs of CPU 0, %ju wake-ups (%ju "
+	    "ended by %s; %ju power-downs of CPU 0, %ju wake-ups (%ju "
 	    "by its timer or the frame), at least %u other CPUs frozen "
 	    "(after %u us); RPM: %s +%u, %s +%u; MPM hand-overs +%ju",
 	    error != 0 ? "not suspended:" : "suspended",
 	    (uintmax_t)(dt / SBT_1S), (uintmax_t)((dt % SBT_1S) * 1000 / SBT_1S),
-	    epochs, intid != 0 ? "INTID" : "the deadline", intid,
-	    intid >= 32 ? " (a device)" : "", (uintmax_t)downs,
+	    epochs, how, (uintmax_t)downs,
 	    (uintmax_t)wakes, (uintmax_t)timer, frozen == UINT_MAX ? 0 : frozen,
 	    wait, na > 0 ? a[0].name : "-",
 	    nb > 0 && na > 0 ? a[0].count - b[0].count : 0,
@@ -558,8 +609,11 @@ pm_modevent(module_t mod, int what, void *arg)
 		} else
 			pm_setup();
 		psci_idle_soc_hook = pm_soc_hook;
+		pm.wake_tag = EVENTHANDLER_REGISTER(power_wakeup, pm_wakeup,
+		    NULL, EVENTHANDLER_PRI_ANY);
 		return (0);
 	case MOD_UNLOAD:
+		EVENTHANDLER_DEREGISTER(power_wakeup, pm.wake_tag);
 		psci_idle_soc_hook = NULL;
 		pm.mpm_on = 0;
 		/* a CPU may be in the hook right now */

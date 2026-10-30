@@ -177,7 +177,7 @@ after boot (`patches/0013`), so that unattended tests always end.
 | GPIOs | `qcom_tlmm_sm6115` (`0006`): GPIOs and their interrupts; on them `gpiokeys` (Shift, Ctrl, Alt, Fn, Home, camera key, the slider switch), `gpioiic` (the touchscreen's bus), `gpioled` (keyboard backlight) |
 | touchscreen | `goodix` (`0007`), GT9286, multi-touch through evdev |
 | keyboard | `geniiic` (`0008`: device tree attachment of FreeBSD's GENI I2C driver, QUP wrapper bus) and `pro1xkbd` (`0009`): the 8x8 matrix behind the AW9523B, console keyboard and evdev; the boot menu keeps the I2C engine's clocks on before the jump |
-| PMIC | `qcom_spmi` (`0011`): the SPMI arbiter (register access, interrupts), `qcom_pon` (power and volume-down keys: evdev, devctl), `qcom_rtc` (the seconds counter plus the offset Leste's `pro1x-rtc` keeps; the boot menu hands it over from `/host/pro1x-rtc-offset`) |
+| PMIC | `qcom_spmi` (`0011`): the SPMI arbiter (register access, interrupts), `qcom_pon` (power and volume-down keys: evdev, devctl), `qcom_rtc` (the seconds counter plus the offset Leste's `pro1x-rtc` keeps; the boot menu hands it over from `/host/pro1x-rtc-offset`; its alarm as the suspend's wake-up, `dev.qcom_rtc.0.wakealarm`, `0035`, `pm/README.md`) |
 | battery | `pro1x_battery` (`0015`): Leste's `pro1x-adc-battery` ported (PMI632 ADC voltage, gauge current, OCV table, charge counting); `dev.pro1x_battery.0.*`, `hw.acpi.battery.*`, `hw.acpi.acline` |
 | CPU frequency | `qcom_cpufreq_hw` (`0010`): the firmware's frequency table per cluster for cpufreq(4) and powerd |
 | vibration | `aw86224` (`0019`): the AW86224 haptics on the keyboard's I2C bus as `/dev/led/vibrator` (led(4): on/off and blink patterns), continuous drive with the Leste driver's register values; drive levels `dev.aw86224.0.*` |
@@ -196,7 +196,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | touch, keyboard, keyboard light, slider | yes (`goodix`, `pro1xkbd`, `gpiokeys`, `gpioled`) |
 | status LED, vibration | yes (`qcom_lpg`, `aw86224`) |
 | battery, charging | state of charge (`pro1x_battery`); the charger itself runs as the bootloader set it |
-| clock across power off | yes, with Leste's offset (`qcom_rtc`); no wake alarms |
+| clock across power off | yes, with Leste's offset (`qcom_rtc`); wake alarms: alarmd's into the RTC's alarm, which ends a suspend (`pm/README.md`, untested on the phone) |
 | CPU frequency, all CPUs | frequency yes; all eight CPUs from `kern.smp.disabled=0` (run 10 tests it) |
 | power management (autosuspend, CPU idle states) | `powerd` only: CPUs idle with `wfi`, no deeper idle states, no suspend on arm64 (`docs/power-management.md`, FreeBSD) |
 | storage | UFS on the link Linux brought up; no SD card |
@@ -243,6 +243,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `patches/0022-*` | `qcom_dpu`: brightness, panel off/on, sleep, low power and partial mode by DCS commands |
 | `patches/0023-*` … `0028-*` | power, checked against the Nokia N9: watchdog fed every 15 s, held keys scanned every 30 ms, UFS Auto-Hibernate, the battery read by time with events for devd, the random harvester at 1 Hz once seeded, the touchscreen's sleep (`docs/power-management.md`) |
 | `patches/0029-*` | shared GEOM nops (`kern.geom.nop.shared`): the writable pool's ranges inside userdata |
+| `patches/0035-*` | `qcom_rtc`'s alarm as a wake-up (`dev.qcom_rtc.0.wakealarm`), `power_wakeup` for the suspend (`pm/README.md`) |
 | `mfsroot/etc/pro1x-pool.sh` | the writable pool through the file's blocks, boot environment menu |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `rootzfs.sh` | the root image as a ZFS pool |

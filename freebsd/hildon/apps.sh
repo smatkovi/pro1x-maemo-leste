@@ -423,9 +423,11 @@ usr_to_local() {
 }
 
 # alarmd: libalarm, the clients' library, and the daemon, which follows
-# clockd's time changes (libtime.h from the sysroot). FreeBSD has no RTC
-# wake-up alarm (patches/alarmd/0002): an alarm rings while the system
-# runs. dsme (power up for an alarm) it asks over D-Bus; FreeBSD has none.
+# clockd's time changes (libtime.h from the sysroot). The wake-up alarm
+# through qcom_rtc's dev.qcom_rtc.0.wakealarm instead of /dev/rtc0, the next
+# one to /var/run/alarmd-wakeup for pro1x-suspend (patches/alarmd/0002,
+# 0006; freebsd/pm/README.md). dsme (power up for an alarm) it asks over
+# D-Bus; FreeBSD has none.
 # Started at boot by rc.d/alarmd (extra/alarmd), as root like the session.
 custom_alarmd() {
 	local m=(CC="$CC" AR="$AR" PREFIX=/usr/local ROOT="$PR"

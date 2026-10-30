@@ -1,0 +1,494 @@
+qcom_rtc: the PMIC RTC's alarm as a wake-up; power_wakeup
+
+The alarm peripheral (the node's second reg, 0x6100 on the PM6125; Linux's
+rtc-pm8xxx pm8941_regs: ALARM_RW 0x40, ALARM_CTRL 0x46 bit 7, ALARM_CTRL2
+0x48 bit 0) with its interrupt through the SPMI arbiter.
+dev.qcom_rtc.0.wakealarm is Linux's /sys/class/rtc/rtc0/wakealarm: the
+alarm's real time (UTC seconds), 0 off; converted with the difference
+between the system clock and the count at that moment, since the count
+cannot be set (as Leste's librtc-realtime does for alarmd). The alarm's
+interrupt switches it off, counts it (dev.qcom_rtc.0.alarms), tells devd
+(PMIC/RTC/ALARM) and raises power_wakeup (qcom_spmi.h), which the power
+key's press raises too: a suspend in progress ends (freebsd/pm's
+pro1x_pm). The registers' sequences in freebsd/pm's
+sys/dev/qcom_spmi/qcom_rtc_alarm.h (host test: pm/test/qcom_rtc_test.c).
+hw.qcom_rtc.alarm_clear=1: the status cleared as qpnp-rtc does (CTRL2's bit
+written 1), else as Linux 7.1.
+
+files.arm64: qcom_rtc_sim, QEMU's stand-in (pm/test/qemu's PRO1XQ):
+qcom_rtc.c on QEMU virt's PL031.
+
+diff --git a/sys/dev/qcom_spmi/qcom_pon.c b/sys/dev/qcom_spmi/qcom_pon.c
+index 5effaf8bf..4b843e15f 100644
+--- a/sys/dev/qcom_spmi/qcom_pon.c
++++ b/sys/dev/qcom_spmi/qcom_pon.c
+@@ -5,7 +5,8 @@
+  * F(x)tec Pro1X: volume down), from the "qcom,pm8941-pwrkey" and
+  * "qcom,pm8941-resin" subnodes. Both report through evdev with their
+  * linux,code; the power key also through devctl (system PMIC, subsystem
+- * POWER, type PRESS or RELEASE), for devd to act on.
++ * POWER, type PRESS or RELEASE), for devd to act on, and a press as a
++ * wake-up (power_wakeup, qcom_spmi.h: it ends a suspend).
+  *
+  * Each key has an interrupt on both edges; its handler reads the state
+  * from PON_RT_STS (bit 0 power key, bit 1 RESIN).
+@@ -16,6 +17,7 @@
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/bus.h>
++#include <sys/eventhandler.h>
+ #include <sys/kernel.h>
+ #include <sys/lock.h>
+ #include <sys/module.h>
+@@ -85,9 +87,12 @@ qcom_pon_intr(void *arg)
+ 	evdev_sync(sc->evdev);
+ #endif
+ 	mtx_unlock(&sc->mtx);
+-	if (key->code == KEY_POWER)
++	if (key->code == KEY_POWER) {
++		if (pressed)
++			EVENTHANDLER_INVOKE(power_wakeup, "the power key");
+ 		devctl_notify("PMIC", "POWER", pressed ? "PRESS" : "RELEASE",
+ 		    NULL);
++	}
+ }
+ 
+ static int
+diff --git a/sys/dev/qcom_spmi/qcom_rtc.c b/sys/dev/qcom_spmi/qcom_rtc.c
+index 20efbcbe7..71b1c60e4 100644
+--- a/sys/dev/qcom_spmi/qcom_rtc.c
++++ b/sys/dev/qcom_spmi/qcom_rtc.c
+@@ -7,51 +7,89 @@
+  * counter plus an offset, which the boot hands over as the kernel
+  * environment hint.qcom_rtc.0.offset (seconds; the Pro1X boot menu reads it
+  * from userdata). Setting the clock changes the offset only.
++ *
++ * The alarm (the node's second reg; qcom_rtc_alarm.h, after Linux's
++ * rtc-pm8xxx.c) wakes the system from a suspend (freebsd/pm's pro1x_pm)
++ * and, as on Linux, may power the phone up. dev.qcom_rtc.0.wakealarm is
++ * Linux's /sys/class/rtc/rtc0/wakealarm: the alarm's real time in seconds
++ * since the epoch (UTC), 0 while it is off; a time not in the future (0)
++ * switches it off. The count cannot be set, so the time is converted with
++ * the difference between the system clock and the counter at that moment,
++ * as Leste's librtc-realtime does for alarmd: the alarm follows the system
++ * clock whatever offset was handed over. Its interrupt (through the SPMI
++ * arbiter: on the SM6115 the arbiter's own interrupt, INTID 215, MPM pin
++ * 86 while the SoC sleeps) switches the alarm off, counts it
++ * (dev.qcom_rtc.0.alarms), tells devd (system PMIC, subsystem RTC, type
++ * ALARM) and a suspend in progress (power_wakeup, qcom_spmi.h).
++ * hw.qcom_rtc.alarm_clear=1: the alarm's status cleared by writing
++ * ALARM_CTRL2's bit 0 as Qualcomm's qpnp-rtc does (default: as Linux 7.1).
+  */
+ 
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/bus.h>
+ #include <sys/clock.h>
+-#include <sys/endian.h>
++#include <sys/eventhandler.h>
+ #include <sys/kernel.h>
++#include <sys/lock.h>
+ #include <sys/module.h>
++#include <sys/mutex.h>
++#include <sys/rman.h>
++#include <sys/sbuf.h>
++#include <sys/sysctl.h>
++#include <sys/time.h>
++
++#include <machine/bus.h>
++#include <machine/resource.h>
+ 
+ #include <dev/ofw/openfirm.h>
+ #include <dev/ofw/ofw_bus.h>
+ #include <dev/ofw/ofw_bus_subr.h>
+ 
+ #include <dev/qcom_spmi/qcom_spmi.h>
++#include <dev/qcom_spmi/qcom_rtc_alarm.h>
+ 
+ #include "clock_if.h"
+ 
+-#define	RTC_CTRL		0x46
+-#define	 CTRL_EN		(1u << 7)
+-#define	RTC_READ		0x48
+-
+ struct qcom_rtc_softc {
+ 	device_t	dev;
+ 	uint16_t	base;
++	uint16_t	abase;		/* the alarm's peripheral, 0: none */
+ 	int64_t		offset;
++	struct qrtc_io	io;
++	struct mtx	mtx;		/* the alarm */
++	struct resource	*irq;
++	int		irq_rid;
++	void		*ih;
++	uint64_t	alarms;		/* its interrupts */
++	uint64_t	stale;		/* interrupts with the alarm off */
++	uint32_t	last_cnt;	/* the counter at the last alarm */
++	int64_t		last;		/* and the real time */
+ };
+ 
++static SYSCTL_NODE(_hw, OID_AUTO, qcom_rtc, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
++    "Qualcomm PMIC RTC");
++static int qcom_rtc_alarm_clear;
++SYSCTL_INT(_hw_qcom_rtc, OID_AUTO, alarm_clear, CTLFLAG_RWTUN,
++    &qcom_rtc_alarm_clear, 0,
++    "After an alarm, write ALARM_CTRL2's clear bit 1 (qpnp-rtc)");
++
+ static int
+-qcom_rtc_read(struct qcom_rtc_softc *sc, uint32_t *secs)
++qcom_rtc_io_rd(void *arg, uint16_t addr, uint8_t *buf, size_t len)
+ {
+-	uint8_t v[4], lsb;
+-	int error;
++	return (qcom_spmi_read(arg, addr, buf, len));
++}
+ 
+-	if ((error = qcom_spmi_read(sc->dev, sc->base + RTC_READ, v, 4)) != 0)
+-		return (error);
+-	/* A carry between the bytes: read again. */
+-	if ((error = qcom_spmi_read(sc->dev, sc->base + RTC_READ, &lsb,
+-	    1)) != 0)
+-		return (error);
+-	if (lsb < v[0] &&
+-	    (error = qcom_spmi_read(sc->dev, sc->base + RTC_READ, v, 4)) != 0)
+-		return (error);
+-	*secs = le32dec(v);
+-	return (0);
++static int
++qcom_rtc_io_wr(void *arg, uint16_t addr, const uint8_t *buf, size_t len)
++{
++	return (qcom_spmi_write(arg, addr, buf, len));
++}
++
++static int
++qcom_rtc_read(struct qcom_rtc_softc *sc, uint32_t *secs)
++{
++	return (qrtc_read_count(&sc->io, sc->base, secs));
+ }
+ 
+ static int
+@@ -81,15 +119,221 @@ qcom_rtc_settime(device_t dev, struct timespec *ts)
+ 	return (0);
+ }
+ 
++/* --- the alarm ------------------------------------------------------- */
++
++/* The counter and the system's real time together; the alarm's lock held */
+ static int
+-qcom_rtc_probe(device_t dev)
++qcom_rtc_now(struct qcom_rtc_softc *sc, uint32_t *cnt, int64_t *now)
+ {
+-	if (!ofw_bus_status_okay(dev))
+-		return (ENXIO);
+-	if (!ofw_bus_is_compatible(dev, "qcom,pm8941-rtc"))
+-		return (ENXIO);
+-	device_set_desc(dev, "Qualcomm PMIC RTC");
+-	return (BUS_PROBE_DEFAULT);
++	struct timespec ts;
++	int error;
++
++	mtx_assert(&sc->mtx, MA_OWNED);
++	error = qcom_rtc_read(sc, cnt);
++	getnanotime(&ts);
++	*now = ts.tv_sec;
++	return (error);
++}
++
++/* The alarm at the real time when, off for a time not in the future */
++static int
++qcom_rtc_alarm_set(struct qcom_rtc_softc *sc, int64_t when)
++{
++	uint32_t cnt, alarm, was;
++	int64_t now;
++	int on, error;
++
++	mtx_lock(&sc->mtx);
++	if ((error = qcom_rtc_now(sc, &cnt, &now)) != 0 ||
++	    (error = qrtc_alarm_get(&sc->io, sc->abase, &was, &on)) != 0)
++		goto out;
++	error = qrtc_alarm_count(cnt, now, when, &alarm);
++	if (error == EINVAL) {
++		error = on ? qrtc_alarm_off(&sc->io, sc->abase) : 0;
++		if (error == 0 && on)
++			device_printf(sc->dev, "alarm off (counter %u)\n", cnt);
++		goto out;
++	}
++	if (error != 0)
++		goto out;
++	error = qrtc_alarm_set(&sc->io, sc->abase, alarm);
++	/* each change on the console, not each call */
++	if (error == 0 && (!on || was != alarm))
++		device_printf(sc->dev, "alarm at counter %u, in %u s "
++		    "(counter %u)\n", alarm, alarm - cnt, cnt);
++out:
++	mtx_unlock(&sc->mtx);
++	if (error != 0 && error != ERANGE)
++		device_printf(sc->dev, "alarm not set: error %d\n", error);
++	return (error);
++}
++
++static void
++qcom_rtc_alarm_intr(void *arg)
++{
++	struct qcom_rtc_softc *sc = arg;
++	uint32_t alarm, cnt;
++	int64_t now;
++	int on, error;
++
++	mtx_lock(&sc->mtx);
++	error = qrtc_alarm_get(&sc->io, sc->abase, &alarm, &on);
++	if (error == 0)
++		error = qrtc_alarm_ack(&sc->io, sc->abase, qcom_rtc_alarm_clear);
++	(void)qcom_rtc_now(sc, &cnt, &now);
++	if (error != 0 || !on) {
++		/* not an alarm of ours, or its registers not readable */
++		if (sc->stale++ == 0)
++			device_printf(sc->dev, "alarm interrupt with the alarm "
++			    "off (error %d, counter %u)\n", error, cnt);
++		mtx_unlock(&sc->mtx);
++		return;
++	}
++	sc->alarms++;
++	sc->last_cnt = cnt;
++	sc->last = now;
++	mtx_unlock(&sc->mtx);
++	device_printf(sc->dev, "alarm: counter %u, set for %u\n", cnt, alarm);
++	EVENTHANDLER_INVOKE(power_wakeup, "the RTC alarm");
++	devctl_notify("PMIC", "RTC", "ALARM", NULL);
++}
++
++static int
++qcom_rtc_sysctl_wakealarm(SYSCTL_HANDLER_ARGS)
++{
++	struct qcom_rtc_softc *sc = arg1;
++	uint32_t cnt, alarm;
++	int64_t now, t;
++	int on, error;
++
++	mtx_lock(&sc->mtx);
++	error = qcom_rtc_now(sc, &cnt, &now);
++	if (error == 0)
++		error = qrtc_alarm_get(&sc->io, sc->abase, &alarm, &on);
++	mtx_unlock(&sc->mtx);
++	if (error != 0)
++		return (error);
++	t = on ? qrtc_alarm_time(cnt, now, alarm) : 0;
++	error = sysctl_handle_64(oidp, &t, 0, req);
++	if (error != 0 || req->newptr == NULL)
++		return (error);
++	return (qcom_rtc_alarm_set(sc, t));
++}
++
++static int
++qcom_rtc_sysctl_alarm(SYSCTL_HANDLER_ARGS)
++{
++	struct qcom_rtc_softc *sc = arg1;
++	struct sbuf sb;
++	uint32_t cnt, alarm;
++	int64_t now;
++	int on, error;
++
++	error = sysctl_wire_old_buffer(req, 0);
++	if (error != 0)
++		return (error);
++	sbuf_new_for_sysctl(&sb, NULL, 256, req);
++	mtx_lock(&sc->mtx);
++	error = qcom_rtc_now(sc, &cnt, &now);
++	if (error == 0)
++		error = qrtc_alarm_get(&sc->io, sc->abase, &alarm, &on);
++	if (error != 0)
++		sbuf_printf(&sb, "not readable: error %d", error);
++	else {
++		sbuf_printf(&sb, "counter %u, alarm ", cnt);
++		if (on)
++			sbuf_printf(&sb, "on at counter %u (in %d s, at %jd)",
++			    alarm, (int32_t)(alarm - cnt),
++			    (intmax_t)qrtc_alarm_time(cnt, now, alarm));
++		else
++			sbuf_printf(&sb, "off");
++		sbuf_printf(&sb, "; %ju alarms", (uintmax_t)sc->alarms);
++		if (sc->alarms != 0)
++			sbuf_printf(&sb, ", the last at counter %u (%jd)",
++			    sc->last_cnt, (intmax_t)sc->last);
++		if (sc->stale != 0)
++			sbuf_printf(&sb, ", %ju interrupts with it off",
++			    (uintmax_t)sc->stale);
++		sbuf_printf(&sb, "; interrupt %s",
++		    sc->ih != NULL ? "set up" : "none");
++	}
++	mtx_unlock(&sc->mtx);
++	error = sbuf_finish(&sb);
++	sbuf_delete(&sb);
++	return (error);
++}
++
++/*
++ * The alarm's peripheral: what the previous system left (an alarm Linux
++ * set, e.g. for Leste's alarmd, stays on and fires here), whether this EE
++ * may write it, its interrupt.
++ */
++static void
++qcom_rtc_alarm_attach(struct qcom_rtc_softc *sc)
++{
++	device_t dev = sc->dev;
++	struct sysctl_ctx_list *ctx = device_get_sysctl_ctx(dev);
++	struct sysctl_oid_list *ch = SYSCTL_CHILDREN(device_get_sysctl_tree(dev));
++	uint32_t cnt, alarm;
++	int64_t now;
++	uint8_t type[2], ctrl;
++	int on, error;
++	char irq[40];
++
++	mtx_lock(&sc->mtx);
++	error = qcom_rtc_now(sc, &cnt, &now);
++	if (error == 0)
++		error = sc->io.rd(sc->io.arg, sc->abase + QRTC_PERPH_TYPE, type,
++		    2);
++	if (error == 0)
++		error = qrtc_alarm_get(&sc->io, sc->abase, &alarm, &on);
++	/* writable from here? The same value again changes nothing */
++	if (error == 0 && (error = sc->io.rd(sc->io.arg, sc->abase +
++	    QRTC_ALARM_CTRL, &ctrl, 1)) == 0)
++		error = sc->io.wr(sc->io.arg, sc->abase + QRTC_ALARM_CTRL,
++		    &ctrl, 1);
++	mtx_unlock(&sc->mtx);
++	if (error != 0) {
++		device_printf(dev, "alarm at %#x %s (error %d): none\n",
++		    sc->abase, error == EPERM ? "not writable from this EE" :
++		    "not readable", error);
++		sc->abase = 0;
++		return;
++	}
++
++	sc->irq_rid = 0;
++	sc->irq = bus_alloc_resource_any(dev, SYS_RES_IRQ, &sc->irq_rid,
++	    RF_ACTIVE);
++	if (sc->irq != NULL && bus_setup_intr(dev, sc->irq,
++	    INTR_TYPE_MISC | INTR_MPSAFE, NULL, qcom_rtc_alarm_intr, sc,
++	    &sc->ih) != 0) {
++		bus_release_resource(dev, SYS_RES_IRQ, sc->irq_rid, sc->irq);
++		sc->irq = NULL;
++		sc->ih = NULL;
++	}
++	if (sc->irq != NULL)
++		snprintf(irq, sizeof(irq), "irq %ju",
++		    (uintmax_t)rman_get_start(sc->irq));
++	else
++		strlcpy(irq, "no interrupt (not this EE's?)", sizeof(irq));
++	if (on)
++		device_printf(dev, "alarm at %#x (type %#x/%u), %s; on, as "
++		    "the previous system left it: at counter %u, in %d s\n",
++		    sc->abase, type[0], type[1], irq, alarm,
++		    (int32_t)(alarm - cnt));
++	else
++		device_printf(dev, "alarm at %#x (type %#x/%u), %s; off\n",
++		    sc->abase, type[0], type[1], irq);
++
++	SYSCTL_ADD_PROC(ctx, ch, OID_AUTO, "wakealarm",
++	    CTLTYPE_S64 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
++	    qcom_rtc_sysctl_wakealarm, "Q",
++	    "The alarm's real time (s since the epoch, UTC), 0: off");
++	SYSCTL_ADD_PROC(ctx, ch, OID_AUTO, "alarm",
++	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
++	    qcom_rtc_sysctl_alarm, "A", "The counter, the alarm, its interrupts");
++	SYSCTL_ADD_U64(ctx, ch, OID_AUTO, "alarms", CTLFLAG_RD, &sc->alarms, 0,
++	    "The alarms that fired");
+ }
+ 
+ static int
+@@ -102,16 +346,25 @@ qcom_rtc_attach(device_t dev)
+ 
+ 	sc->dev = dev;
+ 	sc->base = qcom_spmi_base(dev, 0);
+-	if (qcom_spmi_read(dev, sc->base + RTC_CTRL, &ctrl, 1) != 0 ||
+-	    !(ctrl & CTRL_EN) || qcom_rtc_read(sc, &secs) != 0) {
++	sc->abase = qcom_spmi_base(dev, 1);
++	sc->io.rd = qcom_rtc_io_rd;
++	sc->io.wr = qcom_rtc_io_wr;
++	sc->io.arg = dev;
++	if (sc->io.rd(dev, sc->base + QRTC_RTC_CTRL, &ctrl, 1) != 0 ||
++	    !(ctrl & QRTC_RTC_EN) || qcom_rtc_read(sc, &secs) != 0) {
+ 		device_printf(dev, "not running\n");
+ 		return (ENXIO);
+ 	}
++	mtx_init(&sc->mtx, device_get_nameunit(dev), NULL, MTX_DEF);
+ 	if (resource_long_value(device_get_name(dev), device_get_unit(dev),
+ 	    "offset", &off) == 0)
+ 		sc->offset = off;
+ 	device_printf(dev, "counter %u, offset %jd%s\n", secs,
+ 	    (intmax_t)sc->offset, sc->offset == 0 ? " (none handed over)" : "");
++	if (sc->abase != 0 && !ofw_bus_has_prop(dev, "qcom,no-alarm"))
++		qcom_rtc_alarm_attach(sc);
++	else
++		sc->abase = 0;
+ 	clock_register(dev, 1000000);
+ 	return (0);
+ }
+@@ -119,10 +372,30 @@ qcom_rtc_attach(device_t dev)
+ static int
+ qcom_rtc_detach(device_t dev)
+ {
++	struct qcom_rtc_softc *sc = device_get_softc(dev);
++
+ 	clock_unregister(dev);
++	if (sc->ih != NULL)
++		bus_teardown_intr(dev, sc->irq, sc->ih);
++	if (sc->irq != NULL)
++		bus_release_resource(dev, SYS_RES_IRQ, sc->irq_rid, sc->irq);
++	mtx_destroy(&sc->mtx);
+ 	return (0);
+ }
+ 
++#ifndef QCOM_RTC_SIM
++/* (QEMU's stand-in, qcom_rtc_sim.c, has a bus and a probe of its own) */
++static int
++qcom_rtc_probe(device_t dev)
++{
++	if (!ofw_bus_status_okay(dev))
++		return (ENXIO);
++	if (!ofw_bus_is_compatible(dev, "qcom,pm8941-rtc"))
++		return (ENXIO);
++	device_set_desc(dev, "Qualcomm PMIC RTC");
++	return (BUS_PROBE_DEFAULT);
++}
++
+ static device_method_t qcom_rtc_methods[] = {
+ 	DEVMETHOD(device_probe,		qcom_rtc_probe),
+ 	DEVMETHOD(device_attach,	qcom_rtc_attach),
+@@ -141,3 +414,4 @@ static driver_t qcom_rtc_driver = {
+ };
+ 
+ DRIVER_MODULE(qcom_rtc, qcom_pmic, qcom_rtc_driver, 0, 0);
++#endif
+diff --git a/sys/dev/qcom_spmi/qcom_spmi.h b/sys/dev/qcom_spmi/qcom_spmi.h
+index d7a4f7f2b..b4133fe88 100644
+--- a/sys/dev/qcom_spmi/qcom_spmi.h
++++ b/sys/dev/qcom_spmi/qcom_spmi.h
+@@ -17,6 +17,16 @@ uint16_t qcom_spmi_base(device_t periph, int index);
+ /* The interrupt controller's xref, for interrupts of peripheral subnodes */
+ phandle_t qcom_spmi_intr_xref(device_t periph);
+ 
++/*
++ * A wake-up source fired: the RTC alarm (qcom_rtc), the power key
++ * (qcom_pon), from their interrupt threads, with what it was. A suspend
++ * in progress ends (freebsd/pm's pro1x_pm registers for it); also one
++ * whose CPUs were awake at that moment, between its freezes.
++ */
++#include <sys/eventhandler.h>
++typedef void (*power_wakeup_fn)(void *, const char *);
++EVENTHANDLER_DECLARE(power_wakeup, power_wakeup_fn);
++
+ /* Interrupt registers of every peripheral, after its base */
+ #define	QPNPINT_RT_STS		0x10
+ #define	QPNPINT_SET_TYPE	0x11
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -748,6 +748,7 @@
+ dev/qcom_spmi/qcom_rtc.c			optional qcom_spmi fdt
+ dev/qcom_spmi/pro1x_battery.c			optional qcom_spmi fdt
+ dev/qcom_spmi/qcom_lpg.c			optional qcom_spmi fdt
++dev/qcom_spmi/qcom_rtc_sim.c			optional qcom_rtc_sim fdt !qcom_spmi
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ arm64/qualcomm/pm/psci_idle.c			optional psci_idle fdt
+ arm64/qualcomm/pm/psci_idle_asm.S		optional psci_idle fdt

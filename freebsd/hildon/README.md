@@ -88,10 +88,14 @@ Alarms work as on Leste, from the Hildon session: `alarmd` keeps the
 queue (`/var/cache/alarmd`, kept over a reboot with the writable ZFS root
 only) and follows clockd's time changes, the system UI (`osso-systemui`)
 shows its dialog through `osso-systemui-alarm`, and the status area clock
-(`statusbar-alarm`) shows that an alarm is set. FreeBSD has no RTC wake-up
-alarm (Linux's `RTC_WKALM_SET`): an alarm rings while the system runs, it
-does not power the phone up. Both start with the session, since alarmd
-needs its bus. `../vm/try-alarm.sh` sets an alarm as clock-ui does and
+(`statusbar-alarm`) shows that an alarm is set. The wake-up alarm, which
+Leste's alarmd sets through `/dev/rtc0` (`RTC_WKALM_SET`, a minute before
+the alarm), goes to the PMIC RTC's alarm through `qcom_rtc`'s
+`dev.qcom_rtc.0.wakealarm` (`patches/alarmd/0002`), and the next alarm to
+`/var/run/alarmd-wakeup` (`0006`), from which `pro1x-suspend` sets the RTC
+before it suspends: the alarm wakes the phone from FreeBSD's suspend and
+rings (`../pm/README.md`, the RTC alarm; untested on the phone). Both
+start with the session, since alarmd needs its bus. `../vm/try-alarm.sh` sets an alarm as clock-ui does and
 takes a screenshot of the dialog (`RESPOND=snooze` or `stop` taps a
 button).
 
@@ -276,7 +280,7 @@ licence statement. The sources are the pinned revisions in the table and
 <!-- packages -->
 | Package | Version | Licence | Source | Revision | State |
 | --- | --- | --- | --- | --- | --- |
-| alarmd | 1.1.23_1 | LGPL21 | [alarmd](https://github.com/maemo-leste/alarmd) | `6a248a323bcc` | runs (VM: alarms ring while Hildon runs; no RTC wake-up on FreeBSD) |
+| alarmd | 1.1.23_1 | LGPL21 | [alarmd](https://github.com/maemo-leste/alarmd) | `6a248a323bcc` | runs (VM: alarms ring while Hildon runs; the wake-up alarm into dev.qcom_rtc.0.wakealarm, the next one in /var/run/alarmd-wakeup for pro1x-suspend; the phone's RTC waking it untested) |
 | applet-datetime | 0.6.2 | GPLv3 | [applet-datetime](https://github.com/maemo-leste/applet-datetime) | `39054c07ac94` | builds |
 | braek | 1.3.1 | BSD3CLAUSE | [braek](https://github.com/maemo-leste-extras/braek) | `77ceda0d3d92` | runs (VM) |
 | cal-home-widget | 1.7 | GPLv2+ | [cal-home-widget](https://github.com/maemo-leste-extras/cal-home-widget) | `52ef149cdca0` | builds |

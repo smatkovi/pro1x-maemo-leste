@@ -11,6 +11,11 @@
 #                       60 s suspend, C until the power key
 #                       (pro1x.suspend_key=1), D the battery over
 #                       pro1x.power_min minutes of suspend
+#   pro1x.test=rtcalarm the PMIC RTC's alarm as the suspend's wake-up
+#                       (qcom_rtc, pro1x_pm): A while awake, B ending a
+#                       suspend, C switched off again, D with the SoC's
+#                       sleep (the sleep set, the MPM hand-over) for
+#                       pro1x.rtc_sleep (120) s; a PASS or FAIL line each
 #   pro1x.test=usb      the USB controller as Linux left it (read only)
 #   pro1x.test=usbnet   the USB gadget: dwc3dci, CDC Ethernet, ue0 as
 #                       172.16.42.1 for pro1x.usb_min (5) minutes
@@ -159,6 +164,38 @@ pm_quiet() {
 	done
 }
 
+# The RTC's alarm in $1 seconds, by the real time as alarmd sets it
+pm_rtc() {
+	sysctl dev.qcom_rtc.0.wakealarm=$(($(date +%s) + $1)) > /dev/null
+	pm_log "$2: alarm in $1 s: $(sysctl -n dev.qcom_rtc.0.alarm)"
+}
+
+# A suspend of at most $2 s with the alarm in $1 s ($1 0: the alarm off,
+# the deadline must end it): PASS when what was meant to end it did
+pm_rtcsusp() {
+	n=$(sysctl -n dev.qcom_rtc.0.alarms)
+	t0=$(date +%s)
+	if [ "$1" -gt 0 ]; then
+		pm_rtc $1 "$3"
+	else
+		pm_rtc 20 "$3"
+		sysctl dev.qcom_rtc.0.wakealarm=0 > /dev/null
+		pm_log "$3: and off again: $(sysctl -n dev.qcom_rtc.0.alarm)"
+	fi
+	pm_log "$3: suspend $2 s"
+	sysctl hw.pro1x_pm.suspend=$2 > /dev/null
+	t=$(($(date +%s) - t0))
+	sysctl hw.pro1x_pm.last dev.qcom_rtc.0.alarm
+	m=$(sysctl -n dev.qcom_rtc.0.alarms)
+	if [ "$1" -gt 0 ] && [ "$m" -gt "$n" ] && [ $t -le $(($1 + 10)) ]; then
+		pm_log "$3: PASS: woken after $t s, the RTC alarm"
+	elif [ "$1" -eq 0 ] && [ "$m" -eq "$n" ] && [ $t -ge "$2" ]; then
+		pm_log "$3: PASS: $t s, the deadline, no alarm"
+	else
+		pm_log "$3: FAIL: back after $t s, alarms $n -> $m"
+	fi
+}
+
 pm_done() {
 	pm_log "=== test $1 done, rebooting"
 	sleep 2
@@ -227,6 +264,42 @@ usbnet)
 	done
 	dmesg | sed -n -E '/dwc3dci|usbus|ugen|cdce|ue[0-9]/p' | tail -20
 	pm_done usbnet
+	;;
+rtcalarm)
+	echo "=== pm: RTC alarm test"
+	pm_cpus
+	dmesg | sed -n -E '/^qcom_rtc|^qcom_spmi|^qcom_pon|^pro1x_pm/p'
+	if ! sysctl dev.qcom_rtc.0.alarm dev.qcom_rtc.0.wakealarm; then
+		pm_log "!! no RTC alarm (dev.qcom_rtc.0.wakealarm): FAIL"
+		pm_done rtcalarm
+	fi
+	sysctl hw.qcom_rtc.alarm_clear
+	pm_quiet 1
+	# A: while awake: its interrupt, then off
+	n=$(sysctl -n dev.qcom_rtc.0.alarms)
+	pm_rtc 20 "A"
+	sleep 25
+	sysctl dev.qcom_rtc.0.alarm
+	if [ "$(sysctl -n dev.qcom_rtc.0.alarms)" -gt "$n" ]; then
+		pm_log "A: PASS: the alarm's interrupt while awake"
+	else
+		pm_log "A: FAIL: no alarm interrupt"
+	fi
+	# B: a suspend (deadline 180 s) the alarm ends after 60 s
+	pm_rtcsusp 60 180 B
+	# C: an alarm switched off again must not end a suspend of 40 s
+	pm_rtcsusp 0 40 C
+	# D: the same as B with the SoC's sleep: the sleep set, the hand-over
+	pm_kld && sysctl hw.pro1x_rpmsleep.set=1 hw.pro1x_rpmsleep.result
+	sysctl hw.pro1x_pm.mpm=1 hw.pro1x_pm.rpm_stats
+	s=$(kenv -q pro1x.rtc_sleep)
+	s=${s:-120}
+	pm_rtcsusp $s $((s + 120)) D
+	sysctl hw.pro1x_pm.rpm_stats
+	sysctl hw.pro1x_pm.mpm=0
+	pm_stats
+	pm_quiet 0
+	pm_done rtcalarm
 	;;
 usb)
 	# stage 4: what Linux leaves of the USB controller (read only)

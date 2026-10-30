@@ -1,0 +1,16 @@
+FreeBSD (the F(x)tec Pro1X): the next event that wakes the system (an alarm
+with ALARM_EVENT_BOOT or ALARM_EVENT_ACTDEAD, as clock-ui's alarms are; 0
+for none) to hwrtc_set_next (0002), whenever the queue is looked at again,
+for pro1x-suspend. A no-op on Linux.
+
+--- a/src/server.c
++++ b/src/server.c
+@@ -2154,6 +2154,8 @@
+     gmtime_r(&trg, &tm);
+     hwrtc_set_alarm(&tm, 1);
+   }
++  // the next event that wakes the system (pro1x-suspend on FreeBSD)
++  hwrtc_set_next(thw < INT_MAX ? thw : 0);
+ 
+   // cleanup
+   free(vec);

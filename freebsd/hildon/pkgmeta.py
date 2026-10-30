@@ -435,8 +435,10 @@ REVISION = {
     # 6: portrait as on the N9 (pages side by side, the N9's launcher rows,
     # the open applications in two columns)
     'hildon-desktop': 6,
-    # 2026-10-27: the daemon too (it was libalarm only)
-    'alarmd': 1,
+    # 2026-10-27: the daemon too (it was libalarm only); 2: the wake-up
+    # alarm through qcom_rtc's dev.qcom_rtc.0.wakealarm, the next wake-up
+    # in /var/run/alarmd-wakeup for pro1x-suspend (0002, 0006)
+    'alarmd': 2,
     # 2026-10-27: Leste's hildon-libs texts, not libhildon's (EXCLUDE); 2:
     # the MeeGo-like look's list menu and wheel pickers (patches/meego)
     'libhildon': 2, 'leste-l10n-en': 1,
