@@ -563,6 +563,14 @@ main(int argc, char **argv)
 	}
 	/* what the drivers' threads still do */
 	usleep(500000);
+	/* the firmware images (the processors are stopped or adopted) */
+	{
+		char cmd[300];
+
+		snprintf(cmd, sizeof(cmd), "rm -rf '%s'", fwdir);
+		if (system(cmd) != 0)
+			say("sim: %s left\n", fwdir);
+	}
 	sim_log_quiet(false);
 	say("=== sim %s: %s (%d passed, %d failed)\n", what,
 	    fails == 0 ? "PASS" : "FAIL", passes, fails);
