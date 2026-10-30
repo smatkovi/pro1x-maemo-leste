@@ -25,7 +25,7 @@ Settings: `/etc/default/pro1x-waydroid` (comments there): `WAYDROID_STORE`,
 `WAYDROID_WINDOW` (`window` or `fullscreen`), `WAYDROID_RENDERER` (`gl` or
 `pixman`), `WAYDROID_DENSITY`, `WAYDROID_PROPERTY_DEFAULTS`,
 `WAYDROID_LXC_NET`. A user's `~/.config/pro1x-waydroid.conf` may set the
-window ones.
+window ones (read only when not running as root).
 
 ## Where Waydroid comes from, and why
 
@@ -124,12 +124,12 @@ On the PC (the release `leste-waydroid-2026.10.30`):
 
     gh release download leste-waydroid-2026.10.30 -R smatkovi/pro1x-maemo-leste -D /tmp/leste-wd
     (cd /tmp/leste-wd && sha256sum -c SHA256SUMS)
-    scp /tmp/leste-wd/pro1x-waydroid_1.0_all.deb root@172.16.42.1:/root/
+    scp /tmp/leste-wd/pro1x-waydroid_1.1_all.deb root@172.16.42.1:/root/
 
 On the phone, as root, with a network connection, in two steps (the
 preferences file must be there before Waydroid brings lxc):
 
-    apt install /root/pro1x-waydroid_1.0_all.deb
+    apt install /root/pro1x-waydroid_1.1_all.deb
     apt update
     df -h / /host                    # about 3 GiB free on / (or WAYDROID_STORE, above)
     apt install waydroid
@@ -193,7 +193,8 @@ the phone's Mesa 25 (daedalus-backports) through glamor/DRI3, so that it
 can take Android's dma-bufs (`zwp_linux_dmabuf_v1`).
 
 When Android stays black or SurfaceFlinger crashes (`waydroid logcat`),
-switch to software rendering (as root; the next Android start uses it):
+switch to software rendering (as root; `waydroid upgrade -o` restarts a
+running Android with it, in the open window):
 
     pro1x-waydroid software     # ro.hardware.gralloc=default, ro.hardware.egl=swiftshader, ro.hardware.vulkan=
     pro1x-waydroid gpu          # back: those properties removed again

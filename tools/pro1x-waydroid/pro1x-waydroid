@@ -28,7 +28,8 @@ WAYDROID_WINDOW=window
 WAYDROID_RENDERER=gl
 WAYDROID_DENSITY=
 [ -r /etc/default/pro1x-waydroid ] && . /etc/default/pro1x-waydroid
-[ -n "$HOME" ] && [ -r "$HOME/.config/pro1x-waydroid.conf" ] &&
+# (not as root: the gpu/software switches must not run a user's file)
+[ "$(id -u)" != 0 ] && [ -n "$HOME" ] && [ -r "$HOME/.config/pro1x-waydroid.conf" ] &&
 	. "$HOME/.config/pro1x-waydroid.conf"
 
 WORK=/var/lib/waydroid
@@ -120,8 +121,8 @@ props() {
 	esac
 	if [ -z "$quiet" ]; then
 		case $1 in
-		gpu)	echo "GPU rendering: the next Android start (close the Android window, open it again)" ;;
-		software) echo "software rendering: the next Android start (close the Android window, open it again)" ;;
+		gpu | software)
+			echo "$1 rendering from Android's next start (a running Android restarts in its window)" ;;
 		esac
 	fi
 }

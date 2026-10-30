@@ -35,7 +35,7 @@ export SOURCE_DATE_EPOCH
 MAINTAINER="Sebastian Matkovich <sebastian.matkovich@gmail.com>"
 HOMEPAGE=https://github.com/smatkovi/pro1x-maemo-leste
 NAME=pro1x-waydroid
-VERSION=1.0
+VERSION=1.1
 T=$REPO/tools/pro1x-waydroid
 # Waydroid's repository key, https://repo.waydro.id/waydroid.gpg
 # (2026-10-30): rsa3072 of 2023-08-03, "Czarek Nakamoto <ci@mrcyjanek.net>",
