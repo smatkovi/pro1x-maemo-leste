@@ -1,0 +1,129 @@
+The UCM profile (device/audio/ucm2/Pro1X) with the headset jack: the
+Headphones device follows the kernel's "Headphone Jack" control (the
+WCD9370's MBHC) in both verbs and comes before the loudspeaker (HiFi) and
+the earpiece (Voice Call) while something is plugged in; a new Headset
+device records a headset's microphone (AMIC2 on the WCD9370's ADC2, TX
+macro decimator 0, TX_CODEC_DMA_TX_3, through MultiMedia2 like the
+built-in one) and follows "Mic Jack". Calls keep the built-in microphone
+(docs/audio.md). Applied to the NixOS port's files in their directory
+(patch -p1), by scripts/45-pro1x-hardware.sh and 64-ucm-install.sh.
+
+--- a/Pro1X.conf
++++ b/Pro1X.conf
+@@ -1,5 +1,10 @@
+ Syntax 4
+ 
++# The F(x)tec Pro1X's sound card (driver sm4250). alsa-lib finds this file
++# as ucm2/sm4250/sm4250.conf, a link to it (scripts/45-pro1x-hardware.sh,
++# scripts/64-ucm-install.sh). The NixOS port's profile with the headset
++# jack (HiFi.conf).
++
+ SectionUseCase."HiFi" {
+ 	File "/Pro1X/HiFi.conf"
+ 	Comment "Default audio"
+--- a/HiFi.conf
++++ b/HiFi.conf
+@@ -1,3 +1,9 @@
++# The NixOS port's profile (github.com/nyymi609/fxtec-pro1x-nixos,
++# device/audio/ucm2, 579356e) plus the headset jack: Headphones and Headset
++# follow the kernel's "Headphone Jack" and "Mic Jack" controls (the WCD9370's
++# MBHC, docs/audio.md) and come first while something is plugged in.
++# Nothing mutes the loudspeakers in hardware (they sit behind the same HPH
++# outputs), so there is no JackHWMute: the device sequences switch them.
+ SectionVerb {
+ 	Value {
+ 		TQ "HiFi"
+@@ -92,9 +98,12 @@
+ 		# The front-end route (MultiMedia1 -> RX codec DMA 0) stays on, see Pro1X.conf.
+ 	]
+ 
++	# Above the loudspeaker: available only while headphones or a headset
++	# are plugged in, so PulseAudio takes the speaker otherwise.
+ 	Value {
+-		PlaybackPriority 100
++		PlaybackPriority 300
+ 		PlaybackPCM "hw:${CardId},0"
++		JackControl "Headphone Jack"
+ 	}
+ }
+ 
+@@ -123,6 +132,51 @@
+ 	}
+ }
+ 
++SectionDevice."Headset" {
++	Comment "Headset microphone"
++
++	# A headset's analog microphone: AMIC2 (MIC BIAS2, the one the MBHC
++	# uses) on the WCD9370's ADC2, over SoundWire into the TX macro
++	# (TX SWR_INPUT4, the SMIC mux's SWR_MIC4) and its decimator 0, then
++	# TX_CODEC_DMA_TX_3 (the vendor's "amic2" path and gains). It is
++	# recorded through MultiMedia2 like the built-in microphone: a
++	# front end has one back end, so the route moves to TX_CODEC_DMA_TX_3
++	# and back. A recording that is running keeps the microphone it was
++	# started with until it starts again (the DSP's session stays on its
++	# port).
++	EnableSequence [
++		cset "name='MultiMedia2 Mixer VA_CODEC_DMA_TX_0' 0"
++		cset "name='MultiMedia2 Mixer TX_CODEC_DMA_TX_3' 1"
++		cset "name='TX DEC0 MUX' SWR_MIC"
++		cset "name='TX SMIC MUX0' SWR_MIC4"
++		cset "name='TX_AIF1_CAP Mixer DEC0' 1"
++		cset "name='TX_DEC0 Volume' 84"
++		cset "name='ADC2 Volume' 12"
++		cset "name='ADC2_MIXER Switch' 1"
++		cset "name='ADC2 MUX' INP2"
++		cset "name='ADC2 Switch' 1"
++	]
++
++	DisableSequence [
++		cset "name='ADC2_MIXER Switch' 0"
++		cset "name='ADC2 Switch' 0"
++		cset "name='TX_AIF1_CAP Mixer DEC0' 0"
++		cset "name='TX SMIC MUX0' ZERO"
++		cset "name='MultiMedia2 Mixer TX_CODEC_DMA_TX_3' 0"
++		# MultiMedia2 back on the built-in microphone's back end, which keeps
++		# the capture PCM openable (Pro1X.conf's BootSequence)
++		cset "name='MultiMedia2 Mixer VA_CODEC_DMA_TX_0' 1"
++	]
++
++	# Above the built-in microphone: available only while a headset (a
++	# plug with a microphone) is in.
++	Value {
++		CapturePriority 200
++		CapturePCM "hw:${CardId},1"
++		JackControl "Mic Jack"
++	}
++}
++
+ SectionDevice."Earpiece" {
+ 	Comment "Earpiece (calls)"
+ 
+--- a/VoiceCall.conf
++++ b/VoiceCall.conf
+@@ -1,6 +1,12 @@
+ # Voice Call: the same devices as HiFi (earpiece preferred) behind a verb that
+ # routes the DSP voice session (VoiceMMode1) to the RX/VA codec DMA ends and
+ # starts the pro1x-voicepcm session (see device/audio/pro1x-voice-call).
++#
++# The headset jack (HiFi.conf): headphones and headsets take the call's sound
++# while they are plugged in. The call's microphone stays the built-in one,
++# also with a headset: the DSP's voice session (q6voice's CVP) takes its tx
++# port when it is created, so a microphone switched in the middle of a call
++# would leave the call without uplink (docs/audio.md).
+ SectionVerb {
+ 	EnableSequence [
+ 		cset "name='RX_CODEC_DMA_RX_0 Audio Mixer MultiMedia1' 1"
+@@ -109,9 +115,11 @@
+ 		# The front-end route (MultiMedia1 -> RX codec DMA 0) stays on, see Pro1X.conf.
+ 	]
+ 
++	# Above the earpiece: available only while something is plugged in.
+ 	Value {
+-		PlaybackPriority 100
++		PlaybackPriority 300
+ 		PlaybackPCM "hw:${CardId},0"
++		JackControl "Headphone Jack"
+ 	}
+ }
+ 

@@ -119,6 +119,9 @@ log "UCM profile Pro1X"
 U=/usr/share/alsa/ucm2
 install -d "$U/Pro1X" "$U/sm4250"
 install -m 644 "$NIXOS"/device/audio/ucm2/Pro1X/*.conf "$U/Pro1X/"
+# The headset jack: Headphones and a Headset microphone follow the kernel's
+# jack controls (docs/audio.md; 64-ucm-install.sh for systems that exist)
+patch -s -d "$U/Pro1X" -p1 < "$REPO/patches/nixos-audio/0002-ucm-headset-jack.patch"
 # When opened by card number, alsa-lib 1.2.8 looks under
 # ucm2/<driver>/<driver>.conf (driver sm4250); only on that path is ${CardId}
 # defined.
