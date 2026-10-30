@@ -45,9 +45,14 @@
  * (Linux), the profile from profiled on the session bus.
  *
  *   pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout]
- *                 [-R none|cw|ccw|inverted] [-P pidfile] [-t themedir]
- *                 [-d dpi] [-f font] [-2]
- *       runs in the X session (with X's own screen saver off, xset s off)
+ *                 [-O minutes] [-R none|cw|ccw|inverted] [-P pidfile]
+ *                 [-t themedir] [-d dpi] [-f font] [-2]
+ *       runs in the X session (with X's own screen saver off, xset s off);
+ *       -O: the panel off (and the touchscreen asleep, the proximity
+ *       sensor unwatched) after that many minutes of the stand-by screen,
+ *       0: at once in its place (the power key brings the desktop back);
+ *       default never, as on the N9. With the panel off the SoC can
+ *       sleep (pro1x-autosleep, freebsd/pm/README.md stage 6).
  *   pro1x-standby -M [-R ...] [-t themedir] [-d dpi] [-f font] [-2]
  *       on Leste, with mce's low power mode (patches/lpm): mce decides
  *       (time-outs, proximity, the power key, the panel's lpm and
@@ -116,6 +121,8 @@ static int twelve_hour;
 static int dim_timeout = DIM_TIMEOUT_S;
 static int standby_bl = STANDBY_BL;
 static int kbd_timeout = KBD_TIMEOUT_S;
+/* -O: minutes of the stand-by screen before the panel goes off; -1 never */
+static int off_after = -1;
 /* how X's screen lies on the panel's rows, for partial mode; NULL: off */
 static const char *rotation;
 /* -M: follow mce's low power mode instead of timing it here */
@@ -727,6 +734,8 @@ struct standby {
 	int saved_bl;			/* brightness before dimming, or -1 */
 	int moves;
 	time_t moved, shown_min;
+	time_t shown_at;		/* the stand-by screen since */
+	int panel_off;			/* -O: the panel switched off */
 	double right, top;
 	int part_first, part_last;	/* partial mode as applied, or 0 */
 	struct state st;
@@ -962,6 +971,25 @@ static void undim(struct standby *sb)
 	sb->saved_bl = -1;
 }
 
+/*
+ * -O: the panel off as while covered, the touchscreen asleep, the
+ * proximity sensor no longer watched (it streams over the ADSP, whose
+ * messages would wake the CPUs): the power key brings the desktop back
+ */
+static void panel_sleep(struct standby *sb)
+{
+	if (sb->panel_off || follow_mce)
+		return;
+	debug("panel off");
+	proximity_watch(sb, 0);
+	if (!sb->near) {
+		panel_set("display", 0);
+		touch_sleep(1);
+	}
+	sb->near = 0;
+	sb->panel_off = 1;
+}
+
 static void sb_show(struct standby *sb)
 {
 	if (sb->mode == STANDBY)
@@ -981,6 +1009,12 @@ static void sb_show(struct standby *sb)
 	sb->moved = time(NULL);
 	sb->tap_time = 0;
 	place(sb->w, sb->h, 0, &sb->right, &sb->top);
+	sb->shown_at = time(NULL);
+	sb->panel_off = 0;
+	if (off_after == 0 && !follow_mce) {
+		panel_sleep(sb);
+		return;
+	}
 	sb_draw(sb, 1);
 	if (follow_mce)
 		return;
@@ -996,11 +1030,12 @@ static void sb_hide(struct standby *sb)
 		return;
 	if (!follow_mce)
 		proximity_watch(sb, 0);
-	if (sb->near) {
+	if (sb->near || sb->panel_off) {
 		touch_sleep(0);
 		panel_set("display", 1);
 	}
 	sb->near = 0;
+	sb->panel_off = 0;
 	if (sb->part_last) {
 		panel_partial(0, 0);
 		sb->part_first = sb->part_last = 0;
@@ -1054,7 +1089,7 @@ static void sb_tap(struct standby *sb, XButtonEvent *b)
 
 static void proximity(struct standby *sb, int near)
 {
-	if (sb->mode != STANDBY || near == sb->near)
+	if (sb->mode != STANDBY || sb->panel_off || near == sb->near)
 		return;
 	sb->near = near;
 	debug(near ? "near" : "far");
@@ -1311,7 +1346,10 @@ static int run_x(void)
 
 		/* sleep until the next event; timers only while needed */
 		now = time(NULL);
-		if (sb.mode == STANDBY && !sb.near) {
+		if (sb.mode == STANDBY && !sb.panel_off && off_after > 0 &&
+		    now - sb.shown_at >= off_after * 60LL)
+			panel_sleep(&sb);
+		if (sb.mode == STANDBY && !sb.near && !sb.panel_off) {
 			if (now - sb.moved >= MOVE_S) {
 				sb.moved = now;
 				place(sb.w, sb.h, ++sb.moves, &sb.right, &sb.top);
@@ -1320,6 +1358,11 @@ static int run_x(void)
 				sb_draw(&sb, 0);
 			}
 			wait = (60 - now % 60) * 1000LL;
+			if (off_after > 0) {
+				t = (sb.shown_at + off_after * 60LL - now) * 1000LL;
+				if (t < wait)
+					wait = t > 0 ? t : 0;
+			}
 		}
 		if (sb.kbd_off_ms) {
 			t = sb.kbd_off_ms - now_ms();
@@ -1405,7 +1448,7 @@ static int run_preview(const char *out, const char *size)
 static void usage(void)
 {
 	fprintf(stderr,
-	    "usage: pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout]\n"
+	    "usage: pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout] [-O minutes]\n"
 	    "                     [-R none|cw|ccw|inverted] [-P pidfile]\n"
 	    "                     [-t themedir] [-d dpi] [-f font] [-2]\n"
 	    "       pro1x-standby -M [-R ...] [-t themedir] [-d dpi] [-f font] [-2]\n"
@@ -1418,7 +1461,7 @@ int main(int argc, char **argv)
 	const char *preview = NULL;
 	int c;
 
-	while ((c = getopt(argc, argv, "s:b:k:R:P:t:d:f:p:2Mh")) != -1) {
+	while ((c = getopt(argc, argv, "s:b:k:O:R:P:t:d:f:p:2Mh")) != -1) {
 		switch (c) {
 		case 'R':
 			if (strcmp(optarg, "none") && strcmp(optarg, "cw") &&
@@ -1429,6 +1472,7 @@ int main(int argc, char **argv)
 		case 's': dim_timeout = atoi(optarg); break;
 		case 'b': standby_bl = atoi(optarg); break;
 		case 'k': kbd_timeout = atoi(optarg); break;
+		case 'O': off_after = atoi(optarg); break;
 		case 'P': pidfile = optarg; break;
 		case 't': theme = optarg; break;
 		case 'd': dpi = atof(optarg); break;

@@ -74,7 +74,8 @@ LOCAL = {
                     "pro1x-light switches the ADSP's ambient light sensor on through "
                     'libssc, prints one reading in lux and switches it off again '
                     '(tools/pro1x-light); the photo light meter asks it.', ['UNKNOWN']),
-    'pro1x-standby': ('1.0', "The Nokia N9's stand-by screen as the X screen saver",
+    # 1.1: -O, the panel off after some minutes of it (the power profile)
+    'pro1x-standby': ('1.1', "The Nokia N9's stand-by screen as the X screen saver",
                       'pro1x-standby shows the time, unread notifications and the '
                       "charging state in the style of the N9's low power mode when "
                       'X blanks the screen, the rest black for the AMOLED panel '
