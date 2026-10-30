@@ -36,6 +36,10 @@ ls /dev/input /dev/kbd* 2>/dev/null
 sysctl dev.pro1x_battery hw.acpi dev.cpu.0.freq dev.cpu.0.freq_levels \
     2>/dev/null
 
+# pro1x.test=smp|idle|suspend|usb: the power management device tests
+# (/etc/pro1x-pmtest.sh, freebsd/pm/README.md); each reboots at its end
+. /etc/pro1x-pmtest.sh
+
 # pro1x.test=power: the standby power of FreeBSD itself, here in the RAM
 # root (no desktop): the panel off (DCS), both clusters at their lowest
 # frequency (what powerd's adaptive mode gives an idle system), the

@@ -1,0 +1,51 @@
+#!/bin/sh
+# /etc/rc of PRO1XQ's root filesystem in RAM (freebsd/pm/test/qemu/run.sh):
+# the CPUs, then pm.secs (20) seconds of work that keeps waking the CPUs
+# (8 workers: xz decompression piped into md5, compared with the
+# reference, a sleep of pm.nap seconds (0.02) between the rounds), so that
+# they keep entering and leaving the idle states, with the FP/SIMD
+# registers in use (libc's memcpy and string functions use them); then
+# the idle statistics and power off (PSCI SYSTEM_OFF ends QEMU).
+PATH=/rescue; export PATH
+echo "=== pm-qemu: rc"
+# the phone's device tests (freebsd/mfsroot/etc/pro1x-pmtest.sh), as far
+# as QEMU has the hardware
+[ -z "$(kenv -q pro1x.test)" ] || . /etc/pro1x-pmtest.sh
+sysctl hw.ncpu kern.smp.cpus kern.smp.active kern.smp.disabled
+sysctl hw.psci_idle.mode hw.psci_idle.enable hw.psci_idle.depth \
+    hw.psci_idle.simulate hw.psci_idle.pc_cluster
+dmesg | sed -n -E '/^psci_idle|^CPU +[0-9]|^Release APs/p' | head -40
+mdmfs -s 96m md /tmp || { echo "!! no /tmp"; poweroff; }
+dd if=/dev/random of=/tmp/a bs=64k count=32 2> /dev/null
+ref=$(md5 -q /tmp/a)
+xz -c -1 /tmp/a > /tmp/a.xz
+secs=$(kenv -q pm.secs); secs=${secs:-20}
+nap=$(kenv -q pm.nap); nap=${nap:-0.02}
+echo "=== pm-qemu: $secs s of work, reference $ref"
+sysctl -n hw.psci_idle.stats
+worker() {
+	n=0; bad=0
+	end=$(($(date +%s) + secs))
+	while [ "$(date +%s)" -lt $end ]; do
+		got=$(xz -dc /tmp/a.xz | md5 -q)
+		[ "$got" = "$ref" ] || { bad=$((bad + 1)); echo "!! worker $1: $got"; }
+		n=$((n + 1))
+		sleep $nap
+	done
+	echo "worker $1: $n rounds, $bad wrong" > /tmp/w$1
+}
+for w in 1 2 3 4 5 6 7 8; do worker $w & done
+sleep 1
+sysctl kern.cp_times
+wait
+cat /tmp/w*
+echo "=== pm-qemu: idle statistics"
+sysctl -n hw.psci_idle.stats
+sysctl kern.cp_times
+# idle for a while: the clusters' states (every CPU down at once)
+sleep 3
+echo "=== pm-qemu: after 3 s idle"
+sysctl -n hw.psci_idle.stats
+dmesg | sed -n '/psci_idle/p' | tail -5
+echo "=== pm-qemu: done"
+poweroff

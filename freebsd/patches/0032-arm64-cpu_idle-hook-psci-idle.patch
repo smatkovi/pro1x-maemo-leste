@@ -1,0 +1,60 @@
+arm64: cpu_idle() asks a hook for a deeper idle than wfi
+
+arm64_cpu_idle_hook (freebsd/pm: psci_idle) gets the time to the CPU's
+next event from cpu_idleclock(); wfi when it is not set or declines.
+files.arm64: psci_idle and the memory-mapped timer (device psci_idle).
+
+diff --git a/sys/arm64/arm64/machdep.c b/sys/arm64/arm64/machdep.c
+index f048c584d..cc72a1e4c 100644
+--- a/sys/arm64/arm64/machdep.c
++++ b/sys/arm64/arm64/machdep.c
+@@ -310,17 +310,30 @@ cpu_idle_wakeup(int cpu)
+ 	return (0);
+ }
+ 
++/*
++ * A deeper idle than wfi, e.g. PSCI's idle states (Pro1X:
++ * arm64/qualcomm/pm/psci_idle.c), given the time to this CPU's next
++ * event; it returns non-zero when it did not idle, and wfi follows.
++ */
++int (*arm64_cpu_idle_hook)(sbintime_t);
++
+ void
+ cpu_idle(int busy)
+ {
++	int (*hook)(sbintime_t);
++	sbintime_t sbt;
+ 
++	sbt = -1;
+ 	spinlock_enter();
+ 	if (!busy)
+-		cpu_idleclock();
+-	if (!sched_runnable())
+-		__asm __volatile(
+-		    "dsb sy \n"
+-		    "wfi    \n");
++		sbt = cpu_idleclock();
++	if (!sched_runnable()) {
++		hook = atomic_load_ptr(&arm64_cpu_idle_hook);
++		if (hook == NULL || sbt <= 0 || hook(sbt) != 0)
++			__asm __volatile(
++			    "dsb sy \n"
++			    "wfi    \n");
++	}
+ 	if (!busy)
+ 		cpu_activeclock();
+ 	spinlock_exit();
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index 539369c74..667b4d626 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -749,6 +749,9 @@ dev/qcom_spmi/qcom_rtc.c			optional qcom_spmi fdt
+ dev/qcom_spmi/pro1x_battery.c			optional qcom_spmi fdt
+ dev/qcom_spmi/qcom_lpg.c			optional qcom_spmi fdt
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
++arm64/qualcomm/pm/psci_idle.c			optional psci_idle fdt
++arm64/qualcomm/pm/psci_idle_asm.S		optional psci_idle fdt
++arm64/qualcomm/pm/arm_tmr_mem.c			optional psci_idle fdt
+ 
+ # RockChip Drivers
+ arm64/rockchip/rk3328_codec.c			optional fdt rk3328codec soc_rockchip_rk3328

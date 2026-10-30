@@ -84,6 +84,8 @@ WIFI_MODULES="$WIFI_MODULES wlan_ccmp wlan_gcmp athk_common ath10k_snoc"
 # GENI UART class, new files only; APR for the audio (qcom_apr, dsp/);
 # the LPASS register windows for the FM sound's programmer (qcom_lpass)
 cp -a "$REPO/freebsd/fm/sys/." "$SRC/sys/"
+# Power management: PSCI idle states, the memory-mapped timer (pm/README.md)
+cp -a "$REPO/freebsd/pm/sys/." "$SRC/sys/"
 # The cameras (freebsd/camera/README.md): the CCI's buses, the camera
 # clocks, pins and power domain, /dev/camss (qcom_camss), new files only
 cp -a "$REPO/freebsd/camera/sys/." "$SRC/sys/"

@@ -53,6 +53,9 @@ device		aw86224			# the vibration motor on it (0019)
 # CPU frequency: the firmware's lookup table per cluster (0010)
 device		cpufreq
 device		qcom_cpufreq_hw
+# CPU idle states through PSCI, the memory-mapped timer as their wake-up
+# (pm/README.md, patches/0032); off until hw.psci_idle.enable=1
+device		psci_idle
 
 # The PMICs over SPMI: power and volume-down keys, the RTC (0011), the
 # battery (0015), the RGB status LED (0020)

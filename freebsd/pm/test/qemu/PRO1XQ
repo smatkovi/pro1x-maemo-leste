@@ -1,0 +1,37 @@
+#
+# PRO1XQ -- the Pro1X kernel's power management in QEMU's virt machine
+# (freebsd/pm/test/qemu/run.sh): SMP and the PSCI idle states with each
+# power-down played (hw.psci_idle.simulate), a PL011 console instead of
+# the phone's framebuffer and RAM console, a root filesystem in RAM.
+#
+cpu		ARM64
+ident		PRO1XQ
+
+include		"std.arm64"
+options 	FDT
+
+makeoptions	MFS_IMAGE=@MFS_IMAGE@
+options 	MD_ROOT_READONLY
+device		md
+
+device		uart
+device		pl011
+
+# the phone's kernel's power management (freebsd/PRO1X)
+device		psci_idle
+
+# the frameworks std.arm64's drivers need (as in freebsd/PRO1X)
+device		clk
+device		phy
+device		hwreset
+device		nvmem
+device		regulator
+device		syscon
+device		gpio
+
+device		loop
+device		ether
+device		crypto
+device		armv8crypto
+
+env		"@ENV_FILE@"
