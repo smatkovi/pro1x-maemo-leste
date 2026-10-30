@@ -81,6 +81,8 @@ echo "--- the ADSP"
 kldload qrtr && echo "qrtr loaded"
 kldload qcom_apr && echo "qcom_apr loaded"
 kldload qcom_lpass && echo "qcom_lpass loaded"
+# the SoundWire masters' interrupts (the jack by alert; without it polled)
+kldload qcom_swr && echo "qcom_swr loaded: $(sysctl -n dev.qcom_swr.0.stats 2>&1)"
 service pd_mapper onestart
 pro1x-dsp start adsp
 echo "ADSP start: $?"

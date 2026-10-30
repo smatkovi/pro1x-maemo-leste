@@ -1,0 +1,45 @@
+#!/bin/sh
+# pro1x-drain [MINUTES] [STEP]: the battery's drain over MINUTES (60), a
+# line every STEP minutes (10), for the power profile's device runs
+# (freebsd/pm/README.md, runs 14-16). Each line: the capacity, voltage,
+# open-circuit voltage and current of pro1x_battery, the RPM's vlow/vmin
+# counts (hw.pro1x_pm.rpm_stats), pro1x-autosleep's suspends; at the end
+# the differences and the drain per hour. Unplugged; runs in the
+# background as well (nohup), its lines also in the system log.
+min=${1:-60}
+step=${2:-10}
+case "$min$step" in *[!0-9]*) echo "usage: pro1x-drain [MINUTES] [STEP]" >&2; exit 2 ;; esac
+b=dev.pro1x_battery.0
+now() {
+	cap=$(sysctl -n $b.capacity 2> /dev/null || echo 0)
+	mv=$(($(sysctl -n $b.voltage 2> /dev/null || echo 0) / 1000))
+	ocv=$(($(sysctl -n $b.ocv 2> /dev/null || echo 0) / 1000))
+	ma=$((-$(sysctl -n $b.current 2> /dev/null || echo 0) / 1000))
+	rpm=$(sysctl -n hw.pro1x_pm.rpm_stats 2> /dev/null)
+	vlow=$(echo "$rpm" | sed -n 's/.*vlow \([0-9]*\).*/\1/p')
+	vmin=$(echo "$rpm" | sed -n 's/.*vmin \([0-9]*\).*/\1/p')
+	susp=$(sed -n 's/^suspends \([0-9]*\).*asleep \([0-9.]*\) s.*/\1 \2/p' \
+	    /var/run/pro1x-autosleep.stats 2> /dev/null)
+	set -- $susp
+	n=${1:-0}
+	asleep=${2:-0}
+}
+say() {
+	echo "$*"
+	logger -t pro1x-drain "$*"
+}
+now
+cap0=$cap; ocv0=$ocv; vlow0=${vlow:-0}; vmin0=${vmin:-0}; n0=$n; t0=$(date +%s)
+asleep0=${asleep%.*}
+say "start: $cap %, $mv mV (OCV $ocv mV), $ma mA; vlow ${vlow:--} vmin ${vmin:--}; suspends $n; $(sysctl -n hw.ncpu) CPUs, profile $(kenv -q pro1x.power || echo off), on power $(sysctl -n hw.acpi.acline 2> /dev/null)"
+t=0
+while [ $t -lt "$min" ]; do
+	sleep $((step * 60))
+	t=$((t + step))
+	now
+	say "+$t min: $cap %, $mv mV (OCV $ocv mV), $ma mA; vlow +$((${vlow:-0} - vlow0)) vmin +$((${vmin:-0} - vmin0)); suspends +$((n - n0)), asleep $((${asleep%.*} - asleep0)) s"
+done
+dt=$(($(date +%s) - t0))
+[ "$dt" -gt 0 ] || dt=1
+say "end after $((dt / 60)) min: capacity $cap0 -> $cap % ($(((cap0 - cap) * 3600 / dt)) % an hour), OCV $ocv0 -> $ocv mV ($(((ocv0 - ocv) * 3600 / dt)) mV an hour); vlow +$((${vlow:-0} - vlow0)), vmin +$((${vmin:-0} - vmin0)); $((n - n0)) suspends, asleep $((${asleep%.*} - asleep0)) of $dt s"
+[ -r /var/run/pro1x-autosleep.stats ] && sed 's/^/  /' /var/run/pro1x-autosleep.stats

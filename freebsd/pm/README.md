@@ -12,6 +12,7 @@ This directory adds, in stages:
 | 4b | the USB-C port | the Type-C detection (`pro1x_typec`, by its interrupts) built, its decoding tested |
 | 4c | host mode, USB 3, the role switch | xHCI on the DWC3, the QMP USB3 PHY (Linux's tables, checked), devd role switch: built, untested; SuperSpeed in device mode not done |
 | 5 | the PMIC RTC's alarm as the suspend's wake-up, alarmd's alarms through it | built; the registers tested on the PC against Linux's rtc-pm8xxx, the wake-up in QEMU (a PL031 in the PMIC's place), alarmd's side in the VM; device runs prepared |
+| 6 | energy: the suspend while nobody uses the phone (`pro1x-autosleep`), the power profile (`pro1x.power=on`), the jack without polling, Wi-Fi's power save, fewer wake-ups | built; the policy host tested, the daemon in the VM, wake-ups measured in QEMU and the VM; device runs prepared |
 
 Nothing here has run on the phone yet (it is unreachable until
 2026-10-31). Everything is off by default: the phone's normal start is
@@ -40,7 +41,12 @@ unchanged until the device runs below pass.
 | `../mfsroot/etc/pro1x-pmtest.sh` | the device tests in the RAM root (`pro1x.test=smp`, `idle`), sourced by `mfsroot/etc/rc` |
 | `build.sh` | the kernels: `qemu` (PRO1XQ) and `phone` (PRO1XPM = `freebsd/PRO1X` with `device psci_idle`) into `$WORK/pm-out` (`PMOUT=`: elsewhere; `LOCKNAME=`: the name in `$WORK/.kbuild-lock`) |
 | `tools/pro1x-suspend` | the Pro1X's `zzz`: panel, touch and keyboard light off, the sleep set and the hand-over, the next alarm as the RTC's alarm, suspend until the power key, the alarm or N seconds, everything back (for the root image's `/usr/local/sbin`) |
-| `test/qemu/` | PRO1XQ, its device tree (`mkdtb.py`: QEMU's virt with the SM6115's idle topology), its rc, `run.sh` |
+| `test/qemu/` | PRO1XQ, its device tree (`mkdtb.py`: QEMU's virt with the SM6115's idle topology), its rc (`pm.wake=N`: the wake-ups idle and suspended), `run.sh` |
+| `tools/pro1x-autosleep/` | the suspend while nobody uses the phone (stage 6): `policy.c` decides, `pro1x-autosleep.c` looks and runs `pro1x-suspend -k`; `test/autosleep_test.c` the policy's host test, `test/vm-autosleep.sh` the daemon in the VM |
+| `tools/pro1x-drain` | the battery's drain over an hour with the RPM's and autosleep's counts (stage 6's device runs) |
+| `test/vm-wakeups.sh` | a Hildon session's idle wake-ups in the VM (DTrace: per process, the kernel's timers, interrupts) |
+| `../patches/0036-*`, `0037-*` | `pro1x.power=on`: the profile's kernel settings; LinuxKPI 802.11: the driver's power save (`ifconfig wlan0 powersave`) |
+| `../rootfs/usr/local/etc/rc.d/pro1x_autosleep`, `pro1x_power`, `../rootfs/usr/local/etc/devd/pro1x_power.conf`, `../rootfs/usr/local/share/pro1x/power.subr` | the profile in the full system |
 
 `freebsd/build.sh` copies `sys/` into the sources like `dsp/` and `fm/`;
 `freebsd/PRO1X` has `device psci_idle` and `device pro1x_pm` (inert
@@ -692,6 +698,141 @@ limits): 0 failures.
     Expected: `ue0` and ssh with the PC, the stick with the adapter, `ue0`
     again with the PC, each change in the log (`pro1x-usbrole`).
 
+## Stage 6: energy (autosleep, the power profile, fewer wake-ups)
+
+Everything here is off by default; one switch, `pro1x.power=on` in
+`freebsd/cmdline`, turns it on once the device runs below have
+confirmed the parts (each part also has its own switch).
+
+**Measured on the PC (2026-10-30).** QEMU (PRO1XQ, the rc's `pm.wake=30`:
+every idle entry counted by `hw.psci_idle.stats`, 30 s idle, then 30 s
+suspended in 5 s epochs; `run.sh NAME "hw.psci_idle.enable=1
+hw.psci_idle.simulate=1 pm.wake=30 pm.secs=1"`):
+
+| | awake, idle | suspended |
+| --- | --- | --- |
+| one CPU (`-smp 1`, the phone's default) | 16.7 wake-ups a second | 0.57 (11 between the epochs, 6 of CPU 0) |
+| eight CPUs, the clusters' states (`pc_cluster=1`) | 33.9 | 6.4 (143 between the epochs, 42 of the frozen CPUs, 6 of CPU 0) |
+
+The first run found a bug: with one CPU the suspend panicked at once
+(`intr_ipi_send: not setup IPI 0`: no IPIs exist without other CPUs);
+device run 6 on one CPU would have stopped there. Fixed (the freeze
+sends IPIs only with more than one CPU).
+
+The VM's Hildon session (`test/vm-wakeups.sh`: started as on the phone,
+left 60 s, then 60 s under DTrace): with osso-systemui-alarm missing
+from the VM, systemui ended at once and `hildon-session` restarted it
+every 2 s, which with D-Bus, syslogd, ConsoleKit and polkit made about
+85 wake-ups a second (systemui 1811, Xvfb 1323, dbus-daemon 741 in 60 s).
+With the plugin installed the idle session's whole user space wakes
+about 2.6 times a second (dbus-daemon 32, hildon-sv-notification 29,
+gconfd-2 23, gvfs-udisks2-volume 20, polkitd 14, nsv-decoder-service 13,
+hildon-desktop 4, alarmd 2 in 60 s). The restart now backs off (4, 8, 16
+... up to 300 s; host check: 5 starts in 62 s instead of 31). FreeBSD's
+kernel itself, measured there too: the page daemon 10 a second (its
+inactive scan's pace, `VM_INACT_SCAN_RATE`), the buffer daemons 6, the
+random harvester 9 (1 on the phone, `patches/0027`), IGMP's and MLD's
+fast timeouts 5 each and their slow ones 2 each, IPv6's fragment timer 2,
+the kernel log 4.75 (`kern.log_wakeups_per_second=1` in
+`rootfs/etc/sysctl.conf` now), syncer and vnlru 1 each. The page daemon's
+and IGMP/MLD's timers would need kernel changes; while suspended they
+run only between the epochs.
+
+Our daemons, changed: `pro1x-audiod` woke every second for nothing (its
+poll timeout) and every 100 ms for the jack (a SoundWire command each,
+the bus and the TX macro's clocks running for good): now it sleeps until
+something is due, the jack comes by interrupt (below; `auto` checks it
+with a read every 2 s, `clkstop` not at all). `pro1x-modemd` asked the
+modem for the signal every 30 s (the modem woken, its answer a GLINK
+interrupt that ends a suspend): no longer while the panel is off or
+shows the stand-by screen; its timer for long SMS ran once a minute for
+good: now only while parts wait.
+
+**The jack without polling** (`../audio/README.md`, "The headset jack"):
+`qcom_swr.ko` hands swr0's interrupt lines (the master's, SPI 296, and
+the wake-up while its clock is stopped, SPI 79) to `pro1x-audiod`, which
+handles the WCD9370's SoundWire alerts as Linux's `soundwire-qcom` does
+and stops the bus' clock between events (`pro1x_audiod_jack`:
+`auto` by default, `clkstop` with the profile; `poll` as before).
+
+**pro1x-autosleep** (`tools/pro1x-autosleep`, `rc.d/pro1x_autosleep`):
+Android's autosleep and mce/dsme's policy, Leste's `pro1x-autosuspend`
+for FreeBSD. It suspends (`pro1x-suspend -k`: the panel as it is, the
+next alarm as the RTC's, none within 70 s of one) when the display has
+been off, or showing the stand-by screen (`-L`: not then), for 30 s
+(`-D`) and nothing holds the phone up: sound (`pro1x-audioctl status`:
+a stream, a voice session, FM), a call (`pro1x-callaudio` runs), a
+transfer (the interfaces' bytes, more than 4 KiB a second), the USB
+network (`ue0` up), external power (`hw.acpi.acline`; `-P`: also then),
+the file `/var/run/pro1x-autosleep.inhibit`. A device interrupt ends the
+freeze; after the power key or the RTC alarm (INTID 215) it stays up
+30 s, after the modem's interrupts (100, 102) 10 s (a call then holds it
+up by itself), after a wake-up from user space or the deadline 30 s
+(`-a`), after anything else 2 s (`-s`); `-w "215:30 100:10 102:10"`.
+Every suspend goes to the log with its end (`... ended by INTID 215 (a
+device: the power key) [INTID 215 (gic0,s183: ...)]; up 30 s`), the
+totals per interrupt to `/var/run/pro1x-autosleep.stats` (`service
+pro1x_autosleep stats`, also on SIGUSR1). A cable or a charger raises no
+interrupt that ends the freeze: devd's `pro1x_power.conf` (Type-C
+attach, the battery's change on external power) ends it through
+`hw.pro1x_pm.wake=1`, seen between the epochs. Tested: the policy on the
+PC (`cc -I freebsd/pm/tools/pro1x-autosleep -o /tmp/ast
+freebsd/pm/test/autosleep_test.c
+freebsd/pm/tools/pro1x-autosleep/policy.c && /tmp/ast`, 30 checks), the
+daemon in the VM (`test/vm-autosleep.sh`, its test mode `-T`: the
+display from files, a stand-in for `pro1x-suspend`: 10 checks: none
+with the display on, the delay, the stays, a call and the inhibit file
+holding it up, the statistics).
+
+**The modem's interrupts and the freeze.** FreeBSD's GLINK edge to the
+modem (SPI 68, INTID 100) and its SMP2P (SPI 70, INTID 102) are real
+interrupts (`bus_setup_intr` in `../dsp/.../qcom_glink.c`,
+`qcom_smp2p.c`). The freeze changes nothing in the GIC: no enable, no
+priority mask; only the CPU's own interrupt mask is set while it waits,
+which `wfi` ignores. So a message from the modem ends a suspend as the
+power key does (the CPU the SPI goes to sees it pending and tells CPU 0).
+vlow/vmin are another matter: neither interrupt is an MPM pin (the
+device tree's `qcom,mpm-pin-map`: 5/296 and 24/79 SoundWire, 12/422 and
+90, 91/260 USB, 86/183 the SPMI arbiter), and while the SoC sleeps the
+GIC has no clock: only the MPM's pins and timer wake the apps processor.
+Whether the modem, itself one of the RPM's masters and awake when it
+sends, gets the apps processor's interrupt through anyway is not known.
+Until device run 21 shows it, `hw.pro1x_pm.mpm_veto` ("100 102") skips
+the hand-over while either interrupt is enabled: no vlow/vmin while the
+modem is up (Linux's mainline MPM driver has no such check; Leste's
+notify_rpm test asks the same). The MPM pins of the map now follow their
+SPIs (`hw.pro1x_pm.mpm_spi=1`): the SoundWire lines are pins while armed.
+
+**Wi-Fi's power save** (`patches/0037`): LinuxKPI's 802.11 never gave a
+driver power save (`vif->cfg.ps` hard off, `IEEE80211_C_PMGT` not
+offered), so ath10k switched the WCN3990's off as soon as its vdev
+started (`WMI_STA_PS_MODE_DISABLED`): the receiver on between beacons.
+Now `ifconfig wlan0 powersave` (taking effect at the next association)
+reaches the firmware as mac80211 would (`vif->cfg.ps`, `BSS_CHANGED_PS`,
+a dynamic timeout of 100 ms). Built, not tried with the chip (ath10k's
+comment on some firmware's unstable STA power save applies).
+
+**The switches:**
+
+| | what | default |
+| --- | --- | --- |
+| `pro1x.power=on` (`freebsd/cmdline`) | all of the profile: in the kernel `kern.smp.disabled=0`, `hw.psci_idle.enable=1` (`patches/0036`, below the command line's own settings), in user space the rest of this table | off |
+| `pro1x_power_enable="YES"` (`rc.conf`, above its profile block) | the user space half (the CPUs' idle states then without OS-initiated mode: the cores' only) | NO |
+| `pro1x_autosleep_enable`, `pro1x_autosleep_flags` | the suspend while nobody uses the phone | NO (profile: YES) |
+| `pro1x_audiod_jack` | the jack: `poll`, `irq`, `auto`, `clkstop` | `auto` (profile: `clkstop`) |
+| `ifconfig_wlan0="WPA DHCP powersave"` | Wi-Fi's power save | off (profile: on) |
+| `powerd_flags` | `-p 1000`: the load looked at once a second | `-p 500` (profile: 1000) |
+| `pro1x.usbrole=1` (kenv) | the USB controller follows the cable (`pro1x-usbrole`, stage 4c): the gadget off without one | off (profile: on) |
+| `pro1x.standby_off=N` (kenv) | the panel off after N minutes of the stand-by screen (`pro1x-standby -O`), 0 at once | never (profile: 10) |
+| `hw.pro1x_pm.mpm_veto`, `mpm_spi` | above | "100 102", 1 |
+| `hw.pro1x_pm.wake=1` | ends a suspend in progress | |
+| `service pro1x_power status` | what is on, the last suspend, the RPM's counts | |
+
+Not done: the page daemon's and IGMP/MLD's kernel timers; sensor
+batching (the stand-by screen's proximity sensor is unwatched once the
+panel goes off, `-O`); the display controller's own power-down with the
+panel off (the DPU keeps scanning out; the panel's DCS off only).
+
 ## Device runs (prepared, for 2026-10-31)
 
 The kernel: `WORK=... bash freebsd/pm/build.sh phone` gives
@@ -884,6 +1025,61 @@ phone N seconds after the start whatever happens.
     `../hildon/README.md`; else the profile's alarm volume). The power key ends the suspend as before (`ended by INTID 215
     (a device: the power key)`); the RTC's alarm then stays set and fires
     while awake, which is harmless.
+
+**Stage 6** (the full system: the joint image with this stage's parts,
+the kernel with `patches/0036` and `0037`; unplugged unless said):
+
+18. **The jack by interrupt** (needs the trace's `[jack-up]`/`[jack-down]`
+    and run audio-jack of `../audio/README.md`): as audio-jack with
+    `pro1x.audio_opts="-j irq"`. Expected: `/dev/qcom_swr0: master INTID
+    328, wake-up INTID 111`, `swr0: device 3: SCP interrupts unmasked`,
+    `jack: watched (...; irq)`; every plug, unplug and button as with
+    polling, `pro1x-audioctl jack` with `polls=0` and `wcd_alerts` growing.
+    Then `-j clkstop`: `clock_stops` +1 about 3 s after each event, a
+    plug while stopped `wakeups` +1 and the detection as before;
+    `sysctl dev.qcom_swr.0.stats` counts both lines. Failure signs: `jack:
+    status ... latched without an alert` (in `auto` the fall-back to
+    polling: the WCD did not alert; IntMask1, the master's level mode);
+    no wake-up while stopped (again with `-W`: WakeUpEnable; else the
+    wake-up line, SPI 79); a hang at the clock stop (the master read
+    unclocked: the log's last `codec: [jack-down]`).
+19. **Autosleep by hand** (with someone at the phone): FreeBSD into Hildon,
+    `service pro1x_autosleep onestart`, the power key for the stand-by
+    screen, 2 minutes. Expected in `/var/log/messages`: `pro1x-autosleep:
+    on: ...`, after 30 s `suspended N s ..., ended by ...`; the power key
+    brings the desktop back within a second (`ended by INTID 215 (a
+    device: the power key)`), the stand-by screen's minute keeps going
+    (at most 5 s late); a call or an SMS ends a suspend (`ended by INTID
+    100`). `touch /var/run/pro1x-autosleep.inhibit`: no suspend.
+20. **The drain** (needs 19): an hour each, unplugged, the display in the
+    stand-by screen, the same Wi-Fi and modem state, `nohup pro1x-drain 60
+    10 &` on the console or over ssh, the lines then in `/var/log/messages`:
+    (a) as today (no `pro1x.power`), (b) `pro1x.power=on`, (c) (b) with
+    `pro1x.standby_off=0` (the panel off). Compare `% an hour`, `mV an
+    hour` (OCV) and `asleep N of 3600 s`.
+21. **vlow/vmin and the modem** (during 20 (c)): `hw.pro1x_pm.rpm_stats`
+    before and after: `vetoed N (last by INTID 100)` while the modem is
+    up. Then `sysctl hw.pro1x_pm.mpm_veto=""` and an SMS and a call to the
+    phone while it is suspended: `ended by INTID 100` within seconds, and
+    `vlow +N`/`vmin +N` meanwhile: the veto can go (`hw.pro1x_pm.mpm_veto=""`
+    in the profile). The call only after up to 5 s (the next epoch) or
+    lost: keep it. Without the modem (`pro1x_modem` off) `vetoed` stays.
+22. **What wakes it** (after 20): `service pro1x_autosleep stats`: the
+    suspends per interrupt. Frequent ones that are no wake-up source
+    (Wi-Fi's copy engines, the ADSP's GLINK 309 for sensors, the battery's
+    ADC) are the next targets.
+23. **Wi-Fi's power save** (with Wi-Fi up, `pro1x.power=on` or by hand:
+    `ifconfig wlan0 powersave` and a reconnect): `ifconfig wlan0` shows
+    `powersavemode ON`; from the PC `ping` the phone: answers 100-300 ms
+    late while it is quiet (the listen interval), the transfer as before
+    (`fetch` of a large file); `dev.pro1x_battery.0.current` lower than
+    with `-powersave`. Failure signs: disconnects (`wlan0: link state
+    changed to DOWN`): `-powersave` again, a firmware with unstable STA
+    power save.
+
+Runs 1-4 (SMP, the CPUs' idle states) and 6-7 (the suspend, now also on
+one CPU without the IPI panic) are the profile's kernel half;
+`pro1x.power=on` turns on what they test.
 
 The vMPM hand-over and the sleep set are the parts with the most
 unknowns: they are copied from Linux and KolibriOS, neither of which

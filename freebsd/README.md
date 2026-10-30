@@ -198,7 +198,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | battery, charging | state of charge (`pro1x_battery`); the charger itself runs as the bootloader set it |
 | clock across power off | yes, with Leste's offset (`qcom_rtc`); wake alarms: alarmd's into the RTC's alarm, which ends a suspend (`pm/README.md`, untested on the phone) |
 | CPU frequency, all CPUs | frequency yes; all eight CPUs from `kern.smp.disabled=0` (run 10 tests it) |
-| power management (autosuspend, CPU idle states) | `powerd` only: CPUs idle with `wfi`, no deeper idle states, no suspend on arm64 (`docs/power-management.md`, FreeBSD) |
+| power management (autosuspend, CPU idle states) | `powerd` by default; built, untested on the phone and off until the device runs: the CPUs' PSCI idle states, suspend-to-idle with the SoC's sleep, the suspend while nobody uses the phone (`pro1x-autosleep`), all of it with one switch, `pro1x.power=on` in `freebsd/cmdline`, which also stops the jack's SoundWire bus between its events, turns on Wi-Fi's power save, the USB role switch and the panel off after 10 minutes of the stand-by screen (`pm/README.md`, stage 6) |
 | storage | UFS on the link Linux brought up; no SD card |
 | Hildon, Xfce | yes, switchable |
 | USB (network to the PC, host) | not yet: FreeBSD's dwc3 is host only, and Linux takes the controller down at kexec |
@@ -244,6 +244,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `patches/0023-*` … `0028-*` | power, checked against the Nokia N9: watchdog fed every 15 s, held keys scanned every 30 ms, UFS Auto-Hibernate, the battery read by time with events for devd, the random harvester at 1 Hz once seeded, the touchscreen's sleep (`docs/power-management.md`) |
 | `patches/0029-*` | shared GEOM nops (`kern.geom.nop.shared`): the writable pool's ranges inside userdata |
 | `patches/0035-*` | `qcom_rtc`'s alarm as a wake-up (`dev.qcom_rtc.0.wakealarm`), `power_wakeup` for the suspend (`pm/README.md`) |
+| `patches/0036-*`, `0037-*` | `pro1x.power=on`: the power profile's kernel settings (all CPUs, their idle states); LinuxKPI 802.11: the driver's power save, `ifconfig wlan0 powersave` (`pm/README.md`, stage 6) |
 | `mfsroot/etc/pro1x-pool.sh` | the writable pool through the file's blocks, boot environment menu |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |
 | `rootzfs.sh` | the root image as a ZFS pool |

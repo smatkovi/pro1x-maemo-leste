@@ -15,7 +15,7 @@ over APR) already have.
 | 2 | capture: VA macro DMIC3 to `VA_CODEC_DMA_TX_0` (the headset's analog mic on `TX_CODEC_DMA_TX_3`) | the same, the `mic` sequences | as stage 1 |
 | 3 | sound(4): `/dev/dsp`, `/dev/mixer` | `snd_pro1x.ko` (kernel) + `pro1x-audiod` | built; tried in the VM with a simulated ADSP |
 | 4 | Hildon: PulseAudio on `/dev/dsp`, the volume keys and bar; calls | `pro1x-volume-keys`; `voice` for the modem agent (`pro1x-callaudio`) | built; voice host tested |
-| jack | headphones and headsets: the WCD9370's MBHC, the routes following the plug, the headset's buttons; events for devd, evdev and the socket | `mbhc.c` (Linux's wcd-mbhc-v2.c), `[jack-up]` from the trace's `jack` scenario | built; host tested against a simulated MBHC; devd event tried in the VM |
+| jack | headphones and headsets: the WCD9370's MBHC, the routes following the plug, the headset's buttons; events for devd, evdev and the socket; its interrupts as SoundWire alerts, the bus' clock stopped between them | `mbhc.c` (Linux's wcd-mbhc-v2.c), `swr.c`'s interrupts, `qcom_swr.ko`, `[jack-up]` from the trace's `jack` scenario | built; host tested against a simulated MBHC and a simulated master with alerts and clock stop; devd event tried in the VM |
 
 Nothing here has run on the phone (unreachable until 2026-10-31).
 Nothing is heard before the trace's sequences: without them the ADSP
@@ -180,8 +180,15 @@ its registers; 4 its RX device on swr1), the command FIFO (one byte per
 command, ids 1-14 then 0, broadcasts with id 15 waiting for
 `SPECIAL_CMD_ID_FINISHED`), a stream's ports on master and slave from the
 device tree's `qcom,ports-*` tables (the WCD937x's ports are SIMPLE with
-lane control and no prepare handshake) and the bank switch. No
-interrupts: FreeBSD has no driver for the masters' SPIs.
+lane control and no prepare handshake) and the bank switch. The master's
+interrupt (`swr_irq`, Linux's `qcom_swrm_irq_handler`): a slave's alert
+(its `SCP_INT1`, the implementation-defined bit to the WCD's handler,
+acknowledged), status changes (a device back: `SCP_IntMask1` unmasked
+again, as `sdw_initialize_slave`), command errors, clashes; the clock
+stop and start of Linux's runtime PM with clock stop (`swr_clock_stop`:
+ClockStopNow by broadcast, no prepare for a simple clock stop slave;
+`swr_clock_start`: the bus clock, the clash unmasked, the frame
+generator). The lines are `qcom_swr.ko`'s (below).
 
 **The WCD9370's probe** (`backend.c` `wcd_init`, sequence line `swr
 wcd-init`): `wcd937x_io_init` with its efuse-dependent branches and the
@@ -313,20 +320,42 @@ Linux logged "missing qcom,mbhc-buttons-vthreshold-microvolt" and took
 500000 "mV" for all eight, which the registers truncate to 0 mV. Patch 0027
 (pro1x.9) gives it the vendor's values (`docs/audio.md`).
 
-FreeBSD has no driver for the masters' interrupts, so the daemon reads
-`DIGITAL_INTR_STATUS_0` over SoundWire every 100 ms (one command), which
-needs swr0's bus running all the time: `[jack-up]` (from the trace's
-`jack` scenario: what Linux wakes to serve the WCD's interrupt, the TX
-macro's clocks and resume, swr0's CGCR reset and master) runs at the
-daemon's start and stays up; the registers it wrote are held: other
-sections leave those very registers and that master alone (a route's
-back end would otherwise switch the TX macro off under the jack), and the
-q6afe clocks and votes are counted. Without `[jack-up]` (no trace yet) the
-jack is not watched. `-J` turns it off (the power of the TX macro's
-clocks and the bus, not measured). Later: SoundWire clock stop and the
-wake interrupt in a small kernel driver, or the bus started for a poll
-every few seconds (the MBHC runs on its own RCO clock and latches its
-interrupts meanwhile).
+**The interrupts** (`qcom_swr.ko`, `/dev/qcom_swr0`): an interrupt-only
+driver on swr0's device tree node hands the master's line (SPI 296,
+INTID 328) and its wake-up line (SPI 79, INTID 111) to the daemon, as
+Linux's `uio_pdrv_genirq` would: the filter masks the line in the GIC,
+the daemon (with the master clocked) handles and clears the master's
+status and arms the line again (`QCOM_SWR_ARM`); the kernel never reads
+the master, whose clock is the TX macro's. The master's line runs in
+level mode (Linux: pulse, with a rising edge asked of the GIC). After
+`[jack-up]` the daemon unmasks the WCD's SCP interrupts (`SCP_IntMask1`:
+implementation-defined, clash, parity; Linux's `sdw_initialize_slave`,
+which no trace shows) and from then on the MBHC's interrupts arrive as
+alerts: `swr_irq` finds the alerting device, its implementation-defined
+interrupt runs `mbhc_irq` (the latched `DIGITAL_INTR_STATUS_0`, until
+none is left), and only the MBHC's own timers (the corrections, a long
+press) wake the daemon besides.
+
+`pro1x-audiod -j` (`rc.d/pro1x_audiod`: `pro1x_audiod_jack`):
+
+| mode | | |
+| --- | --- | --- |
+| `poll` | `DIGITAL_INTR_STATUS_0` read every 100 ms | swr0's bus and the TX macro's clocks run all the time |
+| `irq` | the alerts | the bus runs, no polling |
+| `auto` (default) | `irq` where `/dev/qcom_swr0` is, else `poll`; checked by one read every 2 s: a latched interrupt without an alert twice and it polls from then on | the bus runs |
+| `clkstop` (the power profile's) | the alerts, and 3 s (`-C`) after the last event the bus' clock stopped (ClockStopNow), the TX macro's clocks off (`[jack-sleep]`, else the trace's `[jack-down]`), the wake-up line armed; a plug or a button wakes it: `[jack-wake]`, else `[jack-up]` with its master init and enumeration taken as the clock's start (Linux's resume after a clock stop: the CGCR reset, no new init), then the alert | with nothing in the jack the ADSP's TX core clocks and votes are off, so the LPASS can sleep |
+
+Anything else that needs swr0, the TX macro or the WCD (a back end's
+sequence, a register by hand) starts the clock first; no clock stop while
+a back end, a call or FM is up. `-W` writes the WCD's WakeUpEnable at
+each stop (Linux does not for a simple clock stop slave; device run 18
+of `../pm/README.md` tries both). Both lines are MPM pins (5, 24):
+`pro1x_pm` enables them while they are armed, so the jack wakes the SoC
+from vlow/vmin too. `pro1x-audioctl jack` counts polls, alerts, the
+WCD's interrupts, misses, clock stops and wake-ups.
+
+Without `[jack-up]` (no trace yet) the jack is not watched. `-J` turns it
+off.
 
 What follows a plug:
 
@@ -411,7 +440,14 @@ under ASan and UBSan:
   WCD9370 behind it (init's registers, the enumeration's id
   `0x230217010a00` from the enumerator's byte order, command packing and
   id wrap, reads, a stream's slave and master registers, the bank
-  switch's broadcast); the voice session (six commands up, five down,
+  switch's broadcast); the master's interrupts (an alert with the
+  callback and the acks, IntMask1 unmasked, a status change, a command
+  error, the clock stop's broadcast and the start); the jack by alerts
+  (a plug's alert, the clock stopped 3 s later with the TX macro's clock
+  off and the wake-up armed, a plug while stopped waking it without a new
+  init, a back end waking it first, none while a back end is up, the
+  fall-back to polling, the poll mode as before; no access to the master
+  while its clock is off); the voice session (six commands up, five down,
   handles from the answers' source ports, a refused CVP undone);
   `base.seq` and trace2seq's output parsed;
 - `trace2seq.py --selftest`: a synthetic trace in the script's and
@@ -453,7 +489,7 @@ out as `/host/freebsd/` wants them, with the command lines
 | audio-rec | `pro1x.test=audio pro1x.audio=rec hint.qcom_wdt.0.lifetime=420` | play, then `pcm: capture started: session 2, ... port 0xb021`; `record: 144000 frames in 3.0 s, peak P` (P above the noise floor with the `mic` sequences) |
 | audio-codec | `pro1x.test=audio pro1x.audio=codec hint.qcom_wdt.0.lifetime=480` (needs the trace's sequences) | rec, then `seq check-hph`: no `... is 0x.., Linux had 0x..` lines (or the registers that differ), `swr0 (sequence): version 0x1060000, status 0x1, ... slaves 0x..`, the same for swr1, `check-mic` |
 | audio-voice | `pro1x.test=audio pro1x.audio=voice hint.qcom_wdt.0.lifetime=540` | codec, then `voice: up (MVM 0x.., CVP 0x..)` or the ADSP's status of the refused step (without a call the passive session may be refused); `voice stop` |
-| audio-jack | `pro1x.test=audio pro1x.audio=jack hint.qcom_wdt.0.lifetime=600` (by hand, the screen says when: headphones out, in, a headset in, its button short and held, out, headphones in; needs the trace's `[jack-up]`) | play, then `jack: MBHC set up`, `jack: watched (N registers held, masters 0x1)`; per change `jack: removed`/`jack: something inserted`, `jack: headphone`/`headset`, `jack: detection done: headset (NNN mV)`, `route hph -> spk` and back, `jack: button 0x1 pressed`/`released`; `status` with `in_use=hph/amic`; a tone after each change on the route in use; the watcher's `event jack ...` lines; `check-jack`: the MBHC's registers against Linux's |
+| audio-jack | `pro1x.test=audio pro1x.audio=jack hint.qcom_wdt.0.lifetime=600` (by hand, the screen says when: headphones out, in, a headset in, its button short and held, out, headphones in; needs the trace's `[jack-up]`) | play, then `qcom_swr loaded`, `jack: MBHC set up`, `swr0: device 3: SCP interrupts unmasked`, `jack: watched (N registers held, masters 0x1; irq, checked by a slow poll)` (`pro1x.audio_opts="-j poll"`: as before, polled; `-j clkstop`: `../pm/README.md` run 18); per change `jack: removed`/`jack: something inserted`, `jack: headphone`/`headset`, `jack: detection done: headset (NNN mV)`, `route hph -> spk` and back, `jack: button 0x1 pressed`/`released`; `status` with `in_use=hph/amic`; a tone after each change on the route in use; the watcher's `event jack ...` lines; `check-jack`: the MBHC's registers against Linux's |
 
 `pro1x.audio_trace=1` logs every register access (`-T`);
 `pro1x.audio_opts=` passes options to the daemon. A new trace's sequences
@@ -503,12 +539,14 @@ names the register).
   the sequence's `gpio 85 1`), `-i /dev/iicN` names it.
 - **Power**: the codec stays powered while a back end is up and 3 s
   after; the rails stay on. The jack keeps swr0's bus and the TX macro's
-  clocks running (`-J` without).
+  clocks running unless `-j clkstop` (`-J`: no jack).
 - **The jack**: `mbhc.c` was tested against a simulated MBHC only (its
   ADC as a divider on the mic line, its interrupt status latched until
-  cleared); the polling makes an insertion's report up to 100 ms later
-  than an interrupt would, and the 3 s of corrections happen in steps
-  between other work. A plug in at the daemon's start is seen when the
+  cleared), its alerts and the clock stop against a simulated master; the
+  real WCD's alert and wake-up are the device run's (`auto` falls back to
+  polling should the alert not come). Polled, an insertion's report is up
+  to 100 ms later than an interrupt's, and the 3 s of corrections happen
+  in steps between other work. A plug in at the daemon's start is seen when the
   mechanical detection fires (or not at all: then a re-plug).
   In the VM devd logged the `JACK` notification; the `BUTTON` one reached
   snd_pro1x's sysctl but not devd's log yet (to check: its quoted value).
@@ -527,7 +565,8 @@ names the register).
 | `tools/pro1x-audiod/pcm.c` | the streams between `/dev/pro1x_pcm` and ASM |
 | `tools/pro1x-audiod/backend.c` | the back ends, the AFE ports, clocks, votes, FM, the WCD's init |
 | `tools/pro1x-audiod/codec.c` | the sequences: parser and runner |
-| `tools/pro1x-audiod/swr.c` | the SoundWire masters |
+| `tools/pro1x-audiod/swr.c` | the SoundWire masters, their interrupts and clock stop |
+| `sys/arm64/qualcomm/audio/qcom_swr.c`, `qcom_swr.h`, `sys/modules/qcom_swr/` | `qcom_swr.ko`: the masters' interrupt lines for the daemon (`/dev/qcom_swrN`) |
 | `tools/pro1x-audiod/voice.c` | the voice session |
 | `tools/pro1x-audiod/mbhc.c` | the headset jack (MBHC) |
 | `tools/pro1x-audiod/main.c` | the loop, the platform (windows, GPIOs, rails, I2C), the control socket |
