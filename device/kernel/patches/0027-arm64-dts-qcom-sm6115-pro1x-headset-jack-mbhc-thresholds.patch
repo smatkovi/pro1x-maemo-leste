@@ -1,0 +1,51 @@
+Subject: [PATCH] arm64: dts: qcom: sm6115-pro1x: the headset jack's MBHC thresholds
+
+The sound card registers the WCD9370's jack (sm8250.c, through
+qcom_snd_wcd_jack_setup on the TX_CODEC_DMA_TX_3 link: the "Headset
+Jack" input device, the "Headphone Jack" and "Mic Jack" controls) and
+wcd937x starts its MBHC, but the codec node had no MBHC properties.
+wcd_dt_parse_mbhc_data() then logs "missing
+qcom,mbhc-buttons-vthreshold-microvolt" and sets every button threshold
+to 500000, which wcd937x_mbhc_program_btn_thr() takes as millivolts:
+(500000 * 2 / 25) & 0x3f is 0, so all eight thresholds were 0 mV and
+the headset buttons could not be told apart.
+
+The thresholds are the Pro1X vendor kernel's (bengal.c,
+def_wcd_mbhc_cal: 75, 150, 237 mV, then 500 mV), the same as every
+upstream WCD93xx board. The headset and headphone thresholds equal the
+driver's defaults (1.7 V, 50 mV) and are given as the other boards do.
+The vendor device tree has qcom,msm-mbhc-hphl-swh and gnd-swh = 1
+(normally open), which is the binding's default (no
+*-normally-closed), and no US/Euro switch GPIO.
+
+The jack's DAPM pins stay unrouted on purpose: the AW87339s sit behind
+the WCD9370's HPH outputs, so a "Headphone Jack" widget behind
+HPHL/HPHR would end the codec outputs' endpoint status and switch the
+loudspeaker path with the jack. User space switches by the controls
+(UCM JackControl).
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts b/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
+index 703dfd9731..91755b757a 100644
+--- a/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
++++ b/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
+@@ -407,6 +407,20 @@ wcd9370: audio-codec {
+ 		qcom,micbias3-microvolt = <1800000>;
+ 		qcom,micbias4-microvolt = <1800000>;
+ 
++		/*
++		 * The headset jack (MBHC). The button thresholds are the vendor
++		 * kernel's (bengal.c, def_wcd_mbhc_cal): without them the driver
++		 * takes 500000 for each, in millivolts, which the threshold
++		 * registers (6 bits of mV * 2 / 25) truncate to 0. Headset and
++		 * headphone thresholds as the driver's defaults. The L-detect and
++		 * ground switches are normally open (vendor qcom,msm-mbhc-hphl-swh
++		 * and gnd-swh = 1), the binding's default; no US/Euro switch.
++		 */
++		qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000 237000 500000
++							  500000 500000 500000 500000>;
++		qcom,mbhc-headset-vthreshold-microvolt = <1700000>;
++		qcom,mbhc-headphone-vthreshold-microvolt = <50000>;
++
+ 		qcom,rx-device = <&wcd937x_rx>;
+ 		qcom,tx-device = <&wcd937x_tx>;
+ 
