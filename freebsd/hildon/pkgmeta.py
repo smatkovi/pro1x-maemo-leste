@@ -42,6 +42,10 @@ LOCAL = {
                    "A control panel applet: Hildon in Maemo's style or in the Nokia "
                    "N9's (pages and edge swipes, patches/meego), or Xfce in its "
                    'place (apps/pro1x-look).', ['UNKNOWN']),
+    'pro1x-camera': ('1.0', "The Pro1X's cameras for Hildon",
+                     'pro1x-camera shows the viewfinder, focuses on a tap and takes '
+                     'pictures into MyDocs/DCIM through /dev/camss0 of qcom_camss.ko '
+                     '(freebsd/camera).', ['GPLv2']),
     'pro1x-steps': ('1.0', "The Pro1X's hardware step counter on D-Bus",
                     "pro1x-steps reads the ADSP's pedometer through libssc and "
                     'serves the count as org.pro1x.Steps on the system bus '

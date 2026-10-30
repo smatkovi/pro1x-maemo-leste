@@ -549,6 +549,18 @@ fm_app() {
 	cp -a "$PR/." "$STAGE/"
 }
 
+# The camera app (freebsd/camera/app): Hildon on pro1x-cam's code and
+# qcom_camss.ko's /dev/camss0 (freebsd/camera/README.md)
+camera_app() {
+	log "pro1x-camera"
+	PR=$H/pkgroot/pro1x-camera
+	rm -rf "$PR"
+	WORK=$WORK bash "$REPO/freebsd/camera/app/build-app.sh" "$PR" \
+	    > "$BUILD/pro1x-camera.out" 2>&1 ||
+	    { tail -20 "$BUILD/pro1x-camera.out"; return 1; }
+	cp -a "$PR/." "$STAGE/"
+}
+
 # The Events page of the MeeGo-like look (tools/pro1x-events, its
 # calendar through calendar-backend's C++ API: calendar.cpp) and its
 # control panel applet, the sections, the weather's place and the Mastodon
@@ -810,6 +822,9 @@ if [ $# -eq 0 ] || [[ " $* " == *" pro1x-look "* ]]; then
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-fm "* ]]; then
 	fm_app || failed+=(pro1x-fm)
+fi
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-camera "* ]]; then
+	camera_app || failed+=(pro1x-camera)
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-events "* ]]; then
 	events_page || failed+=(pro1x-events)

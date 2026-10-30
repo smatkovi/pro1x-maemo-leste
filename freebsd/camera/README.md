@@ -260,10 +260,11 @@ viewfinder), "Take picture", Enter or the camera key take one at full
 size with exposure and the focus found into `~/MyDocs/DCIM/<date>.jpg`,
 "Switch camera" changes cameras. A worker thread owns the camera; GTK is
 only touched from the main loop. `app/build-app.sh` builds it against
-`hildon/build.sh`'s sysroot (`build-camera.sh` calls it); it is not yet a
-part of `hildon/build.sh` (that build was running), so it is not in the
-image: for the device run it comes from `/host/freebsd/camera/`. Built,
-not run anywhere: no viewfinder without the phone.
+`hildon/build.sh`'s sysroot (`build-camera.sh` calls it), and it is the
+part `pro1x-camera` of `hildon/build.sh` (package metadata in
+`pkgmeta.py`): staged, so the next root image has it; until then the
+device run takes it from `/host/freebsd/camera/`. Built, not run
+anywhere: no viewfinder without the phone.
 
 ## Host tests
 
