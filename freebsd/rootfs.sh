@@ -111,6 +111,13 @@ for s in m.get("scripts", {}).values():
 		    -e '^\./usr/local/include/' -e '\.a$' -e '/pkgconfig/' \
 		    -e '^\./usr/local/share/man/' -e '^\./usr/local/share/gtk-doc/') |
 		    (cd "$HILDON" && cpio -pdm --quiet "$R")
+		# Leste's texts over the parts' own, as the packages have it
+		# (pkgmeta.py EXCLUDE): the stage holds the catalogue of
+		# whichever part was installed last, and libhildon's en_GB one
+		# showed text ids (wdgt_bd_done) in place of "Done"
+		for l in "$WORK"/hildon/pkgroot/leste-l10n-*/usr/local/share/locale; do
+			if [ -d "$l" ]; then cp -a "$l/." "$R/usr/local/share/locale/"; fi
+		done
 		cp -a "$REPO/freebsd/hildon/rootfs/." "$R/"
 		# Nokia's files for the stand-by screen (icons, Nokia Pure),
 		# never in this repository: from a private directory when
