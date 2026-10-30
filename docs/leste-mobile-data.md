@@ -99,7 +99,8 @@ show: whether the real modem takes this, and the data context itself.
   operator (the SIM's SPN, else mobile-broadband-provider-info), with APN,
   user name and password of oFono's internet context. oFono fills that
   context from its own provisioning database (`provision.db`, oFono's
-  `data/provision.json`) by the SIM's MCC/MNC.
+  `data/provision.json`) by the SIM's MCC/MNC: often wrongly, see the
+  table below.
 - **APN settings**: Settings, "Internet connections", "Connections", the
   SIM's connection, "Edit": "Access point name", user name, password
   (`connui-iapsettings-gprs`). Data roaming and the network mode: Settings,
@@ -110,21 +111,31 @@ show: whether the real modem takes this, and the data context itself.
   address is not put on the link by icd2 (the kernel may still configure
   one from the network's router advertisement; step 9).
 
-APNs that oFono's database has for Austria (the operator's own data wins;
-oFono picks by MCC/MNC and, where several match, the SIM's SPN):
+**Check the APN.** oFono's own provisioning gets most Austrian SIMs wrong
+(looked up in the `provision.db` built from Leste's oFono 2.18 source with
+its `provisiondb.c`): for one MCC/MNC the database keeps only the last
+entry without an SPN, and oFono gives up on an entry with two APNs of one
+type ("Duplicate detected", "Provisioning failed" in the syslog) and then
+makes an "Internet" context with no APN. What oFono sets, and the APN of
+mobile-broadband-provider-info 20230416 (Leste's; the operator's own data
+wins):
 
-| Operator | MCC/MNC | APN (user/password) |
-|---|---|---|
-| A1 | 232 01 | `a1.net` (`ppp@a1plus.at`/`ppp`) |
-| Magenta (T-Mobile) | 232 03 | `gprsinternet` (`t-mobile`/`tm`) |
-| Drei | 232 05, 232 10 | `drei.at` |
-| HoT | 232 07 | `webaut` |
-| tele.ring | 232 07 | `web` (`web@telering.at`/`web`) |
-| Bob | 232 11 | `bob.at` (`data@bob.at`/`ppp`) |
-| yesss! | 232 12 | `web.yesss.at` |
+| Operator | MCC/MNC | oFono 2.18 sets | APN to use (user/password) |
+|---|---|---|---|
+| A1 | 232 01 | `mdata.com` (ABroadband's) | `a1.net` (`ppp@a1plus.at`/`ppp`) |
+| Magenta (T-Mobile) | 232 03 | `volmobil` (VOLmobil's) | `gprsinternet` (`t-mobile`/`tm`) |
+| Drei | 232 05, 232 10 | nothing (duplicate MMS entries) | `drei.at` |
+| HoT | 232 07 | `web` (tele.ring's) | `webaut` |
+| tele.ring | 232 07 | `web` | `web` (`web@telering.at`/`web`) |
+| Lycamobile | 232 08 | `data.lycamobile.at` | the same (`lmat`/`plus`) |
+| Bob | 232 11 | nothing (duplicate internet entries) | `bob.at` (`data@bob.at`/`ppp`) |
+| yesss! | 232 12 | `web.yesss.at` | the same |
+| spusu | 232 17 | nothing (no entry) | `web` (the Kali doc's newer database) |
 
-spusu (232 17, `web` in mobile-broadband-provider-info) is not in oFono's
-database: there the APN goes in by hand ("Edit" above).
+So the APN goes in by hand once: in the connection's "Edit" dialog (icd2
+then sets it on oFono's context when it connects), or for the shell test
+with `set-context-property` (step 6). On LTE the network may accept the
+wrong one; that proves nothing about the next network.
 
 ## Install (on the phone, needs Wi-Fi)
 
@@ -176,7 +187,7 @@ regression is seen before the data steps), then data.
         /sys/class/net/rmnet_ipa0/device/modem/rx_endpoint_id \
         /sys/class/net/rmnet_ipa0/device/modem/tx_endpoint_id
     rc-status default | grep -E 'pro1x-modem-wait|ofono|rmnet'
-    grep pro1x-modem-wait /var/log/syslog
+    grep pro1x-modem-wait /var/log/syslog   # empty if rsyslog was not up yet: the boot console has it
 
 Expected: `IPA driver setup completed successfully`, `received modem
 running event`, `remote processor modem is now up`; `rmnet_ipa0` plus
@@ -206,6 +217,9 @@ noting), `rmnet links rmnet0..rmnet3 on rmnet_ipa0, data format 0xd`.
 Expected: `[ /qrtrsoc_0 ]`, `Powered = 1`; with the SIM unlocked and the
 radio on, `Online = 1`, `org.ofono.ConnectionManager` among the
 interfaces, `Status = registered`. Before the PIN: `PinRequired = pin`.
+If it stays `Online = 0` after the PIN: flight mode off (status menu),
+else `$S/online-modem` (`libicd-network-ofono` brings the modem online
+only while it provisions a new SIM).
 
 ### 4. SIM PIN
 
@@ -232,11 +246,11 @@ If one of them broke after the install and not before: the way back
     $S/list-contexts
     grep -A1 -E '"Attached"' <(dbus-send --system --print-reply --dest=org.ofono /qrtrsoc_0 org.ofono.ConnectionManager.GetProperties)
 
-Expected: `Attached` true, at least one context of `Type = internet` with
-the operator's `AccessPointName`. On LTE one may already be `Active = 1`
-(the default bearer). If the APN is wrong:
-`$S/set-context-property 0 AccessPointName <apn>` (0 = the first context;
-also `Username`, `Password`). Then:
+Expected: `Attached` true, at least one context of `Type = internet`;
+its `AccessPointName` is likely wrong or empty (the APN table above). On
+LTE one may already be `Active = 1` (the default bearer). Set the APN with
+the context inactive: `$S/set-context-property 0 AccessPointName <apn>`
+(0 = the first context; also `Username`, `Password`). Then:
 
     $S/activate-context 1              # 1 = the first context
     $S/list-contexts                   # Active = 1, Settings: Interface = rmnetN, Address, Gateway, DomainNameServers
@@ -325,6 +339,7 @@ line above, or in `/etc/default/ofono` and `/etc/init.d/ofono restart`.
 | `activate-context` fails | APN, user/password, IP type | `set-context-property` (step 6), `Protocol ip`; WDS errors in the debug log |
 | active, but icd2 shows an error or `rmnet0` has no address | icd2 / `libicd-network-ipv4` | `grep -E 'icd2|ipv4' /var/log/syslog`; the manual addresses in step 6 |
 | address set, `ping 1.1.1.1` gets nothing, `rmnet0` RX stays 0 | the data path (WDA format, checksums, DPM) | `pro1x-rmnet-flags` (0xd?), `ip -s link show rmnet_ipa0`; then one at a time `OFONO_IPA_WDA=qmap`, `OFONO_IPA_DPM=0`; logs |
+| address on `rmnet0`, no `default` in `ip route` | the gateway oFono got is outside the netmask: `libicd-network-ipv4`'s `ip route add default via` failed (it reports connected anyway) | `ip route add default dev rmnet0`; note `Gateway`/`Netmask` from `list-contexts` |
 | ping by address works, by name not | DNS | `/etc/resolv.conf`, `/run/resolvconf/interface/`, `list-contexts` `DomainNameServers` |
 | small packets pass, downloads stall | MTU | `ip link set rmnet0 mtu 1280` |
 | after a modem crash: a second modem `/qrtrsoc_1`, data dead | `rmnet_ipa0` came back with a new index; udevng never removes an embedded modem | `/etc/init.d/ofono restart` or reboot |
@@ -333,6 +348,7 @@ line above, or in `/etc/default/ofono` and `/etc/init.d/ofono restart`.
 
     apt-mark unhold ofono ofono-scripts
     apt-get install -y --allow-downgrades /root/ofono-orig/ofono_*.deb
+    # (no copy there: apt-get update && apt-get install -y --allow-downgrades ofono=1:2.18.0-1+4m7.1)
     apt-get remove -y ofono-scripts
     rc-update del pro1x-modem-wait default
 

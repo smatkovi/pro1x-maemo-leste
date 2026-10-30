@@ -19,7 +19,9 @@
 #   BUILD_ONLY=1  build, install nothing
 #
 # Installing does not restart oFono (a call would drop): the new one runs
-# after the next boot, or after /etc/init.d/ofono restart.
+# after the next boot, or after /etc/init.d/ofono restart. The two go
+# together: 45-pro1x-hardware.sh no longer enables pro1x-rmnet, and the
+# stock oFono without its rmnet_data links has no modem (no calls).
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 SRC=${SRC:-/root/src}
@@ -78,7 +80,8 @@ install_ours() {
   install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-modem-wait" /etc/init.d/
   rc-update del pro1x-rmnet default 2> /dev/null || true
   rm -f /etc/init.d/pro1x-rmnet
-  rc-update add pro1x-modem-wait default
+  [ -e /etc/runlevels/default/pro1x-modem-wait ] ||
+    rc-update add pro1x-modem-wait default
   # the rmnet links' data format, which Leste's iproute2 does not show
   install -m 755 "$REPO/tools/pro1x-rmnet-flags" /usr/local/bin/
   # qrtr-lookup for pro1x-modem-wait (45-pro1x-hardware.sh installs it)
@@ -123,8 +126,10 @@ ls "$d"/*_"$v"_*.deb
 # the patch is in the daemon (dpkg-source applies the series before the
 # build and takes it off again after it)
 dpkg-deb --fsys-tarfile "$d/ofono_${v}_$(dpkg --print-architecture).deb" |
-  tar -xO ./usr/sbin/ofonod | grep -a -q 'no mobile data: ' ||
+  tar -xO ./usr/sbin/ofonod > "$d/ofonod.check"
+grep -a -q 'no mobile data: ' "$d/ofonod.check" ||
   { echo "ofonod without patches/fixes/ofono.patch"; exit 1; }
+rm -f "$d/ofonod.check"
 if [ -n "$OUT" ]; then
   mkdir -p "$OUT"
   cp "$d"/*_"$v"_*.deb "$OUT/"

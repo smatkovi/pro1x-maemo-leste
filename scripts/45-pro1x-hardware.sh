@@ -106,8 +106,10 @@ cp -a "$REPO/rootfs-overlay/." /
 chmod 755 /etc/init.d/pro1x-*
 rc-update add pro1x-tqftpserv default
 rc-update add pro1x-rmtfs default
-# before oFono: the modem's rmnet_ipa0 and QMI services (oFono makes its
-# own rmnet links: scripts/49-mobile-data.sh)
+# before oFono: the modem's rmnet_ipa0 and QMI services. oFono makes its
+# own rmnet links once scripts/49-mobile-data.sh rebuilt it; the stock
+# oFono without pro1x-rmnet's rmnet_data links has no modem at all, so 45
+# alone (without 49-mobile-data) leaves the phone without calls
 rc-update add pro1x-modem-wait default
 rc-update add pro1x-cal default
 rc-update add bluetooth default
