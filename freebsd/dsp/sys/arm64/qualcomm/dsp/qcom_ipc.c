@@ -86,5 +86,10 @@ qcom_ipc_kick(phandle_t xref, u_int bit)
 	/* what the other side is told about is in memory first */
 	dsb(sy);
 	va[APCS_IPC_OFFSET / 4] = 1U << bit;
+#ifdef QCOM_DSP_SIM
+	/* the simulation's doorbells (freebsd/dsp/test/sim/hw.c) */
+	qcom_dsp_sim_doorbell(pmap_kextract((vm_offset_t)&va[APCS_IPC_OFFSET /
+	    4]), 1U << bit);
+#endif
 	return (0);
 }

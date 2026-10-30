@@ -1,0 +1,222 @@
+/*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * The part of the Pro1X's device tree the DSP stack reads, as the boot
+ * menu's kernel hands it over (Linux 7.1's sm6115.dtsi with
+ * sm6115-fxtec-pro1x.dts, decompiled from out/sm6115-fxtec-pro1x.dtb),
+ * phandles as there. For the simulation (freebsd/dsp/test/sim) where the
+ * real blob is not at hand; make sim uses the real one too when found.
+ */
+
+/dts-v1/;
+
+/ {
+	interrupt-parent = <0x01>;
+	#address-cells = <0x02>;
+	#size-cells = <0x02>;
+	model = "F(x)tec Pro1X (QX1050)";
+	compatible = "fxtec,pro1x", "qcom,sm6115";
+
+	reserved-memory {
+		#address-cells = <0x02>;
+		#size-cells = <0x02>;
+		ranges;
+
+		memory@46000000 {
+			compatible = "qcom,smem";
+			reg = <0x00 0x46000000 0x00 0x200000>;
+			no-map;
+			hwlocks = <0x27 0x03>;
+		};
+
+		memory@4ab00000 {
+			reg = <0x00 0x4ab00000 0x00 0x6900000>;
+			no-map;
+			phandle = <0xa0>;
+		};
+
+		memory@51a00000 {
+			reg = <0x00 0x51a00000 0x00 0x1e00000>;
+			no-map;
+			phandle = <0xce>;
+		};
+
+		memory@53800000 {
+			reg = <0x00 0x53800000 0x00 0x2800000>;
+			no-map;
+			phandle = <0xcb>;
+		};
+
+		memory@89b01000 {
+			compatible = "qcom,rmtfs-mem";
+			reg = <0x00 0x89b01000 0x00 0x200000>;
+			no-map;
+			qcom,client-id = <0x01>;
+			qcom,vmid = <0x0f 0x2b>;
+		};
+	};
+
+	smp2p-adsp {
+		compatible = "qcom,smp2p";
+		qcom,smem = <0x1bb 0x1ad>;
+		interrupts = <0x00 0x117 0x01>;
+		mboxes = <0x24 0x0a>;
+		qcom,local-pid = <0x00>;
+		qcom,remote-pid = <0x02>;
+
+		master-kernel {
+			qcom,entry-name = "master-kernel";
+			#qcom,smem-state-cells = <0x01>;
+			phandle = <0xcc>;
+		};
+
+		slave-kernel {
+			qcom,entry-name = "slave-kernel";
+			interrupt-controller;
+			#interrupt-cells = <0x02>;
+			phandle = <0xca>;
+		};
+	};
+
+	smp2p-cdsp {
+		compatible = "qcom,smp2p";
+		qcom,smem = <0x5e 0x1b0>;
+		interrupts = <0x00 0x107 0x01>;
+		mboxes = <0x24 0x1e>;
+		qcom,local-pid = <0x00>;
+		qcom,remote-pid = <0x05>;
+
+		master-kernel {
+			qcom,entry-name = "master-kernel";
+			#qcom,smem-state-cells = <0x01>;
+			phandle = <0xcf>;
+		};
+
+		slave-kernel {
+			qcom,entry-name = "slave-kernel";
+			interrupt-controller;
+			#interrupt-cells = <0x02>;
+			phandle = <0xcd>;
+		};
+	};
+
+	smp2p-mpss {
+		compatible = "qcom,smp2p";
+		qcom,smem = <0x1b3 0x1ac>;
+		interrupts = <0x00 0x46 0x01>;
+		mboxes = <0x24 0x0e>;
+		qcom,local-pid = <0x00>;
+		qcom,remote-pid = <0x01>;
+
+		master-kernel {
+			qcom,entry-name = "master-kernel";
+			#qcom,smem-state-cells = <0x01>;
+			phandle = <0xa1>;
+		};
+
+		slave-kernel {
+			qcom,entry-name = "slave-kernel";
+			interrupt-controller;
+			#interrupt-cells = <0x02>;
+			phandle = <0x9f>;
+		};
+
+		ipa-ap-to-modem {
+			qcom,entry-name = "ipa";
+			#qcom,smem-state-cells = <0x01>;
+			phandle = <0xd3>;
+		};
+
+		ipa-modem-to-ap {
+			qcom,entry-name = "ipa";
+			interrupt-controller;
+			#interrupt-cells = <0x02>;
+			phandle = <0xd2>;
+		};
+	};
+
+	soc@0 {
+		compatible = "simple-bus";
+		#address-cells = <0x02>;
+		#size-cells = <0x02>;
+		ranges = <0x00 0x00 0x00 0x00 0x10 0x00>;
+
+		hwlock@340000 {
+			compatible = "qcom,tcsr-mutex";
+			reg = <0x00 0x340000 0x00 0x20000>;
+			phandle = <0x27>;
+		};
+
+		remoteproc@6080000 {
+			compatible = "qcom,sm6115-mpss-pas";
+			reg = <0x00 0x6080000 0x00 0x10000>;
+			interrupts-extended = <0x01 0x00 0x133 0x01 0x9f 0x00 0x01 0x9f 0x01 0x01 0x9f 0x02 0x01 0x9f 0x03 0x01 0x9f 0x07 0x01>;
+			interrupt-names = "wdog", "fatal", "ready", "handover", "stop-ack", "shutdown-ack";
+			memory-region = <0xa0>;
+			qcom,smem-states = <0xa1 0x00>;
+			qcom,smem-state-names = "stop";
+			status = "okay";
+			firmware-name = "qcom/sm6115/Fxtec/QX1050/modem.mbn";
+
+			glink-edge {
+				interrupts = <0x00 0x44 0x01>;
+				label = "mpss";
+				qcom,remote-pid = <0x01>;
+				mboxes = <0x24 0x0c>;
+			};
+		};
+
+		remoteproc@a400000 {
+			compatible = "qcom,sm6115-adsp-pas";
+			reg = <0x00 0xa400000 0x00 0x4040>;
+			interrupts-extended = <0x01 0x00 0x11a 0x01 0xca 0x00 0x01 0xca 0x01 0x01 0xca 0x02 0x01 0xca 0x03 0x01>;
+			interrupt-names = "wdog", "fatal", "ready", "handover", "stop-ack";
+			memory-region = <0xcb>;
+			qcom,smem-states = <0xcc 0x00>;
+			qcom,smem-state-names = "stop";
+			status = "okay";
+			firmware-name = "qcom/sm6115/Fxtec/QX1050/adsp.mbn";
+
+			glink-edge {
+				interrupts = <0x00 0x115 0x01>;
+				label = "lpass";
+				qcom,remote-pid = <0x02>;
+				mboxes = <0x24 0x08>;
+			};
+		};
+
+		remoteproc@b300000 {
+			compatible = "qcom,sm6115-cdsp-pas";
+			reg = <0x00 0xb300000 0x00 0x4040>;
+			interrupts-extended = <0x01 0x00 0x109 0x01 0xcd 0x00 0x01 0xcd 0x01 0x01 0xcd 0x02 0x01 0xcd 0x03 0x01>;
+			interrupt-names = "wdog", "fatal", "ready", "handover", "stop-ack";
+			memory-region = <0xce>;
+			qcom,smem-states = <0xcf 0x00>;
+			qcom,smem-state-names = "stop";
+			status = "okay";
+			firmware-name = "qcom/sm6115/Fxtec/QX1050/cdsp.mbn";
+
+			glink-edge {
+				interrupts = <0x00 0x105 0x01>;
+				label = "cdsp";
+				qcom,remote-pid = <0x05>;
+				mboxes = <0x24 0x1c>;
+			};
+		};
+
+		interrupt-controller@f200000 {
+			compatible = "arm,gic-v3";
+			#interrupt-cells = <0x03>;
+			interrupt-controller;
+			reg = <0x00 0xf200000 0x00 0x10000 0x00 0xf300000 0x00 0x100000>;
+			phandle = <0x01>;
+		};
+
+		mailbox@f111000 {
+			compatible = "qcom,sm6115-apcs-hmss-global", "qcom,msm8994-apcs-kpss-global";
+			reg = <0x00 0xf111000 0x00 0x1000>;
+			#mbox-cells = <0x01>;
+			phandle = <0x24>;
+		};
+	};
+};

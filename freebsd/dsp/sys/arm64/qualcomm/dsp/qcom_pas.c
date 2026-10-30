@@ -475,9 +475,12 @@ pas_adopt(struct pas_softc *sc)
 		    "remote (not started?)\n", sc->data->name);
 		return (ENXIO);
 	}
+	/* ready, and neither crashed nor stopped (bits left from before) */
 	if ((v & (1U << sc->in[IN_READY].bit)) == 0 ||
 	    (sc->in[IN_FATAL].xref != 0 &&
-	    (v & (1U << sc->in[IN_FATAL].bit)) != 0)) {
+	    (v & (1U << sc->in[IN_FATAL].bit)) != 0) ||
+	    (sc->in[IN_STOP_ACK].xref != 0 &&
+	    (v & (1U << sc->in[IN_STOP_ACK].bit)) != 0)) {
 		device_printf(sc->dev, "%s: adopt: SMP2P bits %#x: not running\n",
 		    sc->data->name, v);
 		return (ENXIO);

@@ -9,7 +9,13 @@
  * their endpoint, which queues them: nothing here waits for a remote
  * processor, except a sender of data that has 10 packets on their way to
  * one port unconfirmed (Linux's flow control: the 5th asks for a
- * RESUME_TX). The name service handles its packets in its own work item.
+ * RESUME_TX). The name service handles its packets in its own work item,
+ * which holds the lock of its lists (not of its queue) while it tells
+ * others: a port's callback may send to the name service from there.
+ *
+ * A packet's type is the payload's command when it goes to the control
+ * port, or comes from it (the name service's notices to a port: Linux's
+ * qrtr_sendmsg types by the sender's port), else data.
  */
 
 #include "qrtr.h"
@@ -116,7 +122,8 @@ struct ns_pkt {
 };
 
 static struct {
-	glink_mutex_t	lock;		/* the lists, and the queue */
+	glink_mutex_t	lock;		/* the lists */
+	glink_mutex_t	qlock;		/* the queue */
 	TAILQ_HEAD(, ns_server) servers;
 	TAILQ_HEAD(, ns_lookup) lookups;
 	TAILQ_HEAD(, ns_pkt) queue;
@@ -369,7 +376,7 @@ send_from(uint32_t src_node, uint32_t src_port, uint32_t dst_node,
 	struct qrtr_node *n, *list[16];
 	int type, error = 0, i, count = 0;
 
-	if (dst_port == QRTR_PORT_CTRL) {
+	if (dst_port == QRTR_PORT_CTRL || src_port == QRTR_PORT_CTRL) {
 		if (len < 4)
 			return (EINVAL);
 		memcpy(&type, data, 4);
@@ -809,10 +816,10 @@ ns_work(void *arg, int pending)
 	struct ns_pkt *q;
 
 	for (;;) {
-		glink_lock(&ns.lock);
+		glink_lock(&ns.qlock);
 		if ((q = TAILQ_FIRST(&ns.queue)) != NULL)
 			TAILQ_REMOVE(&ns.queue, q, link);
-		glink_unlock(&ns.lock);
+		glink_unlock(&ns.qlock);
 		if (q == NULL)
 			break;
 		glink_lock(&ns.lock);
@@ -834,9 +841,9 @@ ns_rx(void *arg, const struct qrtr_rx_info *info, const void *data,
 	q->src_node = info->src_node;
 	q->src_port = info->src_port;
 	memcpy(&q->pkt, data, MIN(len, sizeof(q->pkt)));
-	glink_lock(&ns.lock);
+	glink_lock(&ns.qlock);
 	TAILQ_INSERT_TAIL(&ns.queue, q, link);
-	glink_unlock(&ns.lock);
+	glink_unlock(&ns.qlock);
 	glink_work_queue(&ns.work);
 }
 
@@ -867,6 +874,7 @@ qrtr_init(void)
 	r.next_port = MIN_EPH_PORT;
 	r.up = true;
 	glink_mutex_init(&ns.lock);
+	glink_mutex_init(&ns.qlock);
 	TAILQ_INIT(&ns.servers);
 	TAILQ_INIT(&ns.lookups);
 	TAILQ_INIT(&ns.queue);

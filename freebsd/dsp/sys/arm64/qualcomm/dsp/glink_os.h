@@ -27,7 +27,8 @@ MALLOC_DECLARE(M_GLINK);
 typedef struct mtx	glink_mutex_t;
 typedef struct cv	glink_cond_t;
 
-#define	glink_mutex_init(m)	mtx_init((m), "glink", NULL, MTX_DEF)
+/* one name for the edges' and the router's locks: nested on purpose */
+#define	glink_mutex_init(m)	mtx_init((m), "glink", NULL, MTX_DEF | MTX_DUPOK)
 #define	glink_mutex_destroy(m)	mtx_destroy(m)
 #define	glink_lock(m)		mtx_lock(m)
 #define	glink_unlock(m)		mtx_unlock(m)

@@ -8,6 +8,11 @@
 # once its servers run (tqftpserv: its files, among them the Wi-Fi's
 # firmware wlanmdsp.mbn; pd-mapper; rmtfs: its file systems), stopped on
 # the way down. The Wi-Fi (pro1x_wifi) needs it: its firmware runs there.
+# The modem starts once tqftpserv's, pd-mapper's and rmtfs's services are
+# listed on QRTR (up to 20 s each: without rmtfs the modem fails), as
+# Leste's rmtfs -s starts it once its service is registered. A modem that
+# runs already (FreeBSD kexec'd from a running Leste: its SMP2P ready bit
+# set, no fatal or stop acknowledgement) is taken over (pro1x-dsp adopt).
 #
 #   pro1x_modem_enable="YES"   (with tqftpserv_enable, pd_mapper_enable,
 #                               rmtfs_enable)
@@ -30,13 +35,40 @@ pro1x_modem_running()
 	/usr/local/sbin/pro1x-dsp status modem 2> /dev/null | grep -q ": running"
 }
 
+# has_service SERVICE: listed on QRTR by node 1 (this one)
+pro1x_modem_has_service()
+{
+	sysctl -n net.qrtr.servers | awk -v s="$1" \
+	    '$1 == s && $3 == 1 { f = 1 } END { exit !f }'
+}
+
 pro1x_modem_start()
 {
+	local s i bits
+
 	kldload -n qcom_dsp qrtr || return 1
 	if pro1x_modem_running; then
 		echo "modem already running"
 		return 0
 	fi
+	# the SMP2P bits of a modem left running: ready (2) without fatal (1)
+	# or stop-ack (8)
+	bits=$(/usr/local/sbin/pro1x-dsp status modem 2> /dev/null |
+	    sed -n 's/.*SMP2P \(0x[0-9a-f]*\).*/\1/p')
+	if [ -n "$bits" ] && [ $((bits & 0xb)) -eq 2 ]; then
+		echo "modem left running (SMP2P $bits): taken over"
+		/usr/local/sbin/pro1x-dsp adopt modem
+		return
+	fi
+	for s in 4096 64 14; do
+		i=0
+		while [ $i -lt 20 ] && ! pro1x_modem_has_service $s; do
+			sleep 1
+			i=$((i + 1))
+		done
+		pro1x_modem_has_service $s ||
+		    warn "QRTR service $s (tqftpserv 4096, pd-mapper 64, rmtfs 14) not listed"
+	done
 	/usr/local/sbin/pro1x-dsp start modem
 }
 

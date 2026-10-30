@@ -69,6 +69,20 @@ static struct sx scm_lock;
 SX_SYSINIT(qcom_scm_lock, &scm_lock, "qcom_scm");
 
 /* One SMC with all eight argument registers; x6 comes back too */
+#ifdef QCOM_DSP_SIM
+/* the simulation's TrustZone (freebsd/dsp/test/sim/hw.c) */
+static void
+scm_smc(uint64_t a[8], uint64_t *x6, struct scm_res *res)
+{
+	uint64_t r[4];
+
+	qcom_dsp_sim_smc(a, x6, r);
+	res->x0 = r[0];
+	res->x1 = r[1];
+	res->x2 = r[2];
+	res->x3 = r[3];
+}
+#else
 static void
 scm_smc(uint64_t a[8], uint64_t *x6, struct scm_res *res)
 {
@@ -93,6 +107,7 @@ scm_smc(uint64_t a[8], uint64_t *x6, struct scm_res *res)
 	res->x3 = x3;
 	*x6 = r6;
 }
+#endif
 
 /*
  * A call; *result is x1 of the answer. Beyond four arguments the 4th and

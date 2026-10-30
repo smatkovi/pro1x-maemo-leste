@@ -524,7 +524,7 @@ smp2p_report_sbuf(struct sbuf *sb)
 		for (k = 0; k < sc->nentries; k++) {
 			e = sc->entries[k];
 			if (e->value != NULL)
-				sbuf_printf(sb, "  %s %-16s %#010x\n",
+				sbuf_printf(sb, "  %s %-16s 0x%08x\n",
 				    e->inbound ? "in " : "out", e->name, *e->value);
 			else
 				sbuf_printf(sb, "  %s %-16s (not there)\n",

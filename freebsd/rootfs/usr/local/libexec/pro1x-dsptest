@@ -1,70 +1,199 @@
 #!/bin/sh
 # pro1x-dsptest [STEP]: the DSP test runs of freebsd/dsp/README.md, each
 # layer after the one below it, up to STEP (kernel environment pro1x.dsp,
-# set in the boot menu's freebsd/cmdline): load (the substrate), adsp (the
-# ADSP started and stopped again), sensors (the ADSP left running: its
-# GLINK channels, QRTR services, FastRPC, hexagonrpcd, the sensors through
-# libssc and the step counter); modem (on the substrate, without the ADSP:
-# rmtfs, tqftpserv, pd-mapper, the modem and its QMI services); rpm (the
-# RPM's edge, the Wi-Fi's four rails voted on and off); wifi (the modem,
-# then ath10k: WLFW, the firmware ready, ath10k0, wlan0 scanning); wpa
-# (wifi, then joining the network of wpa_supplicant.conf next to the kernel
-# on userdata, DHCP, a ping to the gateway).
+# set in the boot menu's freebsd/cmdline):
+#
+#   load      the substrate (dsp1): SCM, SMEM, SMP2P, PAS, rmtfs's memory
+#   adsp      the ADSP started (pd-mapper first), its GLINK edge, QRTR and
+#             services, stopped again (dsp3, dsp4)
+#   sensors   the ADSP left running: FastRPC, hexagonrpcd, libssc (dsp5)
+#   modem     tqftpserv, pd-mapper, rmtfs listed on QRTR, then the modem,
+#             its QMI services, DMS (dsp6; without the ADSP)
+#   modemcx   modem with Linux's proxy vote for CX (cmdline:
+#             hw.qcom_pas.proxy_votes=1; after dsp7a passed)
+#   adopt     the modem as Leste left it (FreeBSD kexec'd from a running
+#             Leste: dsp/tools/pro1x-kexec-freebsd.sh): taken over, not
+#             started; IPCRTR adopted (dsp6a)
+#   rpm       the RPM's edge, the Wi-Fi's four rails voted on and off (dsp7a)
+#   wifi, wpa the modem, then ath10k, scanning; joining (dsp7b, dsp7c)
+#
+# Every check prints "PASS dsp-STEP: ..." or "FAIL dsp-STEP: ...", every
+# wait is bounded so that the run ends before the watchdog
+# (hint.qcom_wdt.0.lifetime, counted from the boot: 25 s are left for this
+# summary and rc.local's reboot), and the last line is
+#   === dsp-STEP: PASS|FAIL (N passed, M failed; first failure: ...)
 # Everything goes to the console, which the RAM console keeps for Linux
 # after the next boot. Modules in freebsd/modules next to the kernel on
 # userdata (a build newer than the root image's) come first.
 step=${1:-$(kenv -q pro1x.dsp)}
 step=${step:-load}
-echo "=== DSP test up to: $step"
+RUN=dsp-$step
+npass=0
+nfail=0
+first=
+pass() { echo "PASS $RUN: $*"; npass=$((npass + 1)); }
+fail() {
+	echo "FAIL $RUN: $*"
+	nfail=$((nfail + 1))
+	[ -n "$first" ] || first=$*
+}
+check() {	# check WHAT COMMAND...: PASS if the command succeeds
+	what=$1
+	shift
+	if "$@" > /dev/null 2>&1; then pass "$what"; else fail "$what"; fi
+}
+summary() {
+	[ $nfail -eq 0 ] && r=PASS || r=FAIL
+	echo "=== $RUN: $r ($npass passed, $nfail failed${first:+; first failure: $first})"
+}
+trap summary EXIT
+
+# --- time: the watchdog's lifetime from the boot -----------------------------------
+boot=$(sysctl -n kern.boottime | sed 's/^{ sec = \([0-9]*\),.*/\1/')
+life=$(kenv -q hint.qcom_wdt.0.lifetime)
+uptime_s() { echo $(($(date +%s) - boot)); }
+left() {	# seconds this run may still wait
+	if [ -n "$life" ]; then echo $((life - $(uptime_s) - 25)); else echo 600; fi
+}
+# wait_for SECONDS WHAT COMMAND...: up to SECONDS (or what the watchdog
+# leaves) for the command to succeed; PASS/FAIL with the time it took
+wait_for() {
+	max=$1
+	what=$2
+	shift 2
+	l=$(left)
+	[ "$l" -lt "$max" ] && max=$l
+	i=0
+	while ! "$@" > /dev/null 2>&1; do
+		if [ $i -ge "$max" ]; then
+			fail "$what (not within $i s)"
+			return 1
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+	pass "$what ($i s)"
+}
+has_service() {	# has_service SERVICE [NODE]
+	sysctl -n net.qrtr.servers | awk -v s="$1" -v n="$2" \
+	    '$1 == s && (n == "" || $3 == n) { f = 1 } END { exit !f }'
+}
+dmesg_has() { dmesg | grep -q -- "$1"; }
+# the state as it is: SMP2P entries, GLINK channels, QRTR nodes and services
+state() {
+	echo "--- state ($1, $(uptime_s) s after the boot)"
+	sysctl hw.qcom_smp2p hw.qcom_glink net.qrtr.nodes net.qrtr.servers 2>&1
+}
+
+echo "=== DSP test $RUN, $(uptime_s) s after the boot, watchdog ${life:-off}"
 fw=/usr/local/share/pro1x/firmware/qcom/sm6115/Fxtec/QX1050
-ls -la $fw 2>&1 | head -20
+ls -la $fw 2>&1 | grep -E "\.mbn|\.jsn|total" | head -20
 host=/dev/pro1x-host/freebsd
 if [ -d $host/modules ]; then
 	kldconfig -i $host/modules
 	echo "modules from $host/modules first:"
 	ls $host/modules
 fi
+[ -x $host/dsp-tools/pro1x-dsp ] && PATH=$host/dsp-tools:$PATH
 
+# --- dsp1: the substrate ------------------------------------------------------------------
 echo "--- load qcom_dsp, qrtr"
-kldload qcom_dsp && echo "qcom_dsp loaded"
-kldload qrtr && echo "qrtr loaded"
+check "kldload qcom_dsp" kldload -n qcom_dsp
+check "kldload qrtr" kldload -n qrtr
 kldstat | grep -E "qcom|qrtr"
-dmesg | grep -E "qcom_(dsp|smem|smp2p|pas)|qrtr" | tail -30
+dmesg | grep -E "qcom_(dsp|smem|smp2p|pas|rmtfs)|qrtr" | tail -40
+check "the secure monitor answers (SCM INFO)" \
+    dmesg_has "qcom_dsp: secure monitor answers (0)"
+check "SMEM found (0x46000000, version 12)" dmesg_has "qcom_smem: 0x46000000"
+for h in 1 2 5; do
+	check "SMEM partition with host $h" dmesg_has "partition with host $h:"
+done
+n=$(dmesg | grep -c "qcom_smp2p[0-9]: pid 0 <-> ")
+[ "$n" -ge 3 ] && pass "three SMP2P edges ($n)" || fail "three SMP2P edges ($n)"
+for d in adsp modem cdsp; do
+	check "/dev/qcom_pas/$d" test -c /dev/qcom_pas/$d
+	check "TrustZone supports $d's PAS id" dmesg_has "$d: PAS id [0-9]* supported (0)"
+done
 sysctl hw.qcom_socinfo
-ls -la /dev/qcom_pas 2>&1
+check "SoC SM6115 (soc_id 417)" sh -c "sysctl -n hw.qcom_socinfo | grep -q 'soc_id 417'"
+sysctl hw.qcom_rmtfs
+check "rmtfs region shared with the modem (hw.qcom_rmtfs.assigned 0)" \
+    test "$(sysctl -n hw.qcom_rmtfs.assigned)" = 0
+check "/dev/qcom_rmtfs_mem1" test -c /dev/qcom_rmtfs_mem1
+pro1x-dsp status
+state load
 [ "$step" = load ] && exit 0
 
-# wait_service SERVICE: up to a minute for a QRTR service to appear
-wait_service() {
-	i=0
-	while [ $i -lt 60 ] && ! sysctl -n net.qrtr.servers | grep -q "^$1 "; do
-		sleep 1
-		i=$((i + 1))
-	done
-}
-
-# the modem and its servers (dsp6)
-modem_up() {
-	echo "--- modem"
-	sysctl hw.qcom_rmtfs
-	dmesg | grep -E "qcom_(rmtfs|scm)" | tail -5
-	ls -la /dev/qcom_rmtfs_mem* /dev/gpt 2>&1
+# --- the modem's servers on QRTR, then the modem (dsp6) -------------------------------
+servers_up() {
 	for s in tqftpserv pd_mapper rmtfs; do
-		service $s onestart
+		service $s onestatus > /dev/null 2>&1 || service $s onestart
 	done
-	sleep 2
-	pro1x-dsp start modem
-	echo "start: $?"
+	# what the modem looks for when it boots (Leste's rmtfs -s starts the
+	# modem only once its service is registered)
+	wait_for 20 "tqftpserv's service 4096 listed" has_service 4096 1
+	wait_for 20 "pd-mapper's service 64 listed" has_service 64 1
+	wait_for 20 "rmtfs's service 14 listed" has_service 14 1
+}
+modem_checks() {
+	wait_for 15 "the modem's GLINK edge, IPCRTR (qrtr_glink: mpss up)" \
+	    dmesg_has "qrtr_glink: mpss up"
 	# its device management service (QMI 2) once it is up
-	wait_service 2
+	wait_for 60 "the modem's DMS (QMI 2) listed" has_service 2
+	node=$(sysctl -n net.qrtr.servers | awk '$1 == 2 { print $3; exit }')
+	if [ -n "$node" ]; then
+		out=$(qmicli -d qrtr://"$node" --dms-get-revision 2>&1)
+		echo "$out"
+		echo "$out" | grep -q "Revision" && pass "qmicli --dms-get-revision" ||
+		    fail "qmicli --dms-get-revision"
+	fi
 	pro1x-dsp status modem
-	sysctl net.qrtr.servers
-	dmesg | grep -E "qcom_(smp2p|pas)|glink|qrtr" | tail -20
+	dmesg | grep -E "qcom_(smp2p|pas|glink|rmtfs)|glink|qrtr" | tail -30
+	state modem
 	for l in tqftpserv pd-mapper rmtfs; do
 		echo "- $l"
 		tail -15 /var/log/$l.log
 	done
 }
+modem_up() {
+	echo "--- the modem's servers"
+	ls -la /dev/qcom_rmtfs_mem* /dev/gpt 2>&1
+	servers_up
+	echo "--- modem"
+	st=$(pro1x-dsp start modem 2>&1)
+	r=$?
+	echo "$st"
+	[ $r -eq 0 ] && pass "pro1x-dsp start modem: ready over SMP2P" ||
+	    fail "pro1x-dsp start modem ($(echo "$st" | tail -1))"
+	modem_checks
+}
+
+if [ "$step" = adopt ]; then
+	# FreeBSD kexec'd from a running Leste: the modem runs on
+	echo "--- the modem as Leste left it"
+	pro1x-dsp status modem
+	dmesg | grep -E "values kept|qcom_rmtfs" | tail -5
+	check "SMP2P: the modem's item there, our values kept (it runs)" \
+	    dmesg_has "remote running: our values kept"
+	servers_up
+	st=$(pro1x-dsp adopt modem 2>&1)
+	r=$?
+	echo "$st"
+	[ $r -eq 0 ] && pass "pro1x-dsp adopt modem" || fail "pro1x-dsp adopt modem"
+	dmesg | grep -E "glink edge mpss|IPCRTR" | tail -6
+	check "IPCRTR's ids found in the FIFOs' past" \
+	    dmesg_has "IPCRTR: Linux's id [0-9]"
+	wait_for 10 "QRTR on Linux's IPCRTR (adopted)" \
+	    dmesg_has "qrtr_glink: mpss up (Linux's channel adopted)"
+	modem_checks
+	# the ADSP too, if Leste left it running (its APR is not adopted)
+	if pro1x-dsp adopt adsp 2>&1; then
+		pass "pro1x-dsp adopt adsp"
+		wait_for 15 "the ADSP's IPCRTR adopted" dmesg_has "qrtr_glink: lpass up"
+		state adopted
+	fi
+	exit 0
+fi
 
 # The Wi-Fi's rails (the wifi node's vdd-*-supply in the device tree:
 # PM6125 L8, L16, L17, L23), voted at the RPM: on, as ath10k's power-up
@@ -83,13 +212,20 @@ if [ "$step" = rpm ]; then
 	done
 	sysctl hw.qcom_rpm
 	dmesg | grep -E "qcom_rpm" | tail -20
+	for r in $rails; do
+		check "$r voted on" dmesg_has "$r (.*) on .*: done"
+		check "$r voted off" dmesg_has "$r (.*) off: done"
+	done
+	check "no request refused" test "$(sysctl -n hw.qcom_rpm.refused)" = 0
+	check "no request timed out" test "$(sysctl -n hw.qcom_rpm.timeouts)" = 0
 	exit 0
 fi
 
-if [ "$step" = modem ]; then
+if [ "$step" = modem ] || [ "$step" = modemcx ]; then
+	[ "$step" = modemcx ] && sysctl hw.qcom_pas.proxy_votes
 	modem_up
-	node=$(sysctl -n net.qrtr.servers | awk '$1 == 2 { print $3; exit }')
-	[ -n "$node" ] && qmicli -d qrtr://"$node" --dms-get-revision 2>&1
+	[ "$step" = modemcx ] && check "the proxy vote for CX sent" \
+	    dmesg_has "proxy vote CX (rwcx 0) on, level 416: done"
 	exit 0
 fi
 
@@ -98,8 +234,7 @@ if [ "$step" = wifi ] || [ "$step" = wpa ]; then
 	echo "--- Wi-Fi"
 	ls -la /boot/firmware/ath10k/WCN3990/hw1.0/ 2>&1
 	# the WLAN firmware's control service (WLFW, QMI 69) on the modem
-	wait_service 69
-	sysctl net.qrtr.servers
+	wait_for 60 "WLFW (QMI 69) listed" has_service 69
 	sysctl hw.lkpi_pf 2>/dev/null
 	# ath10k's bring-up on the console (debug_mask: BOOT, SNOC, QMI),
 	# unless the command line sets compat.linuxkpi.debug_mask
@@ -111,15 +246,10 @@ if [ "$step" = wifi ] || [ "$step" = wpa ]; then
 	    kenv compat.linuxkpi.80211.hw_crypto=1 > /dev/null
 	# in order: the root image's /boot/modules has no linker.hints
 	kldload -n firmware usb linuxkpi wlan linuxkpi_wlan athk_common
-	kldload ath10k_snoc
-	echo "kldload ath10k_snoc: $?"
+	check "kldload ath10k_snoc" kldload ath10k_snoc
 	kldstat
-	i=0
-	while [ $i -lt 60 ] && ! sysctl -n net.wlan.devices | grep -q ath10k; do
-		sleep 1
-		i=$((i + 1))
-	done
-	echo "net.wlan.devices after $i s: $(sysctl -n net.wlan.devices)"
+	wait_for 60 "ath10k0 in net.wlan.devices" \
+	    sh -c "sysctl -n net.wlan.devices | grep -q ath10k0"
 	dmesg | grep -E "ath10k|lkpi_pf|qcom_rpm|qcom_smmu|wlan|linuxkpi" | tail -60
 	sysctl hw.qcom_rpm dev.ath10k 2>&1
 	vmstat -i | grep -E "ath10k|gic" | head -20
@@ -135,69 +265,81 @@ if [ "$step" = wifi ] || [ "$step" = wpa ]; then
 			sleep 3
 		done
 		ifconfig wlan0 list scan 2>&1 | head -30
+		n=$(ifconfig wlan0 list scan 2>/dev/null | tail -n +2 | wc -l)
+		[ "$n" -gt 0 ] && pass "a scan found $n networks" ||
+		    fail "a scan found no network"
 		ifconfig wlan0
 	fi
 	if [ "$step" = wpa ]; then
 		echo "--- WPA"
 		if [ ! -f $host/wpa_supplicant.conf ]; then
-			echo "no $host/wpa_supplicant.conf: nothing to join"
+			fail "no $host/wpa_supplicant.conf: nothing to join"
 			exit 0
 		fi
 		ifconfig wlan0 down
 		/etc/rc.d/wpa_supplicant status wlan0 > /dev/null 2>&1 ||
 		    /etc/rc.d/wpa_supplicant start wlan0
-		i=0
-		while [ $i -lt 30 ] &&
-		    ! ifconfig wlan0 | grep -q "status: associated"; do
-			sleep 1
-			i=$((i + 1))
-		done
-		echo "associated after $i s:"
+		wait_for 30 "associated" \
+		    sh -c "ifconfig wlan0 | grep -q 'status: associated'"
 		ifconfig wlan0
 		wpa_cli -i wlan0 status 2>&1 | grep -vE "passphrase|psk"
 		dhclient -b wlan0 > /dev/null 2>&1
-		i=0
-		while [ $i -lt 30 ] && ! ifconfig wlan0 | grep -q "inet "; do
-			sleep 1
-			i=$((i + 1))
-		done
+		wait_for 30 "a DHCP lease" sh -c "ifconfig wlan0 | grep -q 'inet '"
 		ifconfig wlan0 | grep -E "inet|status|ssid"
 		netstat -rn -f inet
 		gw=$(route -n get default 2>/dev/null | awk '/gateway:/ { print $2 }')
-		[ -n "$gw" ] && ping -c 3 "$gw"
+		[ -n "$gw" ] && check "the gateway answers ping" ping -c 3 "$gw"
 		cat /var/run/resolv.conf 2>&1
 		dmesg | grep -E "ath10k|wlan0" | tail -20
 	fi
 	exit 0
 fi
 
+# --- dsp3, dsp4: the ADSP -------------------------------------------------------------------
 echo "--- ADSP"
-pro1x-dsp status
-pro1x-dsp start adsp
-echo "start: $?"
-sleep 5
-pro1x-dsp status adsp
+# Linux starts pd-mapper before every DSP (qcom_common.c's pdm subdevice)
+service pd_mapper onestatus > /dev/null 2>&1 || service pd_mapper onestart
+wait_for 20 "pd-mapper's service 64 listed before the ADSP" has_service 64 1
+st=$(pro1x-dsp start adsp 2>&1)
+r=$?
+echo "$st"
+[ $r -eq 0 ] && pass "pro1x-dsp start adsp: ready over SMP2P" ||
+    fail "pro1x-dsp start adsp ($(echo "$st" | tail -1))"
 dmesg | grep -E "qcom_(smp2p|pas)|glink|qrtr|fastrpc|qcom_smmu" | tail -30
+if [ $r -eq 0 ]; then
+	wait_for 10 "the ADSP's GLINK edge, IPCRTR (qrtr_glink: lpass up)" \
+	    dmesg_has "qrtr_glink: lpass up"
+	wait_for 20 "the ADSP's services listed (node 5)" \
+	    sh -c "sysctl -n net.qrtr.servers | awk '\$3 == 5 { f = 1 } END { exit !f }'"
+	check "the ADSP sent VERSION" \
+	    sh -c "sysctl -n hw.qcom_glink | grep -q 'lpass.*remote sent VERSION'"
+fi
+state adsp
 if [ "$step" = adsp ]; then
-	pro1x-dsp stop adsp
-	echo "stop: $?"
+	st=$(pro1x-dsp stop adsp 2>&1)
+	r=$?
+	echo "$st"
+	[ $r -eq 0 ] && pass "pro1x-dsp stop adsp" || fail "pro1x-dsp stop adsp"
+	check "the stop acknowledged over SMP2P" dmesg_has "adsp: stop-ack after"
 	pro1x-dsp status adsp
 	exit 0
 fi
 
+# --- dsp5: the sensors ----------------------------------------------------------------------
 echo "--- sensors"
-sleep 5
-sysctl net.qrtr.servers
+check "/dev/fastrpc-adsp" test -c /dev/fastrpc-adsp
 ls -la /dev/fastrpc-* 2>&1
 service dbus onestatus > /dev/null 2>&1 || service dbus onestart
 service hexagonrpcd onestart
 # the sensor service (QRTR 400) once the ADSP has its configuration
-wait_service 400
+wait_for 60 "the sensor service (QRTR 400) listed" has_service 400
 sysctl net.qrtr.servers
 tail -20 /var/log/hexagonrpcd.log
 for s in accelerometer light proximity; do
 	echo "- $s"
-	ssccli --sensor $s --timeout 3 2>&1 | tail -5
+	out=$(ssccli --sensor $s --timeout 3 2>&1 | tail -5)
+	echo "$out"
+	[ -n "$out" ] && pass "ssccli $s answered" || fail "ssccli $s"
 done
 service pro1x_steps onestart
 sleep 3

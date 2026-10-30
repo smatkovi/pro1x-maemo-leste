@@ -1,5 +1,5 @@
 # Host tests of the DSP stack's protocol code (freebsd/dsp/README.md):
-#   make -C freebsd/dsp/test
+#   make -C freebsd/dsp/test         (make -C freebsd/dsp/test sim: the start)
 SRC=	../sys/arm64/qualcomm/dsp
 CFLAGS?=	-O2 -g
 CFLAGS+=	-Wall -Wextra -Wno-unused-parameter -I$(SRC) -pthread -fsanitize=address,undefined
@@ -31,5 +31,13 @@ run: glink_test qrtr_test qmi_test rpm_test
 	./qmi_test
 	./rpm_test
 
+# the whole start, the drivers' own files against simulated hardware and
+# remote processors (sim/, freebsd/dsp/README.md "The simulation")
+sim:
+	$(MAKE) -C sim
+
 clean:
 	rm -f glink_test qrtr_test qmi_test rpm_test
+	$(MAKE) -C sim clean
+
+.PHONY: all run sim clean
