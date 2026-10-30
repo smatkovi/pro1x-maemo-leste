@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 30 Oct 2026 21:00:00 +0100
+Subject: [PATCH] random: the device tree's /chosen/rng-seed and kaslr-seed
+
+A kernel started by Linux's kexec -s (the Pro1X's boot menu) has no
+loader and no /boot/entropy; Linux hands it 128 bytes of its own seeded
+generator as /chosen/rng-seed and 8 as kaslr-seed (QEMU's virt 32 and 8).
+They go into Fortuna's pool 0 as RANDOM_CACHED at SI_SUB_RANDOM, all of
+them, so that the first reseed takes them whole, and are wiped in the
+tree as Linux does. kern.random.harvest.fdt_seed: the bytes taken.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+--- a/sys/dev/random/random_harvestq.c
++++ b/sys/dev/random/random_harvestq.c
+@@ -29,6 +29,8 @@
+  *
+  */
+ 
++#include "opt_platform.h"
++
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/ck.h>
+@@ -59,6 +61,10 @@
+ #include <dev/random/randomdev.h>
+ #include <dev/random/random_harvestq.h>
+ 
++#ifdef FDT
++#include <dev/ofw/openfirm.h>
++#endif
++
+ #if defined(RANDOM_ENABLE_ETHER)
+ #define _RANDOM_HARVEST_ETHER_OFF 0
+ #else
+@@ -807,6 +813,66 @@
+ 	return (random_early_prime(data, size));
+ }
+ 
++#ifdef FDT
++static u_int random_fdt_seed_bytes;
++SYSCTL_UINT(_kern_random_harvest, OID_AUTO, fdt_seed, CTLFLAG_RD,
++    &random_fdt_seed_bytes, 0,
++    "Bytes of the device tree's /chosen/rng-seed and kaslr-seed taken at boot");
++
++/*
++ * The seeds a boot loader leaves in the device tree's /chosen: Linux's
++ * kexec_file_load (of_kexec_alloc_and_setup_fdt) puts 128 bytes of its own
++ * generator there as rng-seed, once that is seeded, and 8 as kaslr-seed;
++ * QEMU's virt 32 and 8. A kernel started by kexec -s (the Pro1X's boot
++ * menu) has no other seed from before it: no loader, no /boot/entropy.
++ * They go into Fortuna's pool 0 as RANDOM_CACHED, all of them, so that the
++ * first reseed takes them whole, and are wiped in the tree, as Linux does
++ * (early_init_dt_scan_chosen).
++ */
++static size_t
++random_prime_fdt_seed(const char *name)
++{
++	struct harvest_event event;
++	phandle_t chosen;
++	ssize_t len;
++	uint8_t *buf;
++	size_t i;
++	bool wiped;
++
++	chosen = OF_finddevice("/chosen");
++	if (chosen == -1)
++		return (0);
++	len = OF_getproplen(chosen, name);
++	if (len <= 0 || len > 4096)
++		return (0);
++	buf = malloc(len, M_ENTROPY, M_WAITOK | M_ZERO);
++	if (OF_getprop(chosen, name, buf, len) != len) {
++		free(buf, M_ENTROPY);
++		return (0);
++	}
++	for (i = 0; i < (size_t)len; i += sizeof(event.he_entropy)) {
++		memset(&event, 0, sizeof(event));
++		event.he_somecounter = random_get_cyclecount();
++		event.he_size = MIN(sizeof(event.he_entropy), (size_t)len - i);
++		event.he_source = RANDOM_CACHED;
++		event.he_destination = 0;	/* pool 0 */
++		memcpy(event.he_entropy, buf + i, event.he_size);
++		random_harvestq_fast_process_event(&event);
++	}
++	explicit_bzero(&event, sizeof(event));
++	explicit_bzero(buf, len);
++	OF_setprop(chosen, name, buf, len);
++	wiped = OF_getprop(chosen, name, buf, len) == len;
++	for (i = 0; wiped && i < (size_t)len; i++)
++		wiped = buf[i] == 0;
++	free(buf, M_ENTROPY);
++	printf("random: %zd bytes of the device tree's %s%s\n", len, name,
++	    wiped ? ", wiped in the tree" : " (NOT wiped in the tree)");
++	random_fdt_seed_bytes += len;
++	return (len);
++}
++#endif
++
+ /*
+  * This is used to prime the RNG by grabbing any early random stuff
+  * known to the kernel, and inserting it directly into the hashing
+@@ -817,6 +883,11 @@
+ {
+ 	size_t size;
+ 
++#ifdef FDT
++	random_prime_fdt_seed("rng-seed");
++	random_prime_fdt_seed("kaslr-seed");
++#endif
++
+ 	/*
+ 	 * Get entropy that may have been preloaded by loader(8)
+ 	 * and use it to pre-charge the entropy harvest queue.

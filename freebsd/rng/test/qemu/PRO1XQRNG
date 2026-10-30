@@ -1,0 +1,38 @@
+#
+# PRO1XQRNG -- the Pro1X kernel's random numbers in QEMU's virt machine
+# (freebsd/rng/test/qemu/run.sh): qcom_rnd (patches/0038) and the device
+# tree's rng-seed (patches/0039), a PL011 console, a root filesystem in
+# RAM whose rc reports and powers off.
+#
+cpu		ARM64
+ident		PRO1XQRNG
+
+include		"std.arm64"
+options 	FDT
+
+makeoptions	MFS_IMAGE=@MFS_IMAGE@
+options 	MD_ROOT_READONLY
+device		md
+
+device		uart
+device		pl011
+
+# the SoC's PRNG (freebsd/PRO1X)
+device		qcom_rnd
+
+# the frameworks std.arm64's drivers need (as in freebsd/PRO1X)
+device		clk
+device		phy
+device		hwreset
+device		nvmem
+device		regulator
+device		syscon
+device		gpio
+
+device		loop
+device		ether
+device		crypto
+device		armv8crypto
+device		armv8_rng
+
+env		"@ENV_FILE@"

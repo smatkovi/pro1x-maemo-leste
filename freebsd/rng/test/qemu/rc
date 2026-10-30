@@ -1,0 +1,12 @@
+#!/bin/sh
+# /etc/rc of PRO1XQRNG's root filesystem in RAM (freebsd/rng/test/qemu/run.sh):
+# what random(4) was seeded from, then power off
+PATH=/rescue; export PATH
+echo "=== rng-qemu: rc"
+dmesg | sed -n -E '/^random:|^qcom_rnd/p'
+sysctl kern.random.harvest.fdt_seed kern.random.random_sources
+sysctl dev.qcom_rnd.0 2> /dev/null
+# blocks until random(4) is seeded, as ssh-keygen's getrandom(2) does
+dd if=/dev/random of=/dev/null bs=32 count=1 2> /dev/null && echo "=== rng-qemu: /dev/random reads"
+echo "=== rng-qemu: done"
+poweroff

@@ -69,6 +69,19 @@ pro1x_usbnet_hostkeys()
 		d=/var/run/pro1x-sshd
 		mkdir -p -m 700 $d
 	fi
+	# New keys only from a seeded random(4) (freebsd/rng/README.md):
+	# ssh-keygen's getrandom(2) waits for the seed anyway (rc.d/random runs
+	# before netif, this after NETWORKING); the read waits here, the log
+	# says what seeded it (the PRNG, kexec's seed). Nothing on stdout: it
+	# is sshd's arguments.
+	if [ ! -f $d/ssh_host_ed25519_key ] || [ ! -f $d/ssh_host_ecdsa_key ] ||
+	    [ ! -f $d/ssh_host_rsa_key ]; then
+		dd if=/dev/random of=/dev/null bs=1 count=1 2> /dev/null
+		logger -t pro1x_usbnet "new host keys; random(4)'s sources:" \
+		    "$(sysctl -n kern.random.random_sources 2> /dev/null)," \
+		    "the device tree's seed:" \
+		    "$(sysctl -n kern.random.harvest.fdt_seed 2> /dev/null) bytes"
+	fi
 	for t in ed25519 ecdsa rsa; do
 		[ -f $d/ssh_host_${t}_key ] ||
 		    ssh-keygen -q -t $t -N '' -f $d/ssh_host_${t}_key

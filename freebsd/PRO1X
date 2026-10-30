@@ -102,7 +102,11 @@ device		ether
 device		bpf
 device		crypto
 device		armv8crypto
+# random(4)'s sources (freebsd/rng/README.md): the SoC's PRNG, read as
+# Linux's qcom-rng reads its qcom,prng-ee window (patches/0038); armv8_rng
+# finds no RNDR on the Kryo 260 (Cortex-A73/A53) and stays silent
 device		armv8_rng
+device		qcom_rnd
 
 # Settings that cannot come from the command line: the bootloader appends
 # its own arguments, and FreeBSD reads bootargs only when they start with
