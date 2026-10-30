@@ -777,7 +777,12 @@ psci_idle_freeze(sbintime_t until, volatile u_int *stop,
 	atomic_store_rel_int(&pidle_freeze, 1);
 	/* pidle_freeze before *stop (psci_idle_freeze_kick: the other way) */
 	atomic_thread_fence_seq_cst();
-	ipi_all_but_self(IPI_AST);
+	/*
+	 * one CPU (kern.smp.disabled=1, the phone's default): no IPIs, none
+	 * are set up (intr_ipi_send panics: "not setup IPI 0", QEMU -smp 1)
+	 */
+	if (mp_ncpus > 1)
+		ipi_all_but_self(IPI_AST);
 	for (i = 0; i < 1000 && atomic_load_int(&pidle_frozen) <
 	    (u_int)mp_ncpus - 1; i++)
 		DELAY(100);
@@ -839,7 +844,8 @@ psci_idle_freeze(sbintime_t until, volatile u_int *stop,
 	WRITE_SPECIALREG(cntv_ctl_el0, ctl);
 	isb();
 	atomic_store_rel_int(&pidle_freeze, 0);
-	ipi_all_but_self(IPI_AST);
+	if (mp_ncpus > 1)
+		ipi_all_but_self(IPI_AST);
 	spinlock_exit();
 	fi->intid = reason > 0 ? reason : 0;
 	return (reason);
@@ -850,7 +856,12 @@ psci_idle_freeze_kick(void)
 {
 	/* the caller's *stop before pidle_freeze (psci_idle_freeze: after) */
 	atomic_thread_fence_seq_cst();
-	if (atomic_load_int(&pidle_freeze))
+	/*
+	 * with one CPU the kick comes between the freezes (the frozen CPU
+	 * runs no interrupt thread): *stop is looked at before the next
+	 */
+	if (atomic_load_int(&pidle_freeze) && mp_ncpus > 1 &&
+	    pidle_freeze_cpu != PCPU_GET(cpuid))
 		ipi_cpu(pidle_freeze_cpu, IPI_AST);
 }
 

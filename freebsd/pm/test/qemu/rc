@@ -47,6 +47,41 @@ sleep 3
 echo "=== pm-qemu: after 3 s idle"
 sysctl -n hw.psci_idle.stats
 dmesg | sed -n '/psci_idle/p' | tail -5
+# wake-ups (pm.wake=N, needs hw.psci_idle.enable=1, which counts every idle
+# entry): N seconds idle, then N seconds suspended (the freeze), each
+# CPU's idle entries summed (each is a wake-up), and the frozen CPUs'
+idle_sum() {	# the idle entries (wfi and the states) of all CPUs
+	t=0
+	for n in $(sysctl -n hw.psci_idle.stats | sed -n -e '/^cpu[0-9]*: /!d' \
+	    -e 's/^cpu[0-9]*: //' -e 's/, denied.*//' -e 's/ ([0-9]* ms)//g' \
+	    -e 's/[a-z][a-z0-9-]* //g' -e 's/,//gp'); do
+		t=$((t + n))
+	done
+	echo $t
+}
+frozen_sum() {	# the wake-ups of the CPUs frozen in a suspend
+	t=0
+	for n in $(sysctl -n hw.psci_idle.stats | sed -n 's/.*frozen \([0-9]*\).*/\1/p'); do
+		t=$((t + n))
+	done
+	echo $t
+}
+w=$(kenv -q pm.wake)
+if [ -n "$w" ]; then
+	sleep 5
+	a=$(idle_sum)
+	sleep "$w"
+	b=$(idle_sum)
+	echo "=== pm-qemu: wake-ups idle: $((b - a)) in $w s ($(($((b - a)) / w)) a second)"
+	a=$(idle_sum)
+	f=$(frozen_sum)
+	sysctl hw.pro1x_pm.epoch=5 > /dev/null
+	sysctl hw.pro1x_pm.suspend="$w" > /dev/null
+	b=$(idle_sum)
+	g=$(frozen_sum)
+	echo "=== pm-qemu: wake-ups suspended: $((b - a)) idle entries between the epochs, $((g - f)) of the frozen CPUs in $w s"
+	sysctl hw.pro1x_pm.last
+fi
 # suspend-to-idle (pro1x_pm): pm.suspend=N seconds, epochs of pm.epoch
 s=$(kenv -q pm.suspend)
 if [ -n "$s" ]; then
