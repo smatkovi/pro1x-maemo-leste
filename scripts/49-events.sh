@@ -6,7 +6,8 @@
 # (Xsession.post). Needs hildon-desktop with patches/meego (49-hidpi.sh)
 # for its scrolling.
 #
-# Runs as root INSIDE the target (chroot or the running phone).
+# Runs as root INSIDE the target (chroot or the running phone). As a
+# package: scripts/mkdeb-tools.sh (pro1x-events_<version>_arm64.deb).
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 SRC=${SRC:-/root/src}

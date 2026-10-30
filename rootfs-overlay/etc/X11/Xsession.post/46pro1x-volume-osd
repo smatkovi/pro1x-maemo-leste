@@ -1,6 +1,11 @@
 # F(x)tec Pro1X (sourced by Xsession-post): the N9's volume bar for
 # Hildon's MeeGo-like look (tools/pro1x-volume-osd), unseen while the look
-# is off.
-if [ -x /usr/local/bin/pro1x-volume-osd ]; then
-	/usr/local/bin/pro1x-volume-osd > /dev/null 2>&1 &
-fi
+# is off. In /usr/bin from its package (scripts/mkdeb-tools.sh) or
+# 49-volume-osd.sh, in /usr/local/bin where that script put it before.
+for pro1x_osd in /usr/bin/pro1x-volume-osd /usr/local/bin/pro1x-volume-osd; do
+	if [ -x "$pro1x_osd" ]; then
+		"$pro1x_osd" > /dev/null 2>&1 &
+		break
+	fi
+done
+unset pro1x_osd
