@@ -87,6 +87,9 @@ release() { xdotool mouseup 1; }
 # a drag held still before its release: the list scrolls by as much, with
 # no flick after it
 dragh() { drag "$@"; sleep 0.4; release; }
+# back at the list's top (a busy VM's drags can still flick: pulled down
+# at the top it only updates)
+top() { for i in 1 2 3 4 5 6; do dragh 1080 200 1080 1000 10; sleep 1; done; }
 tap() { xdotool mousemove "$1" "$2" mousedown 1; sleep 0.15; xdotool mouseup 1; }
 shot() {
 	sleep ${SHOTWAIT:-6}
@@ -152,19 +155,21 @@ case " $STEPS " in *" step4 "*)
 	dragh 1080 1000 1080 500 12
 	SHOTWAIT=3 shot 14 "the weekly one tomorrow, the task, the birthday"
 	gconftool-2 -s -t string $e/weather_icons none
-	for i in 1 2 3; do dragh 1080 200 1080 1000 10; sleep 1; done
+	top
 	shot 15 "the weather's own glyphs (pulled down: updated)"
 	gconftool-2 -u $e/weather_icons
 	gconftool-2 -s -t bool $e/show_notifications false
 	gconftool-2 -s -t bool $e/show_mastodon false
+	top
 	shot 16 "only the weather and the calendar"
 	gconftool-2 -u $e/show_notifications
 	gconftool-2 -u $e/show_mastodon
 	gconftool-2 -u $e/weather_place
+	top
 	shot 17 "no place: the hint"
 	gconftool-2 -s -t string $e/weather_url http://127.0.0.1:8009/v1/forecast
 	gconftool-2 -s -t string $e/weather_place Wien
-	sleep 3; dragh 1080 200 1080 1000 10
+	sleep 3; top
 	SHOTWAIT=8 shot 18 "no connection: the last answer, not updated"
 	gconftool-2 -s -t string $e/weather_url http://127.0.0.1:8000/v1/forecast
 	# Settings, Events: the control panel first, then its entry (the
