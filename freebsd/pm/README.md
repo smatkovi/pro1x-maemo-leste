@@ -9,6 +9,7 @@ This directory adds, in stages:
 | 2 | CPU idle: the PSCI idle states of the device tree, OS-initiated mode, the core's context across a power-down, the memory-mapped timer as the wake-up | built, tried in QEMU with every power-down played (`simulate`); device runs prepared |
 | 3 | the SoC's sleep (RPM sleep set, MPM hand-over) and suspend-to-idle | built; the freeze tried in QEMU (no RPM there); device runs prepared |
 | 4 | USB device mode (CDC ethernet to the PC) | dwc3dci (a DWC_usb3 device controller driver) and the SM6115 glue built, the encodings tested on the PC; a probe and the gadget run prepared |
+| 4b | the USB-C port, USB 3 | the Type-C detection (`pro1x_typec`) built and its decoding tested; USB 3 wired per the device tree, host mode and USB 3 not done |
 | 5 | the PMIC RTC's alarm as the suspend's wake-up, alarmd's alarms through it | built; the registers tested on the PC against Linux's rtc-pm8xxx, the wake-up in QEMU (a PL031 in the PMIC's place), alarmd's side in the VM; device runs prepared |
 
 Nothing here has run on the phone yet (it is unreachable until
@@ -32,6 +33,7 @@ unchanged until the device runs below pass.
 | `sys/dev/qcom_spmi/qcom_rtc_sim.c` | QEMU's stand-in (`device qcom_rtc_sim`, PRO1XQ only): `qcom_rtc.c` on QEMU virt's PL031 |
 | `test/qcom_rtc_test.c` | the host test of `qcom_rtc_alarm.h` against Linux's `rtc-pm8xxx` and Leste's `librtc-realtime` |
 | `test/dwc3dci_test.c` | the host test of `dwc3dci_hw.h` |
+| `sys/dev/qcom_spmi/pro1x_typec.{c,h}`, `sys/modules/pro1x_typec` | `pro1x_typec.ko`: the PMI632's Type-C detection (stage 4b); `test/typec_test.c` its host test |
 | `../patches/0032-arm64-cpu_idle-hook-psci-idle.patch` | `cpu_idle()` asks `arm64_cpu_idle_hook` first; the files for `device psci_idle` |
 | `../mfsroot/etc/pro1x-pmtest.sh` | the device tests in the RAM root (`pro1x.test=smp`, `idle`), sourced by `mfsroot/etc/rc` |
 | `build.sh` | the kernels: `qemu` (PRO1XQ) and `phone` (PRO1XPM = `freebsd/PRO1X` with `device psci_idle`) into `$WORK/pm-out` (`PMOUT=`: elsewhere; `LOCKNAME=`: the name in `$WORK/.kbuild-lock`) |
@@ -558,6 +560,83 @@ this EE may write the alarm peripheral and owns its interrupt: the
 attach line says), the MPM waking the SoC from vlow/vmin for it, a
 power-up from off by the alarm (the PMIC's power-on trigger; Leste's is
 untested too).
+
+## Stage 4b: the USB-C port (detection) and USB 3 (facts, not done)
+
+**What the sources say** (mainline Linux 7.1: `sm6115.dtsi`, `pmi632.dtsi`,
+`sm6115-fxtec-pro1x.dts`, whose USB-C wiring came with the 7.1 merge, not
+with this project's patches; Linux's drivers):
+
+- **Type-C** is the PMI632's (SPMI slave 2): `qcom,pmi632-typec` at
+  0x1500 (Linux's `qcom_pmic_typec`, TCPM, PD disabled: `pd-disable`), a
+  `usb-c-connector` with `power-role = "dual"`, `data-role = "dual"`,
+  `typec-power-opmode = "default"`; its port 0 (high speed) goes to the
+  DWC3 (`usb-role-switch`: TCPM sets the controller's role), its port 1
+  (SuperSpeed) to the QMP PHY. VBUS out for host mode: the PMI632's
+  `qcom,pmi632-vbus-reg` at 0x1100, 500 mA to 1 A in the Pro1X's tree.
+- **USB 3 is wired, according to the device tree:** the QMP USB3 PHY
+  (`qcom,sm6115-qmp-usb3-phy` at 0x1615000, Linux's `phy-qcom-qmp-usbc`,
+  loaded on the phone: `~/ps/pro1x-power` logs) is enabled in the Pro1X's
+  tree with its supplies (L4A, L12A), its output endpoint goes to the
+  connector's SuperSpeed port, the DWC3 has both PHYs and no
+  `maximum-speed` limit. The PHY is the `orientation-switch`: it selects
+  the lanes by the plug's orientation through the TCSR register 0xb244
+  (`qcom,tcsr-reg`). No SuperSpeed connection has been seen on the phone
+  yet (none in the logs); that the lanes reach the plug is the device
+  tree's statement, not a measurement.
+
+**Done:** `pro1x_typec.ko` (`sys/dev/qcom_spmi/pro1x_typec.c`, a child of
+FreeBSD's `qcom_pmic` bus): only with `hw.pro1x_typec.enable=1`. It
+polls (`hw.pro1x_typec.poll_ms`, 250) MISC_STATUS (attached, orientation
+CC1/CC2, VBUS detected, sink or source mode), SNK_STATUS (the partner's
+Rp: 500 mA, 1.5 A, 3 A) and SRC_STATUS (Rd: a device, Ra/Ra audio,
+debug), the registers of Linux's `qcom_pmic_typec_port.c`, and reports
+`role=device` (we are the sink: a PC, or a charger, which CC cannot tell
+apart), `role=host` (a device's Rd: an OTG adapter, a stick, a hub),
+`orientation=cc1|cc2`, `vbus`, `rp` in `dev.pro1x_typec.0.state` and to
+devd (system PRO1X, subsystem TYPEC, ATTACH/DETACH;
+`rootfs/usr/local/etc/devd/pro1x_typec.conf` logs it). Read only by
+default; `hw.pro1x_typec.drp=1` sets dual role if Linux left the port
+otherwise (MODE_CFG 0x44), `hw.pro1x_typec.vbus=1` switches the VBUS
+output on while a device is attached and off when it leaves (Linux's
+`qcom_usb_vbus-regulator`: OTG_CFG source by command, the current limit
+from `regulator-max-microamp`, CMD_OTG). Tested on the PC:
+`test/typec_test.c` (the decoding of PC, flipped charger, OTG adapter,
+powered cable, audio and debug accessories, the mode names, the VBUS
+limits): 0 failures.
+
+**Not done** (the next steps, in this order):
+
+1. Host mode: the DWC3 as xHCI. FreeBSD's `dwc3`/`xhci` drivers exist,
+   but FreeBSD's `dwc3` takes its clocks and PHYs from frameworks that
+   have no SM6115 providers; the way is `pro1x_usb`'s bring-up, then
+   GCTL's port capability to host and `generic_xhci_attach` on the core,
+   switched by `pro1x_typec`'s role (with VBUS on).
+2. USB 3: the QMP PHY's init tables of `phy-qcom-qmp-usbc.c` for the
+   SM6115, its pipe clock (`GCC_USB3_PRIM_PHY_PIPE_CLK`) and two resets,
+   the lane select in TCSR 0xb244 by `orientation`, then xHCI SuperSpeed
+   (host) and SuperSpeed in `dwc3dci` (bursts, U1/U2: device).
+3. The role switch itself: `pro1x_usb` (device) or the host path loaded
+   by devd on `role=device` / `role=host`.
+
+**Device run:**
+
+12. **The port's detection** (`pro1x_typec`), with someone at the phone,
+    from the full system's console (or ssh over Wi-Fi):
+    `kenv hw.pro1x_typec.enable=1; kldload pro1x_typec`, then
+    `tail -f /var/log/messages` and plug, one after the other: the PC's
+    cable (both orientations), a charger, an OTG adapter with a USB
+    stick, a hub. Expected: `pro1x_typec0: at 0x1500, mode 00 (dual
+    role), VBUS out at 0x1100 up to 1000 mA (left alone)`, then per plug
+    `role=device orientation=cc1 vbus=1 rp=500 (misc 29 ...)` and with
+    the plug turned `orientation=cc2`; the charger `role=device ...
+    rp=1500` or `3000`; the OTG adapter `role=host ... vbus=0` (with
+    `hw.pro1x_typec.vbus=1` also `VBUS out on` and the stick's light on);
+    `DETACH` lines on unplugging. Failure signs: no `pro1x_typec0` (the
+    node not enumerated below the PMIC: `devinfo -v`), `mode 01
+    (disabled)` (Linux switched the port off at the kexec: then
+    `hw.pro1x_typec.drp=1`), no change on plugging (`misc` stays: the
+    block not running, or the debounce bits differ from Linux's reading).
 
 ## Device runs (prepared, for 2026-10-31)
 
