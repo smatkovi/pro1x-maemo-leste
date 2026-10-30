@@ -1,7 +1,7 @@
 # The state of each package as tried in the FreeBSD VM (vm/try-hildon.sh,
 # 2160x1080 at x2.25), for the table in README.md (apps-table.py);
 # "builds" when not listed.
-hildon-desktop|runs (VM)
+hildon-desktop|runs (VM; the MeeGo-like look in portrait on Xorg's dummy driver with fake-rotation.so: pages, launcher, open applications, an application, the status menu)
 hildon-home|runs (VM)
 hildon-status-menu|runs (VM)
 hildon-session|runs (VM)
@@ -36,7 +36,7 @@ qt5-webengine|runs (VM, through Jib)
 qt5-webkit|runs (VM, through Dorian)
 ffmpeg8-libs|runs (VM, through QtWebEngine)
 pro1x-standby|runs (VM: time-out, dimming, double tap, power key, proximity signals; no system calls while in use)
-pro1x-events|runs (VM: the Events page with made-up notifications and a made-up Mastodon timeline, scrolling, pull to update, Clear, the settings applet; 1.1: the weather from a made-up and from the real Open-Meteo, with MeeCast's icons and its own, the cached one without a connection, made-up appointments of calendar-backend incl. a weekly one, a task and a birthday, the sections on and off, the applet's place search)
+pro1x-events|runs (VM: the Events page with made-up notifications and a made-up Mastodon timeline, scrolling, pull to update, Clear, the settings applet; 1.1: the weather from a made-up and from the real Open-Meteo, with MeeCast's icons and its own, the cached one without a connection, made-up appointments of calendar-backend incl. a weekly one, a task and a birthday, the sections on and off, the applet's place search; 1.2: made-up posts' pictures, three, a video's still, a sensitive post's plates, in landscape and portrait)
 calendar-backend|runs (VM: pro1x-events reads its appointments; with 0003 and 0004 the weekly ones are expanded and the default calendars created)
 pro1x-volume-osd|runs (VM: started by hildon-session, the bar on a null sink's volume changes)
 pro1x-proximity|builds; needs the Pro1X's ADSP (untested on the phone)

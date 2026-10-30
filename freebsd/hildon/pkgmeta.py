@@ -66,13 +66,15 @@ LOCAL = {
                       "(tools/pro1x-standby); Nokia's icons and font are not "
                       'included.', ['UNKNOWN']),
     # 1.1: the weather (Open-Meteo) and the calendar's appointments
-    # (calendar-backend), each section on or off
-    'pro1x-events': ('1.1', "The Nokia N9's Events page for Hildon's MeeGo-like look",
+    # (calendar-backend), each section on or off; 1.2: the posts' pictures
+    # as the N9's feeds showed theirs
+    'pro1x-events': ('1.2', "The Nokia N9's Events page for Hildon's MeeGo-like look",
                      'pro1x-events shows on the first home view the date, the weather '
                      "of a place (Open-Meteo, MeeCast's icons where MeeCast is installed), "
                      'the missed calls, messages and chats (rtcom-eventlogger), unread '
                      "e-mail (modest), the next days' appointments of Hildon's calendar "
-                     "(calendar-backend) and a Mastodon account's home timeline, pulled "
+                     "(calendar-backend) and a Mastodon account's home timeline with its posts' "
+                     'pictures, pulled '
                      'down to update, while the MeeGo-like look is on; its control panel '
                      'applet turns the sections on and off and takes the place and the '
                      'account (tools/pro1x-events, apps/pro1x-events).',
@@ -393,8 +395,10 @@ REVISION = {
     # MeeGo-like pages (patches/meego, off by default); 2: the edge
     # gestures, no more crash when a thumbnail zooms in (isnanf, 0003);
     # 4: no dependency on Nokia's sounds (PRIVATE); 5: the MeeGo-like look's
-    # status bar over the launcher and the task navigator, the Events page
-    'hildon-desktop': 5,
+    # status bar over the launcher and the task navigator, the Events page;
+    # 6: portrait as on the N9 (pages side by side, the N9's launcher rows,
+    # the open applications in two columns)
+    'hildon-desktop': 6,
     # 2026-10-27: the daemon too (it was libalarm only)
     'alarmd': 1,
     # 2026-10-27: Leste's hildon-libs texts, not libhildon's (EXCLUDE); 2:

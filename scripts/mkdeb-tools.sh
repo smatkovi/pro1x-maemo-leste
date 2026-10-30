@@ -34,7 +34,7 @@ export DEBIAN_FRONTEND=noninteractive
 MAINTAINER="Sebastian Matkovich <sebastian.matkovich@gmail.com>"
 HOMEPAGE=https://github.com/smatkovi/pro1x-maemo-leste
 ARCH=$(dpkg --print-architecture)
-declare -A VERSIONS=([pro1x-events]=1.1 [pro1x-volume-osd]=1.0)
+declare -A VERSIONS=([pro1x-events]=1.2 [pro1x-volume-osd]=1.0)
 log() { echo ">> $*"; }
 
 # Build dependencies (49-events.sh's and 49-volume-osd.sh's). The -dev
@@ -151,7 +151,7 @@ if want pro1x-events; then
     "hildon-desktop (>= 1:2.2.196+pro1x4), hildon-control-panel, ca-certificates" \
     "librtcom-eventlogger-plugins1, qalendar" \
     "Nokia N9 style Events page for Hildon's MeeGo-like look" \
-    "pro1x-events shows on the first home view, while the MeeGo-like look is on (GConf /apps/osso/hildon-desktop/meego_pages), the day and the date, the weather of a place (Open-Meteo, no key; MeeCast's icons where MeeCast is installed), the missed calls, messages and chats (rtcom-eventlogger), unread e-mail (modest), the next days' appointments of Hildon's calendar (calendar-backend) and a Mastodon account's home timeline; pulled down it updates. Its control panel applet, Settings, Events, turns each section on or off and takes the weather's place (with Open-Meteo's geocoding) and the Mastodon server and access token. Started by the X session (Xsession.post). No Nokia graphics or fonts are included."
+    "pro1x-events shows on the first home view, while the MeeGo-like look is on (GConf /apps/osso/hildon-desktop/meego_pages), the day and the date, the weather of a place (Open-Meteo, no key; MeeCast's icons where MeeCast is installed), the missed calls, messages and chats (rtcom-eventlogger), unread e-mail (modest), the next days' appointments of Hildon's calendar (calendar-backend) and a Mastodon account's home timeline with its posts' pictures, as the N9 showed its feeds'; pulled down it updates; in portrait too. Its control panel applet, Settings, Events, turns each section on or off and takes the weather's place (with Open-Meteo's geocoding) and the Mastodon server and access token. Started by the X session (Xsession.post). No Nokia graphics or fonts are included."
 fi
 
 if want pro1x-volume-osd; then

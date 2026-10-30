@@ -111,7 +111,7 @@ per caller or sender; the unread e-mail of each modest account, asked over
 D-Bus only while modest runs) with Clear, which marks them read, then the
 home timeline of a Mastodon account (`GET /api/v1/timelines/home` with the
 account's access token, in a thread with libcurl, the avatars cached in
-`~/.cache/pro1x-events`). The list scrolls up and down with a flick; pulled
+`~/.cache/pro1x-events`), with the posts' pictures (below). The list scrolls up and down with a flick; pulled
 down at its top it updates (as the N9's feeds, "Pull down to update",
 "Release to update"), else every 15 minutes while it is seen. A tap opens
 the post in the browser, a notification its application (through
@@ -196,9 +196,7 @@ notifications and the feed, scrolled by drags, pulled down to update, the
 swipes across to the second view, back, to the launcher and back, Clear,
 the hint without an account opening Settings, Events, a token saved there
 and the feed fetched with it. Not tried: a real Mastodon server, modest
-with unread mail, a phone. Portrait: the page follows the screen's size,
-but hildon-desktop's portrait home pans up and down, so it gets no drags
-there.
+with unread mail, a phone. (Portrait: below.)
 
 The weather and the calendar (1.1) in the VM, `STEPS=step4` with
 `EVENTS_FIXTURE=1` (a made-up answer in Open-Meteo's format, three places
@@ -213,3 +211,81 @@ calendar's days, a tap opening qalendar (in the VM its month view: the
 appointment's own view needs qalendar to answer within the call's minute,
 which it did not in the emulated VM), and the real Open-Meteo for Vienna
 from the VM. Not tried: a phone.
+
+### The posts' pictures (pro1x-events 1.2)
+
+The N9 showed pictures in its Events feeds (Twitter, Facebook, the RSS
+reader, AP News): its home screen's style (`meegotouchhome.css` of the N9's
+firmware, PR1.3) has `SwipeEventFeedItemStyle` with `maximum-images: 3`,
+`maximum-video-images: 1` and a play button over a video
+(`video-overlay-image: icon-l-common-video-playback`, 64 x 64 at 40 %), and
+image styles `EventFeedImageLarge` (168 x 168 of its pixels),
+`EventFeedImageSmall` (120 x 120) and `EventFeedImageVideo` (210 x 120), 1.6
+mm above them and 0.8 mm right of each; its event feed API
+(libmeegotouchevents, `MEventFeed::addItem`) takes an `imageList` and a
+`video` flag ("limited to one thumbnail ... a play button overlay rendered
+on top of it"), and the N9's own Twitter and Facebook clients pass their
+posts' pictures. pro1x-events shows a Mastodon post's attachments so:
+their previews (`preview_url`; of the boosted post for a boost) in a row
+in the text column below the text, above the time; up to 3 images, 168
+pixels square for one or two, 120 for three (three of them and their gaps
+fill the N9's text column, 384 of its pixels: inferred, the rule itself is
+in Nokia's closed home screen), cropped to squares as the N9's thumbnails
+(its "grid" flavour, "cropped"); a video or GIF as one still in 210 x 120,
+not cropped, under the N9's play button where its theme is installed, else
+one drawn alike. A tap opens the post, as a tap anywhere on an item (the
+N9 had no action of its own for a picture). A post marked sensitive gets
+grey plates, "Sensitive content", instead of its pictures (which are not
+fetched; the N9 had no such mark). The previews are cached in
+`~/.cache/pro1x-events` (`media-*`) while posts show them, for two days
+after. One older text of Nokia's (the Harmattan developer library's guide
+to the event feed, of an earlier libmeegotouchevents) says the images show
+when an item is expanded by a tap; the N9's own home screen (PR1.3) has no
+such expanding and shows them in the list.
+
+## Portrait
+
+Leste's hildon-desktop turns the screen to portrait when mce reports the
+phone upright (its accelerometer, through iio-sensor-proxy on the Pro1X),
+while the keyboard is slid in and `/apps/osso/hildon-desktop/ui_can_rotate`
+is on (the default). The N9 was made for portrait, and with the look the
+pages work there as on it (`hildon-desktop.patch`, hildon-desktop 1:2.2.196+pro1x5,
+FreeBSD hildon-desktop_6):
+
+- The pages stay side by side, changed by a swipe across, and the Events
+  page scrolls up and down: Leste's own portrait home, its views one below
+  the other (GConf `scroll_vertical`), which took the drags up and down
+  from the page, is not used while the look is on (it is again when it is
+  off). A swipe on Home changes the page after a quarter of the screen's
+  width in either orientation.
+- The status bar lies across the top, 81 px high, as in landscape.
+- The launcher has the N9's buttons (`SwipeLauncherButtonStyle`, 11.2 mm
+  wide; `LauncherPageFlowLayoutPolicy`: 0.2 mm apart, rows 3 mm apart;
+  `SwipeLauncherPannedWidget`: 1.3 mm free at the sides in portrait, 2.9 mm
+  in landscape): as many in a row as fit, 4 in portrait and 7 in landscape,
+  as on the N9, in either orientation.
+- The open applications are two columns of thumbnails from the top left
+  below the status bar, as the N9's (`SwitcherDetailviewPolicy`: 1.4 mm
+  free at the sides, 2.4 mm at the top, 2.0 mm apart in portrait; 3, 3 and
+  2.4 mm in landscape), as wide as that leaves and of their windows' shape,
+  in landscape too. Hildon's title on each thumbnail, with its close
+  button, stays.
+- The Events page lays itself out for the narrower screen: the weather's
+  days below the weather now, the pictures in the same sizes in both.
+- Applications that can turn (their `_HILDON_PORTRAIT_MODE_SUPPORT`) begin
+  below the bar in portrait; the edges' swipes and the menu as a list (as
+  wide as the screen) work there as in landscape.
+
+Tried in the FreeBSD VM (`freebsd/vm/try-meego-portrait.sh`): Xvfb cannot
+change its screen's size, so Xorg's dummy driver with a landscape and a
+portrait mode of the phone's size, and `fake-rotation.c` preloaded in the
+session, which turns the rotation hildon-desktop asks for into a change of
+mode (the screen is then 1080 x 2160, as on the phone after the turn; the
+screenshots are upright); mce's orientation signal sent with `dbus-send`
+(`session.sh rotate portrait|landscape`), and `scroll_vertical` on: the
+Events page in landscape and in portrait, scrolled to the feed's pictures,
+a swipe to the launcher and back, two X Terminals, one in portrait below
+the bar, its menu, the left edge's swipe to the open applications, the
+status menu from there, back to landscape: the open applications, the
+launcher and the Events page. FreeBSD itself has no sensors on the Pro1X,
+so there it stays in landscape. Not tried: a phone.

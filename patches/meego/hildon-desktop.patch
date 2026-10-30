@@ -11,6 +11,10 @@ N9's shape (the N9's own where its theme is installed). The status bar
 also over the launcher and the task navigator. Home widgets that scroll
 (_HILDON_MEEGO_SCROLLING_APPLET, the Events page) get the drags up and
 down; applets begin right below the bar.
+In portrait as on the N9: the pages side by side (Leste's scroll_vertical
+not used with the look), the launcher with the N9's buttons (4 in a row
+in portrait, 7 in landscape), the open applications in two columns below
+the status bar.
 
 diff --git a/src/hildon-desktop-views.schemas b/src/hildon-desktop-views.schemas
 index 8da5ccc..a493524 100644
@@ -134,7 +138,7 @@ index eda58da..0353a9d 100644
  
    clutter_actor_set_position (applet, c_geom.x, c_geom.y);
 diff --git a/src/home/hd-home.c b/src/home/hd-home.c
-index 96d6cf5..aad7630 100644
+index 96d6cf5..a44cdf8 100644
 --- a/src/home/hd-home.c
 +++ b/src/home/hd-home.c
 @@ -42,6 +42,7 @@
@@ -153,7 +157,17 @@ index 96d6cf5..aad7630 100644
  #include <gdk/gdkx.h>
  #include <gdk/gdkkeysyms.h>
  #include <libhildondesktop/hd-pvr-texture.h>
-@@ -171,6 +173,12 @@ struct _HdHomePrivate
+@@ -150,6 +152,9 @@ struct _HdHomePrivate
+ 
+   guint                  edit_button_cb;
+ 
++  /* Leste's portrait home with the views one below the other (GConf
++   * scroll_vertical); never in the MeeGo-like look, whose pages lie side
++   * by side in either orientation (scrolls_vertically) */
+   gboolean               vertical_scrolling;
+   gboolean               portrait_wallpaper;
+ 
+@@ -171,6 +176,12 @@ struct _HdHomePrivate
    gboolean               long_press : 1;
    guint                  press_timeout;
    ClutterActor          *pressed_applet;
@@ -166,10 +180,11 @@ index 96d6cf5..aad7630 100644
  
    Window                 desktop;
  
-@@ -240,6 +248,12 @@ static gboolean do_home_applet_motion (HdHome       *home,
+@@ -240,6 +251,13 @@ static gboolean do_home_applet_motion (HdHome       *home,
                                         ClutterActor *applet,
                                         int           x,
                                         int           y);
++static gboolean scrolls_vertically (HdHomePrivate *priv);
 +static void hd_home_applet_emit_motion_event (HdHome       *home,
 +                                              ClutterActor *applet,
 +                                              int           x,
@@ -179,10 +194,29 @@ index 96d6cf5..aad7630 100644
  static void update_edge_indication_visibility (HdHome *home,
                                                 guint8  left_opacity,
                                                 guint8  right_opacity);
-@@ -507,6 +521,22 @@ hd_home_desktop_motion (XButtonEvent *xev, void *userdata)
+@@ -363,7 +381,7 @@ hd_home_desktop_do_motion (HdHome *home,
+   g_timer_reset(priv->last_move_time);
+ 
+   if(!STATE_IS_PORTRAIT(hd_render_manager_get_state ())
+-        || !priv->vertical_scrolling )
++        || !scrolls_vertically (priv))
+     { /* Scrolling in landscape mode */
+       drag_item->x = x - priv->last_x;
+       priv->cumulative_x += drag_item->x;
+@@ -507,6 +525,32 @@ hd_home_desktop_motion (XButtonEvent *xev, void *userdata)
    hd_home_desktop_do_motion (home, xev->x, xev->y);
  }
  
++/* The home views one below the other in portrait: Leste's choice
++ * (scroll_vertical), but not in the MeeGo-like look, where they and the
++ * other pages lie side by side as on the N9, whose Events page scrolls up
++ * and down itself (hd-meego.c) */
++static gboolean
++scrolls_vertically (HdHomePrivate *priv)
++{
++  return priv->vertical_scrolling && !hd_meego_pages_enabled ();
++}
++
 +/* The ends of the home views among the MeeGo-like pages (hd-meego.c) */
 +static guint
 +meego_end_view (HdHome *home, gboolean last)
@@ -202,14 +236,23 @@ index 96d6cf5..aad7630 100644
  static void
  hd_home_desktop_do_release (HdHome *home)
  {
-@@ -544,7 +574,18 @@ hd_home_desktop_do_release (HdHome *home)
+@@ -533,7 +577,7 @@ hd_home_desktop_do_release (HdHome *home)
+   priv->drag_list = 0;
+ 
+   if(STATE_IS_PORTRAIT(hd_render_manager_get_state ())
+-      && priv->vertical_scrolling)
++      && scrolls_vertically (priv))
+     {
+       cumulative_value = priv->cumulative_y;
+       velocity_value = priv->velocity_y;
+@@ -544,9 +588,23 @@ hd_home_desktop_do_release (HdHome *home)
        velocity_value = priv->velocity_x;
      }
  
 -  if (!priv->long_press && priv->moved_over_threshold)
 +  if (!priv->long_press && priv->moved_over_threshold &&
 +      hd_meego_pages_enabled () &&
-+      ABS (cumulative_value) >= PAN_NEXT_PREVIOUS_PERCENTAGE * HD_COMP_MGR_LANDSCAPE_WIDTH &&
++      ABS (cumulative_value) >= PAN_NEXT_PREVIOUS_PERCENTAGE * hd_comp_mgr_get_current_screen_width () &&
 +      hd_home_view_container_get_current_view (HD_HOME_VIEW_CONTAINER (priv->view_container)) ==
 +      meego_end_view (home, cumulative_value < 0))
 +    {
@@ -220,9 +263,33 @@ index 96d6cf5..aad7630 100644
 +    }
 +  else if (!priv->long_press && priv->moved_over_threshold)
      {
-       if (ABS (cumulative_value) >= PAN_NEXT_PREVIOUS_PERCENTAGE * HD_COMP_MGR_LANDSCAPE_WIDTH) /* */
+-      if (ABS (cumulative_value) >= PAN_NEXT_PREVIOUS_PERCENTAGE * HD_COMP_MGR_LANDSCAPE_WIDTH) /* */
++      /* (in the MeeGo-like look a quarter of the screen in portrait too) */
++      if (ABS (cumulative_value) >= PAN_NEXT_PREVIOUS_PERCENTAGE *
++          (hd_meego_pages_enabled () ? hd_comp_mgr_get_current_screen_width ()
++                                     : HD_COMP_MGR_LANDSCAPE_WIDTH)) /* */
          {
-@@ -1914,6 +1955,74 @@ hd_home_applet_emit_button_press_event (
+           if (cumulative_value > 0)
+             {
+@@ -1357,11 +1415,12 @@ hd_home_constructed (GObject *object)
+                           HD_COMP_MGR_LANDSCAPE_HEIGHT);
+   /* Eliminates black rectangles between views in portrait mode. */
+   /* Visible with horizontal scrolling. */
+-  /* It should be disabled when vertical scrolling is in use. */
+-  if (!priv->vertical_scrolling)
+-    g_signal_connect_swapped(clutter_stage_get_default(), "notify::allocation",
+-                            G_CALLBACK(hd_home_resize_view_container),
+-                            priv->view_container);
++  /* It should be disabled when vertical scrolling is in use (the handler
++   * leaves the container then as it is: the MeeGo-like look, which can be
++   * switched on later, never scrolls vertically). */
++  g_signal_connect_swapped(clutter_stage_get_default(), "notify::allocation",
++                          G_CALLBACK(hd_home_resize_view_container),
++                          priv->view_container);
+   clutter_actor_show (priv->view_container);
+ 
+   priv->edit_button = hd_home_create_edit_button ();
+@@ -1914,6 +1973,74 @@ hd_home_applet_emit_button_press_event (
    	     0, (XEvent *)&xev);
  }
  
@@ -297,7 +364,7 @@ index 96d6cf5..aad7630 100644
  static void
  hd_home_applet_emit_leave_event (
  		HdHome             *home,
-@@ -2103,6 +2212,14 @@ hd_home_applet_press (ClutterActor       *applet,
+@@ -2103,6 +2230,14 @@ hd_home_applet_press (ClutterActor       *applet,
    hd_home_desktop_do_press (home, event->x, event->y);
  
    priv->pressed_applet = applet;
@@ -307,12 +374,12 @@ index 96d6cf5..aad7630 100644
 +  if (cclient && cclient->wm_client && hd_meego_pages_enabled ()
 +      && HD_HOME_APPLET (cclient->wm_client)->meego_scrolls
 +      && !(STATE_IS_PORTRAIT (hd_render_manager_get_state ())
-+           && priv->vertical_scrolling))
++           && scrolls_vertically (priv)))
 +    priv->applet_drag = APPLET_DRAG_UNDECIDED;
  
    return TRUE;
  }
-@@ -2115,6 +2232,7 @@ do_applet_release (HdHome             *home,
+@@ -2115,6 +2250,7 @@ do_applet_release (HdHome             *home,
    HdHomePrivate   *priv = home->priv;
  
    priv->pressed_applet = NULL;
@@ -320,7 +387,7 @@ index 96d6cf5..aad7630 100644
  
    hd_home_desktop_do_release (home);
    clutter_ungrab_pointer ();
-@@ -2189,6 +2307,22 @@ hd_home_applet_release (ClutterActor       *applet,
+@@ -2189,6 +2325,22 @@ hd_home_applet_release (ClutterActor       *applet,
  
    g_debug ("%s. (x, y) = (%d, %d)", __FUNCTION__, event->x, event->y);
  
@@ -343,7 +410,7 @@ index 96d6cf5..aad7630 100644
    do_home_applet_motion (home, applet, event->x, event->y);
    do_applet_release (home, applet, event);
  
-@@ -2251,6 +2385,37 @@ hd_home_applet_motion (ClutterActor       *applet,
+@@ -2251,6 +2403,37 @@ hd_home_applet_motion (ClutterActor       *applet,
  	(CLUTTER_BUTTON1_MASK | CLUTTER_BUTTON2_MASK | CLUTTER_BUTTON2_MASK)))
      return FALSE;
  
@@ -381,6 +448,40 @@ index 96d6cf5..aad7630 100644
    return do_home_applet_motion (home, applet, event->x, event->y);
  }
  
+@@ -2588,7 +2771,7 @@ hd_home_show_edge_indication (HdHome *home)
+ 
+   if (STATE_IS_PORTRAIT (hd_render_manager_get_state ()))
+     {
+-      if (priv->vertical_scrolling)
++      if (scrolls_vertically (priv))
+         {
+           clutter_actor_set_size (priv->edge_indication_left, HD_COMP_MGR_PORTRAIT_HEIGHT,
+                                   HD_EDGE_INDICATION_WIDTH);
+@@ -2790,6 +2973,15 @@ void
+ hd_home_resize_view_container (ClutterActor *actor, GParamSpec *unused,
+                                ClutterActor *stage)
+ {
++  HdHome *home = hd_render_manager_get_home ();
++
++  /* the views one below the other: as it was made (landscape) */
++  if (home && scrolls_vertically (home->priv))
++    {
++      clutter_actor_set_size (actor, HD_COMP_MGR_LANDSCAPE_WIDTH,
++                              HD_COMP_MGR_LANDSCAPE_HEIGHT);
++      return;
++    }
+   clutter_actor_set_size (actor,
+                           hd_comp_mgr_get_current_screen_width (),
+                           hd_comp_mgr_get_current_screen_height ());
+@@ -2800,7 +2992,7 @@ hd_home_get_vertical_scrolling (HdHome *home)
+ {
+   HdHomePrivate *priv = home->priv;
+ 
+-  return priv->vertical_scrolling;
++  return scrolls_vertically (priv);
+ }
+ 
+ gboolean
 diff --git a/src/home/hd-home.h b/src/home/hd-home.h
 index f3cf6e3..b7e99b4 100644
 --- a/src/home/hd-home.h
@@ -543,7 +644,7 @@ index c039af9..50c7679 100644
  
  
 diff --git a/src/home/hd-task-navigator.c b/src/home/hd-task-navigator.c
-index fb0c326..d719555 100644
+index fb0c326..cdb96dd 100644
 --- a/src/home/hd-task-navigator.c
 +++ b/src/home/hd-task-navigator.c
 @@ -61,6 +61,7 @@
@@ -554,7 +655,77 @@ index fb0c326..d719555 100644
  #include "hd-clutter-cache.h"
  #include "hd-transition.h"
  #include "hd-theme.h"
-@@ -2944,10 +2945,12 @@ hd_task_navigator_zoom_in (HdTaskNavigator * self, ClutterActor * win,
+@@ -234,7 +235,8 @@
+  */
+ #define THUMBSIZE_IS_LARGE            (Thumbsize == &Thumbsizes[IS_PORTRAIT].large || \
+ 				       Thumbsize == &Thumbsizes[IS_PORTRAIT].single || \
+-				       Thumbsize == &Thumbsizes[IS_PORTRAIT].twocol)
++				       Thumbsize == &Thumbsizes[IS_PORTRAIT].twocol || \
++				       Thumbsize == &Meego_thumbsizes[IS_PORTRAIT])
+ 
+ #define FLY(ops, how)                 ((ops) == &Fly_##how)
+ /* Macros }}} */
+@@ -631,6 +633,9 @@ static struct
+   }
+ };
+ 
++/* The MeeGo-like look's (calc_meego_layout), landscape and portrait */
++static GtkRequisition Meego_thumbsizes[2];
++
+ #define _setThumbSizes() \
+ if (G_LIKELY (Thumbsizes[0].large.width == 0))\
+   {\
+@@ -1926,6 +1931,36 @@ layout_fun (gint total, gint term1, gint term2, gint factor)
+   return (total - (term1*factor + term2*(factor - 1))) / 2;
+ }
+ 
++/* The MeeGo-like look (hd-meego.c): the N9's open applications, in either
++ * orientation two columns of thumbnails from the top left, below the
++ * status bar (meegotouchhome.css, SwitcherDetailviewPolicy: 1.4 mm free
++ * at the sides, 2.4 mm at the top, 2.0 mm between them in portrait; 3 mm,
++ * 3 mm and 2.4 mm in landscape), as wide as that leaves, their windows'
++ * shape kept. */
++static void
++calc_meego_layout (Layout * lout)
++{
++  GtkRequisition *size = &Meego_thumbsizes[IS_PORTRAIT];
++  gint side = IS_PORTRAIT ? HD_S (14) : HD_S (30);
++  gint top  = IS_PORTRAIT ? HD_S (24) : HD_S (30);
++  gint gap  = IS_PORTRAIT ? HD_S (20) : HD_S (24);
++  /* the applications' area, as layout_thumbs() scales it */
++  gint appw = IS_PORTRAIT ? App_window_geometry_height + HD_COMP_MGR_TOP_MARGIN
++                          : App_window_geometry_width;
++  gint apph = IS_PORTRAIT ? App_window_geometry_width - HD_COMP_MGR_TOP_MARGIN
++                          : App_window_geometry_height;
++
++  size->width = (DESKTOP_WIDTH - 2 * side - gap) / 2;
++  size->height = (size->width - 2 * FRAME_WIDTH) * apph / appw
++                 + FRAME_TOP_HEIGHT + FRAME_BOTTOM_HEIGHT;
++  lout->thumbsize = size;
++  lout->cells_per_row = 2;
++  lout->xpos = lout->last_row_xpos = side;
++  lout->ypos = HD_MEEGO_BAR_HEIGHT + top;
++  lout->hspace = size->width + gap;
++  lout->vspace = size->height + gap;
++}
++
+ /* Calculates the layout of the thumbnails and fills in @lout.
+  * The layout depends on the number of thumbnails. */
+ static void
+@@ -1936,6 +1971,12 @@ calc_layout (Layout * lout)
+                                                  "taskswitcher", 0);
+   _setThumbSizes();
+ 
++  if (hd_meego_pages_enabled ())
++    {
++      calc_meego_layout (lout);
++      return;
++    }
++
+   /* Figure out how many thumbnails to squeeze into one row
+    * (not the last one, which may be different) and the maximum
+    * number of fully visible rows at a time. */
+@@ -2944,10 +2985,12 @@ hd_task_navigator_zoom_in (HdTaskNavigator * self, ClutterActor * win,
    hd_render_manager_unzoom_background ();
    zoom_in (apthumb);
  
@@ -569,7 +740,7 @@ index fb0c326..d719555 100644
    clutter_effect_fade (Zoom_effect, apthumb->plate,      0, NULL, NULL);
  
    /* Fade out our notification smoothly if we have one. */
-@@ -3038,7 +3041,8 @@ hd_task_navigator_zoom_out (HdTaskNavigator * self, ClutterActor * win,
+@@ -3038,7 +3081,8 @@ hd_task_navigator_zoom_out (HdTaskNavigator * self, ClutterActor * win,
     * .titlebar shown but transparent." but i can't recall why.  Anyway,
     * let's hide it afterwards.) */
    clutter_actor_show (apthumb->titlebar);
@@ -579,6 +750,33 @@ index fb0c326..d719555 100644
    clutter_effect_fade (Zoom_effect, apthumb->titlebar,   0,
                         (ClutterEffectCompleteFunc)hide_when_complete,
                         apthumb->titlebar);
+@@ -4589,6 +4633,14 @@ hd_task_navigator_mode(void)
+   return g_hd_task_navigator_mode;
+ }
+ 
++/* The thumbnails laid out anew (the MeeGo-like look changed, hd-meego.c) */
++void
++hd_task_navigator_relayout (void)
++{
++  if (Thumbnails)
++    layout (NULL, FALSE);
++}
++
+ void
+ hd_task_navigator_rotate(int mode)
+ {
+diff --git a/src/home/hd-task-navigator.h b/src/home/hd-task-navigator.h
+index 5bded15..18febd0 100644
+--- a/src/home/hd-task-navigator.h
++++ b/src/home/hd-task-navigator.h
+@@ -86,6 +86,7 @@ void hd_task_navigator_rotate_thumbs(void);
+ int hd_task_navigator_mode(void);
+ 
+ void hd_task_navigator_rotate(int mode);
++void hd_task_navigator_relayout (void);
+ void hd_task_navigator_update_orientation(gboolean portrait);
+ void hd_task_navigator_update_win_orientation(Window xwindow,gboolean portrait);
+ gboolean hd_task_navigator_get_disable_portrait(MBWindowManagerClient *c);
 diff --git a/src/home/hd-title-bar.c b/src/home/hd-title-bar.c
 index 327173a..d336134 100644
 --- a/src/home/hd-title-bar.c
@@ -612,6 +810,83 @@ index 327173a..d336134 100644
  }
  
  #ifndef G_DEBUG_DISABLE
+diff --git a/src/launcher/hd-launcher-grid.c b/src/launcher/hd-launcher-grid.c
+index 6585e83..bc195dd 100644
+--- a/src/launcher/hd-launcher-grid.c
++++ b/src/launcher/hd-launcher-grid.c
+@@ -45,6 +45,7 @@
+ #include "hd-comp-mgr.h"
+ #include "hd-util.h"
+ #include "hd-transition.h"
++#include "hd-meego.h"
+ 
+ #define I_(str) (g_intern_static_string ((str)))
+ 
+@@ -116,8 +117,28 @@ static gboolean _hd_launcher_grid_blocker_release_cb (ClutterActor *actor,
+                                         gpointer *data);
+ 
+ static gboolean      hd_launcher_grid_is_portrait (HdLauncherGrid *self);
+-#define HD_LAUNCHER_GRID_MAX_COLUMNS_LANDSCAPE (int)(HD_COMP_MGR_LANDSCAPE_WIDTH/HD_S (160))
+-#define HD_LAUNCHER_GRID_MAX_COLUMNS_PORTRAIT (int)(HD_COMP_MGR_PORTRAIT_WIDTH/HD_S (160))
++/* The MeeGo-like look (hd-meego.c): the N9's launcher, as many of its
++ * buttons in a row as fit (meegotouchhome.css: 11.2 mm wide, 0.2 mm apart,
++ * 1.3 mm free at the sides in portrait, 2.9 mm in landscape; 4 and 7 on
++ * the N9), its rows 3 mm apart, in either orientation */
++#define MEEGO_H_SPACING HD_S (2)
++#define MEEGO_V_SPACING HD_S (30)
++static int
++meego_columns (gboolean portrait)
++{
++  /* in the N9's pixels, before they are rounded to ours (a row just
++   * fits on the N9) */
++  double width = (portrait ? HD_LAUNCHER_PAGE_HEIGHT : HD_LAUNCHER_PAGE_WIDTH)
++                 / hd_util_scale ();
++
++  return MAX (1, (int) ((width - 2 * (portrait ? 13 : 29) + 2) / (112 + 2)
++                        + 0.01));
++}
++#define HD_LAUNCHER_GRID_MAX_COLUMNS_LANDSCAPE (hd_meego_pages_enabled () \
++  ? meego_columns (FALSE) : (int)(HD_COMP_MGR_LANDSCAPE_WIDTH/HD_S (160)))
++#define HD_LAUNCHER_GRID_MAX_COLUMNS_PORTRAIT (hd_meego_pages_enabled () \
++  ? meego_columns (TRUE) : (int)(HD_COMP_MGR_PORTRAIT_WIDTH/HD_S (160)))
++static void update_spacing (HdLauncherGrid *grid);
+ 
+ #define HD_LAUNCHER_GRID_LEFT_DISMISSAL_AREA_LANDSCAPE (HD_LAUNCHER_LEFT_MARGIN)
+ #define HD_LAUNCHER_GRID_RIGHT_DISMISSAL_AREA_LANDSCAPE (HD_LAUNCHER_RIGHT_MARGIN)
+@@ -492,6 +513,9 @@ void hd_launcher_grid_layout (HdLauncherGrid *grid)
+   GList *l;
+   guint cur_height, n_visible_launchers, n_rows;
+ 
++  /* the look may have changed since the orientation did */
++  update_spacing (grid);
++
+   /* Free our list of 'blocker' actors that we use to block mouse clicks.
+    * TODO: just check we have 'nrows' worth */
+   g_list_foreach(priv->blockers,
+@@ -705,9 +729,21 @@ hd_launcher_grid_set_portrait (HdLauncherGrid *grid,
+   priv = HD_LAUNCHER_GRID_GET_PRIVATE (grid);
+ 
+   priv->is_portrait = portraited;
++  update_spacing (grid);
++}
+ 
+-  /* update tiles' spacing */
+-  if (portraited)
++/* The tiles' spacing for the orientation and the look */
++static void
++update_spacing (HdLauncherGrid *grid)
++{
++  HdLauncherGridPrivate *priv = HD_LAUNCHER_GRID_GET_PRIVATE (grid);
++
++  if (hd_meego_pages_enabled ())
++    {
++      priv->h_spacing = MEEGO_H_SPACING;
++      priv->v_spacing = MEEGO_V_SPACING;
++    }
++  else if (priv->is_portrait)
+     {
+       priv->h_spacing = HD_LAUNCHER_GRID_ICON_MARGIN_PORTRAIT;
+       priv->v_spacing = HD_LAUNCHER_GRID_ROW_SPACING_PORTRAIT;
 diff --git a/src/launcher/hd-launcher-tile.c b/src/launcher/hd-launcher-tile.c
 index a21162e..81f6fbd 100644
 --- a/src/launcher/hd-launcher-tile.c
@@ -640,6 +915,33 @@ index a21162e..81f6fbd 100644
  
    if (pixbuf)
      {
+diff --git a/src/launcher/hd-launcher-tile.h b/src/launcher/hd-launcher-tile.h
+index e3136de..a39b79e 100644
+--- a/src/launcher/hd-launcher-tile.h
++++ b/src/launcher/hd-launcher-tile.h
+@@ -35,6 +35,7 @@
+ #include <clutter/clutter.h>
+ 
+ #include "util/hd-util.h"
++#include "util/hd-meego.h"
+ 
+ G_BEGIN_DECLS
+ 
+@@ -80,9 +81,12 @@ void hd_launcher_tile_reset(HdLauncherTile *tile, gboolean hard);
+ 
+ void hd_launcher_tile_activate(ClutterActor       *actor);
+ 
+-/* Fixed size */
++/* Fixed size (in the MeeGo-like look the N9's launcher buttons, 11.2 mm,
++ * 112 of its pixels wide, hd-meego.c; the tiles are made anew when the
++ * look changes) */
+ #define HD_LAUNCHER_TILE_HEIGHT HD_S (96)
+-#define HD_LAUNCHER_TILE_WIDTH  HD_S (142)
++#define HD_LAUNCHER_TILE_WIDTH  (hd_meego_pages_enabled () ? HD_S (112) \
++                                                          : HD_S (142))
+ /* For the glow, we unfortunately have to have a 1px transparent border
+  * around the icons. */
+ #define HD_LAUNCHER_TILE_ICON_REAL_SIZE HD_S (64)
 diff --git a/src/launcher/hd-launcher-tree.c b/src/launcher/hd-launcher-tree.c
 index 83969c0..83f1d28 100644
 --- a/src/launcher/hd-launcher-tree.c
@@ -887,10 +1189,10 @@ index 84c1bb1..1ed349f 100644
  noinst_LTLIBRARIES = libutil.la
 diff --git a/src/util/hd-meego.c b/src/util/hd-meego.c
 new file mode 100644
-index 0000000..eaf9e16
+index 0000000..d3983e5
 --- /dev/null
 +++ b/src/util/hd-meego.c
-@@ -0,0 +1,724 @@
+@@ -0,0 +1,735 @@
 +/*
 + * MeeGo-like home: the home views (Hildon's desktops, up to four), the
 + * launcher and the task navigator as pages side by side in a ring,
@@ -929,6 +1231,15 @@ index 0000000..eaf9e16
 + * Hildon has it, and hildon-desktop goes back when it closes (below). Home
 + * widgets that scroll (_HILDON_MEEGO_SCROLLING_APPLET, the Events page,
 + * pro1x-events) get the drags up and down (hd-home.c).
++ *
++ * In portrait (hildon-desktop turns the screen when mce reports the device
++ * upright and the keyboard is slid in) the pages stay side by side, as on
++ * the N9, which was made for portrait: Leste's home views one below the
++ * other (GConf scroll_vertical) are not used with the look, the Events
++ * page scrolls up and down, the launcher has as many of the N9's buttons
++ * in a row as fit (4 in portrait, 7 in landscape, as on the N9), the open
++ * applications are two columns of thumbnails below the status bar
++ * (hd-launcher-grid.c, hd-task-navigator.c).
 + */
 +
 +#include <math.h>
@@ -1058,8 +1369,10 @@ index 0000000..eaf9e16
 +      hd_render_manager_set_state (hd_render_manager_get_state ());
 +      hd_render_manager_restack ();
 +      hd_render_manager_place_titlebar_elements ();
-+      /* the launcher's icons in the other shape */
++      /* the launcher's icons in the other shape, its rows and the open
++       * applications laid out as the look has them */
 +      hd_launcher_tree_refresh (hd_launcher_get_tree ());
++      hd_task_navigator_relayout ();
 +    }
 +}
 +

@@ -36,6 +36,9 @@ msgstr "Die Antwort von Mastodon war unverständlich."
 msgid "boosted by %s"
 msgstr "geteilt von %s"
 
+msgid "Sensitive content"
+msgstr "Sensibler Inhalt"
+
 msgid "%u attachment"
 msgid_plural "%u attachments"
 msgstr[0] "%u Anhang"

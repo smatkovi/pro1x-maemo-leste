@@ -23,8 +23,14 @@
  * Mastodon: GET <server>/api/v1/timelines/home with the account's access
  * token (GConf /apps/pro1x/events/mastodon_server and mastodon_token,
  * Settings, Events: apps/pro1x-events), in a thread with libcurl; the
- * avatars are cached in ~/.cache/pro1x-events. A tap opens the post in the
- * browser, a notification its application (through hildon-desktop's
+ * avatars are cached in ~/.cache/pro1x-events. A post's pictures show as
+ * the N9's feeds showed theirs (its home screen's style: up to 3 images in
+ * a row below the text, 168 of its pixels square, 120 when there are 3,
+ * cropped to squares, 1.6 mm above them and 0.8 mm between; a video as one
+ * still in 210 x 120, not cropped, under the N9's play button at 40 %),
+ * from the attachments' previews (preview_url), cached for MEDIA_DAYS; a
+ * post marked sensitive gets grey plates instead. A tap opens the post in
+ * the browser, a notification its application (through hildon-desktop's
  * launcher), Clear marks the notifications read.
  *
  * Weather: Open-Meteo's forecast API (open-meteo.com: no key, free for
@@ -101,6 +107,8 @@
 #define MAIL_PER_ACCOUNT 3
 #define AVATAR_MAX (2 << 20)	/* bytes */
 #define AVATAR_DAYS 7
+#define MEDIA_MAX 3		/* pictures of a post shown, as the N9's feeds */
+#define MEDIA_DAYS 2		/* their previews kept in the cache */
 #define WEATHER_URL "https://api.open-meteo.com/v1/forecast"
 #define WEATHER_SITE "https://open-meteo.com/"
 #define WEATHER_EVERY (30 * 60)	/* s between updates while seen */
@@ -138,6 +146,11 @@ typedef struct {
 	GArray *events;		/* rtcom-eventlogger's ids of a notification */
 	gboolean clear;		/* a section with the Clear button */
 	int colour, cal_id, cal_kind;	/* an appointment's calendar, kind */
+	/* a post's pictures (NULL: sensitive, a grey plate), how many, a video's
+	 * still */
+	GdkPixbuf *media[MEDIA_MAX];
+	int nmedia;
+	gboolean video;
 	/* laid out */
 	int y, h;
 	PangoLayout *lt, *lb, *lf;
@@ -195,6 +208,9 @@ static void item_free(gpointer p)
 	g_free(it->target);
 	if (it->icon)
 		g_object_unref(it->icon);
+	for (i = 0; i < MEDIA_MAX; i++)
+		if (it->media[i])
+			g_object_unref(it->media[i]);
 	if (it->events)
 		g_array_free(it->events, TRUE);
 	if (it->lt)
@@ -297,6 +313,23 @@ static int icon_size(void)
 	return MM(6.4);
 }
 
+/* a post's pictures (meegotouchhome.css' EventFeedImageLarge and Small,
+ * Small where 3 fill the N9's text column) and a video's still
+ * (EventFeedImageVideo), in the text column of the narrower orientation
+ * (the same in both) */
+#define MEDIA_GAP MM(0.8)
+static int media_size(int n)
+{
+	GdkScreen *sc = gdk_screen_get_default();
+	int w = MIN(gdk_screen_get_width(sc), gdk_screen_get_height(sc))
+		- 2 * margin() - MM(0.2) - icon_size() - MM(1.6);
+	int s = n > 2 ? PX(120) : PX(168);
+
+	return MAX(1, MIN(s, (w - (n - 1) * MEDIA_GAP) / MAX(n, 1)));
+}
+#define VIDEO_W PX(210)
+#define VIDEO_H PX(120)
+
 /* the items' x for their text */
 static int text_x(const Item *it)
 {
@@ -394,6 +427,19 @@ static void layout_weather(Item *it)
 	}
 }
 
+/* the height of a post's row of pictures, with the 1.6 mm above it */
+static int media_h(const Item *it)
+{
+	int i, h = 0;
+
+	if (!it->nmedia)
+		return 0;
+	for (i = 0; i < it->nmedia; i++)
+		h = MAX(h, it->media[i] ? gdk_pixbuf_get_height(it->media[i]) :
+			   it->video ? VIDEO_H : media_size(it->nmedia));
+	return MM(1.6) + h;
+}
+
 static void layout_item(Item *it)
 {
 	PangoFontDescription *d;
@@ -449,7 +495,7 @@ static void layout_item(Item *it)
 		if (it->footer && *it->footer)
 			it->lf = layout_text(it->footer, d, w, 1);
 		pango_font_description_free(d);
-		it->h = MM(0.8) + layout_h(it->lt) + layout_h(it->lb) +
+		it->h = MM(0.8) + layout_h(it->lt) + layout_h(it->lb) + media_h(it) +
 			(it->lf ? MM(0.4) + layout_h(it->lf) : 0) + MM(0.8);
 		it->h = MAX(it->h, MM(0.8) + icon_size() + MM(0.8));
 		break;
@@ -795,7 +841,8 @@ static void modest_owner(GDBusConnection *c, const char *name, const char *owner
 
 typedef struct {
 	char *server, *token, *cache;
-	int icon;
+	int icon;		/* the icons' size */
+	int msize[MEDIA_MAX + 1];	/* the pictures', by their number (media_size) */
 	GPtrArray *items;	/* Item, with their icons */
 	char *error;
 	gboolean settings;	/* the error is the settings' */
@@ -988,6 +1035,109 @@ static GdkPixbuf *avatar(Fetch *f, const char *url)
 	return p;
 }
 
+/* A picture's preview from the cache, fetched once: cropped to a square
+ * of @size, or a video's still in VIDEO_W x VIDEO_H, not cropped */
+static GdkPixbuf *media_preview(Fetch *f, const char *url, int size, gboolean video)
+{
+	char *sum, *name, *path;
+	GdkPixbuf *src, *p = NULL;
+	int w, h;
+
+	if (!url || !g_str_has_prefix(url, "http"))
+		return NULL;
+	sum = g_compute_checksum_for_string(G_CHECKSUM_SHA1, url, -1);
+	name = g_strconcat("media-", sum, NULL);
+	path = g_build_filename(f->cache, name, NULL);
+	g_free(sum), g_free(name);
+	if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
+		long status;
+		GByteArray *b = http_get(url, NULL, &status, NULL);
+
+		if (b && status == 200 && b->len < AVATAR_MAX)
+			g_file_set_contents(path, (char *)b->data, b->len, NULL);
+		if (b)
+			g_byte_array_free(b, TRUE);
+	} else
+		g_utime(path, NULL);	/* still seen: kept */
+	src = gdk_pixbuf_new_from_file(path, NULL);
+	g_free(path);
+	if (!src)
+		return NULL;
+	w = gdk_pixbuf_get_width(src), h = gdk_pixbuf_get_height(src);
+	if (video) {
+		double k = MIN((double)VIDEO_W / w, (double)VIDEO_H / h);
+
+		p = gdk_pixbuf_scale_simple(src, MAX(1, w * k), MAX(1, h * k), GDK_INTERP_BILINEAR);
+	} else {
+		/* the middle square (as the N9's "grid" thumbnails, cropped) */
+		int c = MIN(w, h);
+		GdkPixbuf *sq = gdk_pixbuf_new_subpixbuf(src, (w - c) / 2, (h - c) / 2, c, c);
+
+		p = gdk_pixbuf_scale_simple(sq, size, size, GDK_INTERP_BILINEAR);
+		g_object_unref(sq);
+	}
+	g_object_unref(src);
+	return p;
+}
+
+/* The previews no post has shown for MEDIA_DAYS go */
+static void media_expire(const char *cache)
+{
+	GDir *d = g_dir_open(cache, 0, NULL);
+	const char *n;
+
+	while (d && (n = g_dir_read_name(d))) {
+		char *path;
+		GStatBuf st;
+
+		if (!g_str_has_prefix(n, "media-"))
+			continue;
+		path = g_build_filename(cache, n, NULL);
+		if (!g_stat(path, &st) && time(NULL) - st.st_mtime > MEDIA_DAYS * 86400)
+			g_unlink(path);
+		g_free(path);
+	}
+	if (d)
+		g_dir_close(d);
+}
+
+/* A post's pictures, or the still of its video: the N9's feeds showed up
+ * to 3 images or 1 video (libmeegotouchevents' imageList and video) */
+static void post_media(Fetch *f, Item *it, JsonObject *shown)
+{
+	JsonNode *media = json_object_has_member(shown, "media_attachments") ?
+			  json_object_get_member(shown, "media_attachments") : NULL;
+	JsonArray *a = media && JSON_NODE_TYPE(media) == JSON_NODE_ARRAY ?
+		       json_node_get_array(media) : NULL;
+	gboolean sensitive = json_object_get_boolean_member_with_default(shown, "sensitive",
+									 FALSE);
+	const char *urls[MEDIA_MAX];
+	guint i;
+	int n = 0;
+
+	for (i = 0; a && i < json_array_get_length(a) && n < MEDIA_MAX; i++) {
+		JsonObject *m = json_array_get_object_element(a, i);
+		const char *type = jstr(m, "type"), *url = jstr(m, "preview_url");
+
+		if (!type || !url)
+			continue;
+		if (!strcmp(type, "video") || !strcmp(type, "gifv")) {
+			/* a video: its still alone */
+			if (n)
+				continue;
+			urls[n++] = url;
+			it->video = TRUE;
+			break;
+		}
+		if (!strcmp(type, "image"))
+			urls[n++] = url;
+	}
+	for (i = 0; i < (guint)n; i++)
+		it->media[i] = sensitive ? NULL :
+			       media_preview(f, urls[i], f->msize[n], it->video);
+	it->nmedia = n;
+}
+
 static gint by_time(gconstpointer a, gconstpointer b)
 {
 	const Item *x = *(Item *const *)a, *y = *(Item *const *)b;
@@ -1069,6 +1219,7 @@ static void parse_feed(Fetch *f, const char *data, gsize len)
 			it->action = A_URL;
 			it->target = g_strdup(url);
 		}
+		post_media(f, it, shown);
 		g_ptr_array_add(f->items, it);
 	}
 	g_ptr_array_sort(f->items, by_time);
@@ -1109,7 +1260,10 @@ static gpointer fetch_thread(gpointer data)
 	char *url = g_strdup_printf("%s/api/v1/timelines/home?limit=%d", f->server, FEED_LIMIT);
 	char *error = NULL;
 	long status;
-	GByteArray *b = http_get(url, f->token, &status, &error);
+	GByteArray *b;
+
+	media_expire(f->cache);
+	b = http_get(url, f->token, &status, &error);
 
 	if (!b) {
 		f->error = g_strdup_printf(_("No connection to %s (%s)."), f->server,
@@ -1152,6 +1306,7 @@ static void feed_update(void)
 	char *server, *token;
 	Fetch *f;
 	GThread *t;
+	int i;
 
 	if (feed_busy || !show_feed)
 		return;
@@ -1175,6 +1330,8 @@ static void feed_update(void)
 	f->token = g_strstrip(token);
 	f->cache = g_build_filename(g_get_user_cache_dir(), "pro1x-events", NULL);
 	f->icon = icon_size();
+	for (i = 1; i <= MEDIA_MAX; i++)
+		f->msize[i] = media_size(i);
 	f->items = g_ptr_array_new_with_free_func(item_free);
 	g_mkdir_with_parents(f->cache, 0700);
 	g_free(server);
@@ -2148,6 +2305,79 @@ static void draw_icon(cairo_t *cr, Item *it, double x, double y)
 	cairo_restore(cr);
 }
 
+/* the N9's play button over a video's still (its own where its theme is
+ * installed, else drawn alike: a dark rounded square, a white triangle),
+ * 64 of its pixels, at 40 % */
+static void draw_play(cairo_t *cr, double cx, double cy)
+{
+	static GdkPixbuf *n9;
+	static gboolean looked;
+	double s = PX(64);
+	guint i;
+
+	if (!looked) {
+		looked = TRUE;
+		for (i = 0; !n9 && i < G_N_ELEMENTS(n9_dirs); i++) {
+			char *p = g_strdup_printf("%s/icon-l-common-video-playback.png", n9_dirs[i]);
+
+			n9 = gdk_pixbuf_new_from_file_at_size(p, s, s, NULL);
+			g_free(p);
+		}
+	}
+	cairo_save(cr);
+	if (n9) {
+		gdk_cairo_set_source_pixbuf(cr, n9, cx - gdk_pixbuf_get_width(n9) / 2.0,
+					    cy - gdk_pixbuf_get_height(n9) / 2.0);
+		cairo_paint_with_alpha(cr, 0.4);
+	} else {
+		cairo_push_group(cr);
+		rounded(cr, cx - s / 2, cy - s / 2, s, s, s * 0.18);
+		cairo_set_source_rgb(cr, 0, 0, 0);
+		cairo_fill(cr);
+		cairo_move_to(cr, cx - s * 0.16, cy - s * 0.24);
+		cairo_line_to(cr, cx + s * 0.26, cy);
+		cairo_line_to(cr, cx - s * 0.16, cy + s * 0.24);
+		cairo_close_path(cr);
+		cairo_set_source_rgb(cr, 1, 1, 1);
+		cairo_fill(cr);
+		cairo_pop_group_to_source(cr);
+		cairo_paint_with_alpha(cr, 0.4);
+	}
+	cairo_restore(cr);
+}
+
+/* a post's pictures in a row from @x, @y (grey plates for a sensitive
+ * post's), a video's still under the play button */
+static void draw_media(cairo_t *cr, Item *it, int x, int y)
+{
+	int i, n = it->nmedia, s = media_size(n);
+
+	for (i = 0; i < n; i++) {
+		GdkPixbuf *p = it->media[i];
+		int w = p ? gdk_pixbuf_get_width(p) : it->video ? VIDEO_W : s;
+		int h = p ? gdk_pixbuf_get_height(p) : it->video ? VIDEO_H : s;
+
+		if (p) {
+			gdk_cairo_set_source_pixbuf(cr, p, x, y);
+			cairo_paint(cr);
+		} else {
+			PangoFontDescription *d = font(FALSE, FALSE, MM(1.6));
+			PangoLayout *l = layout_text(_("Sensitive content"), d, w - MM(0.8), 0);
+
+			cairo_rectangle(cr, x, y, w, h);
+			cairo_set_source_rgb(cr, 0.2, 0.2, 0.2);
+			cairo_fill(cr);
+			pango_layout_set_alignment(l, PANGO_ALIGN_CENTER);
+			text_at(cr, l, x + MM(0.4), y + (h - layout_h(l)) / 2, 0x808080);
+			g_object_unref(l);
+			pango_font_description_free(d);
+		}
+		if (it->video)
+			draw_play(cr, x + w / 2.0, y + h / 2.0);
+		x += w + MEDIA_GAP;
+	}
+}
+
 static void draw_item(cairo_t *cr, Item *it)
 {
 	int x = text_x(it), y = it->y;
@@ -2220,8 +2450,9 @@ static void draw_item(cairo_t *cr, Item *it)
 		draw_icon(cr, it, margin() + MM(0.2), y + MM(0.8));
 		text_at(cr, it->lt, x, y + MM(0.8), 0xffffff);
 		text_at(cr, it->lb, x, y + MM(0.8) + layout_h(it->lt), 0xffffff);
-		text_at(cr, it->lf, x, y + MM(0.8) + layout_h(it->lt) + layout_h(it->lb) + MM(0.4),
-			0x808080);
+		draw_media(cr, it, x, y + MM(0.8) + layout_h(it->lt) + layout_h(it->lb) + MM(1.6));
+		text_at(cr, it->lf, x, y + MM(0.8) + layout_h(it->lt) + layout_h(it->lb) +
+			media_h(it) + MM(0.4), 0x808080);
 		/* the separator below, as the N9's feed has */
 		cairo_set_source_rgb(cr, 0.16, 0.16, 0.16);
 		cairo_rectangle(cr, x, y + it->h - MAX(1, MM(0.1)), width - x - margin(),

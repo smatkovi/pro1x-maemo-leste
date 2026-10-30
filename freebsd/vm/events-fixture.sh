@@ -2,8 +2,10 @@
 # events-fixture.sh DIR: made-up content for the Events page
 # (tools/pro1x-events) in the test VM, nobody's real data:
 # - DIR/api/v1/timelines/home, a Mastodon home timeline of eight posts by
-#   made-up accounts (one boosted, one with a content warning, one with
-#   pictures), their avatars as DIR/avatars/*.png, for
+#   made-up accounts (one boosted, one with a content warning and its
+#   pictures marked sensitive, one with two pictures, one with three, one
+#   with a video), their avatars as DIR/avatars/*.png, the pictures' and
+#   the video's previews (made-up stripes and discs) as DIR/media/*.png, for
 #   python3 -m http.server in DIR (try-meego-events.sh EVENTS_FIXTURE=DIR)
 # - unread events in ~/.rtcom-eventlogger/el-v1.db: two missed calls, two
 #   SMS of one sender, a chat message (with the sqlite3 tool; the page reads
@@ -20,7 +22,7 @@
 set -eu
 DIR=${1:?usage: events-fixture.sh DIR}
 URL=${URL:-http://127.0.0.1:8000}
-mkdir -p "$DIR/api/v1/timelines" "$DIR/avatars" "$DIR/v1"
+mkdir -p "$DIR/api/v1/timelines" "$DIR/avatars" "$DIR/media" "$DIR/v1"
 python3.11 - "$DIR" "$URL" <<'PY'
 import json, struct, sys, time, zlib
 d, url = sys.argv[1:3]
@@ -40,6 +42,31 @@ def png(path, rgb):
         return struct.pack('>I', len(b)) + t + b + struct.pack('>I', zlib.crc32(t + b) & 0xffffffff)
     open(path, 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
                            + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
+def picture(path, w, h, rgb):
+    # a made-up picture: stripes across, a light disc in the middle (to see
+    # how it is cropped), w x h
+    rows = b''
+    for y in range(h):
+        row = b'\0'
+        for x in range(w):
+            k = 1.0 if (x * 8 // w) % 2 else 0.6
+            c = tuple(int(v * k) for v in rgb)
+            if (x - w / 2) ** 2 + (y - h / 2) ** 2 < (min(w, h) / 4) ** 2:
+                c = (235, 235, 220)
+            row += bytes(c)
+        rows += row
+    def chunk(t, b):
+        return struct.pack('>I', len(b)) + t + b + struct.pack('>I', zlib.crc32(t + b) & 0xffffffff)
+    open(path, 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+                           + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
+pictures = [('m0', 320, 200, (200, 120, 40)), ('m1', 200, 320, (60, 140, 200)),
+            ('m2', 240, 240, (90, 170, 90)), ('m3', 320, 180, (170, 70, 150)),
+            ('m4', 300, 200, (120, 120, 200)), ('v0', 320, 180, (60, 60, 60))]
+for n, w, h, rgb in pictures:
+    picture('%s/media/%s.png' % (d, n), w, h, rgb)
+def media(kind, name):
+    return {'id': name, 'type': kind, 'url': '%s/media/%s.png' % (url, name),
+            'preview_url': '%s/media/%s.png' % (url, name), 'description': None}
 people = [('Ada Example', 'ada@example.social', (40, 90, 160)),
           ('Bo Testperson', 'bo@demo.example', (150, 60, 60)),
           ('Cleo Sample', 'cleo', (50, 130, 70)),
@@ -66,9 +93,15 @@ feed = [
     post(2, 1, 17, '<p>Testing the new <a href="https://example.org/"><span class="invisible">https://</span>'
                    '<span class="ellipsis">example.org/a-very-long-p</span><span class="invisible">ath</span></a> '
                    'page &amp; it works.</p><p>Second paragraph with <strong>bold</strong> text.</p>'),
-    post(3, 2, 42, '<p>Spoilers inside</p>', spoiler_text='Film ending', sensitive=True),
+    post(3, 2, 42, '<p>Spoilers inside</p>', spoiler_text='Film ending', sensitive=True,
+         media_attachments=[media('image', 'm4')]),
     post(4, 3, 75, '<p>Two pictures from the walk this afternoon.</p>',
-         media_attachments=[{'type': 'image'}, {'type': 'image'}]),
+         media_attachments=[media('image', 'm0'), media('image', 'm1')]),
+    post(9, 1, 90, '<p>Three of the market.</p>',
+         media_attachments=[media('image', 'm2'), media('image', 'm3'), media('image', 'm0'),
+                            media('image', 'm1')]),
+    post(10, 2, 110, '<p>The fountain, a short video.</p>',
+         media_attachments=[media('video', 'v0')]),
     post(5, 0, 130, '', reblog=post(6, 2, 140, '<p>A boosted post: shared by Ada, written by Cleo.</p>')),
     post(7, 1, 60 * 20, '<p>Yesterday\'s post, with an emoji ☺ and a line<br>break.</p>'),
     post(8, 3, 60 * 50, '<p>Older post from two days ago. ' + 'Long text that wraps over several lines. ' * 8 + '</p>'),
