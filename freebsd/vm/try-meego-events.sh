@@ -19,7 +19,8 @@
 #           place (20), searched (21: the places found; 22: one taken), the
 #           calendar's days (23), 3 days saved (24), an appointment tapped:
 #           qalendar (25, after a minute)
-# (LANG=de_DE.UTF-8 in the environment: the session in German)
+# (LANG=de_DE.UTF-8 in the environment: the session in German; the drags
+# of 13 and 14 may still scroll further in an emulated VM)
 # EVENTS_FIXTURE=1 makes up a Mastodon home timeline, unread calls and
 # messages, the weather, places and appointments (events-fixture.sh,
 # beside this script), serves the timeline, the weather and the places at
