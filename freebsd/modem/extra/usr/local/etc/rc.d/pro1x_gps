@@ -1,0 +1,63 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_gps
+# REQUIRE: pro1x_modem
+# KEYWORD: nojail shutdown
+#
+# GPS on the Pro1X (freebsd/modem/README.md, stage 3), as Leste's
+# /etc/conf.d/gpsd: gpsd on the NMEA that pro1x-gnss sends to
+# udp://127.0.0.1:29470, pro1x-gnss running the modem's GNSS engine (QMI
+# LOC) while gpsd runs, and stopping it (SIGTERM: LOC Stop) with gpsd.
+# location-daemon starts it on demand when liblocation's clients want a
+# position (/usr/local/libexec/location-daemon-gpsd), as Leste's starts
+# gpsd; at boot only with
+#
+#   pro1x_gps_enable="YES"
+
+. /etc/rc.subr
+
+name=pro1x_gps
+desc="gpsd on the modem's GNSS"
+rcvar=pro1x_gps_enable
+load_rc_config $name
+: ${pro1x_gps_enable:=NO}
+: ${pro1x_gps_port:=29470}
+
+start_cmd=pro1x_gps_start
+stop_cmd=pro1x_gps_stop
+status_cmd=pro1x_gps_status
+extra_commands=status
+
+gpsd_pid=/var/run/gpsd.pid
+gnss_pid=/var/run/pro1x-gnss.pid
+
+pro1x_gps_start()
+{
+	kldload -n qcom_dsp qrtr || return 1
+	if ! pgrep -qF $gpsd_pid gpsd 2> /dev/null; then
+		/usr/local/sbin/gpsd -n -P $gpsd_pid udp://127.0.0.1:${pro1x_gps_port} ||
+		    return 1
+	fi
+	# daemon(8) passes SIGTERM on to pro1x-gnss, which stops the session
+	if ! pgrep -qF $gnss_pid 2> /dev/null; then
+		/usr/sbin/daemon -r -R 10 -P $gnss_pid -o /var/log/pro1x-gnss.log \
+		    /usr/local/bin/pro1x-gnss -p ${pro1x_gps_port}
+	fi
+	echo "gpsd on udp://127.0.0.1:${pro1x_gps_port}, pro1x-gnss"
+}
+
+pro1x_gps_stop()
+{
+	[ -f $gnss_pid ] && kill "$(cat $gnss_pid)" 2> /dev/null
+	[ -f $gpsd_pid ] && kill "$(cat $gpsd_pid)" 2> /dev/null
+	rm -f $gnss_pid $gpsd_pid
+	return 0
+}
+
+pro1x_gps_status()
+{
+	pgrep -lF $gpsd_pid 2> /dev/null || echo "gpsd not running"
+	pgrep -lF $gnss_pid 2> /dev/null || echo "pro1x-gnss not running"
+}
+
+run_rc_command "$1"

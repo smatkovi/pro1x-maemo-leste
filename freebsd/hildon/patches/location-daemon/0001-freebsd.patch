@@ -1,0 +1,51 @@
+location-daemon on FreeBSD: its lock file in /var/run (FreeBSD has no
+/run; liblocation's patch 0003 moves its side), gpsd started without sudo
+and /etc/init.d (the daemon runs as root, its D-Bus service file says so):
+through /usr/local/libexec/location-daemon-gpsd if the system has it (the
+Pro1X: freebsd/modem, gpsd with the modem's GNSS), else gpsd's rc.d script;
+the service file's program below /usr/local.
+
+--- a/location-daemon.c
++++ b/location-daemon.c
+@@ -18,6 +18,7 @@
+  */
+ #include <math.h>
+ #include <sys/file.h>
++#include <unistd.h>
+ #include <inttypes.h>
+ 
+ #include <dbus/dbus-glib-lowlevel.h>
+@@ -28,7 +29,13 @@
+ #define GPSD_HOST "localhost"
+ #define GPSD_PORT "2947"
+ 
+-#define FLOCK_PATH "/run/lock/location-daemon.lock"
++/* FreeBSD: no /run; liblocation creates the same file (its patch 0003) */
++#define FLOCK_PATH "/var/run/location-daemon.lock"
++/* FreeBSD: no sudo, no /etc/init.d; the daemon runs as root (its D-Bus
++ * service file). A system's own way to start gpsd with its source (the
++ * Pro1X: freebsd/modem's pro1x_gps, gpsd with pro1x-gnss), else gpsd's
++ * rc.d script with rc.conf's gpsd_devices */
++#define GPSD_START_HOOK "/usr/local/libexec/location-daemon-gpsd"
+ 
+ #define DAEMON_DBUS_NAME     "org.maemo.LocationDaemon"
+ #define DAEMON_DBUS_PATH     "/org/maemo/LocationDaemon"
+@@ -306,7 +313,8 @@
+ 
+ 	if (gps_open(GPSD_HOST, GPSD_PORT, &gpsdata)) {
+ 		g_debug("Could not connect to gpsd, attempting to start it");
+-		switch (system("sudo /etc/init.d/gpsd start")) {
++		switch (system(access(GPSD_START_HOOK, X_OK) == 0 ?
++		    GPSD_START_HOOK " start" : "/usr/sbin/service gpsd onestart")) {
+ 		case 0:
+ 			/* Give time to settle */
+ 			sleep(1);
+--- a/org.maemo.LocationDaemon.service
++++ b/org.maemo.LocationDaemon.service
+@@ -1,4 +1,4 @@
+ [D-BUS Service]
+ Name=org.maemo.LocationDaemon
+-Exec=/usr/sbin/location-daemon
+-User=user
++Exec=/usr/local/sbin/location-daemon
++User=root

@@ -5,7 +5,7 @@ It speaks QMUX on a pty, as a USB modem's cdc-wdm port would: libqmi's
 QMUX endpoint opens the pty's other end (pro1x-modemd -d PTY), and every
 message goes through libqmi's own encoders and decoders on that side. On
 this side the messages are written from libqmi's data files
-(data/qmi-service-{ctl,dms,uim,nas,wms,voice}.json, libqmi 1.34: the
+(data/qmi-service-{ctl,dms,uim,nas,wms,voice,loc}.json, libqmi 1.34: the
 message ids, the TLV ids and their layouts; strings that are a whole TLV
 have no length prefix, strings inside a sequence a guint8 one), not from
 pro1x-modemd's code. The SMS PDUs it delivers and decodes are built here
@@ -24,6 +24,7 @@ connection and answers "ok ..." or "error ...":
     remote-answer           the far end answers the outgoing call
     remote-hangup           the far end ends every call
     log                     the requests so far, one per line
+    gps-fix LAT LON         the GNSS engine's position from now on (LOC)
     state                   the simulated modem's state
 
 The log file has one line per request: "SERVICE Message-Name key=value...".
@@ -40,8 +41,8 @@ import tty
 # --- QMI framing (libqmi's qmi-message.c: struct qmux_header,
 # control_header, service_header, tlv) ---------------------------------
 QMUX_MARKER = 0x01
-SVC_CTL, SVC_DMS, SVC_NAS, SVC_WMS, SVC_VOICE, SVC_UIM = 0, 2, 3, 5, 9, 11
-SVC_NAMES = {0: 'CTL', 2: 'DMS', 3: 'NAS', 5: 'WMS', 9: 'VOICE', 11: 'UIM'}
+SVC_CTL, SVC_DMS, SVC_NAS, SVC_WMS, SVC_VOICE, SVC_UIM, SVC_LOC = 0, 2, 3, 5, 9, 11, 16
+SVC_NAMES = {0: 'CTL', 2: 'DMS', 3: 'NAS', 5: 'WMS', 9: 'VOICE', 11: 'UIM', 16: 'LOC'}
 # QMI_PROTOCOL_ERROR_* (qmi-errors.h)
 ERR_INTERNAL, ERR_INVALID_ID, ERR_INCORRECT_PIN, ERR_NO_EFFECT = 3, 41, 12, 26
 ERR_NOT_SUPPORTED, ERR_INVALID_ARG, ERR_PIN_BLOCKED = 94, 48, 35
@@ -244,6 +245,9 @@ class Modem:
         self.out = []              # frames to write
         self.requests = []
         self.events_mask = {}
+        self.loc_session = None        # (session id, interval s) while started
+        self.loc_fix = (48.2082, 16.3738)
+        self.loc_next = 0
 
     # framing
     def frame(self, svc, cid, msg, payload, indication=False, txn=0):
@@ -529,10 +533,58 @@ class Modem:
                 return
             else:
                 r = result(ERR_NOT_SUPPORTED)
+        elif svc == SVC_LOC:
+            if msg == 0x0021:
+                name = 'Register-Events'
+                self.record(svc, name, mask='%#x' % struct.unpack('<Q', tl[0x01])[0])
+                self.frame(svc, cid, msg, r, txn=txn)
+                return
+            elif msg == 0x003E:
+                name = 'Set-NMEA-Types'
+                self.record(svc, name, types='%#x' % struct.unpack('<I', tl[0x01])[0])
+                self.frame(svc, cid, msg, r, txn=txn)
+                # the request's result as LOC sends it: an indication
+                self.indicate(SVC_LOC, 0x003E, tlv(0x01, struct.pack('<I', 0)))
+                return
+            elif msg == 0x0022:
+                sid = tl[0x01][0]
+                ms = struct.unpack('<I', tl[0x13])[0] if 0x13 in tl else 1000
+                self.record(svc, 'Start', session=sid, interval_ms=ms)
+                self.loc_session = (sid, ms / 1000.0)
+                self.loc_next = time.monotonic() + 0.5
+                self.frame(svc, cid, msg, r, txn=txn)
+                self.indicate(SVC_LOC, 0x002B, tlv(0x01, struct.pack('<i', 1)))   # engine on
+                self.later(0.5, self.loc_report)
+                return
+            elif msg == 0x0023:
+                self.record(svc, 'Stop', session=tl[0x01][0])
+                self.loc_session = None
+                self.frame(svc, cid, msg, r, txn=txn)
+                self.indicate(SVC_LOC, 0x002B, tlv(0x01, struct.pack('<i', 2)))   # engine off
+                return
+            else:
+                r = result(ERR_NOT_SUPPORTED)
         self.record(svc, name)
         self.frame(svc, cid, msg, r + out, txn=txn)
         if post:
             post()
+
+    def loc_report(self):
+        """Position Report (0x0024) of a fix, every interval while started"""
+        if not self.loc_session:
+            return
+        sid, interval = self.loc_session
+        lat, lon = self.loc_fix
+        utc_ms = int(time.time() * 1000)
+        body = (tlv(0x01, struct.pack('<I', 0)) + tlv(0x02, bytes([sid])) +
+                tlv(0x10, struct.pack('<d', lat)) + tlv(0x11, struct.pack('<d', lon)) +
+                tlv(0x12, struct.pack('<f', 8.0)) + tlv(0x18, struct.pack('<f', 1.5)) +
+                tlv(0x1B, struct.pack('<f', 171.0)) + tlv(0x20, struct.pack('<f', 90.0)) +
+                tlv(0x24, struct.pack('<fff', 1.8, 1.1, 1.4)) +
+                tlv(0x25, struct.pack('<Q', utc_ms)) +
+                tlv(0x2C, bytes([5]) + struct.pack('<5H', 3, 7, 12, 19, 25)))
+        self.indicate(SVC_LOC, 0x0024, body)
+        self.later(interval, self.loc_report)
 
     def sim_changed(self):
         self.indicate(SVC_UIM, 0x0032, self.card_status_tlv())
@@ -568,6 +620,9 @@ class Modem:
             for c in self.calls.values():
                 c['state'] = CALL_END
             self.calls_changed()
+            return 'ok'
+        if cmd == 'gps-fix':
+            self.loc_fix = (float(w[1]), float(w[2]))
             return 'ok'
         if cmd == 'log':
             return 'ok\n' + '\n'.join(self.requests)

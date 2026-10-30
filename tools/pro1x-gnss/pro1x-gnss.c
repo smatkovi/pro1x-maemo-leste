@@ -11,7 +11,10 @@
  * NMEA, so GGA and RMC are built from the position report of each fix;
  * NMEA the modem does send is passed through unchanged.
  *
- *   pro1x-gnss [-n node] [-p port] [-i interval_ms] [-v]
+ *   pro1x-gnss [-n node] [-p port] [-i interval_ms] [-v] [-d qmux-file]
+ *
+ * -d takes the modem from a file that speaks QMUX instead of a QRTR node
+ * (the tests' simulated modem on a pty, freebsd/modem/test).
  *
  * Build: gcc -O2 -Wall -o pro1x-gnss pro1x-gnss.c \
  *          $(pkg-config --cflags --libs qmi-glib qrtr-glib)
@@ -34,6 +37,7 @@
 #define SESSION_ID 1
 
 static guint node_id;
+static const char *qmux_file;
 static guint udp_port = 29470;
 static guint interval_ms = 1000;
 static gboolean verbose;
@@ -346,6 +350,20 @@ static void bus_ready (GObject *src, GAsyncResult *res, gpointer data)
     qrtr_bus_wait_for_node (bus, node_id, 30000, NULL, (GAsyncReadyCallback) node_ready, NULL);
 }
 
+static void file_device_ready (GObject *src, GAsyncResult *res, gpointer data)
+{
+    GError *error = NULL;
+    GObject *dev = g_async_initable_new_finish (G_ASYNC_INITABLE (src), res, &error);
+
+    (void) data;
+    if (!dev) {
+        die ("create QMI device", error);
+        return;
+    }
+    device = QMI_DEVICE (dev);
+    qmi_device_open (device, QMI_DEVICE_OPEN_FLAGS_NONE, 15, NULL, (GAsyncReadyCallback) open_ready, NULL);
+}
+
 static void stop_ready (QmiClientLoc *c, GAsyncResult *res, gpointer data)
 {
     QmiMessageLocStopOutput *out = qmi_client_loc_stop_finish (c, res, NULL);
@@ -378,14 +396,15 @@ int main (int argc, char **argv)
 {
     int opt;
 
-    while ((opt = getopt (argc, argv, "n:p:i:v")) != -1) {
+    while ((opt = getopt (argc, argv, "n:p:i:vd:")) != -1) {
         switch (opt) {
+        case 'd': qmux_file = optarg; break;
         case 'n': node_id = (guint) strtoul (optarg, NULL, 10); break;
         case 'p': udp_port = (guint) strtoul (optarg, NULL, 10); break;
         case 'i': interval_ms = (guint) strtoul (optarg, NULL, 10); break;
         case 'v': verbose = TRUE; break;
         default:
-            fprintf (stderr, "usage: %s [-n qrtr-node] [-p udp-port] [-i interval-ms] [-v]\n", argv[0]);
+            fprintf (stderr, "usage: %s [-n qrtr-node] [-p udp-port] [-i interval-ms] [-v] [-d qmux-file]\n", argv[0]);
             return EXIT_FAILURE;
         }
     }
@@ -403,7 +422,14 @@ int main (int argc, char **argv)
     loop = g_main_loop_new (NULL, FALSE);
     g_unix_signal_add (SIGINT, on_signal, NULL);
     g_unix_signal_add (SIGTERM, on_signal, NULL);
-    qrtr_bus_new (1000, NULL, bus_ready, NULL);
+    if (qmux_file) {
+        GFile *f = g_file_new_for_path (qmux_file);
+
+        g_async_initable_new_async (QMI_TYPE_DEVICE, G_PRIORITY_DEFAULT, NULL, file_device_ready, NULL,
+                                    QMI_DEVICE_FILE, f, QMI_DEVICE_NO_FILE_CHECK, TRUE, NULL);
+        g_object_unref (f);
+    } else
+        qrtr_bus_new (1000, NULL, bus_ready, NULL);
     g_main_loop_run (loop);
 
     g_clear_object (&client);

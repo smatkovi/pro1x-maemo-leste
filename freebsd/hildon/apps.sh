@@ -135,6 +135,10 @@ APPS=(
 	# interface), the mail client's D-Bus client library (apps that hand
 	# a file to the mail client), Base32 for MaeOTP, SDL_gles for CloudGPS
 	"liblocation|"
+	# Leste's location-daemon: gpsd's positions on the system bus, which
+	# liblocation listens to (on the Pro1X gpsd gets the modem's GNSS from
+	# pro1x-gnss, freebsd/modem)
+	"location-daemon|!"
 	"libmodest-dbus-client|"
 	"libbaseencode|!"
 	"sdlgles|!"
@@ -258,6 +262,7 @@ REV+=(
 )
 REV+=(
 	[liblocation]=919eb1807f07 [libmodest-dbus-client]=1a7df54dd759
+	[location-daemon]=2776b12680b9
 	[libbaseencode]=045da9388cc7
 	[sdlgles]=4f7c489ab7e37f960220191200c4a52eff1fcba18cd45f5883c2ce03781dea1c
 	[fahrplan2]=a32593650f54 [yappari-leste]=86d34e711832
@@ -1140,6 +1145,18 @@ custom_fahrplan2() {
 	# variant of Fahrplan, which that scope stands for here
 	sed -i 's/^maemo5 {/maemo5:!leste {/; s/^maemo5:QT += maemo5/maemo5:!leste:QT += maemo5/' fahrplan2.pro
 	qt_qmake fahrplan2.pro CONFIG+=leste
+}
+
+# location-daemon: its one file without its Makefile's -Werror (libgps's
+# isfinite needs libm on FreeBSD), the D-Bus service below /usr/local
+custom_location_daemon() {
+	# shellcheck disable=SC2046
+	$CC $CPPFLAGS $CFLAGS -D_GNU_SOURCE -o location-daemon location-daemon.c \
+	    $(pkg-config --cflags --libs dbus-1 dbus-glib-1 libgps glib-2.0) -lm $LDFLAGS \
+	    > make.out 2>&1 || { grep -m20 error make.out; exit 1; }
+	install -D -m 755 location-daemon "$PR/usr/local/sbin/location-daemon"
+	install -D -m 644 org.maemo.LocationDaemon.service \
+	    "$PR/usr/local/share/dbus-1/system-services/org.maemo.LocationDaemon.service"
 }
 
 # GPS Recorder: stripped with llvm-strip (the PC's strip knows no arm64)

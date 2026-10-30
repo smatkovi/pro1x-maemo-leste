@@ -221,8 +221,9 @@ RUNTIME = {
     # the light meter asks the Pro1X's light sensor (pro1x-light)
     'photolightmeter': ['pro1x-light'],
     'pro1x-gnss': ['gpsd'],
-    # the modem started by pro1x_modem (rmtfs, tqftpserv, pd-mapper), the bus
-    'pro1x-modem': ['rmtfs', 'dbus'],
+    # the modem started by pro1x_modem (rmtfs, tqftpserv, pd-mapper), the bus;
+    # rc.d/pro1x_gps runs gpsd on pro1x-gnss
+    'pro1x-modem': ['rmtfs', 'dbus', 'pro1x-gnss', 'gpsd'],
     # the page is a home widget of hildon-desktop's MeeGo-like look; the
     # certificates for Mastodon's https
     'pro1x-events': ['hildon-desktop', 'hildon-control-panel', 'rtcom-eventlogger-plugins',

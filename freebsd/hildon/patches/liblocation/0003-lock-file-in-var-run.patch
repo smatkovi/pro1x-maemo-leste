@@ -1,0 +1,16 @@
+The lock file through which location-daemon sees whether any client is
+left: FreeBSD has no /run, so it lives in /var/run, as location-daemon's
+FreeBSD patch has it. (patch 0001 adds <sys/stat.h> to the same file)
+
+--- a/src/location-gpsd-control.c
++++ b/src/location-gpsd-control.c
+@@ -34,7 +34,8 @@
+ 
+ #define LOCATION_DAEMON_SERVICE "org.maemo.LocationDaemon"
+ #define LOCATION_DAEMON_PATH    "/org/maemo/LocationDaemon"
+-#define FLOCK_PATH "/run/lock/location-daemon.lock"
++/* FreeBSD: no /run (location-daemon's FreeBSD patch has the same path) */
++#define FLOCK_PATH "/var/run/location-daemon.lock"
+ 
+ #define LOCATION_UI_SERVICE  "com.nokia.Location.UI"
+ #define LOCATION_UI_DIALOG   LOCATION_UI_SERVICE".Dialog"

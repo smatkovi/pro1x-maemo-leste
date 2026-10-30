@@ -2,3 +2,4 @@ test_sms
 test_voice
 pro1x-modemd
 pro1x-callaudio
+__pycache__/

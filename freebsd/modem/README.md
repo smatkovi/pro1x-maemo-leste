@@ -12,7 +12,7 @@ QMI to the modem and oFono's D-Bus API to the applications:
 | --- | --- | --- | --- |
 | 1 | the modem's calls, SMS, SIM and network as oFono's D-Bus API | `pro1x-modemd` (libqmi over QRTR) | built for FreeBSD/arm64; host tested against a simulated modem; device runs prepared |
 | 2 | the voice of a call: the ADSP's voice session and the codec's earpiece and microphone | `pro1x-callaudio`, through pro1x-audiod (freebsd/audio, the one user of `/dev/apr`) | built; host tested against a stand-in for pro1x-audiod; needs the audio stack on the phone |
-| 3 | GPS: the modem's GNSS (QMI LOC) into gpsd, positions for Hildon's apps | `pro1x-gnss`, gpsd, Leste's `location-daemon` | see "Stage 3" |
+| 3 | GPS: the modem's GNSS (QMI LOC) into gpsd, positions for Hildon's apps | `pro1x-gnss`, gpsd, `rc.d/pro1x_gps`, Leste's `location-daemon` (new part), liblocation patched | the chain runs in the VM on a simulated modem's LOC, up to liblocation's client; device run prepared |
 
 Nothing here has run on the phone (unreachable until 2026-10-31). No call
 was made and no SMS sent: the tests that dial or send need the user and a
@@ -251,7 +251,7 @@ Without `modem-test.conf` the runs only receive.
 | modem | `pro1x.test=modem` | dsp6's lines (`start: 0`, modem running, `net.qrtr.servers` with 2 DMS, 3 NAS, 5 WMS, 9 VOICE, 11 UIM, 16 LOC), `qmicli --dms-get-revision` answering; `qrtr-lookup` the same services through libqrtr's lookup (the first time libqrtr-glib's lookup runs on `qrtr_sock.c`); `pro1x-modemd: qrtr: node 0 with N services`, `qmi: DMS client 1` ... `VOICE client 5`, `dms: operating mode online`, `sim: present`, `sim: PIN required: pin (tries 3, ...)`, `sim: PIN from the PIN file`, `sim: PIN (PIN file) accepted`, `sim: ready`, `nas: registered on lte`, `nas: operator ...`; `after N s: registration "registered"`; the properties of Modem, SimManager (`PinRequired "none"`), NetworkRegistration (`Strength`) |
 | sms | `pro1x.test=modem pro1x.modem=sms pro1x.modem_wait=300` | modem's lines, then for each message the user sends to the phone in the window an `IncomingMessage` with its text, `Sender` and `LocalSentTime`, and `sms: from ...` in the log; with `to=`: `sms: to ..., N part(s)`, `part 1 of 1 ... sent (reference N)` (or the RP/TP causes) |
 | call | `pro1x.test=modem pro1x.modem=call pro1x.modem_wait=300` | modem's lines, then for a call to the phone `CallAdded` with `"incoming"` and the caller's number, `call 1 (/qrtr_0/voicecall01): from ..., incoming`; with `answer=1`: `voice: answer call 1`, `incoming -> active`, `callaudio: ... started` (stage 2), 20 s later `voice: end call 1`, `disconnected`, `callaudio: the last call is over`; with `dial=`: `voice: dial ...`, `dialing`, `alerting`, `active` once answered |
-| gps | `pro1x.test=modem pro1x.modem=gps pro1x.modem_wait=600` | stage 3 |
+| gps | `pro1x.test=modem pro1x.modem=gps pro1x.modem_wait=600` | stage 3 (below) |
 
 Risks, in the order they would show:
 
@@ -345,4 +345,51 @@ A call without sound still connects (stage 1).
 
 ## Stage 3: GPS
 
-Not written yet.
+As on Leste (`README.md`: "engine runs, positions arrive"), the modem's
+GNSS engine is QMI LOC over QRTR, and `tools/pro1x-gnss` turns its
+position reports into NMEA for gpsd (the modem sends none itself: GGA and
+RMC are built from each fix). For Hildon's location apps (CloudGPS, GPS
+Recorder, Maep, Fahrplan, ...) the chain on Leste is liblocation, which
+listens to `location-daemon` on the system bus, which reads gpsd. On
+FreeBSD:
+
+| Piece | Leste | FreeBSD |
+| --- | --- | --- |
+| the engine to NMEA | `pro1x-gnss` (libqmi over QRTR) | the same, built for FreeBSD (`hildon/build.sh pro1x-gnss`); `-d` takes a QMUX file for the tests |
+| gpsd | Debian's, `/etc/conf.d/gpsd`: `udp://127.0.0.1:29470`, pro1x-gnss started and stopped with it | FreeBSD's package (3.25); `rc.d/pro1x_gps` (package pro1x-modem): gpsd on `udp://127.0.0.1:29470` and pro1x-gnss under daemon(8), stopped together (SIGTERM: LOC Stop) |
+| on demand | location-daemon runs `sudo /etc/init.d/gpsd start` | location-daemon runs `/usr/local/libexec/location-daemon-gpsd start` (→ `service pro1x_gps onestart`), as root through D-Bus activation |
+| location-daemon | Leste's | Leste's at its 0.8 commit, new part `location-daemon` (patch 0001: the lock in `/var/run`, the start hook, the service file below /usr/local as root; D-Bus policy in `hildon/extra/location-daemon`) |
+| liblocation | Leste's | patch 0003: the lock in `/var/run`; 0004: without location-ui (its disclaimer and "enable positioning" dialogs, not ported: their yes is taken), without location-control (no device chosen: the internal receiver, not Bluetooth) and without MCE (device mode normal) |
+
+The positions only start when an app asks (liblocation's start): the
+engine runs only while a client holds liblocation's lock, as on Leste.
+`pro1x_gps_enable="YES"` starts it at boot instead.
+
+**Tested in the VM** (`test/vm-gps.sh`): liblocation's own example
+(`examples/basic.c`: start, the first fix, stop) under a session bus for
+GConf, against the VM's system bus: D-Bus activates location-daemon (its
+policy and service file), which finds no gpsd and runs the start hook;
+gpsd (FreeBSD's) and pro1x-gnss come up, pro1x-gnss on `fakemodem.py`'s
+QMI LOC (Register Events, Set NMEA Types with its indication, Start;
+then a Position Report a second: 48.2082 N, 16.3738 E, 171 m, 1.5 m/s,
+DOP, five satellites, the UTC time, written from libqmi's
+`qmi-service-loc.json`); gpsd's TPV has mode 3 with that position;
+location-daemon sends `Running`, `FixStatusChanged 3` and
+`PositionChanged 48.2082 16.3738 171`; the example prints `lat: 48.208200`,
+`lon: 16.373800` and stops, and pro1x-gnss stops its session. On the PC:
+pro1x-gnss against the same simulated LOC (`-d`) writes GGA and RMC with
+the position (4812.4920 N, 01622.4280 E, 2.92 knots) and sends LOC Stop
+on SIGTERM.
+
+The device run (`pro1x.test=modem pro1x.modem=gps pro1x.modem_wait=600`,
+outdoors or at a window; the window is the time to the first fix): the
+modem's lines, then the lock held as a client would, location-daemon
+activated with liblocation's call (or started by hand if activation fails),
+`gpsd on udp://127.0.0.1:29470, pro1x-gnss`, `pro1x-gnss: session 1
+started`, `engine on`; with a fix gpspipe's GGA/RMC lines with a position
+and a `"class":"TPV"` with `"mode":3`, `PositionChanged` signals; without
+one (indoors) `position in-progress` reports and no NMEA. Risks: dsp6;
+QMI LOC on this firmware needs nothing else from the apps processor on
+Leste (positions arrive there), but its first fix without assistance
+data (no network for XTRA) can take many minutes; the engine's time comes
+from the network or the satellites.

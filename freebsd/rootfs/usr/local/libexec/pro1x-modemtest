@@ -155,23 +155,33 @@ call)
 	;;
 gps)
 	echo "--- GPS for $wait s"
-	# gpsd on pro1x-gnss's NMEA (as Leste's /etc/conf.d/gpsd), polling at once (-n)
-	/usr/local/sbin/gpsd -n -P /var/run/gpsd.pid udp://127.0.0.1:29470 2>&1
-	/usr/local/bin/pro1x-gnss -v > /var/log/pro1x-gnss.log 2>&1 &
-	gnss=$!
-	if [ -x /usr/local/sbin/location-daemon ]; then
-		timeout "$wait" dbus-monitor --system \
-		    "type='signal',interface='org.maemo.LocationDaemon.Position'" \
-		    "type='signal',interface='org.maemo.LocationDaemon.Device'" 2>&1 |
-		    grep -A4 -E "member=(PositionChanged|FixStatusChanged)" | head -40 &
+	# as liblocation's clients get it: the lock file held (a client),
+	# location-daemon activated over D-Bus by the call liblocation sends,
+	# which starts gpsd with pro1x-gnss (location-daemon-gpsd, pro1x_gps)
+	touch /var/run/location-daemon.lock
+	lockf -k -t 0 /var/run/location-daemon.lock sleep "$((wait + 30))" &
+	timeout "$wait" dbus-monitor --system \
+	    "type='signal',interface='org.maemo.LocationDaemon.Position'" \
+	    "type='signal',interface='org.maemo.LocationDaemon.Device'" \
+	    "type='signal',interface='org.maemo.LocationDaemon.Running'" 2>&1 |
+	    grep -A4 -E "member=(PositionChanged|FixStatusChanged|Running)" | head -60 &
+	dbus-send --system --type=method_call --dest=org.maemo.LocationDaemon \
+	    /org/maemo/LocationDaemon org.maemo.LocationDaemon.start 2>&1
+	sleep 10
+	pgrep -l location-daemon || {
+		echo "- location-daemon not activated: started by hand"
 		/usr/local/sbin/location-daemon > /var/log/location-daemon.log 2>&1 &
-	fi
+		sleep 5
+	}
+	service pro1x_gps onestatus 2>&1
 	timeout "$wait" gpspipe -r 2>&1 | grep -E '^\$G[PNL](GGA|RMC)' | awk 'NR % 10 == 1' | head -30
+	echo "- gpspipe -w (the last report)"
+	timeout 5 gpspipe -w -n 6 2>&1 | grep -E '"class":"TPV"' | tail -1
 	echo "- pro1x-gnss"
-	kill "$gnss" 2>/dev/null
+	service pro1x_gps onestop 2>&1
 	sleep 2
-	grep -vE "^\\\$G" /var/log/pro1x-gnss.log | tail -20
-	grep -c '^\$G' /var/log/pro1x-gnss.log | sed 's/^/NMEA sentences: /'
+	tail -20 /var/log/pro1x-gnss.log
+	pkill -x location-daemon
 	tail -10 /var/log/location-daemon.log 2>/dev/null
 	;;
 esac
