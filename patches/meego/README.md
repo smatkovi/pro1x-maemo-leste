@@ -286,6 +286,7 @@ screenshots are upright); mce's orientation signal sent with `dbus-send`
 Events page in landscape and in portrait, scrolled to the feed's pictures,
 a swipe to the launcher and back, two X Terminals, one in portrait below
 the bar, its menu, the left edge's swipe to the open applications, the
-status menu from there, back to landscape: the open applications, the
-launcher and the Events page. FreeBSD itself has no sensors on the Pro1X,
+status menu from there, back to landscape: the open applications and the
+launcher (the emulated VM, busy redrawing after a turn, loses some drags
+and swipes: they take longer than a swipe may). FreeBSD itself has no sensors on the Pro1X,
 so there it stays in landscape. Not tried: a phone.

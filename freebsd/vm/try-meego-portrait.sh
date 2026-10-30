@@ -20,6 +20,7 @@
 #   11 a tap on the bar's right half there: the status menu
 #   12 turned back: the open applications in landscape
 #   13 the launcher in landscape        14 the Events page in landscape
+# (An emulated VM busy redrawing after a turn may lose a swipe: run again.)
 # Then everything ends (HOLD=1: it stays until /tmp/try-stop appears).
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
