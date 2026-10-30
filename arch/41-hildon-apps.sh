@@ -84,7 +84,7 @@ for q in $FBSD_PATCHES; do
 	mkdir -p "$MNT$B/patches/fbsd/${q%%/*}"
 	cp "$REPO/freebsd/hildon/patches/$q" "$MNT$B/patches/fbsd/$q"
 done
-bash -c "declare -A REV URL; . '$MNT$B/apps-arch.sh'; declare -p APPS REV URL" > "$MNT$B/apps-tables.sh"
+bash -c "declare -A REV URL SPARSE; . '$MNT$B/apps-arch.sh'; declare -p APPS REV URL" > "$MNT$B/apps-tables.sh"
 . "$MNT$B/apps-tables.sh"
 
 log "packages"
@@ -222,7 +222,8 @@ printf '%s\n' "${APPS[@]}" > "$MNT$B/apps-list"
 chroot "$MNT" /bin/bash -uo pipefail -s "$JOBS" "$SKIP" "$ONLY" "$REBUILD" "$STALE" <<'EOF'
 jobs=$1 skip=$2 only=$3 rebuild=" $4 " stale=" $5 "
 B=/usr/src/hildon
-declare -A REV URL
+# (SPARSE: the parts that are some directories of a big repository)
+declare -A REV URL SPARSE
 # apps.sh's FreeBSD-only paths (the DSP headers) ask for the repository
 REPO=$B
 . $B/apps-arch.sh
