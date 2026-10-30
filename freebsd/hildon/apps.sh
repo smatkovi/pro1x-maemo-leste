@@ -139,6 +139,12 @@ APPS=(
 	# liblocation listens to (on the Pro1X gpsd gets the modem's GNSS from
 	# pro1x-gnss, freebsd/modem)
 	"location-daemon|!"
+	# Leste's location dialogs (the disclaimer, "enable positioning", GPS
+	# and network on), which liblocation asks for, run by hildon-session;
+	# the control panel's Location applet (GPS and network positioning on
+	# or off) with liblocation's GConf schema
+	"location-ui|"
+	"location-control|!"
 	"libmodest-dbus-client|"
 	"libbaseencode|!"
 	"sdlgles|!"
@@ -262,7 +268,8 @@ REV+=(
 )
 REV+=(
 	[liblocation]=919eb1807f07 [libmodest-dbus-client]=1a7df54dd759
-	[location-daemon]=2776b12680b9
+	[location-daemon]=2776b12680b9 [location-ui]=f35b3cd74c3a
+	[location-control]=030809f8195d
 	[libbaseencode]=045da9388cc7
 	[sdlgles]=4f7c489ab7e37f960220191200c4a52eff1fcba18cd45f5883c2ce03781dea1c
 	[fahrplan2]=a32593650f54 [yappari-leste]=86d34e711832
@@ -1157,6 +1164,21 @@ custom_location_daemon() {
 	install -D -m 755 location-daemon "$PR/usr/local/sbin/location-daemon"
 	install -D -m 644 org.maemo.LocationDaemon.service \
 	    "$PR/usr/local/share/dbus-1/system-services/org.maemo.LocationDaemon.service"
+}
+
+# location-control: its plain Makefile asks pkg-config for the control
+# panel's directories and installs the schema below /usr/share; one file
+custom_location_control() {
+	# shellcheck disable=SC2046
+	$CC $CPPFLAGS $CFLAGS -fPIC -shared -o liblocation_applet.so src/liblocation_applet.c \
+	    $(pkg-config --cflags --libs gtk+-2.0 hildon-control-panel libosso gconf-2.0) \
+	    $LDFLAGS > make.out 2>&1 || { grep -m20 error make.out; exit 1; }
+	install -D -m 644 liblocation_applet.so \
+	    "$PR/usr/local/lib/hildon-control-panel/liblocation_applet.so"
+	install -D -m 644 src/location-cp.desktop \
+	    "$PR/usr/local/share/applications/hildon-control-panel/location-cp.desktop"
+	install -D -m 644 src/location-cp.schemas \
+	    "$PR/usr/local/share/gconf/schemas/location-cp.schemas"
 }
 
 # GPS Recorder: stripped with llvm-strip (the PC's strip knows no arm64)

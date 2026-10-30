@@ -73,6 +73,14 @@ if [ -x /usr/local/bin/systemui ]; then
 	respawn /usr/local/bin/systemui &
 	alarm="$alarm $!"
 fi
+# The location dialogs (the disclaimer, "enable positioning") that
+# liblocation's clients ask for over the system bus; Leste's bus activates
+# it through maemo-invoker, which FreeBSD's cannot do into this session
+# (location-ui --stay, freebsd/modem/README.md)
+if [ -x /usr/local/libexec/location-ui ]; then
+	respawn /usr/local/libexec/location-ui --stay &
+	alarm="$alarm $!"
+fi
 # Sounds play through PulseAudio, which starts for the session when there
 # is a sound device. The notification and alarm sound daemon from the
 # start, not at the first sound: it decodes the profile's and the alarms'

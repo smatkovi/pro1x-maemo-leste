@@ -11,8 +11,8 @@ QMI to the modem and oFono's D-Bus API to the applications:
 | Stage | What | Here | State |
 | --- | --- | --- | --- |
 | 1 | the modem's calls, SMS, SIM and network as oFono's D-Bus API | `pro1x-modemd` (libqmi over QRTR) | built for FreeBSD/arm64; host tested against a simulated modem; device runs prepared |
-| 2 | the voice of a call: the ADSP's voice session and the codec's earpiece and microphone | `pro1x-callaudio`, through pro1x-audiod (freebsd/audio, the one user of `/dev/apr`) | built; host tested against a stand-in for pro1x-audiod; needs the audio stack on the phone |
-| 3 | GPS: the modem's GNSS (QMI LOC) into gpsd, positions for Hildon's apps | `pro1x-gnss`, gpsd, `rc.d/pro1x_gps`, Leste's `location-daemon` (new part), liblocation patched | the chain runs in the VM on a simulated modem's LOC, up to liblocation's client; device run prepared |
+| 2 | the voice of a call: the ADSP's voice session and the codec's earpiece and microphone | `pro1x-callaudio`, through pro1x-audiod (freebsd/audio, the one user of `/dev/apr`) | built; host tested against a stand-in for pro1x-audiod, sphone's Speaker button and DTMF keypad in the VM; needs the audio stack on the phone |
+| 3 | GPS: the modem's GNSS (QMI LOC) into gpsd, positions for Hildon's apps | `pro1x-gnss`, gpsd, `rc.d/pro1x_gps`, Leste's `location-daemon`, `location-ui` and `location-control` (new parts), liblocation patched | the chain runs in the VM on a simulated modem's LOC, up to liblocation's client, with location-ui's dialogs and location-control's applet; device run prepared |
 
 Nothing here has run on the phone (unreachable until 2026-10-31). No call
 was made and no SMS sent: the tests that dial or send need the user and a
@@ -41,8 +41,11 @@ runs unchanged: what `comm-ofono` uses is all there:
 
 The rest of oFono's methods answer `org.ofono.Error.NotImplemented`
 (hold, swap, multiparty, call forwarding and barring, USSD, cell
-broadcast, mobile data). sphone's `comm-ofono` has no DTMF (only its test
-backend does); `SendTones` is there for other clients.
+broadcast, mobile data). sphone's `comm-ofono` had no DTMF (only its test
+backend did): `freebsd/hildon/patches/sphone/0001` gives it the DTMF
+button and sends each key of its keypad as `SendTones` (sphone 3). Its
+Speaker button reaches the call's voice through `0002`, sphone's new
+module `route-pro1x` (stage 2).
 
 **Conversations** builds its overview per Telepathy account: without
 telepathy-ring's `ring` account it shows none of the messages sphone logs
@@ -117,7 +120,10 @@ services over raw QMI, written for this phone):
   has no CLIR TLV, so `hide_callerid` stays the network's), `Answer
   Call`, `End Call`; DTMF as ModemManager's QMI calls send it: `Start
   Continuous DTMF`, 250 ms, `Stop Continuous DTMF`, 100 ms, per tone
-  (the durations are ours).
+  (the durations are ours); tones asked for while others are still
+  being sent (sphone sends one `SendTones` per key) join the queue, so
+  the modem gets one tone at a time, and each call is answered once its
+  tones are out.
 
 A service the modem does not offer yet is asked again every 5 s for two
 minutes (the modem announces its services one by one); a modem that goes
@@ -222,6 +228,19 @@ out). Doing the same in the VM again:
         tar -xzf - -C /root/modemtest'
     vm sh /root/modemtest/vm-sphone.sh start      # then ctl, click, shot, stop
 
+With sphone 3 (its patches 0001, 0002) and pro1x-callaudio per call
+against a stand-in for pro1x-audiod (`vm-sphone.sh` takes the newer
+modules, the package's module list and the stand-in when they come
+along): the call window has the DTMF button
+(`~/ps/pro1x-screens/bsd-sphone-active.png`), its keypad
+(`bsd-sphone-dtmf.png`); 1, 2 and # tapped 0.2 s apart: three
+`SendTones`, at the modem `Start`/`Stop Continuous DTMF` for 1, 2, #
+one after the other. Speaker: `route spk` at pro1x-audiod, the button
+turns into Handset (`bsd-sphone-speaker.png`); Handset: `route ear`;
+Hangup: `voice stop` and the route of before, the pid file gone.
+Answering no longer passes the ring tone's loudspeaker route on: the
+call starts on the earpiece.
+
 What the simulated modem cannot tell is how the Pro1X's modem answers:
 which services it announces when, whether its firmware supports DMS's
 UIM messages, the event report's TLVs on this firmware. The device runs
@@ -313,7 +332,7 @@ request per connection, as `pro1x-audioctl`):
 | When | pro1x-callaudio asks |
 | --- | --- |
 | a call exists (pro1x-modemd starts it: dialling, ringing either way, active, held, as Linux's `pro1x-voice-call`) | `status` (the route of before), `route ear`, `voice start`; then "callaudio: ready" |
-| SIGUSR1 | `route spk`, again: `route ear` (the loudspeaker; not wired to sphone's Speaker button, which switches PulseAudio's port) |
+| SIGUSR1, SIGUSR2 | `route spk` (the loudspeaker), `route ear` (the earpiece again); sphone's Speaker and Handset buttons send them through its module `route-pro1x` (`hildon/patches/sphone/0002`), which finds pro1x-callaudio in `/var/run/pro1x-callaudio.pid` (`-p`, written once the voice is up); the call's voice does not pass PulseAudio here, so route-pulseaudio has nothing to switch |
 | the last call is over (SIGTERM from pro1x-modemd) | `voice stop`, the route of before |
 
 Without pro1x-audiod (none within 5 s) or when `voice start` fails it
@@ -325,9 +344,11 @@ from its Leste trace of 2026-10-31: `ear`, `mic`).
 Tests on the PC (`make -C freebsd/modem/test`): `test_callaudio.sh` runs
 pro1x-callaudio against `fakeaudiod.py` (pro1x-audiod's answers as its
 `main.c` writes them): the requests of a call in order (status, route
-ear, voice start, route spk and back on SIGUSR1, voice stop, the route of
-before), a refused `voice start` (exit 1, the route restored), no daemon
-(exit 1). In `run.sh` pro1x-modemd runs the real pro1x-callaudio per call
+ear, voice start, route spk on SIGUSR1, nothing on a second one, route
+ear on SIGUSR2, voice stop, the route of before; the pid file while the
+voice is up), a refused `voice start` (exit 1, the route restored), no
+daemon (exit 1). Each request goes out in one write (pro1x-audiod reads
+once and closes: a second write got SIGPIPE in the VM). In `run.sh` pro1x-modemd runs the real pro1x-callaudio per call
 against the same stand-in: `route ear`, `voice start` while the call
 exists, `voice stop` after it.
 
@@ -359,7 +380,9 @@ FreeBSD:
 | gpsd | Debian's, `/etc/conf.d/gpsd`: `udp://127.0.0.1:29470`, pro1x-gnss started and stopped with it | FreeBSD's package (3.25); `rc.d/pro1x_gps` (package pro1x-modem): gpsd on `udp://127.0.0.1:29470` and pro1x-gnss under daemon(8), stopped together (SIGTERM: LOC Stop) |
 | on demand | location-daemon runs `sudo /etc/init.d/gpsd start` | location-daemon runs `/usr/local/libexec/location-daemon-gpsd start` (→ `service pro1x_gps onestart`), as root through D-Bus activation |
 | location-daemon | Leste's | Leste's at its 0.8 commit, new part `location-daemon` (patch 0001: the lock in `/var/run`, the start hook, the service file below /usr/local as root; D-Bus policy in `hildon/extra/location-daemon`) |
-| liblocation | Leste's | patch 0003: the lock in `/var/run`; 0004: without location-ui (its disclaimer and "enable positioning" dialogs, not ported: their yes is taken), without location-control (no device chosen: the internal receiver, not Bluetooth) and without MCE (device mode normal) |
+| the dialogs | location-ui, activated on the system bus through maemo-invoker as the user | location-ui (new part), run by `hildon-session` for the session's life (`--stay`, patch 0002: a system bus activation would start it without the session's display, so no service file); Leste's fix of its unanswered dialogs (`patches/fixes/location-ui.patch`, as 0001); 0003: the answer to "close" passed the response by value, which aborted location-ui (libdbus' NULL check) whenever a dialog was answered with OK |
+| the settings | location-control, the control panel's Location applet | the same (new part): GPS and network positioning on or off; its GConf schema (the defaults: GPS on, network off, the device `(com.nokia.Location, las)`, the disclaimer not accepted) loaded at boot by `rc.d/hildon_setup` |
+| liblocation | Leste's | 0003: the lock in `/var/run`; 0004: when no location-ui runs at all (no session, an unattended run) the dialog's yes is taken, with a message; without location-control's schema the internal receiver; without MCE the device mode normal; 0005: the calls of location-ui's "display" and "close" lacked dbus-glib's terminator of the output arguments, so every dialog request failed on FreeBSD ("Too few arguments in reply"); 0006: `get_selected_method()` had its test the wrong way round, so the "enable positioning" dialog's yes ended in "User didn't enable requested methods" (0005 and 0006 are in Leste's code too) |
 
 The positions only start when an app asks (liblocation's start): the
 engine runs only while a client holds liblocation's lock, as on Leste.
@@ -376,7 +399,24 @@ DOP, five satellites, the UTC time, written from libqmi's
 `qmi-service-loc.json`); gpsd's TPV has mode 3 with that position;
 location-daemon sends `Running`, `FixStatusChanged 3` and
 `PositionChanged 48.2082 16.3738 171`; the example prints `lat: 48.208200`,
-`lon: 16.373800` and stops, and pro1x-gnss stops its session. On the PC:
+`lon: 16.373800` and stops, and pro1x-gnss stops its session.
+
+**The dialogs and the applet in the VM** (`test/vm-location.sh`, the
+same chain in a Hildon session, location-ui run as hildon-session runs
+it, the schema's defaults installed as hildon_setup does): liblocation's
+example asks; location-ui shows the disclaimer
+(`~/ps/pro1x-screens/bsd-location-disclaimer.png`), Accept: GConf's
+`disclaimer-accepted` true, the position arrives. With GPS and network
+off: "Enable positioning?" with GPS and Network positioning
+(`bsd-location-enable.png`), GPS ticked (`bsd-location-enable-gps.png`),
+Done: `gps-disabled` false, the position arrives. Settings, Connectivity,
+Location: the applet with GPS enabled (`bsd-location-applet.png`). The
+dialogs' Done and the applet's Save show the text IDs `wdgt_bd_done` and
+`wdgt_bd_save` in English: the stage's `en_GB/LC_MESSAGES/hildon-libs.mo`
+is libhildon's own catalog, not Leste's (the packages exclude it, the
+stage does not); not ours to fix here.
+
+On the PC:
 pro1x-gnss against the same simulated LOC (`-d`) writes GGA and RMC with
 the position (4812.4920 N, 01622.4280 E, 2.92 knots) and sends LOC Stop
 on SIGTERM.

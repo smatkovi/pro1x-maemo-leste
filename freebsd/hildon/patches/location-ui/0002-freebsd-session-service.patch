@@ -1,0 +1,61 @@
+location-ui on FreeBSD: hildon-session runs it for the session's lifetime
+(--stay: not ended after 15 s without a dialog), since the system bus,
+whose name it owns, would activate it without the session's display and
+environment (Leste does it through maemo-invoker, as the user "user"); no
+D-Bus service file therefore. Without a running location-ui liblocation
+falls back to its patch 0004.
+
+--- a/src/main.c
++++ b/src/main.c
+@@ -19,6 +19,7 @@
+ #include <locale.h>
+ #include <libintl.h>
+ #include <stdlib.h>
++#include <string.h>
+ 
+ #include <dbus/dbus.h>
+ #include <dbus/dbus-glib-lowlevel.h>
+@@ -97,6 +98,11 @@
+ 				      gpointer);
+ 
+ /* variables */
++/* FreeBSD: started by the session (hildon-session), which a system bus
++ * activation cannot reach (no DISPLAY): it stays instead of ending after
++ * 15 s without a dialog */
++static int stay;
++
+ static struct client_request_table clireq_table[5] = {
+ 	{"location_verification", create_privacy_verification_dialog},
+ 	{"location_information", create_privacy_information_dialog},
+@@ -532,7 +538,7 @@
+ 			g_source_remove(location_ui->inactivity_timeout_id);
+ 			location_ui->inactivity_timeout_id = 0;
+ 		}
+-	} else if (!location_ui->inactivity_timeout_id) {
++	} else if (!stay && !location_ui->inactivity_timeout_id) {
+ 		location_ui->inactivity_timeout_id = g_timeout_add(15000u,
+ 								   (GSourceFunc)
+ 								   on_inactivity_timeout,
+@@ -749,6 +755,9 @@
+ 	textdomain("osso-location-ui");
+ 
+ 	gtk_init(&argc, &argv);
++	for (i = 1; i < argc; i++)
++		if (!strcmp(argv[i], "--stay"))
++			stay = 1;
+ 
+ 	location_ui.dialogs = NULL;
+ 	location_ui.current_dialog = NULL;
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -3,8 +3,8 @@
+ 
+ SUBDIRS = src
+ 
+-servicesdir = $(datadir)/dbus-1/system-services
+-services_DATA = com.nokia.Location.UI.service
++# FreeBSD: no D-Bus activation (the system bus would start it without the
++# session's display); hildon-session runs it (--stay)
+ 
+ #com.nokia.Location.UI.service:
+ #	sed -e "s,@LIBDIR@,$(libdir)," < $@.in > $@

@@ -1,0 +1,141 @@
+route-pro1x, a module for the Pro1X under FreeBSD: sphone's Speaker and
+handset routes during a call as SIGUSR1 and SIGUSR2 to pro1x-callaudio
+(freebsd/modem), which holds the call's voice route at pro1x-audiod; the
+call's voice does not pass PulseAudio there, so route-pulseaudio has
+nothing to switch. Loaded through the Modules list of the Pro1X's
+sphone.ini.d file (package pro1x-modem).
+
+--- a/src/modules/CMakeLists.txt
++++ b/src/modules/CMakeLists.txt
+@@ -57,6 +57,13 @@
+ 	install(TARGETS route-pulseaudio DESTINATION ${SPHONE_MODULE_DIR})
+ endif(DEFINED PULSE_LIBRARIES)
+ 
++# the Pro1X's call audio under FreeBSD: sphone's route to pro1x-callaudio
++add_library(route-pro1x SHARED route-pro1x.c)
++target_link_libraries(route-pro1x ${COMMON_LIBRARIES})
++target_include_directories(route-pro1x SYSTEM PRIVATE ${COMMON_INCLUDE_DIRS})
++target_include_directories(route-pro1x PRIVATE ${MODULE_INCLUDE_DIRS})
++install(TARGETS route-pro1x DESTINATION ${SPHONE_MODULE_DIR})
++
+ add_library(rtconf-ini SHARED rtconf-ini.c)
+ target_link_libraries(rtconf-ini ${COMMON_LIBRARIES})
+ target_include_directories(rtconf-ini PRIVATE ${COMMON_INCLUDE_DIRS} ${MODULE_INCLUDE_DIRS})
+--- /dev/null
++++ b/src/modules/route-pro1x.c
+@@ -0,0 +1,115 @@
++/*
++ * route-pro1x: the call's loudspeaker and earpiece on the F(x)tec Pro1X
++ * under FreeBSD (pro1x-maemo-leste, freebsd/modem/README.md)
++ *
++ * A call's voice there does not pass PulseAudio (route-pulseaudio has no
++ * earpiece port to switch to): the modem hands it to the ADSP, and
++ * pro1x-callaudio, which pro1x-modemd runs while there are calls, holds its
++ * route at pro1x-audiod. This module passes sphone's route on to it while
++ * a call is up: the Speaker button's SPHONE_AUDIO_ROUTE_SPEAKER as
++ * SIGUSR1, the handset's as SIGUSR2, to the process in its pid file.
++ * Without the file (no call audio) nothing happens.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include <errno.h>
++#include <glib.h>
++#include <signal.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/types.h>
++
++#include "sphone-modules.h"
++#include "sphone-log.h"
++#include "datapipes.h"
++#include "datapipe.h"
++#include "types.h"
++
++#define MODULE_NAME "route-pro1x"
++#define CALLAUDIO_PIDFILE "/var/run/pro1x-callaudio.pid"
++
++static const gchar *const provides[] = { MODULE_NAME, NULL };
++
++SPHONE_MODULE_EXPORT module_info_struct module_info = {
++	.name = MODULE_NAME,
++	.provides = provides,
++	.priority = 250
++};
++
++static sphone_audio_route_t sent = SPHONE_AUDIO_ROUTE_UNKNOWN;
++
++static pid_t callaudio_pid(void)
++{
++	FILE *f = fopen(CALLAUDIO_PIDFILE, "r");
++	long pid = 0;
++
++	if (!f)
++		return 0;
++	if (fscanf(f, "%ld", &pid) != 1)
++		pid = 0;
++	fclose(f);
++	return pid > 1 ? (pid_t)pid : 0;
++}
++
++static gboolean in_call(void)
++{
++	sphone_call_mode_t mode = datapipe_get_last_data_int(&call_mode_pipe);
++
++	return mode == SPHONE_MODE_INCALL || mode == SPHONE_MODE_INCALL_NO_ROUTE;
++}
++
++/* pro1x-callaudio starts each call on the earpiece; the route sphone had
++ * while ringing (the loudspeaker, for the ring tone) is not the call's */
++static void mode_trigger(gconstpointer data, gpointer user_data)
++{
++	sphone_call_mode_t mode = GPOINTER_TO_INT(data);
++
++	(void)user_data;
++	sent = mode == SPHONE_MODE_INCALL || mode == SPHONE_MODE_INCALL_NO_ROUTE ?
++		SPHONE_AUDIO_ROUTE_HANDSET : SPHONE_AUDIO_ROUTE_UNKNOWN;
++}
++
++static void route_trigger(gconstpointer data, gpointer user_data)
++{
++	(void)user_data;
++	sphone_audio_route_t route = GPOINTER_TO_INT(data);
++	pid_t pid;
++
++	if (!in_call())
++		return;
++	if (route != SPHONE_AUDIO_ROUTE_SPEAKER && route != SPHONE_AUDIO_ROUTE_HANDSET)
++		return;
++	if (route == sent)
++		return;
++	pid = callaudio_pid();
++	if (!pid) {
++		sphone_module_log(LL_DEBUG, "no %s: no call audio to route", CALLAUDIO_PIDFILE);
++		return;
++	}
++	if (kill(pid, route == SPHONE_AUDIO_ROUTE_SPEAKER ? SIGUSR1 : SIGUSR2) != 0) {
++		sphone_module_log(LL_WARN, "pro1x-callaudio (%ld): %s", (long)pid, strerror(errno));
++		return;
++	}
++	sphone_module_log(LL_DEBUG, "call audio to the %s",
++		route == SPHONE_AUDIO_ROUTE_SPEAKER ? "loudspeaker" : "earpiece");
++	sent = route;
++}
++
++SPHONE_MODULE_EXPORT const gchar *sphone_module_init(void **data);
++const gchar *sphone_module_init(void **data)
++{
++	*data = NULL;
++	append_trigger_to_datapipe(&call_mode_pipe, mode_trigger, NULL);
++	append_trigger_to_datapipe(&audio_route_pipe, route_trigger, NULL);
++	return NULL;
++}
++
++SPHONE_MODULE_EXPORT void sphone_module_exit(void *data);
++void sphone_module_exit(void *data)
++{
++	(void)data;
++	remove_trigger_from_datapipe(&call_mode_pipe, mode_trigger, NULL);
++	remove_trigger_from_datapipe(&audio_route_pipe, route_trigger, NULL);
++}

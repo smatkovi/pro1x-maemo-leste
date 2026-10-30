@@ -1,30 +1,35 @@
-liblocation without location-ui, location-control and MCE (FreeBSD's
-Hildon has none of them):
+liblocation where location-ui, location-control's schema or MCE are not
+there (FreeBSD has no MCE; location-ui runs only inside a Hildon session,
+started by hildon-session, and location-control's schema is loaded at boot
+by rc.d/hildon_setup):
 
 - location-ui shows the disclaimer and the "enable positioning" dialogs
-  and answers with a "response" signal. Without it (the service unknown)
-  the start ended in "System error"; now the dialog's yes is taken: the
-  disclaimer accepted (stored in GConf as by the dialog), GPS and network
-  positioning on.
-- location-control (the settings applet) sets the device in GConf's
-  method pair; with none set, the internal receiver ("las": gpsd through
-  location-daemon) instead of a Bluetooth receiver, which needed BlueZ.
+  and answers with a "response" signal; with it running, liblocation asks
+  it as on Leste. Only when no location-ui runs at all (the service unknown:
+  no session, an unattended test) the start used to end in "System
+  error"; then the dialog's yes is taken (the disclaimer accepted and
+  stored in GConf, GPS and network positioning on), with a message.
+- location-control's schema gives the device in GConf's method pair
+  (com.nokia.Location, las); without it, the internal receiver ("las":
+  gpsd through location-daemon) instead of a Bluetooth one, which needed
+  BlueZ.
 - MCE's get_device_mode tells flight and offline mode, in which liblocation
   restricts the methods. Without MCE the device mode is "normal".
 
 --- a/src/location-gpsd-control.c
 +++ b/src/location-gpsd-control.c
-@@ -276,7 +276,18 @@
+@@ -276,7 +276,19 @@
  				&ierr, G_TYPE_INVALID);
  
  		/* TODO: Some error is raised here */
 -		if (ierr) {
 +		if (ierr && handler_func &&
 +		    g_error_matches(ierr, DBUS_GERROR, DBUS_GERROR_SERVICE_UNKNOWN)) {
-+			/* FreeBSD: no location-ui to ask (not ported): the
-+			 * answer its dialog's yes would give (the disclaimer
-+			 * accepted, positioning on: GPS and network) */
-+			g_message("%s: no location UI, taken as accepted", path);
++			/* FreeBSD: no location-ui running (it runs in a
++			 * Hildon session only): the answer its dialog's yes
++			 * would give (the disclaimer accepted, positioning on:
++			 * GPS and network) */
++			g_message("%s: no location UI running, taken as accepted", path);
 +			g_error_free(ierr);
 +			g_object_unref(p->location_ui_proxy);
 +			p->location_ui_proxy = NULL;
@@ -34,7 +39,7 @@ Hildon has none of them):
  			quark = dbus_g_error_quark();
  			if (g_error_matches(ierr, quark, 32)
  					&& (err_name = dbus_g_error_get_name(ierr),
-@@ -454,6 +465,12 @@
+@@ -454,6 +466,12 @@
  				G_TYPE_INVALID);
  		g_object_unref(proxy);
  
@@ -47,7 +52,7 @@ Hildon has none of them):
  		if (ierr) {
  			g_warning("%s: %s", "update_mce_device_mode", ierr->message);
  			g_error_free(ierr);
-@@ -498,7 +515,7 @@
+@@ -498,7 +516,7 @@
  	} else {
  		g_debug("%s: We are in offline mode now!", G_STRLOC);
  
@@ -56,14 +61,14 @@ Hildon has none of them):
  			register_dbus_signal_callback(control, UI_BT_DISABLED, NULL, NULL);
  			g_warning("%s: Offline mode, external device, giving up.", G_STRLOC);
  			g_signal_emit(control, signals[ERROR], 0);
-@@ -578,7 +595,10 @@
+@@ -578,7 +596,10 @@
  
  	// interval = p->interval
  
 -	if ((unsigned int)(method - 1) <= 2 || !g_strcmp0(p->device, "las")) {
-+	/* FreeBSD: without location-control nothing has chosen a device
-+	 * (GConf's method pair): the internal receiver, "las", which this
-+	 * takes from gpsd through location-daemon, rather than Bluetooth */
++	/* FreeBSD: without location-control's schema nothing has chosen a
++	 * device (GConf's method pair): the internal receiver, "las", which
++	 * this takes from gpsd through location-daemon, rather than Bluetooth */
 +	if ((unsigned int)(method - 1) <= 2 || !g_strcmp0(p->device ? p->device : "las", "las")) {
  		/* TODO: What? */
  		if (!gpsd_start(control))

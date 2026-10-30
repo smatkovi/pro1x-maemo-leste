@@ -50,7 +50,8 @@ LOCAL = {
                     "pro1x-steps reads the ADSP's pedometer through libssc and "
                     'serves the count as org.pro1x.Steps on the system bus '
                     '(tools/pro1x-steps), with its rc.d script.', ['UNKNOWN']),
-    'pro1x-gnss': ('1.0', "The Pro1X modem's GNSS as NMEA for gpsd",
+    # 1.1: -d, the modem from a QMUX file (freebsd/modem's tests)
+    'pro1x-gnss': ('1.1', "The Pro1X modem's GNSS as NMEA for gpsd",
                    "pro1x-gnss starts the modem's location service over QMI and "
                    'writes its NMEA sentences for gpsd (tools/pro1x-gnss).',
                    ['UNKNOWN']),
@@ -221,6 +222,8 @@ RUNTIME = {
     # the light meter asks the Pro1X's light sensor (pro1x-light)
     'photolightmeter': ['pro1x-light'],
     'pro1x-gnss': ['gpsd'],
+    # as Leste's liblocation0: the daemon, the dialogs and the settings
+    'liblocation': ['location-daemon', 'location-ui', 'location-control'],
     # the modem started by pro1x_modem (rmtfs, tqftpserv, pd-mapper), the bus;
     # rc.d/pro1x_gps runs gpsd on pro1x-gnss
     'pro1x-modem': ['rmtfs', 'dbus', 'pro1x-gnss', 'gpsd'],
@@ -446,8 +449,10 @@ REVISION = {
     # 2026-10-29: Qt 6's plugins below /usr/local/lib/qt6 (qmake6 -query
     # answered with the PC's /usr/lib/qt6), sphone's modules below
     # /usr/local/lib, system-ui's D-Bus policy below /usr/local/etc and
-    # its dead notification sinks dropped (harmattan-qt5 278a4b8)
-    'qt6-qpa-maemo': 1, 'qt6-style-maemo': 1, 'sphone': 2, 'harmattan-system-ui': 1,
+    # its dead notification sinks dropped (harmattan-qt5 278a4b8); sphone
+    # 3 (2026-10-30): DTMF through oFono's SendTones (0001), the Speaker
+    # button to pro1x-callaudio (route-pro1x, 0002)
+    'qt6-qpa-maemo': 1, 'qt6-style-maemo': 1, 'sphone': 3, 'harmattan-system-ui': 1,
     # 2026-10-29: libmeegotouch's style sheet cache read every attribute 4
     # bytes early in clang builds (nothing drew, harmattan-qt5 0bbefb4),
     # the Pro1X's 960x480 target; the pro1x theme's black wallpaper
@@ -466,6 +471,12 @@ REVISION = {
     'hildon-home': 1, 'hildon-control-panel-personalisation': 1, 'osso-calculator': 1, 'conversations': 1, 'osso-abook': 1, 'osso-addressbook': 1,
     # 2026-10-29: no dependency on Nokia's sounds (PRIVATE)
     'osso-chess-ui': 1, 'maemo-input-sounds': 1, 'osso-systemui-alarm': 1,
+    # 2026-10-30: events were never logged on FreeBSD (0001: SQLite's printf
+    # has no j modifier, FreeBSD's PRIiMAX)
+    'rtcom-eventlogger': 1,
+    # 2026-10-30: the lock in /var/run (0003), location-ui's dialogs asked
+    # when it runs, without MCE (0004), the dialogs' answers (0005, 0006)
+    'liblocation': 1,
 }
 
 # Maemo 5's sounds as Leste's archive has them: Nokia's (debian/copyright:

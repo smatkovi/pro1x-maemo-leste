@@ -1800,25 +1800,39 @@ qmi_hangup_all(GDBusMethodInvocation *inv)
 	g_dbus_method_invocation_return_value(inv, NULL);
 }
 
-/* DTMF: each tone started and stopped (continuous DTMF) */
+/*
+ * DTMF: each tone started and stopped (continuous DTMF). Tones asked for
+ * while others are still being sent (sphone sends one per key) join the
+ * queue, so that the modem sees one tone at a time; each SendTones is
+ * answered once its tones are out.
+ */
 struct tones_ctx {
-	GDBusMethodInvocation *inv;
-	char *tones;
+	GSList *invs;		/* the SendTones calls waiting for their answer */
+	GString *tones;
 	guint pos;
 	guint8 id;
 };
 
+static struct tones_ctx *tones_active;
 static void tone_next(struct tones_ctx *x);
 
 static void
 tones_done(struct tones_ctx *x, GError *error)
 {
+	for (GSList *l = x->invs; l != NULL; l = l->next) {
+		if (error != NULL)
+			ofono_reply_error(l->data, OFONO_ERROR_FAILED, error->message);
+		else
+			g_dbus_method_invocation_return_value(l->data, NULL);
+	}
 	if (error != NULL)
-		fail(x->inv, "voice: DTMF", error);
+		fail(NULL, "voice: DTMF", error);
 	else
-		g_dbus_method_invocation_return_value(x->inv, NULL);
-	g_free(x->tones);
+		mlog("voice: DTMF \"%s\" sent", x->tones->str);
+	g_slist_free(x->invs);
+	g_string_free(x->tones, TRUE);
 	g_free(x);
+	tones_active = NULL;
 }
 
 static gboolean
@@ -1879,14 +1893,13 @@ tone_next(struct tones_ctx *x)
 {
 	QmiMessageVoiceStartContinuousDtmfInput *in;
 
-	if (x->tones[x->pos] == 0) {
-		mlog("voice: DTMF \"%s\" sent", x->tones);
+	if (x->pos >= x->tones->len) {
 		tones_done(x, NULL);
 		return;
 	}
 	in = qmi_message_voice_start_continuous_dtmf_input_new();
 	qmi_message_voice_start_continuous_dtmf_input_set_data(in, x->id,
-	    (guint8)x->tones[x->pos], NULL);
+	    (guint8)x->tones->str[x->pos], NULL);
 	qmi_client_voice_start_continuous_dtmf(VOICE, in, TIMEOUT, NULL,
 	    (GAsyncReadyCallback)tone_start_ready, x);
 	qmi_message_voice_start_continuous_dtmf_input_unref(in);
@@ -1896,7 +1909,7 @@ void
 qmi_send_tones(const char *tones, GDBusMethodInvocation *inv)
 {
 	struct call *active = NULL;
-	struct tones_ctx *x;
+	char *up;
 
 	if (tones[0] == 0 || strspn(tones, "0123456789*#ABCDabcd") != strlen(tones)) {
 		ofono_reply_error(inv, OFONO_ERROR_INVALID_FORMAT, tones);
@@ -1909,11 +1922,19 @@ qmi_send_tones(const char *tones, GDBusMethodInvocation *inv)
 		ofono_reply_error(inv, OFONO_ERROR_FAILED, "no active call");
 		return;
 	}
-	x = g_new0(struct tones_ctx, 1);
-	x->inv = inv;
-	x->tones = g_ascii_strup(tones, -1);
-	x->id = active->id;
-	tone_next(x);
+	up = g_ascii_strup(tones, -1);
+	if (tones_active != NULL) {
+		g_string_append(tones_active->tones, up);
+		tones_active->invs = g_slist_append(tones_active->invs, inv);
+		g_free(up);
+		return;
+	}
+	tones_active = g_new0(struct tones_ctx, 1);
+	tones_active->invs = g_slist_append(NULL, inv);
+	tones_active->tones = g_string_new(up);
+	tones_active->id = active->id;
+	g_free(up);
+	tone_next(tones_active);
 }
 
 /* --- the clients ---------------------------------------------------------- */

@@ -275,6 +275,19 @@ check([x.split()[1] for x in dt] == ['Start-Continuous-DTMF', 'Stop-Continuous-D
       [x.split('digit=')[1] for x in dt if 'digit=' in x] == ['1', '2', '#'],
       'SendTones: start and stop for 1, 2, # (%s)' % dt)
 check(dbus_error(vcm.SendTones, '12x') == 'org.ofono.Error.InvalidFormat', 'SendTones: bad tone')
+# sphone sends one SendTones per key, the next before the last is out:
+# queued, one tone at a time at the modem, each call answered
+answers = []
+n0 = len([x for x in requests() if 'Continuous-DTMF' in x])
+for t in ('4', '5', '6'):
+    vcm.SendTones(t, reply_handler=lambda: answers.append('ok'),
+                  error_handler=lambda e: answers.append(e.get_dbus_name()))
+check(wait_for(lambda: len(answers) == 3, 10) and answers == ['ok'] * 3,
+      'three SendTones at once: all answered (%s)' % answers)
+dt = [x for x in requests() if 'Continuous-DTMF' in x][n0:]
+check([x.split()[1] for x in dt] == ['Start-Continuous-DTMF', 'Stop-Continuous-DTMF'] * 3 and
+      [x.split('digit=')[1] for x in dt if 'digit=' in x] == ['4', '5', '6'],
+      'one tone at a time, in order (%s)' % dt)
 iface(cp, 'org.ofono.VoiceCall').Hangup()
 check(wait_for(lambda: call_state(cp) == 'disconnected'), 'disconnected after Hangup')
 check(wait_for(lambda: sigs('org.ofono.VoiceCallManager', 'CallRemoved', MP)), 'CallRemoved')

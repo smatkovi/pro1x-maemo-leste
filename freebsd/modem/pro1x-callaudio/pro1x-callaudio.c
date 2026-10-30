@@ -1,8 +1,8 @@
 /*-
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * pro1x-callaudio [-v] [-S socket] [-r route] [-w seconds]: the voice of a
- * call on FreeBSD (freebsd/modem/README.md, "Stage 2").
+ * pro1x-callaudio [-v] [-S socket] [-r route] [-w seconds] [-p pidfile]: the
+ * voice of a call on FreeBSD (freebsd/modem/README.md, "Stage 2").
  *
  * pro1x-modemd runs it while there are calls (-A), as Linux's
  * pro1x-voice-call runs while ModemManager lists one, and sends it SIGTERM
@@ -19,7 +19,10 @@
  *   start   "status" (the route before the call), "route ear" (-r: the
  *           earpiece), "voice start"; "callaudio: ready" on stdout
  *   SIGTERM "voice stop", the route of before; exit 0
- *   SIGUSR1 the loudspeaker and back ("route spk" / the call's route)
+ *   SIGUSR1 the loudspeaker ("route spk"), SIGUSR2 the call's route again
+ *           (sphone's Speaker button through its module route-pro1x, which
+ *           finds this process in -p's file, /var/run/pro1x-callaudio.pid,
+ *           written once the voice is up)
  *
  * Without pro1x-audiod (none within -w seconds, default 5) or when the
  * voice does not start, it says so and exits 1: pro1x-modemd then does not
@@ -41,9 +44,12 @@
 
 #define	SOCK_PATH	"/var/run/pro1x-audio.sock"
 
+#define	PID_PATH	"/var/run/pro1x-callaudio.pid"
+
 static const char *sock_path = SOCK_PATH;
+static const char *pid_path = PID_PATH;
 static int verbose;
-static volatile sig_atomic_t got_term, got_usr1;
+static volatile sig_atomic_t got_term, want_spk = -1;
 
 static void
 say(const char *fmt, ...)
@@ -63,6 +69,7 @@ static int
 ask(const char *req, char *ans, size_t alen)
 {
 	struct sockaddr_un sun;
+	char line[128];
 	size_t got = 0;
 	ssize_t n;
 	int s;
@@ -78,7 +85,10 @@ ask(const char *req, char *ans, size_t alen)
 		close(s);
 		return (-1);
 	}
-	if (write(s, req, strlen(req)) != (ssize_t)strlen(req) || write(s, "\n", 1) != 1) {
+	/* the request and its newline in one write: pro1x-audiod reads once
+	 * and closes, a second write would find the socket closed */
+	snprintf(line, sizeof(line), "%s\n", req);
+	if (write(s, line, strlen(line)) != (ssize_t)strlen(line)) {
 		close(s);
 		return (-1);
 	}
@@ -96,7 +106,9 @@ static void
 on_signal(int sig)
 {
 	if (sig == SIGUSR1)
-		got_usr1 = 1;
+		want_spk = 1;
+	else if (sig == SIGUSR2)
+		want_spk = 0;
 	else
 		got_term = 1;
 }
@@ -104,7 +116,8 @@ on_signal(int sig)
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: pro1x-callaudio [-v] [-S socket] [-r route] [-w seconds]\n");
+	fprintf(stderr, "usage: pro1x-callaudio [-v] [-S socket] [-r route] [-w seconds] "
+	    "[-p pidfile]\n");
 	exit(2);
 }
 
@@ -117,8 +130,9 @@ main(int argc, char **argv)
 	int c, wait_s = 5, r = -1, speaker = 0;
 	struct sigaction sa;
 
-	while ((c = getopt(argc, argv, "vS:r:w:")) != -1) {
+	while ((c = getopt(argc, argv, "vS:r:w:p:")) != -1) {
 		switch (c) {
+		case 'p': pid_path = optarg; break;
 		case 'v': verbose = 1; break;
 		case 'S': sock_path = optarg; break;
 		case 'r': route = optarg; break;
@@ -133,6 +147,9 @@ main(int argc, char **argv)
 	sigaction(SIGTERM, &sa, NULL);
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGUSR1, &sa, NULL);
+	sigaction(SIGUSR2, &sa, NULL);
+	/* a daemon that closes early is an error answer, not our end */
+	signal(SIGPIPE, SIG_IGN);
 
 	/* pro1x-audiod, which may be starting too */
 	for (int i = 0; i <= wait_s * 10 && !got_term; i++) {
@@ -158,6 +175,16 @@ main(int argc, char **argv)
 		return (1);
 	}
 	say("ready (%s; route %s, before %s)", ans, route, before[0] ? before : "?");
+	{
+		FILE *f = fopen(pid_path, "w");
+
+		if (f != NULL) {
+			fprintf(f, "%ld\n", (long)getpid());
+			fclose(f);
+		} else {
+			say("%s: %s (no loudspeaker from sphone)", pid_path, strerror(errno));
+		}
+	}
 
 	/* the signals held between the checks and the wait (sigsuspend) */
 	sigset_t block, old;
@@ -166,18 +193,24 @@ main(int argc, char **argv)
 	sigaddset(&block, SIGTERM);
 	sigaddset(&block, SIGINT);
 	sigaddset(&block, SIGUSR1);
+	sigaddset(&block, SIGUSR2);
 	sigprocmask(SIG_BLOCK, &block, &old);
 	while (!got_term) {
-		if (!got_usr1)
+		if (want_spk < 0)
 			sigsuspend(&old);
-		if (got_usr1 && !got_term) {
-			got_usr1 = 0;
-			speaker = !speaker;
+		if (want_spk >= 0 && !got_term) {
+			int w = want_spk;
+
+			want_spk = -1;
+			if (w == speaker)
+				continue;
+			speaker = w;
 			snprintf(cmd, sizeof(cmd), "route %s", speaker ? "spk" : route);
 			r = ask(cmd, ans, sizeof(ans));
 			say("%s: %s", cmd, r == 0 ? "done" : ans);
 		}
 	}
+	unlink(pid_path);
 	r = ask("voice stop", ans, sizeof(ans));
 	if (r != 0)
 		say("voice stop: %s", r < 0 ? "pro1x-audiod is gone" : ans);

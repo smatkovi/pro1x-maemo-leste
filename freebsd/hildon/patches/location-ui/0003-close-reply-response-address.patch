@@ -1,0 +1,18 @@
+The answer to "close" carries the dialog's response: dbus_message_append_args()
+takes the address of an INT32, not its value. With the response 0 (the
+disclaimer accepted, a dialog's OK) libdbus got a NULL pointer and aborted
+location-ui ("assertion value != NULL failed", signal 6), whenever a
+liblocation client closed the dialog after its answer; any other response
+was read as an address. Leste's build has the same line.
+
+--- a/src/main.c
++++ b/src/main.c
+@@ -586,7 +586,7 @@
+ 
+ 	new_msg = dbus_message_new_method_return(msg);
+ 	dbus_message_append_args(new_msg, DBUS_TYPE_INT32,
+-				 dialog->dialog_response_code,
++				 &dialog->dialog_response_code,
+ 				 DBUS_TYPE_INVALID);
+ 
+ 	/* TODO: Review */

@@ -1,0 +1,29 @@
+get_selected_method() had its test the wrong way round: a client's
+LOCATION_METHOD_USER_SELECTED (0, what most apps and liblocation's example
+ask for) gave no method at all, a specific method every method. After
+the "enable positioning" dialog (the only place that uses it on a start)
+the user's yes therefore ended in "User didn't enable requested methods",
+with GPS just switched on. Now 0 stands for every method the user allows
+(cell positioning only with the network allowed, so that a dialog
+answered with nothing still fails), a specific one for itself, as the code
+below the test already treats them. The same code is in Leste's
+liblocation.
+
+--- a/src/location-gpsd-control.c
++++ b/src/location-gpsd-control.c
+@@ -183,11 +183,13 @@
+ 	int acwp, gnss, agnss, result;
+ 	LocationGPSDControlPrivate *p = location_gpsd_control_get_instance_private(control);
+ 
+-	if (method) {
++	/* LOCATION_METHOD_USER_SELECTED (0): every method the user allows
++	 * (cell positioning, CWP, being a network one) */
++	if (!method) {
+ 		acwp = LOCATION_METHOD_ACWP;
+ 		gnss = LOCATION_METHOD_GNSS;
+ 		agnss = LOCATION_METHOD_AGNSS;
+-		result = LOCATION_METHOD_CWP;
++		result = p->net_disabled ? 0 : LOCATION_METHOD_CWP;
+ 		goto out;
+ 	}
+ 

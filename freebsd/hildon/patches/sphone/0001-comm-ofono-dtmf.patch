@@ -1,0 +1,90 @@
+comm-ofono: the DTMF keypad. The backend had no BACKEND_FLAG_DTMF, so the
+call window showed no DTMF button, and nothing took the keypad's requests
+(only the test backend does). Each key is now oFono's
+VoiceCallManager.SendTones with that one tone (oFono's tones have a fixed
+duration; the keypad sends no key release), sent without waiting for the
+answer, an error shown as sphone's other errors are.
+
+--- a/src/modules/comm-ofono.c
++++ b/src/modules/comm-ofono.c
+@@ -50,7 +50,7 @@
+ static const Scheme call_scheme =
+ {
+ 	.scheme = (char*)"tel",
+-	.flags = BACKEND_FLAG_CALL | BACKEND_FLAG_CELLULAR
++	.flags = BACKEND_FLAG_CALL | BACKEND_FLAG_CELLULAR | BACKEND_FLAG_DTMF
+ };
+ 
+ static const Scheme sms_scheme =
+@@ -621,6 +621,46 @@
+ 	}
+ }
+ 
++static void send_tones_ready(GObject *source, GAsyncResult *res, gpointer user_data)
++{
++	GError *gerror = NULL;
++	GVariant *result = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &gerror);
++
++	(void)user_data;
++	if (result)
++		g_variant_unref(result);
++	if (gerror) {
++		error_dbus(gerror);
++		gchar message[] = "Unable to send the tone via ofono";
++		execute_datapipe(&gui_error_pipe, message);
++	}
++}
++
++/* The DTMF keypad's keys as oFono's VoiceCallManager.SendTones: one tone
++ * per key, of oFono's fixed duration (the keypad sends no key release) */
++static void call_dtmf_trigger(gconstpointer data, gpointer user_data)
++{
++	static const char tones[] = "0123456789#*ABCD";
++	const DtmfRequest *request = (const DtmfRequest*)data;
++	struct ofono_if_priv_s *priv = (struct ofono_if_priv_s*)user_data;
++	char tone[2] = { 0, 0 };
++
++	if (!request->call || request->call->backend != priv->backend_id)
++		return;
++	if (request->dtmf < SPHONE_DTMF_0 || request->dtmf > SPHONE_DTMF_D)
++		return;
++	if (!ofono_init_valid(priv)) {
++		gchar message[] = "Ofono is not ready";
++		execute_datapipe(&gui_error_pipe, message);
++		return;
++	}
++	tone[0] = tones[request->dtmf - SPHONE_DTMF_0];
++	sphone_module_log(LL_DEBUG, "Sending tone %s", tone);
++	g_dbus_connection_call(priv->s_bus_conn, OFONO_SERVICE, priv->modem,
++		OFONO_VOICECALL_MANAGER_IFACE, "SendTones", g_variant_new("(s)", tone), NULL,
++		G_DBUS_CALL_FLAGS_NONE, -1, NULL, send_tones_ready, NULL);
++}
++
+ SPHONE_MODULE_EXPORT const gchar *sphone_module_init(void** data);
+ const gchar *sphone_module_init(void** data)
+ {	
+@@ -642,7 +682,7 @@
+ 		SPHONE_FIELD_LISTEND
+ 	};
+ 	
+-	priv->backend_id = sphone_comm_add_backend("cellular", "sphone/ofono", schemes, BACKEND_FLAG_MESSAGE | BACKEND_FLAG_CALL | BACKEND_FLAG_CELLULAR, fields, &is_numeric);
++	priv->backend_id = sphone_comm_add_backend("cellular", "sphone/ofono", schemes, BACKEND_FLAG_MESSAGE | BACKEND_FLAG_CALL | BACKEND_FLAG_CELLULAR | BACKEND_FLAG_DTMF, fields, &is_numeric);
+ 
+ 	priv->ofono_service_watcher =
+ 						g_bus_watch_name_on_connection(priv->s_bus_conn, OFONO_SERVICE, 
+@@ -653,6 +693,7 @@
+ 	append_trigger_to_datapipe(&call_accept_pipe, call_accept_trigger, priv);
+ 	append_trigger_to_datapipe(&call_hold_pipe,   call_hold_trigger, priv);
+ 	append_trigger_to_datapipe(&call_hangup_pipe, call_hangup_trigger, priv);
++	append_trigger_to_datapipe(&call_dtmf_pipe,   call_dtmf_trigger, priv);
+ 	
+ 	append_trigger_to_datapipe(&message_send_pipe, message_send_trigger, priv);
+ 	
+@@ -670,6 +711,7 @@
+ 	remove_trigger_from_datapipe(&call_accept_pipe, call_accept_trigger, priv);
+ 	remove_trigger_from_datapipe(&call_hold_pipe,   call_hold_trigger, priv);
+ 	remove_trigger_from_datapipe(&call_hangup_pipe, call_hangup_trigger,priv);
++	remove_trigger_from_datapipe(&call_dtmf_pipe,   call_dtmf_trigger, priv);
+ 	
+ 	remove_trigger_from_datapipe(&message_send_pipe, message_send_trigger, priv);
+ 

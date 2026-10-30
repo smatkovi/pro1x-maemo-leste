@@ -5,7 +5,9 @@
 # system bus, in Hildon on a virtual screen (Xvfb :1, 2160x1080, as
 # vm/try-hildon.sh). Its files are in /root/modemtest (copied there by the
 # PC: pro1x-modemd, lib/ with libqmi-glib and libqrtr-glib, fakemodem.py,
-# pro1x-modemd.conf, the D-Bus policy); its state and logs in /tmp/fm.
+# pro1x-modemd.conf, the D-Bus policy; optionally modules/ with sphone's
+# newer modules and 50-pro1x-freebsd.ini, pro1x-callaudio and
+# fakeaudiod.py); its state and logs in /tmp/fm.
 #   start      the policy, the bus, Hildon, the simulated modem (PIN 7395,
 #              the PIN file), pro1x-modemd, sphone
 #   shot NAME  the screen as /root/shots/NAME.xwd
@@ -42,6 +44,22 @@ for e in list(d.values())[0]["environment"]:
 	# (and the phone's scfb) cannot: the picture went black
 	mkdir -p /root/.config/sphone
 	printf '[Gui]\nLandscapeCalls=1\n' > /root/.config/sphone/user.ini
+	# a newer sphone's modules (modules/, with route-pro1x) and the
+	# package's module list, if they came along
+	if [ -d "$T/modules" ] && [ -f "$T/50-pro1x-freebsd.ini" ]; then
+		printf '\n[Modules]\nModulePath=%s/modules\n' "$T" >> /root/.config/sphone/user.ini
+		grep '^Modules=' "$T/50-pro1x-freebsd.ini" >> /root/.config/sphone/user.ini
+	fi
+	# pro1x-callaudio per call against a stand-in for pro1x-audiod, if
+	# they came along (its pid file where sphone's route-pro1x looks)
+	A=
+	if [ -x "$T/pro1x-callaudio" ] && [ -f "$T/fakeaudiod.py" ]; then
+		daemon -f -o "$F/audiod.log" -p "$F/audiod.pid" python3.11 "$T/fakeaudiod.py" \
+		    "$F/audio.sock" "$F/audio.log"
+		printf '#!/bin/sh\nexec %s/pro1x-callaudio -v -S %s/audio.sock\n' "$T" "$F" > "$F/callaudio"
+		chmod 755 "$F/callaudio"
+		A="-A $F/callaudio"
+	fi
 	umask 077
 	echo 7395 > "$F/sim-pin"
 	rm -f "$F/pin-tried"
@@ -49,7 +67,7 @@ for e in list(d.values())[0]["environment"]:
 	    --pty-link "$F/modem" --ctl "$F/ctl" --log "$F/req.log" --pin 7395
 	sleep 3
 	LD_LIBRARY_PATH=$T/lib daemon -f -o "$F/modemd.log" -p "$F/modemd.pid" \
-	    "$T/pro1x-modemd" -v -d "$F/modem" -p "$F/sim-pin" -P "$F/pin-tried" -s 10
+	    "$T/pro1x-modemd" -v -d "$F/modem" -p "$F/sim-pin" -P "$F/pin-tried" -s 10 $A
 	sleep 15
 	(. "$F/session.env"; daemon -f -o "$F/sphone.log" -p "$F/sphone.pid" \
 	    /usr/local/bin/sphone -v)
@@ -80,7 +98,7 @@ key)
 	xdotool key "$2"
 	;;
 stop)
-	for p in sphone modemd fake session xvfb; do
+	for p in sphone modemd fake audiod session xvfb; do
 		[ -f "$F/$p.pid" ] && kill "$(cat "$F/$p.pid")" 2> /dev/null
 	done
 	pkill -f /usr/local/bin/sphone 2> /dev/null

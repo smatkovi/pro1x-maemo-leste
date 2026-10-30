@@ -42,7 +42,7 @@ export DBUS_SYSTEM_BUS_ADDRESS=unix:path=$T/bus
 # pro1x-audiod's control socket, which logs its requests in audio.log
 python3 "$D/fakeaudiod.py" "$T/audio.sock" "$T/audio.log" > /dev/null 2>&1 &
 echo $! > "$T/audiod.pid"
-printf '#!/bin/sh\nexec "%s" -v -S "%s"\n' "$CA" "$T/audio.sock" > "$T/callaudio"
+printf '#!/bin/sh\nexec "%s" -v -S "%s" -p "%s"\n' "$CA" "$T/audio.sock" "$T/callaudio.pid" > "$T/callaudio"
 chmod +x "$T/callaudio"
 PIN=7395
 fails=0

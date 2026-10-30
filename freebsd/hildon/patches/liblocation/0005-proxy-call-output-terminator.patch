@@ -1,0 +1,29 @@
+dbus_g_proxy_call() takes the input arguments, G_TYPE_INVALID, then the
+output arguments and another G_TYPE_INVALID. The calls of location-ui's
+"display" and "close" ended after the inputs, so dbus-glib read whatever
+followed on the stack as the first output's type: on FreeBSD/arm64 that
+was no G_TYPE_INVALID, and every dialog request failed ("Too few arguments
+in reply") although location-ui showed it. Leste's build has the same
+calls; there the stack apparently held a zero.
+
+--- a/src/location-gpsd-control.c
++++ b/src/location-gpsd-control.c
+@@ -169,7 +169,8 @@
+ 
+ 	if (p->location_ui_proxy) {
+ 		if (p->ui_open) {
+-			dbus_g_proxy_call(p->location_ui_proxy, "close", NULL, G_TYPE_INVALID);
++			dbus_g_proxy_call(p->location_ui_proxy, "close", NULL, G_TYPE_INVALID,
++			    G_TYPE_INVALID);
+ 			p->ui_open = FALSE;
+ 		}
+ 		g_object_unref(p->location_ui_proxy);
+@@ -273,7 +274,7 @@
+ 		dbus_g_proxy_connect_signal(p->location_ui_proxy, "response",
+ 				handler_func, control, NULL);
+ 		dbus_g_proxy_call(p->location_ui_proxy, "display",
+-				&ierr, G_TYPE_INVALID);
++				&ierr, G_TYPE_INVALID, G_TYPE_INVALID);
+ 
+ 		/* TODO: Some error is raised here */
+ 		if (ierr && handler_func &&
