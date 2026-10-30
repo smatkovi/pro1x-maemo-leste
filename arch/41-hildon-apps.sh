@@ -125,10 +125,11 @@ printf '#include "../linux-g++/qplatformdefs.h"\n' > "$d/qplatformdefs.h"
 EOF
 
 # PyOtherSide (Python in QML) for gPodder, from the AUR, where Arch Linux ARM
-# has none: built by the user alarm, installed by root (as 40's GConf)
+# has none: built by the user alarm, installed by root (as 40's GConf); its
+# PKGBUILD names x86_64 only (-A). Without it gPodder builds, but does not run.
 if want gpodder-leste && ! chroot "$MNT" pacman -Q python-pyotherside > /dev/null 2>&1; then
 	log "PyOtherSide (AUR)"
-	chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
+	chroot "$MNT" /bin/bash -euo pipefail <<'EOF' || echo "   (PyOtherSide failed)"
 rm -rf /home/alarm/aur/python-pyotherside
 install -d -o alarm -g alarm /home/alarm/aur
 su alarm -c 'cd /home/alarm/aur && git clone -q https://aur.archlinux.org/python-pyotherside.git'
@@ -136,7 +137,7 @@ deps=$(cd /home/alarm/aur/python-pyotherside && bash -c '. ./PKGBUILD; echo "${d
 	sed 's/[<>=][^ ]*//g')
 # shellcheck disable=SC2086
 pacman -S --noconfirm --needed $deps > /dev/null
-su alarm -c 'cd /home/alarm/aur/python-pyotherside && makepkg --nocheck --noconfirm > makepkg.log 2>&1' ||
+su alarm -c 'cd /home/alarm/aur/python-pyotherside && makepkg -A --nocheck --noconfirm > makepkg.log 2>&1' ||
 	{ tail -30 /home/alarm/aur/python-pyotherside/makepkg.log; exit 1; }
 pacman -U --noconfirm /home/alarm/aur/python-pyotherside/python-pyotherside-[0-9]*.pkg.tar.* > /dev/null
 gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
