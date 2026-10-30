@@ -99,7 +99,7 @@ EOF
 	done
 	if [ -n "$missing" ]; then
 		echo "missing:$missing; first: bash arch/40-hildon.sh, then"
-		echo "  ONLY=\"osso-af-settings cityinfo clockd icd2-osso-ic-dev libconic statusbar-alarm-dbus-api libdsme osso-systemui-dbus-dev alarmd calendar-backend hildon-control-panel rtcom-eventlogger rtcom-eventlogger-plugins\" bash arch/41-hildon-apps.sh"
+		echo "  ONLY=\"osso-af-settings codelockui cityinfo clockd icd2-osso-ic-dev libconic statusbar-alarm-dbus-api libdsme osso-systemui-dbus-dev alarmd calendar-backend hildon-control-panel rtcom-eventlogger rtcom-eventlogger-plugins\" bash arch/41-hildon-apps.sh"
 		exit 1
 	fi
 	S=$B/pro1x

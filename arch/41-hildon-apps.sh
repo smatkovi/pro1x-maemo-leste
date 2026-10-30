@@ -95,12 +95,13 @@ all="cmake qt5-base qt5-svg qt5-declarative \
 	qt5-x11extras qt5-xmlpatterns qt5-location qt5-tools qt5-websockets \
 	poppler-glib libical espeak-ng expat libxkbfile curl libsigc++ \
 	evolution-data-server sdl12-compat sdl_mixer sdl_image gnuchess \
-	python python-pip gettext libevent json-c protobuf-c dpkg"
-[ -z "$ONLY" ] || all="cmake curl expat python gettext dpkg"
+	python python-pip gettext libevent json-c protobuf-c dpkg check"
+[ -z "$ONLY" ] || all="cmake curl expat python gettext dpkg check"
 chroot "$MNT" /bin/bash -euo pipefail -s "$all" <<'EOF'
 # only those Arch Linux ARM has (qt5-location and qt5-websockets it has
 # not): one unknown name would make pacman install none of them. dpkg for
-# dpkg-parsechangelog, which configure.ac files call for their version.
+# dpkg-parsechangelog, which configure.ac files call for their version;
+# check, the unit test library rtcom-eventlogger's configure asks for.
 have=
 for p in $1; do
 	if pacman -Si "$p" > /dev/null 2>&1; then have="$have $p"
