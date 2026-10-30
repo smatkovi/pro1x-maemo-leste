@@ -12,6 +12,8 @@
 #                       (pro1x.suspend_key=1), D the battery over
 #                       pro1x.power_min minutes of suspend
 #   pro1x.test=usb      the USB controller as Linux left it (read only)
+#   pro1x.test=usbnet   the USB gadget: dwc3dci, CDC Ethernet, ue0 as
+#                       172.16.42.1 for pro1x.usb_min (5) minutes
 #   pro1x.test=idle     the PSCI idle states (hw.psci_idle.enable=1): the
 #                       states, a work check (8 workers: xz decompression
 #                       piped into md5, against the reference) while the
@@ -184,6 +186,47 @@ idle)
 	pm_power
 	pm_stats
 	pm_done idle
+	;;
+usbnet)
+	# stage 4: the USB gadget, CDC Ethernet (usb_template 1) on dwc3dci;
+	# the modules from userdata's freebsd/pm/ (pm-out/modules)
+	echo "=== pm: USB gadget, CDC Ethernet"
+	sysctl hw.pro1x_pm.usb_probe
+	if mount -t ext2fs -o ro /dev/gpt/userdata /dev/pro1x-host; then
+		M=/dev/pro1x-host/freebsd/pm
+		for m in qcom_dsp usb usb_template uether if_cdce; do
+			kldload $M/$m.ko || pm_log "!! $m.ko not loaded"
+		done
+		sysctl hw.usb.template=1
+		kenv hw.dwc3dci.enable=1
+		kldload $M/pro1x_usb.ko || pm_log "!! pro1x_usb.ko not loaded"
+		umount /dev/pro1x-host
+	else
+		pm_log "!! userdata not mounted"
+	fi
+	kldstat
+	dmesg | sed -n -E '/dwc3dci|usbus|ugen|cdce|ue[0-9]/p'
+	sysctl dev.dwc3dci.0.bringup dev.dwc3dci.0.stats
+	min=$(kenv -q pro1x.usb_min)
+	min=${min:-5}
+	t=0
+	up=
+	while [ $t -lt $((min * 60)) ]; do
+		if [ -z "$up" ] && ifconfig ue0 > /dev/null 2>&1; then
+			ifconfig ue0 inet 172.16.42.1/24 up && up=1
+			pm_log "ue0 up as 172.16.42.1"
+		fi
+		pm_log "$(sysctl -n dev.dwc3dci.0.stats 2>&1)"
+		if [ -n "$up" ]; then
+			ifconfig ue0 | sed -n -E '/status|ether|inet /p'
+			ping -c 1 -t 2 172.16.42.2 > /dev/null 2>&1 &&
+			    pm_log "172.16.42.2 answers" || pm_log "172.16.42.2: no answer"
+		fi
+		sleep 10
+		t=$((t + 10))
+	done
+	dmesg | sed -n -E '/dwc3dci|usbus|ugen|cdce|ue[0-9]/p' | tail -20
+	pm_done usbnet
 	;;
 usb)
 	# stage 4: what Linux leaves of the USB controller (read only)

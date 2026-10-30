@@ -92,8 +92,10 @@ cp -a "$REPO/freebsd/camera/sys/." "$SRC/sys/"
 # The sound (freebsd/audio/README.md): sound(4) as a module (the kernel has
 # no "device sound") and its device over the ADSP, snd_pro1x
 cp -a "$REPO/freebsd/audio/sys/." "$SRC/sys/"
-# Power management (pm/): the RPM sleep set (pro1x_rpmsleep, on qcom_dsp)
-PM_MODULES="pro1x_rpmsleep"
+# Power management (pm/): the RPM sleep set (pro1x_rpmsleep, on qcom_dsp);
+# the USB gadget (pm/README.md, stage 4): dwc3dci (pro1x_usb, on qcom_dsp
+# and usb), the template, CDC Ethernet; not loaded unless asked for
+PM_MODULES="pro1x_rpmsleep pro1x_usb usb/template usb/uether usb/cdce"
 MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss sound/sound snd_pro1x $PM_MODULES}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
@@ -105,6 +107,9 @@ rm -rf "$OUT/modules"
 mkdir -p "$OUT/modules"
 for m in $MODULES; do
 	ko=$(find "$WORK/obj" -path "*/sys/PRO1X/modules/*/$m.ko" | head -1)
+	# a module named otherwise than its directory (usb/cdce: if_cdce.ko)
+	[ -f "$ko" ] || ko=$(find "$WORK/obj" \
+	    -path "*/sys/PRO1X/modules/*/sys/modules/$m/*.ko" | head -1)
 	[ -f "$ko" ] || { echo "module $m not built"; exit 1; }
 	cp "$ko" "$OUT/modules/"
 done

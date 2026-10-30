@@ -104,9 +104,13 @@ kernel() {	# kernel CONF TEMPLATE MFS ENV OUT [MODULES]
 	log "$out"
 	[ -z "$mods" ] || mkdir -p "$PMOUT/modules"
 	for m in $mods; do
-		cp "$(find "$WORK/obj" -path "*/sys/$conf/modules/*/$m.ko" | head -1)" \
-		    "$PMOUT/modules/"
-		log "$PMOUT/modules/$m.ko"
+		m=${m##*/}
+		ko=$(find "$WORK/obj" -path "*/sys/$conf/modules/*" -name "$m.ko" |
+		    head -1)
+		[ -n "$ko" ] || ko=$(find "$WORK/obj" -path "*/sys/$conf/modules/*" \
+		    -name "*$m.ko" | head -1)
+		cp "$ko" "$PMOUT/modules/"
+		log "$PMOUT/modules/${ko##*/}"
 	done
 }
 
@@ -132,7 +136,7 @@ for t in $TARGETS; do
 		    > "$PMOUT/PRO1XPM.tmpl"
 		kernel PRO1XPM "$PMOUT/PRO1XPM.tmpl" "$PMOUT/mfsroot.ufs" \
 		    "$REPO/freebsd/pro1x.env" "$PMOUT/kernel.bin" \
-		    "qcom_dsp pro1x_rpmsleep"
+		    "qcom_dsp pro1x_rpmsleep usb/usb usb/template usb/uether usb/cdce pro1x_usb"
 		;;
 	*)	echo "unknown target $t"; exit 1 ;;
 	esac

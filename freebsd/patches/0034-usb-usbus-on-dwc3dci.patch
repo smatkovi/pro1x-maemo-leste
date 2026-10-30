@@ -1,0 +1,16 @@
+usb: the bus attaches to dwc3dci, the DWC_usb3 device controller (freebsd/pm)
+
+usbus has to be declared for every controller driver; dwc3dci is a new
+one (freebsd/pm/sys/dev/usb/controller), in pro1x_usb.ko.
+
+diff --git a/sys/dev/usb/controller/usb_controller.c b/sys/dev/usb/controller/usb_controller.c
+--- a/sys/dev/usb/controller/usb_controller.c
++++ b/sys/dev/usb/controller/usb_controller.c
+@@ -133,6 +133,7 @@ DRIVER_MODULE(usbus, xhci, usb_driver, 0, 0);
+ DRIVER_MODULE(usbus, musbotg, usb_driver, 0, 0);
+ DRIVER_MODULE(usbus, uss820dci, usb_driver, 0, 0);
+ DRIVER_MODULE(usbus, octusb, usb_driver, 0, 0);
++DRIVER_MODULE(usbus, dwc3dci, usb_driver, 0, 0);
+ 
+ /* Dual Mode Drivers */
+ DRIVER_MODULE(usbus, dwcotg, usb_driver, 0, 0);

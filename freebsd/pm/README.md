@@ -8,7 +8,7 @@ This directory adds, in stages:
 | 1 | SMP: all eight CPUs (PSCI CPU_ON) | FreeBSD's own code; checked against the device tree, tried in QEMU (8 CPUs); device run prepared |
 | 2 | CPU idle: the PSCI idle states of the device tree, OS-initiated mode, the core's context across a power-down, the memory-mapped timer as the wake-up | built, tried in QEMU with every power-down played (`simulate`); device runs prepared |
 | 3 | the SoC's sleep (RPM sleep set, MPM hand-over) and suspend-to-idle | built; the freeze tried in QEMU (no RPM there); device runs prepared |
-| 4 | USB device mode (CDC ethernet to the PC) | analysed; a read-only probe of what Linux leaves (device run prepared); the DWC3 device-mode driver is not written |
+| 4 | USB device mode (CDC ethernet to the PC) | dwc3dci (a DWC_usb3 device controller driver) and the SM6115 glue built, the encodings tested on the PC; a probe and the gadget run prepared |
 
 Nothing here has run on the phone yet (it is unreachable until
 2026-10-31). Everything is off by default: the phone's normal start is
@@ -24,6 +24,9 @@ unchanged until the device runs below pass.
 | `sys/arm64/qualcomm/pm/pro1x_pm.c` | `device pro1x_pm`: the MPM's hand-over to the RPM, the RPM's counts, suspend-to-idle (`hw.pro1x_pm.*`) |
 | `sys/arm64/qualcomm/pm/pro1x_rpmsleep.c`, `sys/modules/pro1x_rpmsleep` | `pro1x_rpmsleep.ko`: the apps processor's RPM sleep set at 0, through `qcom_dsp.ko` |
 | `../patches/0033-files.arm64-pro1x_pm.patch` | the file for `device pro1x_pm` |
+| `sys/dev/usb/controller/dwc3dci*.{c,h}`, `sys/modules/pro1x_usb` | `pro1x_usb.ko`: the DWC_usb3 device controller driver and its SM6115 glue (stage 4) |
+| `../patches/0034-usb-usbus-on-dwc3dci.patch` | `usbus` on `dwc3dci` |
+| `test/dwc3dci_test.c` | the host test of `dwc3dci_hw.h` |
 | `../patches/0032-arm64-cpu_idle-hook-psci-idle.patch` | `cpu_idle()` asks `arm64_cpu_idle_hook` first; the files for `device psci_idle` |
 | `../mfsroot/etc/pro1x-pmtest.sh` | the device tests in the RAM root (`pro1x.test=smp`, `idle`), sourced by `mfsroot/etc/rc` |
 | `build.sh` | the kernels: `qemu` (PRO1XQ) and `phone` (PRO1XPM = `freebsd/PRO1X` with `device psci_idle`) into `$WORK/pm-out` |
@@ -303,12 +306,57 @@ what is missing:
   only need the core driver; otherwise the GCC, GDSC and PHY bring-up
   comes first.
 
-**Done:** `hw.pro1x_pm.usb_probe` (`pro1x_pm`): the GCC's USB registers
-above (always readable), and only when the GDSC is on, the master and bus
-clocks run and the reset is released, the DWC3's GSNPSID, GCTL, DCFG,
-DCTL and DSTS (an unclocked block's read can hang the bus). Not done:
-the driver, the bring-up, the SMMU stream, the PC side. This is the
-largest of the four stages; it is not started beyond the probe.
+**Done:**
+
+- `hw.pro1x_pm.usb_probe` (`pro1x_pm`): the GCC's USB registers above
+  (always readable), and only when the GDSC is on, the master and bus
+  clocks run and the reset is released, the DWC3's GSNPSID, GCTL, DCFG,
+  DCTL and DSTS (an unclocked block's read can hang the bus).
+- **dwc3dci** (`sys/dev/usb/controller/dwc3dci.c`, `pro1x_usb.ko`): a
+  DWC_usb3 device controller driver for FreeBSD's USB device side. The
+  framework (transfer descriptor chains, the emulated root hub with its
+  one device-mode port, the transfer setup) is `atmegadci.c`'s, taken as
+  it is; the hardware part follows Linux's `dwc3/gadget.c` and `ep0.c`:
+  the event buffer (reset, connect-done, disconnect; XferNotReady of the
+  control status stage), one TRB per transfer on an uncached bounce
+  buffer per physical endpoint (16 KiB, 4 KiB for EP0), the control
+  endpoint as SETUP, DATA, STATUS2/STATUS3 TRBs, SET_ADDRESS into DCFG at
+  the setup stage, the other endpoints configured (STARTCFG 2 once,
+  DEPCFG, XFERCFG, DALEPENA) when the stack resets them at
+  SET_CONFIGURATION, stalls by SETSTALL/CLEARSTALL, cancelled transfers
+  by ENDXFER. High speed only (no USB3 PHY), bulk and interrupt
+  endpoints, no isochronous. `patches/0034`: `usbus` attaches to it.
+- **The SM6115 glue** (`dwc3dci_pro1x.c`): attaches to the wrapper
+  (`qcom,sm6115-dwc3`) only with `hw.dwc3dci.enable=1`; the PHY's
+  supplies on through the RPM and stream 0x120 untranslated
+  (`qcom_dsp.ko`'s `qcom_rpm_regulator`, `qcom_smmu_bypass`), the GDSC
+  and the seven clocks on where they are off, the master RCG at
+  66.67 MHz, the block reset pulsed, the QUSB2 PHY initialised as
+  Linux's `qusb2_phy_init` (its reset, `sm6115_init_tbl`, the
+  single-ended reference clock, PLL lock checked; the HSTX trim fuse is
+  not applied: the table's TUNE2 0x53 stays), the wrapper set to UTMI as
+  the PIPE clock and VBUS valid. It does this whatever Linux left (the
+  reset makes a running gadget of Linux's stop its DMA), and says what it
+  found in `dev.dwc3dci.0.bringup`; `dev.dwc3dci.0.stats` counts events,
+  resets, connections, setups, TRBs and command errors.
+- **Function:** FreeBSD's own: `usb_template.ko` with `hw.usb.template=1`
+  (CDC Ethernet), `if_cdce.ko` and `uether.ko` in device mode, the
+  interface `ue0`. `freebsd/build.sh`'s `MODULES` has `pro1x_usb`,
+  `usb/template`, `usb/uether`, `usb/cdce` (none loaded unless asked).
+- **Tested on the PC:** the build (kernel PRO1XPM and the modules); the
+  encodings of `dwc3dci_hw.h` (DEPCFG parameters as Linux's dwc3 trace
+  prints them for a high-speed gadget, TRB words, completion lengths,
+  whole-packet OUT lengths, the device and endpoint event fields,
+  command words) against expected values: `test/dwc3dci_test.c`, 0
+  failures. Not tested: the driver against hardware or a model (QEMU has
+  no DWC3 device side); the control state machine, the PHY and clock
+  bring-up and the SMMU stream are first tried on the phone.
+- **Not done:** the serial console (`hw.usb.template=8`, CDC Ethernet and
+  a serial port, with `umodem.ko` and a getty on `/dev/ttyU0`: the next
+  step, cheap once the Ethernet works), the full system's side
+  (`rc.conf`: load the modules, `ifconfig_ue0="inet 172.16.42.1/24"`,
+  sshd), the HSTX trim, USB3, the PMI632's VBUS and Type-C detection
+  (VBUS is forced valid).
 
 **Device run:**
 
@@ -321,6 +369,36 @@ largest of the four stages; it is not started beyond the probe.
    reset asserted|released` and either the DWC3's registers (GSNPSID
    0x5533xxxx for a DWC_usb3) or `not read (not clocked)`. That is the
    input for the next step; nothing is changed.
+
+10. **USB gadget, CDC Ethernet** (`usbnet`), the cable to the PC, about
+    6 minutes. First, from Leste, `pm-out/modules/{qcom_dsp,usb,
+    usb_template,uether,if_cdce,pro1x_usb}.ko` into `/host/freebsd/pm/`.
+    Then:
+
+        pro1x.test=usbnet pro1x.usb_min=5 hint.qcom_wdt.0.lifetime=480
+
+    On the PC, once the phone shows up as a CDC Ethernet device (`dmesg`:
+    cdc_ether, 16c0:27e1 "USB Ethernet Adapter", FreeBSD's template):
+    `ip addr add 172.16.42.2/24 dev <its interface>`, `ip link set ...
+    up`, `ping 172.16.42.1`. Expected on the console:
+    `dwc3dci0: bring-up: SMMU stream 0x120 untranslated, GDSC ...,
+    N of 7 clocks switched on, ..., QUSB2 PLL locked, UTMI as PIPE clock,
+    VBUS valid`, `dwc3dci0: DWC_usb3 5533xxxx in device mode, high
+    speed`, `usbus0 on dwc3dci0`, `dwc3dci0: connected (run)`, then with
+    the cable: `stats: events N, resets 1 or more, connects 1 (high
+    speed), setups N, ...`, `cdce0`/`ue0` attaching, `ue0 up as
+    172.16.42.1`, and `172.16.42.2 answers` once the PC has its address.
+    Failure signs: `bring-up: ... does not come on` or `QUSB2 PLL not
+    locked` (the power or the PHY: the probe of run 9 shows the state;
+    a supply the RPM refused is named); `not a DWC_usb3` (the core not
+    clocked or not out of reset); a reset of the phone right after
+    `bring-up` (a read of an unclocked block hung the bus); `resets 0`
+    with the cable in (the pull-up/VBUS or the PHY); `resets` growing,
+    `setups 0` (EP0's SETUP TRB never completes: the event buffer or the
+    SMMU stream: the core's DMA does not reach memory); setups but no
+    `ue0` (the control stage machine: the stack's descriptors not sent,
+    the PC's `dmesg` shows "device descriptor read error"); `ue0` but no
+    ping (the bulk endpoints).
 
 ## Device runs (prepared, for 2026-10-31)
 
@@ -443,7 +521,8 @@ phone N seconds after the start whatever happens.
 
 8. With all eight CPUs: 6 with `kern.smp.disabled=0` (needs 1 and 4).
 
-9. The USB probe (`pro1x.test=usb`): see stage 4 above.
+9. The USB probe (`pro1x.test=usb`) and 10. the gadget
+   (`pro1x.test=usbnet`): see stage 4 above.
 
 The vMPM hand-over and the sleep set are the parts with the most
 unknowns: they are copied from Linux and KolibriOS, neither of which
