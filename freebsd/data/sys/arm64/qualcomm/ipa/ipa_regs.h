@@ -12,6 +12,13 @@
 #ifndef _IPA_REGS_H_
 #define	_IPA_REGS_H_
 
+#ifndef _KERNEL
+#include <stdint.h>
+#endif
+#ifndef __packed
+#define	__packed	__attribute__((__packed__))
+#endif
+
 #define	IPA_BIT(n)		(1U << (n))
 #define	IPA_GENMASK(h, l)	(((~0U) << (l)) & (~0U >> (31 - (h))))
 /* a value into / out of a field given by its mask */

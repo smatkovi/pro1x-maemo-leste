@@ -1,0 +1,5 @@
+test_regs
+test_qmap
+test_qmi
+test_gsi
+*.o

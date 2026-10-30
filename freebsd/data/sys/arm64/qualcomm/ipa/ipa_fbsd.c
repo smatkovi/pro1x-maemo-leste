@@ -503,8 +503,15 @@ qmap_tx_drain(struct ipa_softc *sc, struct qmap_if *qif)
 
 	mtx_assert(&sc->txlock, MA_OWNED);
 	while (mbufq_len(&qif->q) > 0) {
-		if (sc->txfree == NULL || gsi_channel_tre_free(ch) < ch->tlv_count)
-			return;		/* again when transfers complete */
+		if (sc->txfree == NULL || gsi_channel_tre_free(ch) < ch->tlv_count) {
+			/*
+			 * Again when transfers complete; their events have BEI
+			 * (Linux's), so look for them rather than wait for the
+			 * moderation timer's interrupt alone
+			 */
+			taskqueue_enqueue(sc->tq_poll, &sc->poll_task[ch->id]);
+			return;
+		}
 		m = mbufq_dequeue(&qif->q);
 		len = m->m_pkthdr.len;
 		tb = sc->txfree;
