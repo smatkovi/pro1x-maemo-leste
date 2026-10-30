@@ -45,6 +45,9 @@ PARTS=(
   # repeating appointments on 64-bit (patches/fixes): none was expanded,
   # in qalendar's views and on the Events page (pro1x-events)
   "calendar-backend|7a149bfc9f76|1"
+  # sent SMS no longer "pending" for ever (patches/fixes): the token the
+  # delivery report names, from MessageSent's argument
+  "conversations|573056f32a8d|1"
 )
 if [ -n "$ONLY" ]; then
   sel=()

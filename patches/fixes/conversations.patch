@@ -1,0 +1,36 @@
+Sent SMS stayed "pending" in the event log for ever.
+
+Conversations logs a message it sent with RTCOM_EL_FLAG_SMS_PENDING and
+keeps its token as the event's "message-token" header; the delivery
+report (telepathy-ring's, once the modem has sent the SMS) names that
+token as its original, and Conversations then clears the flag. The token
+was taken from the sent message's header (Tp::Message::messageToken()),
+but telepathy-glib's message mixin passes it only as MessageSent's
+argument, not in the header: the header stayed empty, nothing was stored,
+and every report ended in "the original message for this delivery report
+was not found". Now the sent token (Tp-Qt's sentMessageToken) is taken
+when the header has none.
+
+Found in the FreeBSD port (freebsd/hildon/patches/conversations/0001,
+freebsd/modem/README.md); Leste's Conversations 0.7.87 has the same code.
+
+diff --git a/src/lib/tp/tp.cpp b/src/lib/tp/tp.cpp
+index 01f02fb..218c1ec 100644
+--- a/src/lib/tp/tp.cpp
++++ b/src/lib/tp/tp.cpp
+@@ -741,7 +741,14 @@ void TelepathyAccount::onMessageSent(const Tp::Message &message, Tp::MessageSend
+   if (result.isNull()) {
+     qWarning() << "Failed to add a database event";
+   } else {
+-    if (auto message_token = message.messageToken().toStdString(); !message_token.empty())
++    // the token the connection manager gave the message (MessageSent's
++    // token): telepathy-glib's message mixin does not put it in the sent
++    // message's header, so messageToken() is empty for ring's SMS, and the
++    // delivery report (whose original token it is) found no message
++    auto message_token = message.messageToken().toStdString();
++    if (message_token.empty())
++      message_token = sentMessageToken.toStdString();
++    if (!message_token.empty())
+       rtcom_qt::set_event_header(result->event_id(), "message-token", message_token);
+   }
+ }

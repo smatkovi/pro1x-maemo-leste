@@ -260,7 +260,7 @@ would otherwise lose its slot after seven starts.
 | `scripts/47-libcal.sh` | inside the rootfs, root | libcal that accepts the block2mtd CAL (lock code) |
 | `scripts/48-camera-stack.sh` | inside the rootfs, root | libcamera 0.7.2 with the Pro1X sensors |
 | `scripts/49-apps.sh` | inside the rootfs, root | `pro1x-camera`, the Desktop applet (`pro1x-look`) |
-| `scripts/49-hidpi.sh` | inside the rootfs, root | Hildon at the N900's size on 2160x1080 (`tools/pro1x-hidpi`); also the parts with bug fixes in `patches/fixes/` (liblocation, location-ui, calendar-backend) |
+| `scripts/49-hidpi.sh` | inside the rootfs, root | Hildon at the N900's size on 2160x1080 (`tools/pro1x-hidpi`); also the parts with bug fixes in `patches/fixes/` (liblocation, location-ui, calendar-backend, conversations) |
 | `scripts/49-mobile-data.sh` | inside the rootfs, root | oFono rebuilt for mobile data over the IPA (`patches/fixes/ofono.patch`), `pro1x-modem-wait` instead of `pro1x-rmnet` |
 | `scripts/mkdeb-waydroid.sh` | inside the rootfs (or a Leste chroot), root | the `pro1x-waydroid` package: everything Waydroid needs on Leste before `apt install waydroid` ([docs/waydroid.md](docs/waydroid.md)) |
 | `scripts/50-build-bootimg.sh` | build host | pack the Android boot image (v0, DTB appended) |
