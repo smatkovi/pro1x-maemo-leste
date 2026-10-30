@@ -48,7 +48,8 @@ cp /etc/resolv.conf "$MNT/etc/resolv.conf"
 F=$REPO/freebsd/hildon/build.sh
 SYSROOT=
 eval "$(sed -n '/^PARTS=(/,/^)/p' "$F")"
-eval "$(sed -n '/^declare -A URL REV=(/,/^)/p' "$F")"
+# (the table's declare names URL, REV and what else build.sh keeps)
+eval "$(sed -n '/^declare -A [A-Z ]*REV=(/,/^)/p' "$F")"
 eval "$(grep '^URL\[[a-z0-9.-]*\]=' "$F")"
 
 log "packages"
