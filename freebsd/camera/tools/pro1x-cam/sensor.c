@@ -182,6 +182,29 @@ sensor_mode(const struct sensor_ops *o, const char *name)
 	return (NULL);
 }
 
+/*
+ * The analogue gain code for a multiple, as libcamera's sensor helpers
+ * for these sensors model it (the NixOS port's patches, used on Leste):
+ * IMX582 gain = 1024 / (1024 - code), S5K4H7 gain = code / 32
+ */
+u_int
+sensor_gain_code(const struct sensor_ops *o, double gain)
+{
+	double code;
+
+	if (gain < 1)
+		gain = 1;
+	if (strcmp(o->name, "IMX582") == 0)
+		code = 1024 - 1024 / gain;
+	else
+		code = 32 * gain;
+	if (code < o->gain_min)
+		code = o->gain_min;
+	if (code > o->gain_max)
+		code = o->gain_max;
+	return ((u_int)code);
+}
+
 /* --- the lens: DW9800 --------------------------------------------------------- */
 
 int

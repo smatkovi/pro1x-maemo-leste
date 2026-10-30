@@ -15,6 +15,9 @@
 #ifndef nitems
 #define	nitems(x)	(sizeof((x)) / sizeof((x)[0]))
 #endif
+#ifndef __printflike		/* the host tests on Linux */
+#define	__printflike(f, a)	__attribute__((__format__(__printf__, f, a)))
+#endif
 
 extern int verbose;
 void	msg(const char *fmt, ...) __printflike(1, 2);
@@ -72,6 +75,7 @@ int	sensor_reg(struct cam *c, int s, uint16_t reg, int width, int wr,
 	    uint32_t *val);
 const struct sensor_mode *sensor_mode(const struct sensor_ops *o,
 	    const char *name);
+u_int	sensor_gain_code(const struct sensor_ops *o, double gain);
 int	lens_move(struct cam *c, int s, int from, int to);
 int	lens_status(struct cam *c, int s, uint8_t *st);
 

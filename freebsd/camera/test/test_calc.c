@@ -23,6 +23,24 @@ static int fails;
 #define	CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, \
 	__LINE__, #c); fails++; } } while (0)
 
+static int
+always(int rcg, uint32_t hz)
+{
+	return (1);
+}
+
+static int
+no_gpll6(int rcg, uint32_t hz)
+{
+	u_int j;
+
+	for (j = 0; j < camss_rcgs[rcg].nfreq; j++)
+		if (camss_rcgs[rcg].freq[j].freq == hz)
+			return (camss_src_pll[camss_rcgs[rcg].freq[j].src] !=
+			    CAMSS_PLL_GPLL6);
+	return (0);
+}
+
 int
 main(void)
 {
@@ -102,6 +120,31 @@ main(void)
 	{
 		uint8_t l[4] = { 0, 1, 2, 3 };
 		CHECK(camss_lane_assign(l, 4) == 0x3210);
+	}
+	/* the stream's clock rates, as camss.c's formulas pick them for the
+	 * sensors' modes (link frequency, pixel rate from imx582.c, s5k4h7.c) */
+	{
+		static const struct { uint64_t link, px; uint32_t cphy, timer,
+		    csid, tfe; } m[] = {
+			{ 456800000, 576000000, 240000000, 200000000, 192000000, 153600000 },
+			{ 286400000, 321600000, 240000000, 100000000, 192000000, 153600000 },
+			{ 367000000, 275200000, 240000000, 100000000, 192000000, 153600000 },
+			{ 1000000000, 576000000, 341333333, 268800000, 384000000, 153600000 },
+		};
+		for (i = 0; i < nitems(m); i++) {
+			uint64_t min = camss_margin(m[i].link / 4);
+			CHECK(camss_pick_rate(CAMSS_RCG_CAMSS_TFE_CPHY_RX,
+			    camss_rate_cphy, 3, min, always) == m[i].cphy);
+			CHECK(camss_pick_rate(CAMSS_RCG_CAMSS_CSI0PHYTIMER,
+			    camss_rate_timer, 3, min, always) == m[i].timer);
+			CHECK(camss_pick_rate(CAMSS_RCG_CAMSS_TFE_0_CSID,
+			    camss_rate_csid, 4, min, always) == m[i].csid);
+			CHECK(camss_pick_rate(CAMSS_RCG_CAMSS_TFE_0, camss_rate_tfe,
+			    6, camss_margin(m[i].px * 10 / 64), always) == m[i].tfe);
+		}
+		/* without GPLL6 the CSID takes GPLL0's 240 MHz */
+		CHECK(camss_pick_rate(CAMSS_RCG_CAMSS_TFE_0_CSID, camss_rate_csid,
+		    4, camss_margin(456800000 / 4), no_gpll6) == 240000000);
 	}
 	/* _IOR/_IOWR carry at most IOCPARM_MAX (8191) bytes */
 	printf("  sizeof camss_info %zu, camss_sensor %zu\n",

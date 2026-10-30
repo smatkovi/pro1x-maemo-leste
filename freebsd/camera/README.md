@@ -13,8 +13,8 @@ FreeBSD way, from Linux's drivers for this SoC (the Leste kernel tree,
 | Stage | What | Here | State |
 | --- | --- | --- | --- |
 | 1 | the sensors: power, MCLK, reset, the CCI, chip IDs | `qcom_camss.ko` (`qcom_cci`, `/dev/camss0`), `pro1x-cam id` | built; host tested (CCI protocol against a model, clock encodings); not run on the phone |
-| 2 | raw frames: CSIPHY, CSID, the TFE's RDI write master | `qcom_camss.ko` (`camss_stream.c`), `pro1x-cam raw` | see "Stage 2" |
-| 3 | pictures: raw -> debayer -> PNG/JPEG, focus, an app | `pro1x-cam shot`, `focus`, `af` | see "Stage 3" |
+| 2 | raw frames: CSIPHY, CSID, the TFE's RDI write master | `qcom_camss.ko` (`camss_stream.c`, `/dev/camss0` streaming ioctls, mmap), `pro1x-cam raw` | built; host tested (clock rates against camss.c's formulas); not run on the phone |
+| 3 | pictures: raw -> debayer -> PNG/JPEG, exposure, focus | `pro1x-cam shot` (`-a`: autofocus), `focus` | built; host tested (RAW10, demosaicing, PNG and JPEG decoded by Pillow, the focus measure); not run on the phone; no Hildon app yet |
 
 Nothing here has run on the phone (unreachable until 2026-10-31). What can
 be checked on the PC is: `make -C freebsd/camera/test`.
@@ -129,6 +129,20 @@ out like `/host/freebsd/`, with the command lines
 | --- | --- | --- |
 | cam-id | `pro1x.test=cam pro1x.cam=id hint.qcom_wdt.0.lifetime=180` | `camss_gcc: cci: GDSC 0x58004: ... -> 0x8...` (PWR_ON), `gcc_camss_top_ahb_clk on`, `gcc_camss_cci_0_clk on ..., 37500000 Hz` (or a refused GPLL0 AUX2: then 19.2 MHz and a slower bus), `camss_tlmm: cci: gpio22 cci_i2c: CTL ... -> ...` (function 1), `qcom_cci0: CCI HW version 0x...`, two `qcom_ccim` with iicbus/iic each; `/dev/camss0`; `info` with both sensors, their rails resolved (pca9534 pins 0/4 on the keyboard bus, pm8008 ldo1/2/4/5/6/7); `rear: IMX582 chip ID 0x0582: ok`, `rear: lens ... status 0x00: ok`, `front: S5K4H7 chip ID 0x487b: ok`; `nacks 0 errors 0 timeouts 0` |
 
+| cam-raw | `pro1x.test=cam pro1x.cam=raw hint.qcom_wdt.0.lifetime=300` (`pro1x.cam_sensor=rear` or `front`: one camera) | the id run, then per camera: `stream: sensor 0 CSIPHY0 4 lanes, 1920x1080 RAW10, link 286400000 Hz ...: CPHY 240000000, timer 100000000, CSID 192000000, TFE 153600000 Hz`, `camss_gcc: camss: gpll10 ... voted on` (if it was off), `qcom_smmu`-style `camss_smmu: camss: stream 0x800 ...`, `CSIPHY0 HW version`, `CSID0 ... reset done`, `TFE0 HW version`, `stream on: ...`; then `rear: frame N: means RGGB ...` for 8 frames with plausible levels (black about 64, not all 0 or 1023), `kept frame ...`, `8 frames, 0 with bus errors, 0 timeouts`; `stream off: 10 frames` |
+| cam-jpeg | `pro1x.test=cam pro1x.cam=jpeg hint.qcom_wdt.0.lifetime=480` | the raw run, then `rear: exposure N lines, gain G`, `rear: focus P (contrast C)`, `rear: frame N as /tmp/pro1x-cam/rear.jpg: 4000x3000, quality 90` (turned by 180 degrees), the same for the front camera without focus |
+
+What comes back: the console (RAM console, as for every run) and, for
+raw and jpeg, `/dev/pro1xshot`: a tar archive of the smallest files that
+fit 3 MiB (the `.txt` statistics, the previews, `-small.jpg`, a raw frame).
+On Leste, as root, right after the reboot:
+
+    python3 pro1x-camfetch -o /root/fbsd-cam [--png]   # --png: .raw10 also as 16-bit PNG
+
+With the writable pool (`pool.zfs`) the run also copies everything in
+full size to `/var/db/pro1x-cam/<date>/` (FreeBSD's own; Leste cannot
+read ZFS). FreeBSD never writes userdata.
+
 If it hangs: the watchdog resets the phone after 180 s and the RAM console
 ends at the last step, each register access being reported before it is
 made. A chip ID read that NACKs with everything clocked points at the
@@ -139,6 +153,95 @@ whether `out/kernel.bin` is it) and a root image with this `rc.local` and
 `pro1x-camtest` (the next `rootfs.sh`/`rootzfs.sh`); until then the run
 can only be started by hand from a shell (`kldload` the module from
 `/host/freebsd/modules`, `sh /dev/pro1x-host/freebsd/camera/pro1x-camtest id`).
+
+## Stage 2: raw frames
+
+The "ISP-lite" path Linux's CAMSS uses for this SoC (CAMSS_2290):
+CSIPHY -> CSID (RDI 0) -> the TFE's RDI 0 write master (7) -> memory, as
+`camss-csiphy-3ph-1-0.c` (`lane_regs_qcm2290`), `camss-csid-340.c` and
+`camss-vfe-340.c` program it, in Linux's order (`camss_stream.c`):
+
+1. the clocks of the camss node (by `clock-names`) at the rates camss.c's
+   formulas pick from its `*_res_2290` tables (`camss_pick_rate`: the
+   first table rate above link frequency / 4 * 1.05, resp. pixel rate *
+   bpp / 64 * 1.05 for the TFE, as the GCC table has it, if its source can
+   run): rear 4000x3000 (456.8 MHz link, 576 MHz pixel rate) and the
+   others give CPHY 240 MHz (GPLL0), timer 200 or 100 MHz (GPLL0 AUX2),
+   CSID 192 MHz (GPLL6; 240 MHz from GPLL0 if GPLL6 cannot run), TFE 153.6
+   MHz (GPLL10, voted on). The buses (top AHB, AHB, AXI, camnoc) as found;
+   `hw.qcom_camss.axi_hz` (loader tunable) sets the AXI RCG to one of its
+   table's rates if frames overflow
+2. the power domain, our votes for the multimedia SMMU TBUs' GDSCs
+   (`hlos1_vote_mm_snoc_mmu_tbu_rt/nrt`, which no device tree node
+   claims, so Linux may have collapsed them), the node's four SMMU
+   streams (0x400, 0x800, 0x820, 0x840) without translation
+   (`camss_smmu.c`), since FreeBSD hands the TFE physical addresses
+3. CSIPHY: hardware version, reset; CSID: reset (RST_DONE polled);
+   TFE: global reset (RST_DONE polled)
+4. stream on from the memory end: the write master (frame mode, PLAIN64
+   packer, frame increment = stride * height) with the first two buffers
+   (IMAGE_ADDR, REG_UPDATE), the CSID (receiver: lanes, lane assignment
+   0x3210, PHY_NUM_SEL = CSIPHY + 1, ECC correction; RDI 0: RAW10, data
+   type 0x2b, VC 0), the CSIPHY's lanes (`csiphy_lanes_enable` with the
+   settle count of `csiphy_settle_cnt_calc`); user space then starts the
+   sensor
+5. frames: `TFE_IRQ_STATUS_0`/the bus status polled; BUF_DONE of subgroup
+   RDI0 completes the oldest buffer, the next queued one goes to the write
+   master (`vfe_buf_done`); overflow and violation status recorded per
+   frame (`CAMSS_BUF_ERROR`)
+
+Buffers: `TFE_BUS_IMAGE_ADDR` is 32 bits, so physically contiguous memory
+below 4 GiB (contigmalloc), cached, written back and invalidated before
+the TFE gets a buffer, invalidated before user space reads it; mapped with
+mmap(2) of /dev/camss0 (buffer i at offset i * bufsize). They are kept
+until a stream needs other sizes, not freed at STREAMOFF.
+
+ioctls: `CAMSS_IOC_STREAMON` (sensor, size, RAW10, link frequency, pixel
+rate, 2-8 buffers; returns stride, buffer size, the rates and settle
+count), `CAMSS_IOC_DQBUF` (with a timeout; index, sequence, time, status),
+`CAMSS_IOC_QBUF`, `CAMSS_IOC_STREAMOFF` (also on the last close),
+`CAMSS_IOC_REGDUMP` (CSIPHY, CSID, TFE registers while streaming).
+
+`pro1x-cam raw [-m MODE] [-n N] [-o PREFIX] CAM`: the camera powered, the
+stream started, the sensor's registers (global sequence, mode, frame
+length, exposure maximum, gain minimum, MODE_SELECT = 1), N frames with
+the means of the four Bayer positions, the maximum and the saturated
+share of each; the last one kept as `PREFIX.raw10` (as the TFE wrote it),
+`PREFIX.txt` (size, stride, pattern, statistics) and
+`PREFIX-preview.png`. Default modes are the ones whose raw frame fits
+`/dev/pro1xshot`: rear 1920x1080 (2.6 MB), front 1632x1224 (2.5 MB).
+
+## Stage 3: pictures
+
+`pro1x-cam shot [-a] [-f POS] [-m MODE] [-q Q] [-r DEG] -o FILE.jpg CAM`,
+all on the CPU (FreeBSD has no ISP; under Leste libcamera's software ISP
+does it on the GPU):
+
+- exposure: up to 12 rounds aiming the mean above black at 18 % of the
+  range, the exposure lines first, then the analogue gain (codes as
+  libcamera's sensor helpers for these sensors model it: IMX582 gain =
+  1024 / (1024 - code), S5K4H7 gain = code / 32)
+- focus (`-a`, rear only): pro1x-camera's `findFocus()`: positions 0 to
+  1000 in steps of 100, then +-80 in steps of 20 around the best, one frame
+  dropped after each move, the contrast (sum of neighbour differences in
+  the middle half, on the green of each 2x2 quad) measured on the next;
+  the lens moved in DW9800_CTRL_STEPS steps of 1 ms, parked at 0 at the
+  end, as the Linux driver does; `-f POS`: a fixed position (default 100,
+  the driver's `default_pos`)
+- the picture: RAW10 unpacked, black level 64 (the tuning's 4096 at 16
+  bits), bilinear demosaicing, grey world white balance (the Leste tuning
+  has no colour matrix either), the 99.5th percentile to white, gamma
+  1/2.2, rotated (`-r`; default pro1x-camera's for Hildon's landscape:
+  rear 180, front 0), as baseline JPEG (`jpeg.c`: Annex K tables, 4:2:0,
+  quality `-q`, default 90), and `FILE-small.jpg` at half size
+
+`pro1x-cam focus CAM POS`: the lens to POS, its status, back to 0.
+
+What is not there yet: a Hildon camera app. `apps/pro1x-camera` is built
+on Qt, GStreamer and libcamera; libcamera has no FreeBSD backend. The
+plan is a small GTK app on `pro1x-cam`'s code (viewfinder from the
+1920x1080 mode at half size, tap to focus, the camera key to take the
+picture at full size).
 
 ## Host tests
 
@@ -151,9 +254,18 @@ can only be started by hand from a shell (`kldload` the module from
 - `test_calc`: every entry of Linux's camera frequency tables encoded
   and decoded again, all entries of one source implying the same source
   rate (GPLL0 600 MHz, AUX2 300 MHz, GPLL10 1152 MHz = L 0x3c, GPLL6
-  768/384 MHz, ...); the words for MCLK 19.2 MHz, CCI 37.5 MHz, TFE
-  153.6 MHz; the PM8008 voltages for the device tree's ranges; the CSIPHY
-  settle count; the ioctl structures' size
+  768/384 MHz, ...; the OPE's GPLL8 entries excepted, Linux re-rates
+  GPLL8 for them); the words for MCLK 19.2 MHz, CCI 37.5 MHz, TFE 153.6
+  MHz; the stream's rates for every sensor mode against camss.c's
+  formulas (and without GPLL6); the PM8008 voltages for the device tree's
+  ranges; the CSIPHY settle count, stride, lane assignment; the ioctl
+  structures' size
+- `test_image` and `check_image.py`: a synthetic scene mosaicked in all
+  four Bayer orders, packed as CSI-2 RAW10 and unpacked exactly,
+  demosaicked (full and half size) with the right hues, rotated; PNG
+  (8-bit RGB, 16-bit grey) and JPEG (also at sizes not a multiple of 16)
+  decoded by Pillow, the JPEG within 1.2 levels of the PNG; the focus
+  measure higher on a sharp texture than on the blurred one
 
 ## Building
 
@@ -176,7 +288,7 @@ into the image). For the device runs without a full build:
 | `sys/arm64/qualcomm/camss/camss_smmu.c` | SMMU streams without translation |
 | `sys/arm64/qualcomm/camss/qcom_camss_ioctl.h` | the ioctl interface |
 | `sys/modules/qcom_camss/Makefile` | the module |
-| `tools/pro1x-cam/` | the tool: power, sensors, lens, frames |
+| `tools/pro1x-cam/` | the tool: power (`power.c`), sensors and lens (`sensor.c`), streams (`capture.c`), pictures (`image.c`, `jpeg.c`) |
 | `tools/pro1x-camfetch` | on Leste: the pictures from `/dev/pro1xshot` |
 | `../rootfs/usr/local/libexec/pro1x-camtest`, `../rootfs/etc/rc.local` | the device runs |
 | `build-camera.sh` | module and tools into `$WORK/cam-test` |
@@ -196,3 +308,24 @@ into the image). For the device runs without a full build:
 - **CCI at 19.2 MHz**: if GPLL0's AUX2 output were off, the CCI's RCG
   cannot be set to 37.5 MHz and the bus runs at about half its speed with
   the same timing values (the attach says so).
+- **Bus bandwidth**: Linux votes the camera's interconnect paths (`ahb`,
+  `hf_mnoc`, `sf_mnoc`: icc_res_2290) at the RPM; FreeBSD has no
+  interconnect driver. The display keeps the real time NoC running; if
+  frames overflow (`TFE0 bus overflow`) or never arrive with everything
+  else in order, this is the place to look, with the AXI rate
+  (`hw.qcom_camss.axi_hz`).
+- **SMMU**: the four streams get context banks with translation off, as
+  for the display and the DSPs (camss_smmu.c is dsp/'s code); whether
+  Qualcomm's hypervisor allows the new match entries is untested.
+- **The TBUs' GDSCs**: voted on and never voted off.
+- **Polling**: no interrupts are used (CCI, CSID, TFE): simpler to bring
+  up, a little CPU while streaming.
+- **Buffers stay allocated** from the first stream until the module is
+  unloaded or a stream needs other sizes; a process keeping its mapping
+  across a size change would see freed memory.
+- **Colours**: grey world without a colour matrix; the sensors' Bayer
+  orders are the Linux drivers' (`SRGGB10`, `SGRBG10`), not checked
+  against the mounting (flips) yet.
+- **`/dev/pro1xshot` is 3 MiB**: full size pictures only reach Leste
+  through a raw scratch file, not made yet (the pool's map mechanism
+  would do: a second immutable file with its own map and nops).

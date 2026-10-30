@@ -16,6 +16,11 @@
 uint8_t	camss_settle_cnt(uint64_t link_freq, uint32_t timer_hz);
 uint32_t camss_stride(uint32_t width, uint32_t bpp);
 uint32_t camss_lane_assign(const uint8_t *lanes, u_int n);
+extern const uint32_t camss_rate_cphy[3], camss_rate_timer[3];
+extern const uint32_t camss_rate_csid[4], camss_rate_tfe[6];
+uint64_t camss_margin(uint64_t hz);
+uint32_t camss_pick_rate(int rcg, const uint32_t *tbl, u_int n, uint64_t min,
+	    int (*usable)(int, uint32_t));
 
 #ifdef _KERNEL
 #include <sys/lock.h>

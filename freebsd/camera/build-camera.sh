@@ -65,10 +65,12 @@ if [ "$WHAT" = tools ] || [ "$WHAT" = all ]; then
 	    -I"$REPO/freebsd/camera/sys/arm64/qualcomm/camss" \
 	    -o "$T/camera/pro1x-cam" "$REPO"/freebsd/camera/tools/pro1x-cam/*.c -lz -lm
 	cp "$REPO/freebsd/rootfs/usr/local/libexec/pro1x-camtest" "$T/camera/"
-	for run in id raw jpeg; do
-		lt=240
-		[ $run = id ] && lt=180
-		echo "pro1x.test=cam pro1x.cam=$run hint.qcom_wdt.0.lifetime=$lt" > "$T/cmdline.cam-$run"
+	# the watchdog ends a hang: id 180 s, raw 300 s, jpeg 480 s (both
+	# cameras each, one after the other)
+	for run in id:180 raw:300 jpeg:480; do
+		echo "pro1x.test=cam pro1x.cam=${run%:*} hint.qcom_wdt.0.lifetime=${run#*:}" \
+		    > "$T/cmdline.cam-${run%:*}"
 	done
+	cp "$REPO/freebsd/camera/tools/pro1x-camfetch" "$T/"
 	ls -la "$T/camera"
 fi

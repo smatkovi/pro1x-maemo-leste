@@ -2,3 +2,4 @@ test_cci
 test_calc
 test_image
 *.o
+test-out/
