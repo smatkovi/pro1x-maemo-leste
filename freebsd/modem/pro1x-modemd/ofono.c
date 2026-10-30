@@ -509,7 +509,16 @@ ofono_message_new(int parts)
 	GError *error = NULL;
 
 	m->n = ++msg_counter;
-	m->path = g_strdup_printf("%s/message_%02u", M.path, m->n);
+	/*
+	 * A path no other message had, not even before a restart of the
+	 * daemon (oFono's: a UUID in it): telepathy-ring takes it as the
+	 * message's token, which Conversations keeps in the event log
+	 * (message-token) to find the message its delivery report is for.
+	 * A counter would start again at 01 with every boot.
+	 */
+	m->path = g_strdup_printf("%s/message_%08x%08x%08x%08x%08x", M.path,
+	    g_random_int(), g_random_int(), g_random_int(), g_random_int(),
+	    g_random_int());
 	m->state = "pending";
 	m->parts = parts;
 	M.messages = g_list_append(M.messages, m);

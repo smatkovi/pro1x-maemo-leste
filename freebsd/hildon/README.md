@@ -289,7 +289,7 @@ licence statement. The sources are the pinned revisions in the table and
 | clutter-0.8 | 0.8.2.79 | LGPL20+ | [clutter-0.8](https://github.com/maemo-leste/clutter-0.8) | `ead56341b457` | builds |
 | codelockui | 1.6.20 | LGPL20+ | [codelockui](https://github.com/maemo-leste/codelockui) | `07c6654ae546` | builds |
 | comics-daily | 0.8.1.leste1 | GPLv3 | [comics-daily](https://github.com/maemo-leste-extras/comics-daily) | `54b5cd997f29` | runs (VM) |
-| conversations | 0.8.12_1 | UNKNOWN | [conversations](https://github.com/maemo-leste/conversations) | `f4ccce53bb08` | runs (VM: the welcome page, no accounts) |
+| conversations | 0.8.12_2 | UNKNOWN | [conversations](https://github.com/maemo-leste/conversations) | `f4ccce53bb08` | runs (VM: SMS in and out through telepathy-ring on pro1x-modemd and a simulated modem: the notification, the overview, the chat, a reply sent, logged in rtcom-eventlogger and no longer pending once sent (0001); started in the background by hildon-session) |
 | coolkbd | 0 | UNKNOWN | [coolkbd](https://git.maemo.org/leste-extras/coolkbd) | `194eb909c3b4` | builds |
 | countdowntimer | 0.6.1.2 | GPLv2+ | [countdowntimer](https://git.maemo.org/leste-extras/countdowntimer) | `ddc1f7027af9` | builds |
 | desktop-cmd-exec | 1.22 | GPLv2+ | [desktop-cmd-exec](https://github.com/maemo-leste-extras/desktop-cmd-exec) | `e3ac73e7b031` | builds |
@@ -470,6 +470,7 @@ licence statement. The sources are the pinned revisions in the table and
 | statusbar-alarm | 0.6.3 | GPLv3 | [statusbar-alarm](https://github.com/maemo-leste/statusbar-alarm) | `55045c7780b2` | runs (VM: the status area clock with the alarm icon) |
 | statusbar-alarm-dbus-api | 0.5.10.2 | BSD3CLAUSE | [statusbar-alarm-dbus-api](https://github.com/maemo-leste/statusbar-alarm-dbus-api) | `acf2954ea574` | builds |
 | telepathy-qt6 | 0.9.10.1 | LGPL21 | [telepathy-qt6_0.9.10.orig.tar.gz](https://maedevu.maemo.org/leste/pool/main/t/telepathy-qt6/telepathy-qt6_0.9.10.orig.tar.gz) | `sha256 619a87e18e8b` | builds |
+| telepathy-ring | 2.3.24.0.2 | LGPL21+ | [telepathy-ring](https://github.com/maemo-leste-upstream-forks/telepathy-ring) | `220b1053ef08` | runs (VM: the account ring/tel/account0 from its Mission Control plugin, connected to pro1x-modemd; SMS only (0002), calls stay with sphone) |
 | tinymail | 1.1.100 | LGPL20+ | [tinymail](https://github.com/maemo-leste/tinymail) | `b26e5f078476` | builds |
 | tqftpserv | 1.3.2 | BSD3CLAUSE | [tqftpserv](https://github.com/linux-msm/tqftpserv) | `0bf5b98c2422` | builds |
 | wifi-assistant | 1.0.0 | BSD3CLAUSE | [wifi-assistant](https://github.com/smatkovi/wifi-assistant) | `604bbe98d8b5` | builds |

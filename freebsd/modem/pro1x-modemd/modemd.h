@@ -53,7 +53,7 @@ struct call {
 /* an outgoing SMS (oFono's Message object): its parts in flight */
 struct message {
 	guint		n;
-	char		*path;		/* <modem>/message_01 */
+	char		*path;		/* <modem>/message_<40 hex digits> */
 	const char	*state;		/* "pending", "sent", "failed" */
 	int		parts, sent, failed;
 	guint		reg;

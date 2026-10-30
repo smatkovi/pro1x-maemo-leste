@@ -1,0 +1,27 @@
+FreeBSD on the Pro1X: telepathy-ring for SMS only (built with
+-DRING_SMS_ONLY, freebsd/hildon/apps.sh). The calls stay with sphone,
+which talks to oFono's VoiceCallManager (pro1x-modemd) itself, as before.
+FreeBSD's Hildon has no Telepathy call UI (Leste's voicecall-qt5 is not
+built), so nothing would handle ring's call channels, and Mission Control
+closes a channel no client handles, which for an incoming call of ring is
+a hangup (and for one sphone dials, too). Without the call service's type
+ring ignores the modem's VoiceCallManager ("ignoring interface"): no call
+channels, no call agent; the media and conference managers are as without
+a modem (no call channel classes).
+
+--- a/src/ring-connection-manager.c
++++ b/src/ring-connection-manager.c
+@@ -105,5 +105,13 @@
+ 
+   modem_oface_register_type (MODEM_TYPE_SIM_SERVICE);
+   modem_oface_register_type (MODEM_TYPE_SMS_SERVICE);
++  /* FreeBSD on the Pro1X: SMS only. Calls stay with sphone, which talks to
++   * oFono's VoiceCallManager itself; there is no Telepathy call UI to
++   * handle ring's call channels, and Mission Control closes a channel no
++   * client handles, which for ring's call channels is a hangup. So the
++   * VoiceCallManager is not an interface ring takes ("ignoring interface"):
++   * no call channels, no call agent. */
++#ifndef RING_SMS_ONLY
+   modem_oface_register_type (MODEM_TYPE_CALL_SERVICE);
++#endif
+ }

@@ -14,6 +14,7 @@ QMI to the modem and oFono's D-Bus API to the applications:
 | 2 | the voice of a call: the ADSP's voice session and the codec's earpiece and microphone | `pro1x-callaudio`, through pro1x-audiod (freebsd/audio, the one user of `/dev/apr`) | built; host tested against a stand-in for pro1x-audiod, sphone's Speaker button and DTMF keypad in the VM; needs the audio stack on the phone |
 | 3 | GPS: the modem's GNSS (QMI LOC) into gpsd, positions for Hildon's apps | `pro1x-gnss`, gpsd, `rc.d/pro1x_gps`, Leste's `location-daemon`, `location-ui` and `location-control` (new parts), liblocation patched | the chain runs in the VM on a simulated modem's LOC, up to liblocation's client, with location-ui's dialogs and location-control's applet; device run prepared |
 | 4 | mobile data: DPM, WDA, WDS sessions over the IPA, oFono's ConnectionManager and ConnectionContext | `pro1x-modemd/data.c`, `pro1x-data-ifup`, `pro1x-data`; the kernel side is `freebsd/data` (qcom_ipa) | built for FreeBSD/arm64; host tested against a simulated modem (`freebsd/data/test/data_run.sh`); device run prepared (`freebsd/data/README.md`) |
+| 5 | SMS in Conversations, as on Leste: telepathy-ring (oFono's Telepathy connection manager) with its Mission Control account, the history in rtcom-eventlogger | `telepathy-ring` (new part), FreeBSD's telepathy-glib and mission-control, `hildon-session`, sphone for calls only | runs in the VM against pro1x-modemd and a simulated modem: SMS in (notification, overview, chat, Events page) and out (below) |
 
 Nothing here has run on the phone (unreachable until 2026-10-31). No call
 was made and no SMS sent: the tests that dial or send need the user and a
@@ -37,8 +38,8 @@ runs unchanged: what `comm-ofono` uses is all there:
 | `NetworkRegistration`: `Status`, `Name`, `MobileCountryCode`, `MobileNetworkCode`, `Technology`, `LocationAreaCode`, `CellId`, `Strength` | NAS |
 | `VoiceCallManager`: `Dial`, `HangupAll`, `SendTones`, `GetCalls`, `CallAdded`, `CallRemoved`, `EmergencyNumbers` | VOICE |
 | `VoiceCall`: `Answer`, `Hangup`, `State`, `LineIdentification`, `StartTime`, `Emergency`, `PropertyChanged` | VOICE |
-| `MessageManager`: `SendMessage`, `IncomingMessage`, `ImmediateMessage` (class 0), `MessageAdded`, `MessageRemoved` | WMS |
-| `Message`: `State` (`pending`, `sent`, `failed`) | WMS |
+| `MessageManager`: `SendMessage`, `GetMessages`, `IncomingMessage`, `ImmediateMessage` (class 0), `MessageAdded`, `MessageRemoved` | WMS |
+| `Message`: `State` (`pending`, `sent`, `failed`); its path unique, `message_` and 40 hex digits as oFono's UUIDs | WMS |
 
 The rest of oFono's methods answer `org.ofono.Error.NotImplemented`
 (hold, swap, multiparty, call forwarding and barring, USSD, cell
@@ -49,15 +50,10 @@ button and sends each key of its keypad as `SendTones` (sphone 3). Its
 Speaker button reaches the call's voice through `0002`, sphone's new
 module `route-pro1x` (stage 2).
 
-**Conversations** builds its overview per Telepathy account: without
-telepathy-ring's `ring` account it shows none of the messages sphone logs
-(tried in the VM: "accounts= 0 ... nothing to insert"), and sending from
-it goes through telepathy-ring too, which FreeBSD's Hildon does not have
-yet (it needs telepathy-glib and mission-control's plugins): deferred.
-Since telepathy-ring is an oFono client as well, it would need no backend
-either; its use of `org.ofono.VoiceCallAgent` and `SmsHistory` (Nokia's
-oFono extensions) would have to be checked then. Until then sphone is the
-messages app (its threads and history are its own UI on the event log).
+**Conversations** (stage 5, below) gets the SMS through telepathy-ring,
+which is an oFono client as well: the same subset of oFono's API serves it,
+with no backend of its own. sphone keeps the calls and leaves the messages
+to Conversations, as on Leste.
 
 **The event log on FreeBSD** (`freebsd/hildon/patches/rtcom-eventlogger/
 0001`): rtcom-eventlogger built its INSERT with SQLite's printf and C99's
@@ -223,7 +219,9 @@ answers, Hangup; a new SMS (`sphone -c sms-new -n ...`) typed and sent:
 `Raw-Send` with the PDU decoding to the number and text, the message
 `sent`. With the event log's patch all of it is in rtcom-eventlogger
 (local uid `sphone/ofono`: the SMS in and out, the missed call, the call
-out). Doing the same in the VM again:
+out). Since pro1x-modem 1.1 sphone is set for calls only, as on Leste
+(the SMS are Conversations', stage 5); this run's SMS steps were with its
+messages modules. Doing the same in the VM again:
 
     tar -C <dir with pro1x-modemd, lib/, fakemodem.py, vm-sphone.sh,
         pro1x-modemd.conf> -czf - . | vm 'mkdir -p /root/modemtest &&
@@ -435,3 +433,116 @@ QMI LOC on this firmware needs nothing else from the apps processor on
 Leste (positions arrive there), but its first fix without assistance
 data (no network for XTRA) can take many minutes; the engine's time comes
 from the network or the satellites.
+
+## Stage 5: SMS in Conversations
+
+On Leste (`hildon-connectivity-rtcom`) the messages are Conversations':
+it is a Telepathy client (Telepathy Qt 6), and the SMS come and go through
+**telepathy-ring**, Telepathy's connection manager for oFono, under
+**Mission Control** (Debian's telepathy-mission-control-5 5.16.6, on
+telepathy-glib 0.24). The cellular account `ring/tel/account0`
+("Cellular", enabled, connected automatically, `always_dispatch`) is not
+made by any setup tool: telepathy-ring's own Mission Control plugin
+(`mcp-account-manager-ring`, a read-only account storage) gives it. Leste
+starts `conversations --background` with the X session (its xsession
+file, under dsmetool), which asks Mission Control for the accounts and so
+brings up ring's connection; incoming messages reach Conversations through
+Mission Control's dispatch, and Conversations logs every message itself in
+rtcom-eventlogger (service SMS, local uid `ring/tel/account0`). sphone
+does the calls only there (leste-config: `Features=calls`, without the
+messages UI), so that no message is logged and announced twice.
+
+| Piece | Leste | FreeBSD |
+| --- | --- | --- |
+| telepathy-glib, Mission Control | Debian's 0.24.1 (Leste's build), 5.16.6 | FreeBSD's packages, 0.24.2 and 5.16.6 (plugins from `/usr/local/lib/mission-control-plugins.0`), already in the root image |
+| telepathy-ring | maemo-leste-upstream-forks, 2.3.24.0 | the same (new part, `220b1053ef08`); patches: 0001 GLib's random UUID for the incoming messages' tokens (libuuid is not FreeBSD's), 0002 SMS only (`-DRING_SMS_ONLY`, below) |
+| the account | ring's Mission Control plugin | the same plugin, in the package |
+| Conversations at the session's start | xsession, `post 20` | `hildon-session` (`respawn conversations --background`) |
+| sphone | `Features=calls`, comm-voicecallmanager | `Features=calls`, comm-ofono, without ui-messages-gtk and ui-message-threads-gtk (`extra/.../50-pro1x-freebsd.ini`, package pro1x-modem) |
+
+**SMS only** (`hildon/patches/telepathy-ring/0002`): Leste's calls go
+through ring too (voicecall-qt5), which FreeBSD's Hildon has not; with no
+client for ring's call channels Mission Control would close them, which
+for ring is a hangup of every incoming call (and of the ones sphone dials).
+So ring leaves the VoiceCallManager alone ("ignoring interface"), and the
+calls stay with sphone on pro1x-modemd as before.
+
+**What ring asks of pro1x-modemd**: `GetModems` (the modem's properties:
+powered and online picks it), `SimManager.GetProperties`
+(`SubscriberIdentity`), `MessageManager.GetProperties`
+(`UseDeliveryReports`, `ServiceCenterAddress`) and `GetMessages` (the
+messages still being sent) when it connects, then `IncomingMessage` and
+`ImmediateMessage` (`Sender`, `SentTime`), `SendMessage` and the
+message's `PropertyChanged` (`State` `sent`: Telepathy's delivery report
+"accepted", `failed`: a failed one), `MessageRemoved`. All of it was
+there for sphone. It reads neither NetworkRegistration nor
+RadioSettings, and nothing in ring sets `UseDeliveryReports`, so the
+network's status reports (oFono's `SmsHistory.StatusReport`) are never
+asked for; pro1x-modemd does not offer them. Changed in pro1x-modemd
+(pro1x-modem 1.1): ring takes a message's object path as its token, which
+Conversations keeps in the event log to find the message a delivery
+report is for; the paths counted from `message_01` with every start and
+would have matched old messages after a reboot. They are `message_` and
+40 random hex digits now, as oFono's UUIDs (`test_ofono.py` checks the
+form and that two messages differ). ring subscribes to a message's
+`PropertyChanged` only once `SendMessage` has answered; a network takes a
+second or more for the message, so that is in time (the simulated modem
+answers Raw Send after 1.5 s in the VM, `fakemodem.py --send-delay`; at
+once in `run.sh`).
+
+**Conversations' delivery reports** (`hildon/patches/conversations/0001`):
+an SMS sent stayed "pending" in the event log for ever. Conversations kept
+the sent message's token from the message's header, which
+telepathy-glib's message mixin never fills (it passes the token as
+`MessageSent`'s argument only): no `message-token` header, and every
+report was "the original message for this delivery report was not found".
+It takes the sent token now. Leste's Conversations has the same code.
+
+**Tried in the VM** (`test/vm-conversations.sh`, freebsd/vm; FreeBSD's
+telepathy-mission-control installed, telepathy-ring's files below
+/usr/local as its package has them, the Conversations of 0001):
+pro1x-modemd's FreeBSD build on the simulated modem, this repository's
+`hildon-session`, which started `conversations --background`; Mission
+Control (D-Bus activated) listed `ring/tel/account0` "Cellular",
+connected (`ConnectionStatus` 0), ring asked `GetModems`,
+`SimManager.GetProperties`, `MessageManager.GetProperties` and
+`GetMessages` and nothing of the VoiceCallManager. An SMS in with umlauts,
+braces and the Euro sign: Conversations' notification
+(`~/ps/pro1x-screens/bsd-conversations-notification.png`), one event in
+rtcom-eventlogger (service SMS, `ring/tel/account0`, unread; none from
+sphone); the Events page of the MeeGo-like look lists it under
+Notifications (`bsd-conversations-events.png`), a tap opens Conversations
+(`bsd-conversations-from-events.png`) and marks it read; the overview
+(`bsd-conversations-overview.png`), the chat
+(`bsd-conversations-chat.png`). A reply typed and sent with the Send
+button (`bsd-conversations-sent.png`): `SendMessage` from ring, at the
+modem `Raw-Send` to the sender with the text, the event outgoing with
+the message's path as `message-token` and its pending flag cleared once
+the modem had sent it; refused by the network (`fail-sends 1`): the
+event's permanent error flag. A call coming in while ring is connected:
+sphone's call window (`bsd-conversations-call-in.png`), the call
+untouched until the far end hung up. Doing it again:
+
+    tar -C <dir with pro1x-modemd, lib/ (libqmi-glib, libqrtr-glib,
+        librtcom-eventlogger with its 0001), fakemodem.py, pro1x-modemd.conf,
+        hildon-session, 50-pro1x-freebsd.ini, modules/, vm-conversations.sh>
+        -czf - . | vm 'mkdir -p /root/convtest && tar -xzf - -C /root/convtest'
+    vm sh /root/convtest/vm-conversations.sh start   # then accounts, ctl, click,
+                                                     # type, shot, db, events, stop
+
+**On the phone** (not run yet; after the headless runs above, as the
+user, with a SIM and a second phone): pro1x_modem and pro1x_modemd on in
+`rc.conf`, the SIM PIN file, Hildon started. In an X Terminal:
+
+    dbus-send --session --print-reply --dest=org.freedesktop.Telepathy.AccountManager \
+        /org/freedesktop/Telepathy/Account/ring/tel/account0 \
+        org.freedesktop.DBus.Properties.Get \
+        string:org.freedesktop.Telepathy.Account string:ConnectionStatus
+
+answers `uint32 0` once the SIM is ready (1: connecting, 2: no modem).
+An SMS from the other phone: the notification, Conversations, the Events
+page; a reply from Conversations' chat reaches the other phone, and
+pro1x-modemd's log has `sms: to ..., part 1 of 1 ... sent`. A call to the
+phone still rings in sphone. What the VM could not tell: the real
+modem's timing between `SendMessage` and its answer, and Mission Control
+and ring on the phone's memory beside Hildon.

@@ -12,7 +12,10 @@ pro1x-modemd's code. The SMS PDUs it delivers and decodes are built here
 from 3GPP TS 23.040/23.038, independently of pro1x-modemd's sms.c.
 
     fakemodem.py --pty-link PATH --ctl SOCKET --log FILE [--pin PIN]
-                 [--retries N] [--no-sim] [--online]
+                 [--retries N] [--no-sim] [--online] [--send-delay SEC]
+
+--send-delay: the seconds until WMS Raw Send is answered (a phone's
+network takes a second or more), at once without it.
 
 PATH becomes a symlink to the pty's slave. SOCKET takes one command per
 connection and answers "ok ..." or "error ...":
@@ -23,6 +26,7 @@ connection and answers "ok ..." or "error ...":
     call-in NUMBER          a call comes in
     remote-answer           the far end answers the outgoing call
     remote-hangup           the far end ends every call
+    fail-sends N            the next N messages sent are refused (RP cause 41)
     log                     the requests so far, one per line
     gps-fix LAT LON         the GNSS engine's position from now on (LOC)
     state                   the simulated modem's state
@@ -248,6 +252,9 @@ class Modem:
         self.loc_session = None        # (session id, interval s) while started
         self.loc_fix = (48.2082, 16.3738)
         self.loc_next = 0
+        self.send_delay = a.send_delay  # seconds until Raw Send's answer
+        self.fail_sends = 0        # Raw Sends still to refuse (fail-sends N)
+        self.next_ref = 6          # TP-MR of the last message sent
 
     # framing
     def frame(self, svc, cid, msg, payload, indication=False, txn=0):
@@ -490,7 +497,18 @@ class Modem:
                 name = 'Raw-Send'
                 self.record(svc, name, format=fmt, to=number, text=repr(text),
                             concat=concat and '%d/%d/%d' % concat)
-                self.frame(svc, cid, msg, r + tlv(0x01, struct.pack('<H', 7)), txn=txn)
+                if self.fail_sends > 0:
+                    # refused by the network: RP cause 41 (temporary
+                    # failure), TP cause 0xff (unspecified)
+                    self.fail_sends -= 1
+                    out = result(ERR_INTERNAL) + tlv(0x12, struct.pack('<HB', 41, 0xff))
+                else:
+                    self.next_ref = (self.next_ref + 1) % 256
+                    out = r + tlv(0x01, struct.pack('<H', self.next_ref))
+                # the network's answer (RP-ACK) takes a while on a phone
+                # (--send-delay); at once by default
+                self.later(self.send_delay,
+                           lambda: self.frame(svc, cid, msg, out, txn=txn))
                 return
             else:
                 r = result(ERR_NOT_SUPPORTED)
@@ -621,6 +639,9 @@ class Modem:
                 c['state'] = CALL_END
             self.calls_changed()
             return 'ok'
+        if cmd == 'fail-sends':
+            self.fail_sends = int(w[1])
+            return 'ok'
         if cmd == 'gps-fix':
             self.loc_fix = (float(w[1]), float(w[2]))
             return 'ok'
@@ -641,6 +662,7 @@ def main():
     ap.add_argument('--retries', type=int, default=3)
     ap.add_argument('--no-sim', action='store_true')
     ap.add_argument('--online', action='store_true')
+    ap.add_argument('--send-delay', type=float, default=0)
     a = ap.parse_args()
 
     master, slave = os.openpty()

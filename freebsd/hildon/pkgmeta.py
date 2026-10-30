@@ -55,7 +55,9 @@ LOCAL = {
                    "pro1x-gnss starts the modem's location service over QMI and "
                    'writes its NMEA sentences for gpsd (tools/pro1x-gnss).',
                    ['UNKNOWN']),
-    'pro1x-modem': ('1.0', "The Pro1X modem's calls and SMS as oFono's D-Bus API",
+    # 1.1: message paths unique across restarts (telepathy-ring's tokens),
+    # sphone for calls only (the SMS are Conversations', as on Leste)
+    'pro1x-modem': ('1.1', "The Pro1X modem's calls and SMS as oFono's D-Bus API",
                     "pro1x-modemd talks QMI over QRTR to the modem (DMS, UIM, NAS, WMS, "
                     "VOICE) and offers the calls, SMS, SIM and network registration as "
                     "oFono's D-Bus API, for sphone and the other apps written for oFono; "
@@ -260,7 +262,12 @@ RUNTIME = {
     # and style themselves; Maemo Translate comes with the German models,
     # as on Leste
     'maemo-translate': ['qt6-qpa-maemo', 'qt6-style-maemo', 'maemo-translate-data-de'],
-    'conversations': ['qt6-qpa-maemo', 'qt6-style-maemo'],
+    # the SMS through telepathy-ring (its Mission Control plugin gives the
+    # cellular account, as on Leste), the accounts Mission Control's
+    'conversations': ['qt6-qpa-maemo', 'qt6-style-maemo', 'telepathy-ring',
+                      'telepathy-mission-control'],
+    # its account plugin is Mission Control's (which starts it)
+    'telepathy-ring': ['telepathy-mission-control'],
     'nomweather': ['qt6-qpa-maemo', 'qt6-style-maemo'],
     # QML on the MeeGo components; its alarms are alarmd's
     'meego-clock': ['qt-components', 'alarmd', 'clockd'],
@@ -360,6 +367,11 @@ EXCLUDE = {
     'harmattan-meego-im-settings-applet': (['usr/local/lib/meego-im-settings-applet-tests',
                                             'usr/local/share/meego-im-settings-applet-tests'], []),
     'harmattan-meegotouch-controlpanelapplets': (['mcpapplets-rfs.sh'], []),
+    # as Leste's package (debian/install): the connection manager, its
+    # D-Bus service, manager file and Mission Control plugin; not the test
+    # programs, the modem library's static archive and headers
+    'telepathy-ring': (['opt', 'usr/local/lib/libmodem-glib.a', 'usr/local/include/modem-glib',
+                        'usr/local/share/man/man8/telepathy-ring.8'], []),
 }
 # Packages of this repository without a part: the Hildon session for any
 # FreeBSD (freebsd/hildon/rootfs) and one to install everything
@@ -468,12 +480,16 @@ REVISION = {
     'harmattan-mce-dev': 1,
     # 2026-10-29: the gettext texts below /usr/local/share/locale (the
     # sources named /usr/share/locale: the address book showed text IDs)
-    'hildon-home': 1, 'hildon-control-panel-personalisation': 1, 'osso-calculator': 1, 'conversations': 1, 'osso-abook': 1, 'osso-addressbook': 1,
+    'hildon-home': 1, 'hildon-control-panel-personalisation': 1, 'osso-calculator': 1, 'osso-abook': 1, 'osso-addressbook': 1,
     # 2026-10-29: no dependency on Nokia's sounds (PRIVATE)
     'osso-chess-ui': 1, 'maemo-input-sounds': 1, 'osso-systemui-alarm': 1,
     # 2026-10-30: events were never logged on FreeBSD (0001: SQLite's printf
     # has no j modifier, FreeBSD's PRIiMAX)
     'rtcom-eventlogger': 1,
+    # 2026-10-29: its texts below /usr/local/share/locale (as above); 2
+    # (2026-10-30): SMS through telepathy-ring and Mission Control
+    # (RUNTIME), started in the background by hildon-session
+    'conversations': 2,
     # 2026-10-30: the lock in /var/run (0003), location-ui's dialogs asked
     # when it runs, without MCE (0004), the dialogs' answers (0005, 0006)
     # 2026-10-30: the Uncertainty match rule's quote (0007); creating a

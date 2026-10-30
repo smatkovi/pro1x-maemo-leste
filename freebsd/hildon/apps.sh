@@ -196,6 +196,12 @@ APPS=(
 	# Telepathy Qt 6
 	"nomweather|!"
 	"telepathy-qt6|!"
+	# Telepathy's connection manager for oFono (pro1x-modemd), for the SMS
+	# in Conversations, with its Mission Control plugin, which gives the
+	# account ring/tel/account0 as on Leste; on FreeBSD's telepathy-glib
+	# and mission-control. SMS only (patches/telepathy-ring/0002): the
+	# calls stay with sphone
+	"telepathy-ring||-DRING_SMS_ONLY"
 	"conversations|!"
 	"tinymail|--with-platform=maemo-leste --with-ssl=nss --disable-idle --disable-imap-part-fetch ac_cv_libiconv_utf8=yes --with-iconv-detect-h=$REPO/freebsd/hildon/compat/camel-iconv-detect.h"
 	"modest|"
@@ -292,6 +298,7 @@ REV+=(
 	[qt6csv]=bca1fd34ad102058cc9c8a793bcb1e211abbdb851d4ba5219bd6346e0d9a58d4
 	[nomweather]=b25d2ab69fc1 [conversations]=f4ccce53bb08
 	[telepathy-qt6]=619a87e18e8b0a575316a8a5215ce487cb391c3d30c958ff94d396022ae2aa11
+	[telepathy-ring]=220b1053ef08
 	[pathie-cpp]=7cc567310534 [ruy]=5c98b80b5d58
 	[sentencepiece-browsermt]=1ae781bcc764 [marian-lite]=73322e4b4b5a
 	[kotki]=cbcc6583cd2b [maemo-translate]=6fecb54027dc
@@ -316,6 +323,8 @@ URL+=(
 	[nomweather]=$GH_EXTRAS/nomweather.git
 	[photolightmeter]=$GH_EXTRAS/photolightmeter.git [comics-daily]=$GH_EXTRAS/comics-daily.git
 	[telepathy-qt6]=https://maedevu.maemo.org/leste/pool/main/t/telepathy-qt6/telepathy-qt6_0.9.10.orig.tar.gz
+	# Leste's (maemo/excalibur: 2.3.24.0 with its python 3 build scripts)
+	[telepathy-ring]=https://github.com/maemo-leste-upstream-forks/telepathy-ring.git
 	[pathie-cpp]=$GH_EXTRAS/pathie-cpp.git [ruy]=$GH_EXTRAS/ruy.git
 	[sentencepiece-browsermt]=$GH_EXTRAS/sentencepiece-browsermt.git
 	[marian-lite]=$GH_EXTRAS/marian-lite.git [kotki]=$GH_EXTRAS/kotki.git

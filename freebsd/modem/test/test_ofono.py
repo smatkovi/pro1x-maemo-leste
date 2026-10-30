@@ -12,6 +12,7 @@ attempt with a wrong PIN file, none after a restart), lowretries (no
 attempt), nofile (the PIN over D-Bus).
 """
 import os
+import re
 import socket
 import sys
 import time
@@ -228,6 +229,11 @@ signals.clear()
 mm = iface(MP, 'org.ofono.MessageManager')
 path = mm.SendMessage('+43699111', 'Hallo €uro und Grüße')
 check(path.startswith(MP + '/message_'), 'SendMessage: %s' % path)
+# telepathy-ring takes the path as the message's token (Conversations
+# finds the message of a delivery report by it): unique, as oFono's UUIDs
+check(re.fullmatch(re.escape(MP) + '/message_[0-9a-f]{40}', path) is not None,
+      'the message path has a UUID-like name')
+first_path = path
 check(wait_for(lambda: sigs('org.ofono.Message', 'PropertyChanged', path)), 'Message state changed')
 st = sigs('org.ofono.Message', 'PropertyChanged', path)
 check(st and st[-1][3][0] == 'State' and st[-1][3][1] == 'sent', 'Message sent')
@@ -237,6 +243,7 @@ check(sent and "to=+43699111" in sent[-1] and "text='Hallo €uro und Grüße'" 
       'format=6' in sent[-1], 'the PDU decodes to number and text (%s)' % sent[-1:])
 signals.clear()
 path = mm.SendMessage('0664222', 'x' * 400)
+check(path != first_path, 'another message, another path')
 check(wait_for(lambda: sigs('org.ofono.MessageManager', 'MessageRemoved')), 'long message done')
 sent = [x for x in requests() if x.startswith('WMS Raw-Send') and 'to=0664222' in x]
 check(len(sent) == 3 and all('/3/' in x for x in sent), '400 characters in three parts')

@@ -81,6 +81,15 @@ if [ -x /usr/local/libexec/location-ui ]; then
 	respawn /usr/local/libexec/location-ui --stay &
 	alarm="$alarm $!"
 fi
+# Conversations in the background (Leste: Xsession.post/20conversations,
+# under dsmetool): its start asks Mission Control for the accounts, which
+# brings up the cellular account ring/tel/account0 (telepathy-ring on
+# pro1x-modemd), so that SMS are received, logged in rtcom-eventlogger
+# and announced also while no Conversations window is open
+if [ -x /usr/local/bin/conversations ]; then
+	respawn /usr/local/bin/conversations --background &
+	alarm="$alarm $!"
+fi
 # Sounds play through PulseAudio, which starts for the session when there
 # is a sound device. The notification and alarm sound daemon from the
 # start, not at the first sound: it decodes the profile's and the alarms'

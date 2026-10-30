@@ -1,0 +1,63 @@
+telepathy-ring makes the tokens of incoming messages with libuuid's
+uuid_generate_random (), which FreeBSD does not have (its libc has the DCE
+uuid_create (), FreeBSD's packages no libuuid): GLib's random UUID instead,
+the same RFC 4122 version 4 string, and no configure check for libuuid.
+
+--- a/configure.ac
++++ b/configure.ac
+@@ -74,8 +74,6 @@
+ 
+ PKG_CHECK_MODULES([DBUS], [dbus-1 >= 0.60, dbus-glib-1 >= 0.88])
+ 
+-PKG_CHECK_MODULES([UUID], [uuid])
+-
+ AS_AC_EXPAND(DATADIR, ${datadir})
+ DBUS_SERVICES_DIR="$DATADIR/dbus-1/services"
+ AC_SUBST(DBUS_SERVICES_DIR)
+--- a/modem/Makefile.am
++++ b/modem/Makefile.am
+@@ -11,14 +11,13 @@
+ # -----------------------------------------------------------------------------
+ # Headers and libraries
+ 
+-AM_CFLAGS = $(ERROR_CFLAGS) @GLIB_CFLAGS@ @DBUS_CFLAGS@ @TP_CFLAGS@ \
+-	    @UUID_CFLAGS@
++AM_CFLAGS = $(ERROR_CFLAGS) @GLIB_CFLAGS@ @DBUS_CFLAGS@ @TP_CFLAGS@
+ 
+ INCLUDES = -I$(top_srcdir) -I$(top_srcdir)/modem
+ 
+ AM_LDFLAGS = -static
+ 
+-LIBADD = @TP_LIBS@ @DBUS_LIBS@ @GLIB_LIBS@ @UUID_LIBS@
++LIBADD = @TP_LIBS@ @DBUS_LIBS@ @GLIB_LIBS@
+ 
+ # Build targets
+ 
+--- a/src/ring-text-manager.c
++++ b/src/ring-text-manager.c
+@@ -54,8 +54,6 @@
+ #include <telepathy-glib/errors.h>
+ #include <telepathy-glib/interfaces.h>
+ 
+-#include <uuid/uuid.h>
+-
+ #include <string.h>
+ 
+ static void channel_manager_iface_init(gpointer, gpointer);
+@@ -915,14 +913,8 @@
+ static char *
+ generate_token (void)
+ {
+-  char *token;
+-  uuid_t uu;
+-
+-  token = g_new (gchar, 37);
+-  uuid_generate_random (uu);
+-  uuid_unparse_lower (uu, token);
+-
+-  return token;
++  /* GLib's random UUID: libuuid's uuid_generate_random () is not FreeBSD's */
++  return g_uuid_string_random ();
+ }
+ 
+ static void
