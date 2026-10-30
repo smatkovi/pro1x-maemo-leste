@@ -1,0 +1,212 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 30 Oct 2026 07:00:00 +0100
+Subject: [PATCH] ASoC: codecs: aw87339: enable after the codec's PA, wait
+ for the turn-on time
+
+Every time the sound card powers up, the loudspeaker pops, which is why
+PulseAudio keeps the card open for 5 minutes after a sound.
+
+The amplifiers are fed by the WCD937x's headphone outputs, but their
+widget was a PGA on SND_SOC_NOPM: the same DAPM tier as the codec's
+"HPHL PGA"/"HPHR PGA" in both directions, and dapm_seq_compare() breaks
+the tie by register, -1 before WCD937X_ANA_HPH (0x3009). So the
+amplifier's enable sequence ran before the codec's headphone PA was
+switched on (class-H, PA enable, 20 ms settling), on power-up as well as
+on power-down. The card routes the amplifiers from the RX macro's
+HPHL_OUT/HPHR_OUT, beside the codec rather than behind it, so the sort
+order is all that orders them.
+
+The AW87339's output stage starts switching about 40 ms after the
+enabling write (datasheet V1.3: turn-on time TON typ. 40 ms, and the
+start-up plot on page 14), while DAPM was done and the stream was
+triggered about 25 ms after it. So either the headphone PA's turn-on
+step reached the amplifier's AC-coupled input (9 kOhm / 100 nF) during
+its turn-on, or the output stage came up in the middle of the sound's
+beginning. Which of the two it was can only be heard on the phone.
+
+Make the amplifier an output driver with POST_PMU/PRE_PMD, as aw8738 and
+simple-amplifier are and as Xiaomi's wcd937x hooks up the same
+amplifier family (AW87xxx_SPK after the AUX PA): powered up after the
+codec's PGAs including their settling time, powered down before them
+(the output stops within the I2C write, datasheet shutdown plot). And
+hold the stream start until the turn-on time has passed, with a POST
+widget as rt5640's "HP Post": both amplifiers are enabled first, so the
+two waits add up to one turn-on time, not two.
+
+Both are configurable for the test on the phone, at runtime:
+on_delay_ms (default 40; 0 is the order change alone) and off_gpio
+(default Y: the enable line low while off, as in the vendor kernel's
+aw87xxx v0.2.0; N keeps it high and shuts down by software only, as
+Awinic's aw87xxx v0.1.14 does for the AW873x9).
+
+The register values are unchanged; the power-down write 0x00 is the
+"CHIP Disable" of Awinic's aw87339 reference driver.
+---
+diff --git a/sound/soc/codecs/aw87339.c b/sound/soc/codecs/aw87339.c
+index 714b35c969..6e5a4deeec 100644
+--- a/sound/soc/codecs/aw87339.c
++++ b/sound/soc/codecs/aw87339.c
+@@ -8,9 +8,16 @@
+ // "music" scene on both amplifiers, so they are hardcoded here.  The first
+ // register write powers the amplifier down, the last one enables it.
+ //
++// The amplifier sits behind the codec's headphone PA, so it is switched on
++// only after that PA has come up and settled and off before it goes down
++// (an output driver widget, like aw8738 and simple-amplifier), and a
++// stream start waits for its turn-on time before the stream is unmuted and
++// triggered.
++//
+ #include <linux/delay.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/i2c.h>
++#include <linux/ktime.h>
+ #include <linux/module.h>
+ #include <linux/regmap.h>
+ #include <sound/soc.h>
+@@ -21,10 +28,28 @@
+ #define AW87339_CHIPID		0x39
+ #define AW87339_PWR_DOWN	0x00
+ 
++/*
++ * The output stage starts switching about 40 ms after the enabling write
++ * (datasheet V1.3: TON typ. 40 ms, and its start-up plot); hold the stream
++ * start that long, or a sound starts in the middle of the turn-on.
++ */
++static unsigned int on_delay_ms = 40;
++module_param(on_delay_ms, uint, 0644);
++MODULE_PARM_DESC(on_delay_ms,
++		 "Hold a stream start until this long after the enable (turn-on time, default 40 ms; 0: no wait)");
++
++static bool off_gpio = true;
++module_param(off_gpio, bool, 0644);
++MODULE_PARM_DESC(off_gpio,
++		 "Pull the enable line low while off (default Y, as the vendor kernel); N: software shutdown only");
++
+ struct aw87339 {
+ 	struct regmap *regmap;
+ 	struct gpio_desc *enable;
+ 	struct mutex lock;
++	bool gpio_on;		/* enable line high */
++	bool pa_on;		/* enable sequence written */
++	ktime_t on_until;	/* end of the turn-on time of the last enable */
+ };
+ 
+ static const struct reg_sequence aw87339_music_seq[] = {
+@@ -50,8 +75,50 @@ static const struct regmap_config aw87339_regmap = {
+ 	.max_register = AW87339_REG_MAX,
+ };
+ 
+-static int aw87339_event(struct snd_soc_dapm_widget *w,
+-			 struct snd_kcontrol *kcontrol, int event)
++static int aw87339_power_on(struct aw87339 *aw, struct device *dev)
++{
++	int ret;
++
++	if (!aw->gpio_on) {
++		gpiod_set_value_cansleep(aw->enable, 1);
++		usleep_range(2000, 3000);
++		aw->gpio_on = true;
++	}
++
++	ret = regmap_multi_reg_write(aw->regmap, aw87339_music_seq,
++				     ARRAY_SIZE(aw87339_music_seq));
++	if (ret) {
++		dev_err(dev, "enable sequence failed: %d\n", ret);
++		return ret;
++	}
++
++	aw->pa_on = true;
++	aw->on_until = ktime_add_ms(ktime_get(), READ_ONCE(on_delay_ms));
++
++	return 0;
++}
++
++static void aw87339_power_off(struct aw87339 *aw)
++{
++	/* the output stops within the write (datasheet shutdown plot) */
++	if (aw->gpio_on)
++		regmap_write(aw->regmap, AW87339_REG_SYSCTRL, AW87339_PWR_DOWN);
++	aw->pa_on = false;
++
++	if (aw->gpio_on && READ_ONCE(off_gpio)) {
++		gpiod_set_value_cansleep(aw->enable, 0);
++		aw->gpio_on = false;
++	}
++}
++
++/*
++ * An output driver is powered up after the codec's PGAs (the headphone PA
++ * with its settling time) and powered down before them.  As a PGA on
++ * SND_SOC_NOPM it sorted before the codec's HPH PGAs in both directions,
++ * so it was enabled before the headphone PA came up.
++ */
++static int aw87339_pa_event(struct snd_soc_dapm_widget *w,
++			    struct snd_kcontrol *kcontrol, int event)
+ {
+ 	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+ 	struct aw87339 *aw = snd_soc_component_get_drvdata(component);
+@@ -59,17 +126,11 @@ static int aw87339_event(struct snd_soc_dapm_widget *w,
+ 
+ 	mutex_lock(&aw->lock);
+ 	switch (event) {
+-	case SND_SOC_DAPM_PRE_PMU:
+-		gpiod_set_value_cansleep(aw->enable, 1);
+-		usleep_range(2000, 3000);
+-		ret = regmap_multi_reg_write(aw->regmap, aw87339_music_seq,
+-					     ARRAY_SIZE(aw87339_music_seq));
+-		if (ret)
+-			dev_err(component->dev, "enable sequence failed: %d\n", ret);
++	case SND_SOC_DAPM_POST_PMU:
++		ret = aw87339_power_on(aw, component->dev);
+ 		break;
+-	case SND_SOC_DAPM_POST_PMD:
+-		regmap_write(aw->regmap, AW87339_REG_SYSCTRL, AW87339_PWR_DOWN);
+-		gpiod_set_value_cansleep(aw->enable, 0);
++	case SND_SOC_DAPM_PRE_PMD:
++		aw87339_power_off(aw);
+ 		break;
+ 	}
+ 	mutex_unlock(&aw->lock);
+@@ -77,11 +138,40 @@ static int aw87339_event(struct snd_soc_dapm_widget *w,
+ 	return ret;
+ }
+ 
++/*
++ * Last in the power-up sequence of a stream start, before the DAIs are
++ * unmuted and the stream is triggered: wait for the rest of the turn-on
++ * time.  Both amplifiers are enabled before the first of them waits, so
++ * the two waits add up to one turn-on time.
++ */
++static int aw87339_settle_event(struct snd_soc_dapm_widget *w,
++				struct snd_kcontrol *kcontrol, int event)
++{
++	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
++	struct aw87339 *aw = snd_soc_component_get_drvdata(component);
++	s64 us = 0;
++
++	if (event != SND_SOC_DAPM_POST_PMU)
++		return 0;
++
++	mutex_lock(&aw->lock);
++	if (aw->pa_on)
++		us = ktime_us_delta(aw->on_until, ktime_get());
++	mutex_unlock(&aw->lock);
++
++	if (us > 0)
++		fsleep(us);
++
++	return 0;
++}
++
+ static const struct snd_soc_dapm_widget aw87339_dapm_widgets[] = {
+ 	SND_SOC_DAPM_INPUT("IN"),
+-	SND_SOC_DAPM_PGA_E("SPK PA", SND_SOC_NOPM, 0, 0, NULL, 0, aw87339_event,
+-			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_OUT_DRV_E("SPK PA", SND_SOC_NOPM, 0, 0, NULL, 0,
++			       aw87339_pa_event,
++			       SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_PRE_PMD),
+ 	SND_SOC_DAPM_OUTPUT("OUT"),
++	SND_SOC_DAPM_POST("SPK PA Settle", aw87339_settle_event),
+ };
+ 
+ static const struct snd_soc_dapm_route aw87339_dapm_routes[] = {
