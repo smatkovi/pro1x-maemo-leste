@@ -106,7 +106,9 @@ cp -a "$REPO/rootfs-overlay/." /
 chmod 755 /etc/init.d/pro1x-*
 rc-update add pro1x-tqftpserv default
 rc-update add pro1x-rmtfs default
-rc-update add pro1x-rmnet default
+# before oFono: the modem's rmnet_ipa0 and QMI services (oFono makes its
+# own rmnet links: scripts/49-mobile-data.sh)
+rc-update add pro1x-modem-wait default
 rc-update add pro1x-cal default
 rc-update add bluetooth default
 

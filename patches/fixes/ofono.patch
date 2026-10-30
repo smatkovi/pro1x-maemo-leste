@@ -1,0 +1,778 @@
+Mobile data over the mainline Linux IPA driver (Qualcomm SoCs such as the
+Pro1X's SM6115, IPA v4.2): oFono 2.18's qrtrsoc modem only knew the premux
+interfaces of Android kernels (rmnet_data*, made and set up by others), and
+its rmnet module deletes every rmnet link it finds when it starts, those
+included. With the mainline driver there is only rmnet_ipa0, and the data
+port needs what ModemManager's qcom-soc support does (src/mm-port-qmi.c,
+ModemManager 1.24.2):
+
+- udevng: a rmnet_ipa device of the mainline driver (sysfs
+  device/modem/rx_endpoint_id, drivers/net/ipa/ipa_sysfs.c) makes a qrtrqmi
+  modem without premux interfaces (path still /qrtrsoc_N);
+- qrtrqmi: for such an embedded modem, DPM "Open Port" (service 0x2f,
+  message 0x0020, TLV 0x11 as libqmi 1.38's qmi-service-dpm.json) with the
+  IPA's modem endpoints from sysfs, WDA "Set Data Format" on the embedded
+  port (endpoint type 4, interface 1): raw IP with QMAPv5, else QMAPv4,
+  else QMAP, each read back; then four rmnet links with the checksum
+  offload of sysfs device/feature/{rx,tx}_offload ("MAPv4" below IPA v4.5);
+  any failure or no answer within 20 s only leaves the modem without data
+  contexts (calls and SMS stay); OFONO_IPA_WDA, OFONO_IPA_DPM and
+  OFONO_IPA_RMNET_FLAGS in ofonod's environment change these steps for tests
+  on a device;
+- rmnet: rmnet_get_interfaces_flags(), the links' data format as a
+  parameter (rmnet_get_interfaces keeps QMAPv5's).
+
+For pro1x-maemo-leste (github smatkovi/pro1x-maemo-leste,
+scripts/49-mobile-data.sh), against Maemo Leste's ofono 1:2.18.0-1+4m7.1.
+
+diff --git a/plugins/qrtrqmi.c b/plugins/qrtrqmi.c
+index 27d071a..c0f4172 100644
+--- a/plugins/qrtrqmi.c
++++ b/plugins/qrtrqmi.c
+@@ -11,11 +11,14 @@
+ #endif
+ 
+ #include <errno.h>
++#include <stdint.h>
+ #include <fcntl.h>
+ #include <unistd.h>
+ #include <stdlib.h>
+ #include <stdio.h>
++#include <string.h>
+ #include <net/if.h>
++#include <linux/if_link.h>
+ 
+ #define OFONO_API_SUBJECT_TO_CHANGE
+ #include <ofono/plugin.h>
+@@ -52,18 +55,40 @@
+ #define DEFAULT_DL_AGGREGATION_SIZE 32768
+ #define DEFAULT_UL_AGGREGATION_SIZE 16384
+ 
++/* As src/rmnet.c, for kernel headers older than 5.14 */
++#ifndef RMNET_FLAGS_INGRESS_MAP_CKSUMV5
++#define RMNET_FLAGS_INGRESS_MAP_CKSUMV5 (1U << 4)
++#endif
++#ifndef RMNET_FLAGS_EGRESS_MAP_CKSUMV5
++#define RMNET_FLAGS_EGRESS_MAP_CKSUMV5 (1U << 5)
++#endif
++
++/* Data Port Mapper (libqmi: QMI_SERVICE_DPM, qmi-service-dpm.json) */
++#define QMI_SERVICE_DPM 47
++#define QMI_DPM_OPEN_PORT 0x0020
++#define QMI_PROTOCOL_ERROR_MISSING_ARGUMENT 0x0011
++/* the whole data path set-up of a mainline IPA, in seconds */
++#define IPA_SETUP_TIMEOUT 20
++
+ struct qrtrqmi_data {
+ 	struct qmi_qrtr_node *node;
+ 	struct qmi_service *dms;
+ 	struct qmi_service *wda;
++	struct qmi_service *dpm;
+ 	int main_net_ifindex;
+ 	char main_net_name[IFNAMSIZ];
+ 	struct rmnet_ifinfo rmnet_interfaces[MAX_CONTEXTS];
+ 	uint8_t n_premux;
+ 	int rmnet_id;
+ 	uint32_t set_powered_id;
++	struct l_timeout *ipa_timeout;
++	uint32_t ipa_rmnet_flags;
++	uint8_t ipa_wda_try;
++	uint8_t ipa_wda_end;
+ 	bool have_voice : 1;
+ 	bool soc_premux : 1;
++	bool ipa : 1;
++	bool ipa_wda_endpoint : 1;
+ };
+ 
+ static void qrtrqmi_io_debug(const char *str, void *user_data)
+@@ -180,11 +205,23 @@ static int qrtrqmi_probe(struct ofono_modem *modem)
+ 		data->soc_premux = true;
+ 	}
+ 
++	/*
++	 * An embedded modem without premux interfaces: the mainline Linux IPA
++	 * driver (udevng's qrtrsoc).  Its rmnet links are made here, after
++	 * DPM and WDA set up the data port as ModemManager does it.
++	 */
++	if (!data->soc_premux && l_streq0(bus, "embedded"))
++		data->ipa = true;
++
+ 	return 0;
+ }
+ 
+ static void qrtrqmi_deinit(struct qrtrqmi_data *data)
+ {
++	l_timeout_remove(data->ipa_timeout);
++	data->ipa_timeout = NULL;
++	qmi_service_free(data->dpm);
++	data->dpm = NULL;
+ 	qmi_service_free(data->dms);
+ 	data->dms = NULL;
+ 	qmi_service_free(data->wda);
+@@ -216,6 +253,9 @@ static void qrtrqmi_remove(struct ofono_modem *modem)
+ 	l_free(data);
+ }
+ 
++static void ipa_data_unavailable(struct ofono_modem *modem, const char *why);
++static void ipa_setup_done(struct qrtrqmi_data *data);
++
+ static void rmnet_get_interfaces_cb(int error, unsigned int n_interfaces,
+ 					const struct rmnet_ifinfo *interfaces,
+ 					void *user_data)
+@@ -227,15 +267,30 @@ static void rmnet_get_interfaces_cb(int error, unsigned int n_interfaces,
+ 	DBG("error: %d, n_interfaces: %u", error, n_interfaces);
+ 	data->rmnet_id = 0;
+ 
++	if (error && data->ipa) {
++		ipa_data_unavailable(modem, "the rmnet links were not made");
++		return;
++	}
++
+ 	if (error)
+ 		goto error;
+ 
++	if (data->ipa && n_interfaces)
++		ofono_info("%s: rmnet links %s..%s on %s, data format 0x%x",
++				ofono_modem_get_path(modem),
++				interfaces[0].ifname,
++				interfaces[n_interfaces - 1].ifname,
++				data->main_net_name, data->ipa_rmnet_flags);
++
+ 	DBG("RMNet interfaces created:");
+ 	for (i = 0; i < n_interfaces; i++)
+ 		DBG("\t%s[%d], mux_id: %u",
+ 			interfaces[i].ifname, interfaces[i].ifindex,
+ 			interfaces[i].mux_id);
+ 
++	if (data->ipa)
++		ipa_setup_done(data);
++
+ 	memcpy(data->rmnet_interfaces, interfaces,
+ 			sizeof(struct rmnet_ifinfo) * n_interfaces);
+ 	data->n_premux = n_interfaces;
+@@ -280,6 +335,443 @@ error:
+ 	ofono_modem_set_powered(modem, FALSE);
+ }
+ 
++/*
++ * The data path of an embedded Qualcomm SoC with the mainline Linux IPA
++ * driver (drivers/net/ipa), set up as ModemManager's qcom-soc support does
++ * it (src/mm-port-qmi.c, ModemManager 1.24):
++ *
++ *  - DPM "Open Port" binds the IPA endpoints that face the modem (sysfs
++ *    device/modem/{rx,tx}_endpoint_id of rmnet_ipa0) to the embedded data
++ *    port (endpoint type EMBEDDED, interface 1, as gprs-context's
++ *    BIND_MUX_DATA_PORT uses);
++ *  - WDA "Set Data Format" on that port: raw IP, QMAPv5, else QMAPv4, else
++ *    QMAP, each read back with "Get Data Format";
++ *  - rmnet links with the checksum offload the IPA hardware does (sysfs
++ *    device/feature/{rx,tx}_offload: "MAPv4" below IPA v4.5, "MAPv5" from
++ *    it; ipa_sysfs.c), which the IPA expects on uplink packets and appends
++ *    to downlink ones.
++ *
++ * A failure (or no answer within IPA_SETUP_TIMEOUT) only costs the data
++ * contexts: the modem is powered anyway, for calls and SMS.
++ *
++ * For tests on a device, without a rebuild (environment of ofonod, e.g.
++ * exported in /etc/default/ofono):
++ *   OFONO_IPA_WDA=qmapv5|qmapv4|qmap  only this aggregation protocol
++ *   OFONO_IPA_DPM=0                   no DPM "Open Port"
++ *   OFONO_IPA_RMNET_FLAGS=<n>         the rmnet links' data format instead
++ *                                     of the one from sysfs (0xd: DEAGG,
++ *                                     MAP checksum v4 in and out)
++ */
++static const uint32_t ipa_wda_protocols[] = {
++	QMI_WDA_AGGREGATION_PROTOCOL_QMAPV5,
++	QMI_WDA_AGGREGATION_PROTOCOL_QMAPV4,
++	QMI_WDA_AGGREGATION_PROTOCOL_QMAP,
++};
++
++static const char *const ipa_wda_names[] = { "qmapv5", "qmapv4", "qmap" };
++
++static const struct qmi_endpoint_info ipa_endpoint_info = {
++	.endpoint_type = L_CPU_TO_LE32(QMI_DATA_ENDPOINT_TYPE_EMBEDDED),
++	.interface_number = L_CPU_TO_LE32(0x01),
++};
++
++struct qmi_dpm_hw_data_ports {
++	uint8_t n_ports;
++	uint32_t endpoint_type;
++	uint32_t interface_number;
++	uint32_t rx_endpoint_number;
++	uint32_t tx_endpoint_number;
++} __attribute__((packed));
++
++static int ipa_read_sysfs(const char *ifname, const char *attr,
++						char *buf, size_t len)
++{
++	char path[128];
++	ssize_t n;
++	int fd;
++	int r;
++
++	r = snprintf(path, sizeof(path), "/sys/class/net/%s/device/%s",
++							ifname, attr);
++	if (r < 0 || (size_t) r >= sizeof(path))
++		return -ENAMETOOLONG;
++
++	fd = open(path, O_RDONLY | O_CLOEXEC);
++	if (fd < 0)
++		return -errno;
++
++	n = read(fd, buf, len - 1);
++	r = n < 0 ? -errno : 0;
++	close(fd);
++
++	if (r < 0)
++		return r;
++
++	buf[n] = '\0';
++	buf[strcspn(buf, "\n")] = '\0';
++
++	return 0;
++}
++
++static void ipa_setup_done(struct qrtrqmi_data *data)
++{
++	l_timeout_remove(data->ipa_timeout);
++	data->ipa_timeout = NULL;
++	qmi_service_free(data->dpm);
++	data->dpm = NULL;
++}
++
++static void ipa_data_unavailable(struct ofono_modem *modem, const char *why)
++{
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++
++	ofono_warn("%s: no mobile data: %s", ofono_modem_get_path(modem), why);
++
++	ipa_setup_done(data);
++
++	if (data->rmnet_id) {
++		rmnet_cancel(data->rmnet_id);
++		data->rmnet_id = 0;
++	}
++
++	data->n_premux = 0;
++	ofono_modem_set_powered(modem, TRUE);
++}
++
++static void ipa_setup_timeout(struct l_timeout *timeout, void *user_data)
++{
++	struct ofono_modem *modem = user_data;
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++
++	/* Freeing the services drops their pending requests */
++	qmi_service_free(data->wda);
++	data->wda = NULL;
++
++	ipa_data_unavailable(modem, "no answer from the modem");
++}
++
++static void ipa_create_links(struct ofono_modem *modem)
++{
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++
++	data->rmnet_id = rmnet_get_interfaces_flags(data->main_net_ifindex,
++						MAX_CONTEXTS,
++						data->ipa_rmnet_flags,
++						rmnet_get_interfaces_cb,
++						modem, NULL);
++	if (data->rmnet_id > 0)
++		return;
++
++	data->rmnet_id = 0;
++	ipa_data_unavailable(modem, "unable to request the rmnet links");
++}
++
++static int ipa_wda_get_format(struct ofono_modem *modem,
++					qmi_service_result_func_t func)
++{
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++	struct qmi_param *param = NULL;
++
++	if (data->ipa_wda_endpoint) {
++		param = qmi_param_new();
++		qmi_param_append(param, 0x10, sizeof(ipa_endpoint_info),
++							&ipa_endpoint_info);
++	}
++
++	if (qmi_service_send(data->wda, QMI_WDA_GET_DATA_FORMAT, param,
++					func, modem, NULL) > 0)
++		return 0;
++
++	qmi_param_free(param);
++	return -EIO;
++}
++
++static void ipa_wda_set_next(struct ofono_modem *modem);
++
++static void ipa_wda_verify_cb(struct qmi_result *result, void *user_data)
++{
++	struct ofono_modem *modem = user_data;
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++	uint32_t want = ipa_wda_protocols[data->ipa_wda_try];
++	uint32_t llp, ul, dl;
++	uint16_t error;
++
++	if (qmi_result_set_error(result, &error)) {
++		ofono_warn("%s: WDA data format not read back (%u), "
++				"taking protocol %u as set",
++				ofono_modem_get_path(modem), error, want);
++		goto done;
++	}
++
++	if (!qmi_result_get_uint32(result, 0x11, &llp) ||
++			!qmi_result_get_uint32(result, 0x12, &ul) ||
++			!qmi_result_get_uint32(result, 0x13, &dl)) {
++		ofono_warn("%s: WDA data format incomplete, "
++				"taking protocol %u as set",
++				ofono_modem_get_path(modem), want);
++		goto done;
++	}
++
++	if (llp != QMI_WDA_DATA_LINK_PROTOCOL_RAW_IP || ul != want ||
++			dl != want) {
++		DBG("asked for protocol %u, modem has link layer %u, "
++			"uplink %u, downlink %u", want, llp, ul, dl);
++		data->ipa_wda_try += 1;
++		ipa_wda_set_next(modem);
++		return;
++	}
++
++done:
++	ofono_info("%s: WDA data format: raw IP, aggregation protocol %u "
++			"(5 QMAP, 8 QMAPv4, 9 QMAPv5)",
++			ofono_modem_get_path(modem), want);
++	ipa_create_links(modem);
++}
++
++static void ipa_wda_set_cb(struct qmi_result *result, void *user_data)
++{
++	struct ofono_modem *modem = user_data;
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++	uint16_t error;
++
++	if (qmi_result_set_error(result, &error)) {
++		DBG("protocol %u refused: %u",
++			ipa_wda_protocols[data->ipa_wda_try], error);
++		data->ipa_wda_try += 1;
++		ipa_wda_set_next(modem);
++		return;
++	}
++
++	if (ipa_wda_get_format(modem, ipa_wda_verify_cb) < 0)
++		ipa_create_links(modem);
++}
++
++static void ipa_wda_set_next(struct ofono_modem *modem)
++{
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++	struct qmi_param *param;
++	uint32_t protocol;
++
++	if (data->ipa_wda_try >= data->ipa_wda_end) {
++		ipa_data_unavailable(modem,
++			"the modem took none of QMAPv5, QMAPv4 and QMAP (WDA)");
++		return;
++	}
++
++	protocol = ipa_wda_protocols[data->ipa_wda_try];
++	DBG("WDA set data format: protocol %u, endpoint info %s", protocol,
++					data->ipa_wda_endpoint ? "yes" : "no");
++
++	param = qmi_param_new();
++	qmi_param_append_uint32(param, 0x11, QMI_WDA_DATA_LINK_PROTOCOL_RAW_IP);
++	qmi_param_append_uint32(param, 0x12, protocol);
++	qmi_param_append_uint32(param, 0x13, protocol);
++	qmi_param_append_uint32(param, 0x15, DEFAULT_DL_DATAGRAMS);
++	qmi_param_append_uint32(param, 0x16, DEFAULT_DL_AGGREGATION_SIZE);
++
++	if (data->ipa_wda_endpoint)
++		qmi_param_append(param, 0x17, sizeof(ipa_endpoint_info),
++							&ipa_endpoint_info);
++
++	if (qmi_service_send(data->wda, QMI_WDA_SET_DATA_FORMAT, param,
++					ipa_wda_set_cb, modem, NULL) > 0)
++		return;
++
++	qmi_param_free(param);
++	ipa_data_unavailable(modem, "unable to send WDA set data format");
++}
++
++static void ipa_wda_get_first_cb(struct qmi_result *result, void *user_data)
++{
++	struct ofono_modem *modem = user_data;
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++	uint32_t llp = 0, ul = 0, dl = 0;
++	uint16_t error;
++
++	if (qmi_result_set_error(result, &error)) {
++		/*
++		 * As ModemManager: a modem that misses the endpoint info
++		 * says so; ask again with it, and set the format with it
++		 */
++		if (error == QMI_PROTOCOL_ERROR_MISSING_ARGUMENT &&
++				!data->ipa_wda_endpoint) {
++			data->ipa_wda_endpoint = true;
++
++			if (ipa_wda_get_format(modem,
++						ipa_wda_get_first_cb) == 0)
++				return;
++		}
++
++		DBG("WDA get data format failed: %u", error);
++	} else {
++		qmi_result_get_uint32(result, 0x11, &llp);
++		qmi_result_get_uint32(result, 0x12, &ul);
++		qmi_result_get_uint32(result, 0x13, &dl);
++		DBG("WDA data format now: link layer %u, uplink %u, "
++					"downlink %u", llp, ul, dl);
++	}
++
++	ipa_wda_set_next(modem);
++}
++
++static void ipa_wda_start(struct ofono_modem *modem)
++{
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++	const char *env = getenv("OFONO_IPA_WDA");
++	unsigned int i;
++
++	data->ipa_wda_endpoint = false;
++	data->ipa_wda_try = 0;
++	data->ipa_wda_end = L_ARRAY_SIZE(ipa_wda_protocols);
++
++	for (i = 0; env && i < L_ARRAY_SIZE(ipa_wda_names); i++) {
++		if (strcmp(env, ipa_wda_names[i]))
++			continue;
++
++		ofono_info("%s: OFONO_IPA_WDA: only %s",
++				ofono_modem_get_path(modem), env);
++		data->ipa_wda_try = i;
++		data->ipa_wda_end = i + 1;
++	}
++
++	if (ipa_wda_get_format(modem, ipa_wda_get_first_cb) < 0)
++		ipa_data_unavailable(modem, "unable to send WDA get data format");
++}
++
++static void ipa_dpm_open_port_cb(struct qmi_result *result, void *user_data)
++{
++	struct ofono_modem *modem = user_data;
++	uint16_t error;
++
++	/* ModemManager stops here; the port may still be open from before */
++	if (qmi_result_set_error(result, &error))
++		ofono_warn("%s: DPM open port failed (%u), going on",
++					ofono_modem_get_path(modem), error);
++	else
++		ofono_info("%s: DPM port open",
++					ofono_modem_get_path(modem));
++
++	ipa_wda_start(modem);
++}
++
++static int ipa_dpm_open_port(struct ofono_modem *modem)
++{
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++	struct qmi_dpm_hw_data_ports port;
++	struct qmi_param *param;
++	char rx[16], tx[16];
++	uint32_t rx_id, tx_id;
++
++	if (!qmi_qrtr_node_has_service(data->node, QMI_SERVICE_DPM)) {
++		ofono_warn("%s: modem has no DPM service",
++					ofono_modem_get_path(modem));
++		return -ENOENT;
++	}
++
++	if (ipa_read_sysfs(data->main_net_name, "modem/rx_endpoint_id",
++					rx, sizeof(rx)) < 0 ||
++			ipa_read_sysfs(data->main_net_name,
++					"modem/tx_endpoint_id",
++					tx, sizeof(tx)) < 0 ||
++			l_safe_atou32(rx, &rx_id) < 0 ||
++			l_safe_atou32(tx, &tx_id) < 0) {
++		ofono_warn("%s: no IPA endpoint ids in sysfs, DPM port "
++				"not opened", ofono_modem_get_path(modem));
++		return -ENOENT;
++	}
++
++	data->dpm = qmi_qrtr_node_get_service(data->node, QMI_SERVICE_DPM);
++	if (!data->dpm)
++		return -EIO;
++
++	/*
++	 * As ModemManager: the modem's RX endpoint is the IPA's TX one
++	 * (AP_MODEM_TX, sysfs tx_endpoint_id), its TX endpoint the IPA's
++	 * RX one (AP_MODEM_RX)
++	 */
++	port.n_ports = 1;
++	port.endpoint_type = L_CPU_TO_LE32(QMI_DATA_ENDPOINT_TYPE_EMBEDDED);
++	port.interface_number = L_CPU_TO_LE32(0x01);
++	port.rx_endpoint_number = L_CPU_TO_LE32(tx_id);
++	port.tx_endpoint_number = L_CPU_TO_LE32(rx_id);
++
++	ofono_info("%s: DPM open port: modem RX endpoint %u, TX endpoint %u",
++				ofono_modem_get_path(modem), tx_id, rx_id);
++
++	param = qmi_param_new();
++	qmi_param_append(param, 0x11, sizeof(port), &port);
++
++	if (qmi_service_send(data->dpm, QMI_DPM_OPEN_PORT, param,
++					ipa_dpm_open_port_cb, modem, NULL) > 0)
++		return 0;
++
++	qmi_param_free(param);
++	return -EIO;
++}
++
++static void ipa_setup_data_path(struct ofono_modem *modem)
++{
++	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
++	uint32_t flags = RMNET_FLAGS_INGRESS_DEAGGREGATION;
++	const char *env;
++	char buf[32];
++
++	if (!qmi_qrtr_node_has_service(data->node, QMI_SERVICE_WDA)) {
++		ipa_data_unavailable(modem, "the modem has no WDA service");
++		return;
++	}
++
++	if (ipa_read_sysfs(data->main_net_name, "feature/rx_offload",
++					buf, sizeof(buf)) == 0) {
++		if (l_str_has_prefix(buf, "MAPv4"))
++			flags |= RMNET_FLAGS_INGRESS_MAP_CKSUMV4;
++		else if (l_str_has_prefix(buf, "MAPv5"))
++			flags |= RMNET_FLAGS_INGRESS_MAP_CKSUMV5;
++	}
++
++	if (ipa_read_sysfs(data->main_net_name, "feature/tx_offload",
++					buf, sizeof(buf)) == 0) {
++		if (l_str_has_prefix(buf, "MAPv4"))
++			flags |= RMNET_FLAGS_EGRESS_MAP_CKSUMV4;
++		else if (l_str_has_prefix(buf, "MAPv5"))
++			flags |= RMNET_FLAGS_EGRESS_MAP_CKSUMV5;
++	}
++
++	env = getenv("OFONO_IPA_RMNET_FLAGS");
++	if (env) {
++		char *end;
++		unsigned long v = strtoul(env, &end, 0);
++
++		if (*env && !*end && v <= UINT32_MAX) {
++			ofono_info("%s: OFONO_IPA_RMNET_FLAGS: 0x%lx instead of "
++					"0x%x", ofono_modem_get_path(modem),
++					v, flags);
++			flags = v;
++		}
++	}
++
++	data->ipa_rmnet_flags = flags;
++	DBG("rmnet data format: 0x%x", flags);
++
++	data->wda = qmi_qrtr_node_get_service(data->node, QMI_SERVICE_WDA);
++	if (!data->wda) {
++		ipa_data_unavailable(modem, "no WDA service handle");
++		return;
++	}
++
++	l_timeout_remove(data->ipa_timeout);
++	data->ipa_timeout = l_timeout_create(IPA_SETUP_TIMEOUT,
++						ipa_setup_timeout, modem, NULL);
++
++	if (l_streq0(getenv("OFONO_IPA_DPM"), "0"))
++		ofono_info("%s: OFONO_IPA_DPM=0: no DPM open port",
++					ofono_modem_get_path(modem));
++	else if (ipa_dpm_open_port(modem) == 0)
++		return;
++
++	ipa_wda_start(modem);
++}
++
+ static void setup_data_format(struct ofono_modem *modem)
+ {
+ 	struct qrtrqmi_data *data = ofono_modem_get_data(modem);
+@@ -297,6 +789,11 @@ static void setup_data_format(struct ofono_modem *modem)
+ 
+ 	DBG("%p", modem);
+ 
++	if (data->ipa) {
++		ipa_setup_data_path(modem);
++		return;
++	}
++
+ 	data->wda = qmi_qrtr_node_get_service(data->node, QMI_SERVICE_WDA);
+ 	if (qmi_wda_set_data_format(data->wda, &endpoint_info, &format,
+ 					set_data_format_cb, modem, NULL) > 0)
+@@ -379,7 +876,7 @@ static void lookup_done(void *user_data)
+ 			!qmi_qrtr_node_has_service(node, QMI_SERVICE_NAS))
+ 		goto error;
+ 
+-	if (!data->soc_premux &&
++	if (!data->soc_premux && !data->ipa &&
+ 			!qmi_qrtr_node_has_service(node, QMI_SERVICE_WDA))
+ 		goto error;
+ 
+diff --git a/plugins/udevng.c b/plugins/udevng.c
+index 18954d4..1a59c1e 100644
+--- a/plugins/udevng.c
++++ b/plugins/udevng.c
+@@ -11,6 +11,7 @@
+ 
+ #include <errno.h>
+ #include <ctype.h>
++#include <unistd.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <stdio.h>
+@@ -307,6 +308,26 @@ static gboolean setup_gobi_qrtr_premux(struct modem_info *modem,
+ 	return TRUE;
+ }
+ 
++/*
++ * The mainline Linux IPA driver (drivers/net/ipa) exports the IPA endpoints
++ * that face the modem in sysfs (ipa_sysfs.c); rmnet_ipa0 is its only network
++ * device, the rmnet links on it are made by the qrtrqmi driver (src/rmnet.c,
++ * which deletes any rmnet link it finds when oFono starts, rmnet_data* made
++ * by someone else included).
++ */
++static bool qrtrsoc_mainline_ipa(const struct device_info *info)
++{
++	char path[256];
++	int r;
++
++	r = snprintf(path, sizeof(path), "%s/device/modem/rx_endpoint_id",
++				udev_device_get_syspath(info->udev_device));
++	if (r < 0 || (size_t) r >= sizeof(path))
++		return false;
++
++	return access(path, R_OK) == 0;
++}
++
+ static gboolean setup_qrtrsoc(struct modem_info *modem)
+ {
+ 	const struct device_info *ipa_info = NULL;
+@@ -316,6 +337,27 @@ static gboolean setup_qrtrsoc(struct modem_info *modem)
+ 
+ 	DBG("%s", modem->syspath);
+ 
++	for (list = modem->devices; list; list = list->next) {
++		struct device_info *info = list->data;
++		const char *name;
++
++		name = udev_device_get_sysname(info->udev_device);
++		if (l_str_has_prefix(name, "rmnet_ipa"))
++			ipa_info = info;
++	}
++
++	if (ipa_info && qrtrsoc_mainline_ipa(ipa_info)) {
++		DBG("Mainline IPA driver: no premux interfaces");
++
++		r = setup_qmi_qrtr(modem, ipa_info);
++		if (r < 0)
++			return FALSE;
++
++		return TRUE;
++	}
++
++	ipa_info = NULL;
++
+ 	for (list = modem->devices; list; list = list->next) {
+ 		struct device_info *info = list->data;
+ 		const char *name;
+diff --git a/src/rmnet.c b/src/rmnet.c
+index 9a7f52f..8a480dc 100644
+--- a/src/rmnet.c
++++ b/src/rmnet.c
+@@ -48,6 +48,7 @@ struct rmnet_request {
+ 	uint16_t request_type;
+ 	uint8_t current;
+ 	uint8_t n_interfaces;
++	uint32_t flags;
+ 	struct rmnet_ifinfo infos[];
+ };
+ 
+@@ -133,6 +134,7 @@ static int rmnet_link_del(uint32_t ifindex, l_netlink_command_func_t cb,
+ 
+ static int rmnet_link_new(uint32_t parent_ifindex, uint8_t mux_id,
+ 				const char ifname[static IF_NAMESIZE],
++				uint32_t data_format,
+ 				l_netlink_command_func_t cb,
+ 				void *userdata,
+ 				l_netlink_destroy_func_t destroy,
+@@ -158,9 +160,7 @@ static int rmnet_link_new(uint32_t parent_ifindex, uint8_t mux_id,
+ 	l_netlink_message_append_string(nlm, IFLA_INFO_KIND, RMNET_TYPE);
+ 	l_netlink_message_enter_nested(nlm, IFLA_INFO_DATA);
+ 	l_netlink_message_append_u16(nlm, IFLA_RMNET_MUX_ID, mux_id);
+-	flags.flags = RMNET_FLAGS_INGRESS_DEAGGREGATION |
+-			RMNET_FLAGS_INGRESS_MAP_CKSUMV5 |
+-			RMNET_FLAGS_EGRESS_MAP_CKSUMV5;
++	flags.flags = data_format;
+ 	flags.mask = RMNET_FLAGS_EGRESS_MAP_CKSUMV4 |
+ 			RMNET_FLAGS_INGRESS_MAP_CKSUMV4 |
+ 			RMNET_FLAGS_EGRESS_MAP_CKSUMV5 |
+@@ -305,17 +305,29 @@ static void rmnet_start_next_request(void)
+ 	sprintf(info->ifname, RMNET_TYPE"%u", mux_id - 1);
+ 
+ 	L_WARN_ON(rmnet_link_new(req->parent_ifindex, mux_id, info->ifname,
+-					rmnet_new_link_cb, NULL, NULL,
++					req->flags, rmnet_new_link_cb, NULL, NULL,
+ 					&req->netlink_id) < 0);
+ 
+-	DBG("Start NEWLINK: parent: %u, interface: %u/%u, request: %u",
+-			req->parent_ifindex, req->current + 1,
+-			req->n_interfaces, req->netlink_id);
++	DBG("Start NEWLINK: parent: %u, interface: %u/%u, request: %u, "
++			"flags: 0x%x", req->parent_ifindex, req->current + 1,
++			req->n_interfaces, req->netlink_id, req->flags);
+ }
+ 
+ int rmnet_get_interfaces(uint32_t parent_ifindex, unsigned int n_interfaces,
+ 				rmnet_new_interfaces_func_t cb,
+ 				void *user_data, rmnet_destroy_func_t destroy)
++{
++	return rmnet_get_interfaces_flags(parent_ifindex, n_interfaces,
++					RMNET_FLAGS_INGRESS_DEAGGREGATION |
++					RMNET_FLAGS_INGRESS_MAP_CKSUMV5 |
++					RMNET_FLAGS_EGRESS_MAP_CKSUMV5,
++					cb, user_data, destroy);
++}
++
++int rmnet_get_interfaces_flags(uint32_t parent_ifindex,
++				unsigned int n_interfaces, uint32_t flags,
++				rmnet_new_interfaces_func_t cb,
++				void *user_data, rmnet_destroy_func_t destroy)
+ {
+ 	struct rmnet_request *req;
+ 
+@@ -337,6 +349,7 @@ int rmnet_get_interfaces(uint32_t parent_ifindex, unsigned int n_interfaces,
+ 	req->netlink_id = 0;
+ 	req->current = 0;
+ 	req->n_interfaces = n_interfaces;
++	req->flags = flags;
+ 	memset(req->infos, 0, sizeof(struct rmnet_ifinfo) * n_interfaces);
+ 
+ 	if (next_request_id < 0)
+diff --git a/src/rmnet.h b/src/rmnet.h
+index dc416e0..a4cb56c 100644
+--- a/src/rmnet.h
++++ b/src/rmnet.h
+@@ -20,6 +20,16 @@ typedef void (*rmnet_destroy_func_t)(void *user_data);
+ int rmnet_get_interfaces(uint32_t parent_ifindex, unsigned int n_interfaces,
+ 				rmnet_new_interfaces_func_t cb,
+ 				void *user_data, rmnet_destroy_func_t destroy);
++/*
++ * As rmnet_get_interfaces, with the links' data format (IFLA_RMNET_FLAGS:
++ * RMNET_FLAGS_INGRESS_DEAGGREGATION, RMNET_FLAGS_{IN,E}GRESS_MAP_CKSUMV4
++ * or ..._CKSUMV5) instead of QMAPv5's.  The kernel keeps one data format
++ * per parent device: every link made on it sets it again.
++ */
++int rmnet_get_interfaces_flags(uint32_t parent_ifindex,
++				unsigned int n_interfaces, uint32_t flags,
++				rmnet_new_interfaces_func_t cb,
++				void *user_data, rmnet_destroy_func_t destroy);
+ int rmnet_del_interfaces(unsigned int n_interfaces,
+ 					const struct rmnet_ifinfo *interfaces);
+ int rmnet_cancel(int id);

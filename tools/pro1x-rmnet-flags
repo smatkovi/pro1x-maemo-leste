@@ -1,0 +1,91 @@
+#!/usr/bin/python3
+"""pro1x-rmnet-flags -- the rmnet links and the data format the kernel has.
+
+    pro1x-rmnet-flags [IFNAME...]      (default: every rmnet link)
+
+Prints for each rmnet link its parent, mux id and IFLA_RMNET_FLAGS as the
+kernel reports them (rmnet_fill_info(), drivers/net/ethernet/qualcomm/
+rmnet/rmnet_config.c). Leste's iproute2 6.1 shows only the mux id. The
+data format belongs to the parent device: all links on it show the same.
+For mobile data over the Pro1X's IPA v4.2 it must be
+INGRESS_DEAGGREGATION, INGRESS_MAP_CKSUMV4 and EGRESS_MAP_CKSUMV4 (0xd).
+"""
+import socket
+import struct
+import sys
+
+RTM_NEWLINK, RTM_GETLINK, NLMSG_DONE, NLMSG_ERROR = 16, 18, 3, 2
+NLM_F_REQUEST, NLM_F_DUMP = 0x1, 0x300
+IFLA_IFNAME, IFLA_LINK, IFLA_LINKINFO = 3, 5, 18
+IFLA_INFO_KIND, IFLA_INFO_DATA = 1, 2
+IFLA_RMNET_MUX_ID, IFLA_RMNET_FLAGS = 1, 2
+FLAGS = [(1 << 0, "INGRESS_DEAGGREGATION"), (1 << 1, "INGRESS_MAP_COMMANDS"),
+         (1 << 2, "INGRESS_MAP_CKSUMV4"), (1 << 3, "EGRESS_MAP_CKSUMV4"),
+         (1 << 4, "INGRESS_MAP_CKSUMV5"), (1 << 5, "EGRESS_MAP_CKSUMV5")]
+
+
+def attrs(buf):
+    out = {}
+    i = 0
+    while i + 4 <= len(buf):
+        ln, typ = struct.unpack_from("<HH", buf, i)
+        if ln < 4:
+            break
+        out[typ & 0x3FFF] = buf[i + 4:i + ln]
+        i += (ln + 3) & ~3
+    return out
+
+
+def links():
+    s = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE)
+    s.bind((0, 0))
+    req = struct.pack("<IHHII", 32, RTM_GETLINK, NLM_F_REQUEST | NLM_F_DUMP, 1, 0)
+    s.send(req + struct.pack("<BxHiII", socket.AF_UNSPEC, 0, 0, 0, 0))
+    names, found = {}, []
+    while True:
+        data = s.recv(65536)
+        i = 0
+        while i + 16 <= len(data):
+            ln, typ = struct.unpack_from("<IH", data, i)
+            if typ == NLMSG_DONE:
+                return names, found
+            if typ == NLMSG_ERROR:
+                raise OSError("netlink error")
+            if typ == RTM_NEWLINK:
+                index = struct.unpack_from("<i", data, i + 20)[0]
+                a = attrs(data[i + 32:i + ln])
+                name = a.get(IFLA_IFNAME, b"").rstrip(b"\0").decode()
+                names[index] = name
+                info = attrs(a.get(IFLA_LINKINFO, b""))
+                if info.get(IFLA_INFO_KIND, b"").rstrip(b"\0") == b"rmnet":
+                    d = attrs(info.get(IFLA_INFO_DATA, b""))
+                    parent = struct.unpack("<I", a[IFLA_LINK])[0] if IFLA_LINK in a else 0
+                    mux = struct.unpack("<H", d[IFLA_RMNET_MUX_ID][:2])[0] \
+                        if IFLA_RMNET_MUX_ID in d else None
+                    flags = struct.unpack("<II", d[IFLA_RMNET_FLAGS][:8])[0] \
+                        if IFLA_RMNET_FLAGS in d else None
+                    found.append((name, parent, mux, flags))
+            i += (ln + 3) & ~3
+
+
+def main():
+    names, found = links()
+    want = sys.argv[1:]
+    shown = 0
+    for name, parent, mux, flags in found:
+        if want and name not in want:
+            continue
+        shown += 1
+        if flags is None:
+            fl = "flags not reported"
+        else:
+            fl = "flags 0x%x %s" % (flags, " ".join(n for b, n in FLAGS if flags & b) or "none")
+        print("%s parent %s mux_id %s %s" % (name, names.get(parent, parent), mux, fl))
+    if not shown:
+        print("no rmnet links" + (" named " + " ".join(want) if want else ""))
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

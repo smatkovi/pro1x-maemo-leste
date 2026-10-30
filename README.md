@@ -15,7 +15,7 @@ there, every boot image variant that was tested: [docs/HANDOFF.md](docs/HANDOFF.
 | Vibration | works | mce `evdevvibrator` |
 | Wi-Fi | works, stable MAC | modem up via `rmtfs`/`tqftpserv`; MAC derived from the serial |
 | Bluetooth | controller up | linux-firmware 2025 (`qca/cmbtfw12.tlv`); pairing not tested |
-| Modem in oFono | detected | `rmnet_data0..3` for oFono's `qrtrsoc`; calls/SMS/data untested (no SIM) |
+| Modem in oFono | detected; mobile data prepared | oFono 2.18 `+pro1x1` (`scripts/49-mobile-data.sh`) sets up the IPA data path itself (DPM port, WDA format, `rmnet0..3` with MAPv4 checksums); calls/SMS/data untested (no SIM), test steps in `docs/leste-mobile-data.md` |
 | Loudspeaker, microphone | works | NixOS UCM profile, PulseAudio 48 kHz, suspend after 5 min (pops; fix in 7.1.0-pro1x.8 untested, `docs/audio.md`) |
 | Earpiece, headphones | untested | |
 | Battery, charging | works | upower |
@@ -229,7 +229,8 @@ would otherwise lose its slot after seven starts.
 - [x] Flash `boot_b`, zero `dtbo_b`, switch over -- Leste boots (v0 + appended DTB)
 - [x] `pro1x-boot` and the initramfs boot menu, so switching works without a PC
 - [x] Audio (UCM2 profiles of the NixOS port), sensors (hexagonfs), camera
-- [x] oFono sees the modem (qrtrsoc with rmnet_data links)
+- [x] oFono sees the modem (qrtrsoc)
+- [x] Mobile data prepared: patched oFono over the IPA (`docs/leste-mobile-data.md`)
 - [ ] Calls, SMS, mobile data with a SIM; earpiece, headphones, Bluetooth pairing
 - [ ] Double tap to wake (kernel patch in place, does not wake yet)
 - [ ] MeeGo as a third system (boot menu entry is ready)
@@ -259,6 +260,7 @@ would otherwise lose its slot after seven starts.
 | `scripts/48-camera-stack.sh` | inside the rootfs, root | libcamera 0.7.2 with the Pro1X sensors |
 | `scripts/49-apps.sh` | inside the rootfs, root | `pro1x-camera`, the Desktop applet (`pro1x-look`) |
 | `scripts/49-hidpi.sh` | inside the rootfs, root | Hildon at the N900's size on 2160x1080 (`tools/pro1x-hidpi`) |
+| `scripts/49-mobile-data.sh` | inside the rootfs, root | oFono rebuilt for mobile data over the IPA (`patches/fixes/ofono.patch`), `pro1x-modem-wait` instead of `pro1x-rmnet` |
 | `scripts/50-build-bootimg.sh` | build host | pack the Android boot image (v0, DTB appended) |
 | `scripts/55-deploy-rootfs.sh` | device, root | first deployment: shrink, stream, grow again (additive) |
 | `scripts/56-update-rootfs.sh` | device, root | updates as rsync delta (`--inplace`) |

@@ -1,0 +1,70 @@
+#!/sbin/openrc-run
+# Holds oFono back until the modem is there: its data network device
+# rmnet_ipa0 (the IPA driver makes it after its QMI handshake with the
+# booted modem) and its QMI services on QRTR. oFono's qrtrqmi driver looks
+# the services up once, when it enables the modem, and gives up without
+# DMS, UIM, WDS and NAS; WDA and DPM are what mobile data needs.
+#
+# At most 60 s, and it never fails: oFono starts in any case.
+#
+# Replaces pro1x-rmnet, which made rmnet_data0..3 for oFono: oFono 2.18's
+# rmnet module deletes every rmnet link it finds when it starts (those as
+# well), and the patched oFono (patches/fixes/ofono.patch,
+# scripts/49-mobile-data.sh) makes its own rmnet0..3 on rmnet_ipa0.
+
+description="Wait for the Pro1X modem (rmnet_ipa0, QMI services) before oFono"
+
+depend() {
+	use logger
+	after pro1x-rmtfs
+	before ofono
+}
+
+# to the console and the syslog (grep pro1x-modem-wait /var/log/syslog)
+say() {
+	logger -t pro1x-modem-wait "$*" 2> /dev/null
+}
+
+# qrtr-lookup <service> prints a header line, then one line per server
+has_service() {
+	[ "$(qrtr-lookup "$1" 2> /dev/null | wc -l)" -gt 1 ]
+}
+
+services_up() {
+	command -v qrtr-lookup > /dev/null 2>&1 || return 0
+	for s; do
+		has_service "$s" || return 1
+	done
+}
+
+start() {
+	ebegin "Waiting for the modem (rmnet_ipa0, QMI services)"
+	modprobe -q rmnet
+	# 2 DMS, 11 UIM, 1 WDS, 3 NAS: without them oFono has no modem
+	t=0
+	while [ "$t" -lt 60 ]; do
+		[ -e /sys/class/net/rmnet_ipa0 ] && services_up 2 11 1 3 && break
+		sleep 1
+		t=$((t + 1))
+	done
+	if [ "$t" -ge 60 ]; then
+		m="modem not complete after 60 s (rmnet_ipa0 or DMS/UIM/WDS/NAS missing)"
+		ewarn "$m"
+		say "$m"
+		eend 0
+		return 0
+	fi
+	# 26 WDA, 47 DPM (mobile data): a few seconds more at most
+	w=0
+	while [ "$w" -lt 5 ] && ! services_up 26 47; do
+		sleep 1
+		w=$((w + 1))
+	done
+	if ! services_up 26 47; then
+		ewarn "no WDA or DPM service: oFono may have no mobile data"
+		say "no WDA or DPM service: oFono may have no mobile data"
+	fi
+	einfo "modem up after $((t + w)) s"
+	say "modem up after $((t + w)) s"
+	eend 0
+}

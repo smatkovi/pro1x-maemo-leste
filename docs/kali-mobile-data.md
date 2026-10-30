@@ -313,20 +313,10 @@ Phosh shows the modem through ModemManager. Arch has no `qrtr-lookup`, so
 the ModemManager wait is a no-op there (the 4 s window stays a risk:
 `systemctl restart ModemManager` when `mmcli -L` is empty).
 
-**Leste** uses oFono 2.18 (`qrtrsoc`) and `pro1x-rmnet`, which creates
-`rmnet_data0..3` on `rmnet_ipa0` with `ip link add ... type rmnet mux_id N`
-(the README: oFono sees the modem; data never tried). Hypothesis from the
-sources, to check before relying on it: IPA 4.2 has checksum offload on
-both modem endpoints (`ipa_data-v4.2.c`), so the IPA expects a MAPv4
-checksum header after the QMAP header on uplink packets and appends a
-checksum trailer to downlink ones (`ipa_qmap_header_size()`,
-`ipa_endpoint.c`); rmnet handles both only with the link flags
-`ingress-map-cksumv4`/`egress-map-cksumv4` (`rmnet_map_data.c`), which
-iproute2 cannot set (only `mux_id`) and `pro1x-rmnet` does not. Without
-them every uplink packet loses 4 bytes and downlink aggregates are split
-wrongly. Whether oFono's qrtrsoc also opens the DPM port and sets the WDA
-data format is not checked. So Leste would need the links created with
-those flags (libqmi's `qmicli --link-add=...,flags=...`, or a few lines of
-netlink), plus a test of oFono's data context; or ModemManager +
-NetworkManager as on Kali, which Leste's connectivity stack (icd2) does not
-use. Not changed now.
+**Leste** keeps oFono (calls, SMS); its mobile data is prepared (not yet run on the phone) since
+2026-10-30 by a patched oFono that sets up this same IPA data path itself
+(DPM port, WDA data format, rmnet links with the MAPv4 checksum flags, as
+ModemManager does above): [leste-mobile-data.md](leste-mobile-data.md).
+The hypothesis that stood here (checksum flags missing on `pro1x-rmnet`'s
+`rmnet_data*` links, DPM and WDA not done by oFono's `qrtrsoc`) held in
+the sources, and oFono 2.18 even deleted those links when it started.
