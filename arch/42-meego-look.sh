@@ -123,11 +123,9 @@ for name in pro1x-events pro1x-volume-osd pro1x-fm; do
 	rm -rf "${B:?}/root/$name"
 	mkdir -p "$B/root/$name"
 done
-# (g_utime is utime on Linux, which wants <utime.h>; today's GCC refuses
-# the implicit declaration the page's source left to it)
-make -C $S/apps/pro1x-events PREFIX=/usr HAVE_CAL=1 CPPFLAGS="-include utime.h" \
+make -C $S/apps/pro1x-events PREFIX=/usr HAVE_CAL=1 \
 	> $S/pro1x-events.log 2>&1 &&
-make -C $S/apps/pro1x-events install PREFIX=/usr HAVE_CAL=1 CPPFLAGS="-include utime.h" \
+make -C $S/apps/pro1x-events install PREFIX=/usr HAVE_CAL=1 \
 	DESTDIR=$B/root/pro1x-events >> $S/pro1x-events.log 2>&1 ||
 	{ grep -m20 -E "error|Error" $S/pro1x-events.log; exit 1; }
 install -d $B/root/pro1x-volume-osd/usr/bin

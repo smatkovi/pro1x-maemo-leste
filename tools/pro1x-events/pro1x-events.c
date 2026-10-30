@@ -64,6 +64,7 @@
 #include <math.h>
 #include <string.h>
 #include <time.h>
+#include <utime.h>
 #include <glib/gstdio.h>
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
