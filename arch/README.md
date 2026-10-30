@@ -80,6 +80,23 @@ radio (its notes say how to install them in Arch).
 `arch/pc-chroot.sh` makes a chroot of Arch Linux ARM on the PC (qemu) for
 the same builds there.
 
+`43-packages.sh` makes pacman packages of everything the steps built, one
+per part (`OUT=/dir bash arch/43-packages.sh`, after 30 to 42; `CLEAN=1`
+removes each part's build tree once it is packaged): 30's as
+`harmattan-<part>` (with `libngf`, `ngfd`), 40's, 41's and 42's under
+their own names (Leste's GTK 2 as `gtk2-maemo`, a name Arch Linux ARM has
+as `<name>-maemo`), GConf and PyOtherSide from the AUR, 41's VTE 0.28
+(`vte-gtk2`), libical 3 and QtPositioning, and `pro1x-sessions` (the
+sessions' scripts and units). `arch/pkgbuild.py` writes each PKGBUILD:
+the files as Arch has them (merged `/usr`, no libtool archives or
+generated caches, nothing another package owns), the version, description
+and licence from the part's `debian/`, the dependencies from the
+libraries it links. Each package is installed into the image as it is
+made, so the later ones name it; installed together they need nothing
+but Arch Linux ARM's. arch-hildon-2026.10.30.1 has all of them, built on
+the PC; its notes say how to install them (one `pacman -U` of the lot,
+`--overwrite '*'` over an image the steps built).
+
 ## Btrfs and snapshots
 
 `15-btrfs.sh` (as root in Leste, the image not mounted) copies the ext4
