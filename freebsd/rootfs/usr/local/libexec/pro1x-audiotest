@@ -5,7 +5,7 @@
 # pro1x.test=audio):
 #   pcm    sound.ko and snd_pro1x.ko alone (no ADSP): /dev/dsp, the SMMU
 #          stream of the ADSP's buffers, the buffers' addresses; 2 s of
-#          playback and of recording through the driver's clock
+#          playback and 1 s of recording through the driver's clock
 #   adsp   pcm, then the ADSP (pd_mapper, pro1x-dsp start adsp), qcom_apr,
 #          qcom_lpass, pro1x-audiod without /dev/pro1x_pcm (-n): its
 #          status, the back ends' AFE ports up and down without a codec
@@ -64,11 +64,12 @@ if [ ! -c /dev/pro1x_pcm ]; then
 	echo "no /dev/pro1x_pcm: nothing more to test"
 	exit 0
 fi
-t "2 s of silence through the driver's clock"
-time dd if=/dev/zero of=/dev/dsp bs=7680 count=25 2>&1
-t "2 s recorded through the clock"
-time dd if=/dev/dsp of=/dev/null bs=3840 count=50 2>&1
-sysctl dev.pcm.0.pro1x hw.snd 2>&1 | head -20
+# 48 kHz, 16 bit (/dev/dsp's default is 8 kHz, 8 bit): pro1x-audioctl
+t "a 2 s tone through the driver's clock"
+pro1x-audioctl tone 2 440
+t "1 s recorded through the clock"
+pro1x-audioctl record 1
+sysctl dev.pcm.0.pro1x hw.snd.latency hw.snd.default_unit 2>&1
 [ "$step" = pcm ] && exit 0
 
 echo "--- the ADSP"
@@ -128,7 +129,7 @@ sysctl hw.qcom_apr
 
 echo "--- pro1x-audiod with sound(4): playback"
 start_daemon
-mixer vol=60 2>&1
+ctl volume 60
 ctl status
 t "tone: 1 kHz, -20 dBFS, 3 s"
 pro1x-audioctl tone 3 1000
