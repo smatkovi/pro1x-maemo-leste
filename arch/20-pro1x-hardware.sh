@@ -108,6 +108,8 @@ cp -a /usr/share/pro1x/hexagonfs "$MNT/usr/share/pro1x/"
 # (the units run them from /usr/bin, as in Kali)
 install -m 755 /usr/bin/pro1x-audio-init /usr/bin/pro1x-voice-call /usr/bin/pro1x-voicepcm "$MNT/usr/bin/"
 install -m 755 "$REPO/tools/pro1x-boot/pro1x-boot" "$MNT/usr/local/sbin/pro1x-boot"
+# the update path of this repository's packages (docs/updating.md)
+install -m 755 "$REPO/tools/pro1x-update/pro1x-update" "$MNT/usr/local/sbin/pro1x-update"
 # the clock across power off, its offset shared with the other systems
 install -m 755 /usr/local/sbin/pro1x-rtc "$REPO/rootfs-overlay/usr/local/sbin/pro1x-rtc-sync" \
 	"$MNT/usr/local/sbin/"

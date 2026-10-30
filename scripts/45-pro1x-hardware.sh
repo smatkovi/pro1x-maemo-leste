@@ -151,6 +151,8 @@ install -m 755 "$REPO/tools/pro1x-boot-trial/pro1x-boot-trial.openrc" /etc/init.
 rc-update add pro1x-boot-trial default
 # FreeBSD's writable ZFS pool in a file on userdata (freebsd/README.md)
 install -m 755 "$REPO/tools/pro1x-freebsd-pool/pro1x-freebsd-pool" /usr/local/sbin/
+# the update path of this repository's packages (docs/updating.md)
+install -m 755 "$REPO/tools/pro1x-update/pro1x-update" /usr/local/sbin/
 
 # --- MeeGo Harmattan (meego/) -----------------------------------------------
 # The boot menu entry "MeeGo Harmattan" starts this image without Leste's

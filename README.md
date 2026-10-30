@@ -7,6 +7,10 @@ Status 24.10.2026: **Maemo Leste boots from slot B**, Sailfish stays in slot A,
 and a boot menu in the initramfs chooses between the systems. How we got
 there, every boot image variant that was tested: [docs/HANDOFF.md](docs/HANDOFF.md).
 
+Bringing this repository's packages on the phone up to date, on Leste, Arch
+or FreeBSD: one command, `pro1x-update` (dry run; `--yes` installs), instead
+of collecting them from the separate releases: [docs/updating.md](docs/updating.md).
+
 | Hardware | State on Leste | How |
 |---|---|---|
 | Display, GPU (Adreno 610) | works, glamor/GLES on FD610 | Mesa 25 from daedalus-backports, `a630_sqe.fw` |
@@ -263,6 +267,8 @@ would otherwise lose its slot after seven starts.
 | `scripts/49-hidpi.sh` | inside the rootfs, root | Hildon at the N900's size on 2160x1080 (`tools/pro1x-hidpi`); also the parts with bug fixes in `patches/fixes/` (liblocation, location-ui, calendar-backend, conversations) |
 | `scripts/49-mobile-data.sh` | inside the rootfs, root | oFono rebuilt for mobile data over the IPA (`patches/fixes/ofono.patch`), `pro1x-modem-wait` instead of `pro1x-rmnet` |
 | `scripts/mkdeb-waydroid.sh` | inside the rootfs (or a Leste chroot), root | the `pro1x-waydroid` package: everything Waydroid needs on Leste before `apt install waydroid` ([docs/waydroid.md](docs/waydroid.md)) |
+| `tools/pro1x-update/pro1x-update` | device (Leste, Arch, FreeBSD), root | this repository's packages to their newest release from one manifest per system: dry run, SHA-256, installed -> new, `--yes` installs ([docs/updating.md](docs/updating.md)) |
+| `tools/release/mkmanifest.sh` | build host | the manifests `pro1x-update` reads, from all releases, uploaded to the release `pro1x-latest` (`--publish`) |
 | `scripts/50-build-bootimg.sh` | build host | pack the Android boot image (v0, DTB appended) |
 | `scripts/55-deploy-rootfs.sh` | device, root | first deployment: shrink, stream, grow again (additive) |
 | `scripts/56-update-rootfs.sh` | device, root | updates as rsync delta (`--inplace`) |

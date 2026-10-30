@@ -1,0 +1,608 @@
+#!/bin/sh
+# pro1x-update: brings the F(x)tec Pro1X's own packages on this system to
+# their newest release, from one manifest per system instead of the
+# separate releases (docs/updating.md). As root; without --yes it only
+# shows what it would do.
+#
+#   Maemo Leste  leste.manifest of the release pro1x-latest: the newest
+#                .deb of each package of all leste-* releases. Downloads
+#                those that are newer than the installed ones, checks their
+#                SHA-256, shows installed -> new and apt's plan, installs
+#                them with apt in one go (no service restarted), holds the
+#                +pro1x rebuilds of Leste's packages. Never upgrades the
+#                rest of the system.
+#   Arch Linux   arch.manifest: the same for the arch-hildon-* packages,
+#                installed by arch/42-meego-look.sh's PKGS mode (pacman -U,
+#                then the session's files)
+#   FreeBSD      the newest freebsd-hildon-* release (GitHub's API, else
+#                freebsd.manifest) into /usr/local/etc/pkg/repos/pro1x.conf,
+#                then pkg update -r pro1x and pkg upgrade -r pro1x
+#
+#   pro1x-update                 dry run: what would change
+#   pro1x-update --yes           do it
+#   --with GROUP[,GROUP]         Leste: also install the missing packages of
+#                                these groups (harmattan, waydroid,
+#                                mobile-data: the first oFono from this
+#                                repository, through 49-mobile-data.sh)
+#   --add PKG, --skip PKG        a package (shell pattern) in addition / not
+#   --allow-remove               Leste: let apt remove packages the update
+#                                conflicts with (shown by the dry run);
+#                                without it apt stops instead
+#   --sysupgrade                 Arch: pacman -Syu first
+#   --no-apt-update              Leste: no apt-get update before installing
+#   --manifest FILE|URL          another manifest (tests)
+#   --cache DIR                  where the packages go
+#                                (default /var/cache/pro1x-update)
+#   -v                           also list what is up to date
+#
+# Runs from a clone of the repository as well as installed (45-pro1x-
+# hardware.sh puts it into /usr/local/sbin). POSIX sh: dash on Leste,
+# FreeBSD's sh. PRO1X_OS=leste|arch|freebsd overrides the system's
+# detection, PRO1X_PKG_CONF the FreeBSD repository file (tests).
+set -eu
+set -f
+# output parsed below (pacman -Qo, apt) is in English
+export LC_ALL=C
+GH=${PRO1X_GH:-smatkovi/pro1x-maemo-leste}
+POINTER=${PRO1X_POINTER:-pro1x-latest}
+BASE=https://github.com/$GH/releases/download/$POINTER
+# the manifest format this reads
+FORMAT=1
+
+say() { printf '%s\n' "$*"; }
+log() { printf '>> %s\n' "$*"; }
+warn() { printf '!! %s\n' "$*" >&2; }
+die() {
+  warn "$*"
+  exit 1
+}
+usage() { sed -n '2,/^set -eu$/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
+
+YES=0 WITHS= ADDS= SKIPS= ALLOW_REMOVE=0 APT_UPDATE=1 SYSUPGRADE=0 VERBOSE=0
+MANIFEST= CACHE= OS=${PRO1X_OS:-}
+while [ $# -gt 0 ]; do
+  case $1 in
+  -y | --yes) YES=1 ;;
+  -n | --dry-run) YES=0 ;;
+  --with) WITHS="$WITHS $(echo "${2:?--with GROUP}" | tr , ' ')"; shift ;;
+  --with=*) WITHS="$WITHS $(echo "${1#*=}" | tr , ' ')" ;;
+  --add) ADDS="$ADDS ${2:?--add PKG}"; shift ;;
+  --add=*) ADDS="$ADDS ${1#*=}" ;;
+  --skip) SKIPS="$SKIPS ${2:?--skip PKG}"; shift ;;
+  --skip=*) SKIPS="$SKIPS ${1#*=}" ;;
+  --allow-remove) ALLOW_REMOVE=1 ;;
+  --no-apt-update) APT_UPDATE=0 ;;
+  --sysupgrade) SYSUPGRADE=1 ;;
+  --manifest) MANIFEST=${2:?--manifest FILE}; shift ;;
+  --manifest=*) MANIFEST=${1#*=} ;;
+  --cache) CACHE=${2:?--cache DIR}; shift ;;
+  --cache=*) CACHE=${1#*=} ;;
+  -v | --verbose) VERBOSE=1 ;;
+  -h | --help) usage; exit 0 ;;
+  *) usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [ -z "$OS" ]; then
+  if [ "$(uname -s)" = FreeBSD ]; then
+    OS=freebsd
+  elif [ -e /etc/arch-release ]; then
+    OS=arch
+  elif [ -e /etc/maemo_version ] && command -v apt-get > /dev/null 2>&1; then
+    OS=leste
+  else
+    die "neither Maemo Leste (/etc/maemo_version) nor Arch nor FreeBSD"
+  fi
+fi
+case $OS in leste | arch | freebsd) ;; *) die "PRO1X_OS: leste, arch or freebsd" ;; esac
+ROOT=0
+[ "$(id -u)" != 0 ] || ROOT=1
+[ "$YES" = 0 ] || [ "$ROOT" = 1 ] || die "--yes needs root"
+if [ -z "$CACHE" ]; then
+  if [ "$ROOT" = 1 ]; then CACHE=/var/cache/pro1x-update; else CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/pro1x-update; fi
+fi
+mkdir -p "$CACHE"
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/pro1x-update.XXXXXX")
+GUARD=
+cleanup() {
+  [ -z "$GUARD" ] || rm -f "$GUARD"
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
+
+# a shell pattern of the list (space-separated) matching $1
+matches() {
+  _n=$1
+  shift
+  for _p in $*; do
+    case $_n in $_p) return 0 ;; esac
+  done
+  return 1
+}
+
+sum256() {
+  if command -v sha256sum > /dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    sha256 -q "$1"
+  fi
+}
+
+# download URL FILE
+download() {
+  rm -f "$2.part"
+  if [ "$OS" = freebsd ] && command -v fetch > /dev/null 2>&1; then
+    fetch -q -o "$2.part" "$1" || { rm -f "$2.part"; return 1; }
+  elif command -v curl > /dev/null 2>&1; then
+    curl -fsSL --retry 3 -o "$2.part" "$1" || { rm -f "$2.part"; return 1; }
+  elif command -v wget > /dev/null 2>&1; then
+    wget -q -O "$2.part" "$1" || { rm -f "$2.part"; return 1; }
+  elif command -v python3 > /dev/null 2>&1; then
+    python3 -I -c 'import shutil, sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=60) as r, open(sys.argv[2], "wb") as f:
+    shutil.copyfileobj(r, f)' "$1" "$2.part" || { rm -f "$2.part"; return 1; }
+  else
+    die "no curl, wget or python3 to download with"
+  fi
+  mv "$2.part" "$2"
+}
+
+# fetch_checked URL FILE SHA256: FILE as the manifest has it (the cached one
+# if its SHA-256 is right)
+fetch_checked() {
+  if [ -f "$2" ] && [ "$(sum256 "$2")" = "$3" ]; then return 0; fi
+  download "$1" "$2" || die "could not download $1"
+  _s=$(sum256 "$2")
+  if [ "$_s" != "$3" ]; then
+    rm -f "$2"
+    die "${2##*/}: SHA-256 $_s, the manifest says $3"
+  fi
+}
+
+# The manifest of system $1 into $TMP/manifest
+load_manifest() {
+  M=$TMP/manifest
+  case $MANIFEST in
+  "") download "$BASE/$1.manifest" "$M" || die "could not download $BASE/$1.manifest" ;;
+  http://* | https://*) download "$MANIFEST" "$M" || die "could not download $MANIFEST" ;;
+  *) cp "$MANIFEST" "$M" ;;
+  esac
+  _sys=$(awk '$1 == "system" { print $2 }' "$M")
+  _fmt=$(awk '$1 == "format" { print $2 }' "$M")
+  [ "$_sys" = "$1" ] || die "the manifest is for '$_sys', not $1"
+  [ "${_fmt:-0}" -le "$FORMAT" ] || die "manifest format $_fmt, this pro1x-update reads $FORMAT: get the new one from $BASE/pro1x-update"
+  log "manifest of $(awk '$1 == "generated" { print $2 }' "$M"), commit $(awk '$1 == "commit" { print substr($2, 1, 7) }' "$M")"
+  _tool=$(awk '$1 == "tool" { print $2 }' "$M")
+  if [ -n "$_tool" ] && [ -f "$0" ] && [ "$(sum256 "$0")" != "$_tool" ]; then
+    say "   note: the release has another pro1x-update than this one ($BASE/pro1x-update)"
+  fi
+}
+
+# The repository files of a hook (files NAME SHA URL) unpacked; prints
+# their directory
+hook_files() {
+  _line=$(awk -v n="$1" '$1 == "files" && $2 == n { print $3, $4 }' "$M")
+  [ -n "$_line" ] || die "the manifest has no files $1"
+  fetch_checked "${_line#* }" "$CACHE/$1" "${_line%% *}"
+  rm -rf "$TMP/files-$1"
+  mkdir -p "$TMP/files-$1"
+  tar -xzf "$CACHE/$1" -C "$TMP/files-$1"
+  echo "$TMP/files-$1"
+}
+
+row() { printf '  %-36s %-30s %-30s %s\n' "$@"; }
+
+# --- Maemo Leste -------------------------------------------------------------
+leste() {
+  load_manifest leste
+  ARCH=$(dpkg --print-architecture)
+  P=$TMP/plan
+  : > "$P"
+  # pkg name version arch group policy hold sha256 size release url
+  awk '$1 == "pkg"' "$M" | while read -r _ name ver arch group policy hold sha size tag url; do
+    case $arch in all | "$ARCH") ;; *) continue ;; esac
+    st=$(dpkg-query -W -f='${Status}|${Version}' "$name" 2> /dev/null || true)
+    inst=
+    case $st in *" installed|"*) inst=${st#*|} ;; esac
+    with=0 add=0
+    ! matches "$group" $WITHS || with=1
+    ! matches "$name" $ADDS || add=1
+    hook=$(awk -v g="$group" '$1 == "hook" && $2 == g { print $3 ":" $4 }' "$M")
+    if matches "$name" $SKIPS; then
+      act=skip
+    elif [ -n "$inst" ]; then
+      if dpkg --compare-versions "$inst" lt "$ver"; then
+        act=upgrade
+        # the first of this repository's builds of it: through the hook
+        if [ "$policy" = switch ]; then
+          case $inst in
+          *+pro1x*) ;;
+          *) if [ "$with" = 1 ] || [ "$add" = 1 ]; then act=switch; else act=later; fi ;;
+          esac
+        fi
+      elif dpkg --compare-versions "$inst" eq "$ver"; then
+        act=current
+      else
+        act=newer
+      fi
+    elif [ "$policy" = always ] || [ "$add" = 1 ] ||
+      { [ "$with" = 1 ] && [ "$policy" != extra ]; }; then
+      act=install
+      [ "$policy" != switch ] || act=switch
+    else
+      act=absent
+    fi
+    [ "$act" != switch ] || [ -n "$hook" ] || act=install
+    echo "$name ${inst:--} $ver $act $group $hold $sha $url $arch $policy" >> "$P"
+  done
+  # a group with a switch goes through its hook as a whole
+  for g in $(awk '$4 == "switch" { print $5 }' "$P" | sort -u); do
+    awk -v g="$g" '$5 == g && ($4 == "upgrade" || $4 == "install") { $4 = "switch" } { print }' "$P" > "$P.new"
+    mv "$P.new" "$P"
+  done
+
+  say
+  row package installed new action
+  while read -r name inst ver act group hold sha url arch policy; do
+    h=
+    [ "$hold" != yes ] || h=", held"
+    case $act in
+    upgrade) row "$name" "$inst" "$ver" "upgrade$h" ;;
+    install) row "$name" - "$ver" "install$h" ;;
+    switch) row "$name" "$inst" "$ver" "install by $(awk -v g="$group" '$1 == "hook" && $2 == g { print $4 }' "$M")$h" ;;
+    later) row "$name" "$inst" "$ver" "kept: the archive's (--with $group)" ;;
+    newer) row "$name" "$inst" "$ver" "kept: newer installed" ;;
+    skip) row "$name" "$inst" "$ver" "kept (--skip)" ;;
+    current) [ "$VERBOSE" = 0 ] || row "$name" "$inst" "$ver" "up to date" ;;
+    absent) [ "$VERBOSE" = 0 ] || row "$name" - "$ver" "not installed" ;;
+    esac
+  done < "$P"
+  n=$(($(awk '$4 == "current"' "$P" | wc -l)))
+  [ "$VERBOSE" = 1 ] || [ "$n" = 0 ] || say "  ($((n)) up to date; -v lists them)"
+  n=$(($(awk '$4 == "absent" && $10 == "extra"' "$P" | wc -l)))
+  [ "$n" = 0 ] || say "  ($((n)) -dev, -dbgsym, -doc packages not installed: only updated where installed)"
+  awk '$4 == "absent" && $10 != "extra" { n[$5]++ } END { for (g in n) print g, n[g] }' "$P" | sort |
+    while read -r g n; do
+      case $g in
+      hildon) say "  $g: $n not installed, left out (installed only where the system has them)" ;;
+      *) say "  $g: $n not installed, left out (--with $g installs them)" ;;
+      esac
+    done
+
+  awk '$4 == "upgrade" || $4 == "install" || $4 == "switch" { print $1, $3, $8, $9, $7 }' "$P" > "$TMP/sel"
+  if [ ! -s "$TMP/sel" ]; then
+    say
+    log "nothing to install"
+    return 0
+  fi
+
+  # the packages, checked against the manifest and their own control data
+  say
+  log "downloading to $CACHE"
+  : > "$TMP/files"
+  while read -r name ver url arch sha; do
+    f=$CACHE/${name}_${ver#*:}_$arch.deb
+    fetch_checked "$url" "$f" "$sha"
+    got=$(dpkg-deb -f "$f" Package Version Architecture | tr '\n' ' ')
+    [ "$got" = "Package: $name Version: $ver Architecture: $arch " ] ||
+      die "${f##*/} is not $name $ver $arch: $got"
+    echo "$f" >> "$TMP/files"
+  done < "$TMP/sel"
+
+  NOREMOVE=--no-remove
+  [ "$ALLOW_REMOVE" = 0 ] || NOREMOVE=
+  # apt's plan for all of them at once
+  log "apt's plan (apt-get -s)"
+  ok=1
+  # shellcheck disable=SC2046
+  apt-get -s -q -o Debug::NoLocking=1 --allow-change-held-packages --no-install-recommends install \
+    $(cat "$TMP/files") > "$TMP/sim" 2>&1 || ok=0
+  awk '$1 == "Inst" || $1 == "Remv"' "$TMP/sim" | while read -r what name rest; do
+    if [ "$what" = Remv ]; then
+      say "   REMOVE $name $rest"
+    elif ! grep -q "^$name " "$TMP/sel"; then
+      say "   also from the archive: $name $rest"
+    fi
+  done
+  grep -E '^[0-9]+ upgraded, ' "$TMP/sim" | sed 's/^/   apt: /' || true
+  # what they recommend that stays out (no recommended packages)
+  for f in $(cat "$TMP/files"); do
+    dpkg-deb -f "$f" Recommends | tr ',' '\n' | sed 's/|.*//; s/(.*//; s/[[:space:]]//g' |
+      while read -r r; do
+        [ -n "$r" ] || continue
+        ! grep -q "^$r " "$TMP/sel" || continue
+        ! dpkg-query -W -f='${Status}' "$r" 2> /dev/null | grep -q ' installed$' || continue
+        echo "$r"
+      done
+  done | sort -u > "$TMP/rec"
+  [ ! -s "$TMP/rec" ] || say "   recommended, not installed (left out): $(tr '\n' ' ' < "$TMP/rec")"
+  if [ "$ok" = 0 ]; then
+    grep -E '^(E:|W:| )' "$TMP/sim" | sed 's/^/   /' >&2
+    die "apt cannot install these as they are (above)"
+  fi
+  if grep -q '^Remv ' "$TMP/sim" && [ "$ALLOW_REMOVE" = 0 ]; then
+    warn "apt would remove the packages marked REMOVE: with --allow-remove it may, without it stops"
+  fi
+  n=$(wc -l < "$TMP/sel")
+  if [ "$YES" = 0 ]; then
+    say
+    say "Dry run: $((n)) packages to install. pro1x-update --yes (as root) installs them."
+    return 0
+  fi
+
+  # --- apply ---
+  mkdir -p /var/lib/pro1x-update
+  stamp=$(date +%Y%m%d-%H%M%S)
+  awk '$4 == "upgrade" || $4 == "install" || $4 == "switch" { print $1, $2 }' "$P" > "/var/lib/pro1x-update/$stamp.before"
+  log "the versions before: /var/lib/pro1x-update/$stamp.before"
+  if [ "$APT_UPDATE" = 1 ]; then
+    apt-get update -q || warn "apt-get update had errors: going on with the lists it got"
+  fi
+  # no service (re)started by the packages: a restarted mce leaves the
+  # display off, a restarted oFono drops a call (as 49-hidpi.sh does)
+  if [ ! -e /usr/sbin/policy-rc.d ]; then
+    printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+    chmod 755 /usr/sbin/policy-rc.d
+    GUARD=/usr/sbin/policy-rc.d
+  fi
+  export DEBIAN_FRONTEND=noninteractive
+  # exactly these and what they depend on: no recommended packages (the
+  # N9's Phone and Messages recommend ModemManager, which would take the
+  # modem from oFono); local changes of configuration files kept
+  APT="apt-get install -y -q --allow-change-held-packages --no-install-recommends $NOREMOVE -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+  plain=$(awk '$4 == "upgrade" || $4 == "install" { print $1 }' "$P")
+  if [ -n "$plain" ]; then
+    log "apt-get install ($(echo $plain | wc -w) packages)"
+    # shellcheck disable=SC2046
+    $APT $(for name in $plain; do grep "/${name}_" "$TMP/files"; done)
+  fi
+  # the groups whose first switch a script of the repository does (with
+  # their packages as DEBS), as their releases say
+  for g in $(awk '$4 == "switch" { print $5 }' "$P" | sort -u); do
+    h=$(awk -v g="$g" '$1 == "hook" && $2 == g { print $3, $4 }' "$M")
+    dir=$(hook_files "${h%% *}")
+    rm -rf "$TMP/debs-$g"
+    mkdir -p "$TMP/debs-$g"
+    for name in $(awk -v g="$g" '$4 == "switch" && $5 == g { print $1 }' "$P"); do
+      cp "$(grep "/${name}_" "$TMP/files")" "$TMP/debs-$g/"
+    done
+    log "$g: ${h#* } (DEBS=$TMP/debs-$g)"
+    REPO=$dir DEBS=$TMP/debs-$g bash "$dir/${h#* }"
+    # what the script did not install (it takes the ones it needs)
+    rest=
+    for name in $(awk -v g="$g" '$4 == "switch" && $5 == g { print $1 }' "$P"); do
+      v=$(awk -v n="$name" '$1 == n { print $3 }' "$P")
+      cur=$(dpkg-query -W -f='${Version}' "$name" 2> /dev/null || true)
+      [ "$cur" = "$v" ] || rest="$rest $(grep "/${name}_" "$TMP/files")"
+    done
+    if [ -n "$rest" ]; then
+      log "$g: apt-get install the rest"
+      # shellcheck disable=SC2086
+      $APT $rest
+    fi
+  done
+  # this repository's rebuilds of Leste's packages held, so that an apt
+  # upgrade does not put the archive's back
+  held=$(apt-mark showhold)
+  hold=
+  for name in $(awk '$1 == "pkg" && $7 == "yes" { print $2 }' "$M"); do
+    cur=$(dpkg-query -W -f='${Status}|${Version}' "$name" 2> /dev/null || true)
+    case $cur in *" installed|"*+pro1x*) ;; *) continue ;; esac
+    echo "$held" | grep -qx "$name" || hold="$hold $name"
+  done
+  if [ -n "$hold" ]; then
+    # shellcheck disable=SC2086
+    apt-mark hold $hold
+  fi
+  say
+  log "installed now"
+  while read -r name ver url arch sha; do
+    cur=$(dpkg-query -W -f='${Version}' "$name" 2> /dev/null || echo -)
+    mark=
+    [ "$cur" = "$ver" ] || mark="   (wanted $ver)"
+    row "$name" "$cur" "" "$mark"
+  done < "$TMP/sel"
+  say
+  say "No service was restarted: reboot the phone to use the new packages (Hildon, mce, oFono)."
+}
+
+# --- Arch Linux --------------------------------------------------------------
+arch() {
+  load_manifest arch
+  ARCH=$(uname -m)
+  P=$TMP/plan
+  : > "$P"
+  awk '$1 == "pkg"' "$M" | while read -r _ name ver arch group policy hold sha size tag url; do
+    case $arch in any | "$ARCH") ;; *) continue ;; esac
+    inst=$(pacman -Q "$name" 2> /dev/null | awk '{ print $2 }' || true)
+    if matches "$name" $SKIPS; then
+      act=skip
+    elif [ -n "$inst" ]; then
+      c=$(vercmp "$inst" "$ver")
+      if [ "$c" -lt 0 ]; then act=upgrade; elif [ "$c" = 0 ]; then act=current; else act=newer; fi
+    elif [ "$policy" = always ] || matches "$name" $ADDS || matches "$group" $WITHS; then
+      act=install
+    else
+      act=absent
+    fi
+    echo "$name ${inst:--} $ver $act $group $sha $url" >> "$P"
+  done
+  say
+  row package installed new action
+  while read -r name inst ver act group sha url; do
+    case $act in
+    upgrade | install) row "$name" "$inst" "$ver" "$act" ;;
+    newer) row "$name" "$inst" "$ver" "kept: newer installed" ;;
+    skip) row "$name" "$inst" "$ver" "kept (--skip)" ;;
+    *) [ "$VERBOSE" = 0 ] || row "$name" "$inst" "$ver" "$act" ;;
+    esac
+  done < "$P"
+  awk '$4 == "upgrade" || $4 == "install"' "$P" > "$TMP/sel"
+  if [ ! -s "$TMP/sel" ]; then
+    say
+    log "nothing to install"
+    return 0
+  fi
+  say
+  log "downloading to $CACHE"
+  rm -rf "$TMP/pkgs"
+  mkdir -p "$TMP/pkgs"
+  while read -r name inst ver act group sha url; do
+    f=$CACHE/$(echo "${url##*/}" | sed 's/%2B/+/g')
+    fetch_checked "$url" "$f" "$sha"
+    got=$(bsdtar -xOf "$f" .PKGINFO | sed -n 's/^pkgname = //p; s/^pkgver = //p' | tr '\n' ' ')
+    [ "$got" = "$name $ver " ] || die "${f##*/} is not $name $ver: $got"
+    cp "$f" "$TMP/pkgs/"
+  done < "$TMP/sel"
+  # The files they bring that are there already: those of steps 40/41
+  # (nobody's) 42 overwrites; one of another package would be overwritten
+  # too (--overwrite '*'), so that stops the update
+  log "files already there"
+  : > "$TMP/theirs"
+  nobody=0
+  for f in $(ls "$TMP/pkgs"); do
+    name=$(bsdtar -xOf "$TMP/pkgs/$f" .PKGINFO | sed -n 's/^pkgname = //p')
+    bsdtar -tf "$TMP/pkgs/$f" | grep -v -e '^\.' -e '/$' | while read -r p; do
+      [ -e "/$p" ] || [ -L "/$p" ] || continue
+      [ ! -d "/$p" ] || [ -L "/$p" ] || continue
+      echo "/$p"
+    done > "$TMP/there"
+    [ -s "$TMP/there" ] || continue
+    # shellcheck disable=SC2046
+    pacman -Qo $(cat "$TMP/there") 2> /dev/null | sed -n 's/^\(.*\) is owned by \([^ ]*\) .*/\1 \2/p' > "$TMP/owned" || true
+    awk -v n="$name" '$2 != n { print "   " $1 " belongs to " $2 }' "$TMP/owned" >> "$TMP/theirs"
+    nobody=$((nobody + $(wc -l < "$TMP/there") - $(wc -l < "$TMP/owned")))
+  done
+  say "   $nobody files without a package (steps 40/41): pacman takes them over"
+  if [ -s "$TMP/theirs" ]; then
+    cat "$TMP/theirs"
+    die "files of other packages above: not overwritten, nothing installed"
+  fi
+  log "pacman's plan (pacman -U --print)"
+  # shellcheck disable=SC2046
+  pacman -U --print --print-format '   %n %v' $(find "$TMP/pkgs" -name '*.pkg.tar.*' | sort) 2>&1 || true
+  n=$(wc -l < "$TMP/sel")
+  if [ "$YES" = 0 ]; then
+    say
+    say "Dry run: $((n)) packages to install. pro1x-update --yes (as root) installs them."
+    return 0
+  fi
+  if [ "$SYSUPGRADE" = 1 ]; then
+    log "pacman -Syu"
+    pacman -Syu --noconfirm
+  fi
+  h=$(awk '$1 == "hook" { print $3, $4 }' "$M")
+  dir=$(hook_files "${h%% *}")
+  log "${h#* } (PKGS=$TMP/pkgs MNT=/)"
+  PKGS=$TMP/pkgs MNT=/ bash "$dir/${h#* }"
+  say
+  log "installed now"
+  while read -r name inst ver act group sha url; do
+    row "$name" "$(pacman -Q "$name" 2> /dev/null | awk '{ print $2 }')" "" ""
+  done < "$TMP/sel"
+}
+
+# --- FreeBSD -----------------------------------------------------------------
+freebsd() {
+  CONF=${PRO1X_PKG_CONF:-/usr/local/etc/pkg/repos/pro1x.conf}
+  command -v pkg > /dev/null 2>&1 || die "no pkg"
+  # the newest freebsd-hildon-* release: from GitHub's API (pre-releases
+  # included), checked to be a repository; else the manifest's
+  tag=
+  if download "https://api.github.com/repos/$GH/releases?per_page=100" "$TMP/releases.json"; then
+    tag=$(grep -o '"tag_name": *"freebsd-hildon-[0-9.]*"' "$TMP/releases.json" |
+      sed 's/.*"\(freebsd-hildon-[0-9.]*\)"$/\1/; s/^freebsd-hildon-//' |
+      sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1)
+    [ -z "$tag" ] || tag=freebsd-hildon-$tag
+    if [ -n "$tag" ]; then
+      if download "https://api.github.com/repos/$GH/releases/tags/$tag" "$TMP/release.json" &&
+        grep -q '"name": *"packagesite.pkg"' "$TMP/release.json" &&
+        grep -q '"name": *"meta.conf"' "$TMP/release.json"; then
+        log "newest release (GitHub's API): $tag"
+      else
+        warn "$tag is not a whole repository yet (still uploading?)"
+        tag=
+      fi
+    fi
+  else
+    warn "GitHub's API did not answer"
+  fi
+  if [ -z "$tag" ]; then
+    load_manifest freebsd
+    tag=$(awk '$1 == "repo" { print $2 }' "$M")
+    [ -n "$tag" ] || die "no release found"
+    log "newest release (freebsd.manifest): $tag"
+  fi
+  new=https://github.com/$GH/releases/download/$tag
+  cur=
+  [ ! -f "$CONF" ] || cur=$(sed -n 's/^[[:space:]]*url[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONF" | head -1)
+  say
+  if [ "$cur" = "$new" ]; then
+    say "  $CONF: already $tag"
+  else
+    say "  $CONF: ${cur:-(none)}"
+    say "    -> $new"
+  fi
+  # what changes, from the release's catalogue against what is installed
+  download "$new/packagesite.pkg" "$TMP/packagesite.pkg" || die "could not download $new/packagesite.pkg"
+  tar -xOf "$TMP/packagesite.pkg" packagesite.yaml |
+    awk '{ n = v = ""
+      if (match($0, /"name":"[^"]*"/)) n = substr($0, RSTART + 8, RLENGTH - 9)
+      if (match($0, /"version":"[^"]*"/)) v = substr($0, RSTART + 11, RLENGTH - 12)
+      if (n != "" && v != "") print n, v }' | sort > "$TMP/site"
+  pkg query -a '%n %v %R' | sort > "$TMP/installed"
+  say
+  row package installed new action
+  up=0
+  while read -r name inst repo; do
+    v=$(awk -v n="$name" '$1 == n { print $2 }' "$TMP/site")
+    [ -n "$v" ] || continue
+    c=$(pkg version -t "$inst" "$v")
+    case $c in
+    "<") row "$name" "$inst ($repo)" "$v" upgrade; up=$((up + 1)) ;;
+    ">") row "$name" "$inst ($repo)" "$v" "kept: newer installed" ;;
+    *) [ "$VERBOSE" = 0 ] || row "$name" "$inst ($repo)" "$v" "up to date" ;;
+    esac
+  done < "$TMP/installed"
+  say "  ($up of the installed packages are older than the release's; pkg upgrade also takes new dependencies)"
+  if [ "$YES" = 0 ]; then
+    say
+    say "Dry run. pro1x-update --yes (as root) points pro1x.conf at $tag and runs pkg update -r pro1x, pkg upgrade -r pro1x."
+    return 0
+  fi
+  mkdir -p "$(dirname "$CONF")"
+  before="(none before)"
+  if [ -f "$CONF" ]; then
+    before="before: $CONF.before-pro1x-update"
+    cp -p "$CONF" "$CONF.before-pro1x-update"
+    if grep -q '^[[:space:]]*url[[:space:]]*:' "$CONF"; then
+      sed "s|^\([[:space:]]*url[[:space:]]*:[[:space:]]*\)\"[^\"]*\"|\1\"$new\"|" "$CONF" > "$TMP/conf"
+    else
+      die "$CONF has no url line"
+    fi
+  else
+    printf 'pro1x: {\n  url: "%s",\n  signature_type: "none",\n  priority: 10\n}\n' "$new" > "$TMP/conf"
+  fi
+  cat "$TMP/conf" > "$CONF"
+  log "pkg update -f -r pro1x"
+  if ! pkg update -f -r pro1x; then
+    if [ -f "$CONF.before-pro1x-update" ]; then
+      cat "$CONF.before-pro1x-update" > "$CONF"
+    else
+      rm -f "$CONF"
+    fi
+    die "pkg update failed: $CONF as before"
+  fi
+  log "pkg upgrade -y -r pro1x"
+  pkg upgrade -y -r pro1x
+  say
+  say "$CONF now points at $tag ($before)."
+}
+
+case $OS in
+leste) leste ;;
+arch) arch ;;
+freebsd) freebsd ;;
+esac
