@@ -84,7 +84,10 @@ WIFI_MODULES="$WIFI_MODULES wlan_ccmp wlan_gcmp athk_common ath10k_snoc"
 # GENI UART class, new files only; APR for the audio (qcom_apr, dsp/);
 # the LPASS register windows for the FM sound's programmer (qcom_lpass)
 cp -a "$REPO/freebsd/fm/sys/." "$SRC/sys/"
-MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass}
+# The cameras (freebsd/camera/README.md): the CCI's buses, the camera
+# clocks, pins and power domain, /dev/camss (qcom_camss), new files only
+cp -a "$REPO/freebsd/camera/sys/." "$SRC/sys/"
+MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
 	buildkernel)
@@ -123,6 +126,10 @@ for t in "$REPO"/freebsd/fm/tools/*/; do
 	    -fuse-ld=lld -O2 -Wall -I"$REPO/freebsd/dsp/sys/arm64/qualcomm/dsp" \
 	    -o "$OUT/dsp-tools/$(basename "$t")" "$t"*.c
 done
+# The cameras' tool (freebsd/camera/tools/pro1x-cam)
+clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" \
+    -fuse-ld=lld -O2 -Wall -I"$REPO/freebsd/camera/sys/arm64/qualcomm/camss" \
+    -o "$OUT/dsp-tools/pro1x-cam" "$REPO"/freebsd/camera/tools/pro1x-cam/*.c -lz -lm
 # and the test of the QRTR sockets (freebsd/dsp/test)
 clang --target=aarch64-unknown-freebsd15.0 --sysroot="$BASEROOT" -fuse-ld=lld \
     -O2 -Wall -I"$REPO/freebsd/dsp/sys/arm64/qualcomm/dsp" \

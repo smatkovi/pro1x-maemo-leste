@@ -1,0 +1,121 @@
+#!/bin/sh
+# pro1x-camtest [STEP]: the cameras' device runs (freebsd/camera/README.md),
+# each layer after the one below it, up to STEP (kernel environment
+# pro1x.cam, set in the boot menu's freebsd/cmdline with pro1x.test=cam):
+#   id     qcom_camss.ko: the camera power domain, clocks and pins, the CCI
+#          (its two buses as /dev/iicN), /dev/camss0 with what the device
+#          tree says about the cameras; then each camera powered up (PM8008
+#          LDOs and PCA9534 pins over the keyboard's I2C bus, MCLK, reset),
+#          its chip ID read over the CCI (IMX582 0x0582, S5K4H7 0x487b),
+#          the rear lens (DW9800) answering; powered down
+#   raw    id, then raw frames (stage 2): CSIPHY, CSID, the TFE's RDI write
+#          master into memory; frame counts, errors, levels; one frame kept
+#   jpeg   raw, then a picture (stage 3): raw -> debayer -> JPEG, autofocus
+#          on the rear camera
+# pro1x.cam_sensor=rear|front (raw, jpeg: one camera; default both, one
+# after the other), pro1x.cam_debug=1 (every step), pro1x.cam_opts (more
+# options for pro1x-cam). Everything goes to the console, which the RAM
+# console keeps for Linux after the next boot; the pictures go to
+# /dev/pro1xshot (a tar archive, at most 3 MiB, behind the RAM console:
+# Leste's freebsd/camera/tools/pro1x-camfetch gets it) and, with the
+# writable pool, to /var/db/pro1x-cam in full size. From userdata (next to
+# the kernel) first: a newer copy of this script and pro1x-cam in
+# freebsd/camera/, the module in freebsd/modules, so later fixes need no
+# new image.
+step=${1:-$(kenv -q pro1x.cam)}
+step=${step:-id}
+host=/dev/pro1x-host/freebsd
+if [ -f $host/camera/pro1x-camtest ] && [ "${PRO1X_CAMTEST_HOST:-}" != 1 ]; then
+	echo "=== the newer pro1x-camtest from $host/camera"
+	PRO1X_CAMTEST_HOST=1 exec sh $host/camera/pro1x-camtest "$step"
+fi
+# rc's PATH has no /usr/local
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+[ -d $host/camera ] && PATH=$host/camera:$PATH
+export PATH
+echo "=== camera test up to: $step"
+if [ -d $host/modules ]; then
+	kldconfig -i $host/modules
+	echo "modules from $host/modules first"
+fi
+v=
+[ "$(kenv -q pro1x.cam_debug)" = 1 ] && v=-v
+opts=$(kenv -q pro1x.cam_opts)
+sensors=$(kenv -q pro1x.cam_sensor)
+sensors=${sensors:-rear front}
+out=/tmp/pro1x-cam
+rm -rf $out
+mkdir -p $out
+
+echo "--- qcom_camss"
+echo "the camera pins' levels before (gpioctl)"
+for p in 20 21 22 23 26 27 29 30 66; do
+	echo "  gpio$p: $(gpioctl -f /dev/gpioc0 $p 2>&1)"
+done
+kldload qcom_camss && echo "qcom_camss loaded"
+kldstat | grep -E "camss"
+dmesg | grep -E "camss|qcom_cci|qcom_ccim|^iic[0-9]|^iicbus[0-9]" | tail -60
+sysctl dev.qcom_cci 2>&1
+ls -la /dev/camss0 /dev/iic* 2>&1
+sysctl dev.iic dev.iicbus 2>/dev/null | grep "%parent"
+sysctl -n dev.qcom_camss.0.gcc 2>&1 | grep -E "GDSC|gpll|cci|mclk|top_ahb|camera_ahb|ref [1-9]"
+if [ ! -c /dev/camss0 ]; then
+	echo "!! no /dev/camss0: nothing more to try"
+	exit 1
+fi
+echo "--- what the device tree says"
+pro1x-cam info 2>&1
+
+echo "--- id: power up, chip IDs over the CCI, power down"
+pro1x-cam $v id 2>&1
+echo "pro1x-cam id: $?"
+sysctl dev.qcom_cci.0.xfers dev.qcom_cci.0.nacks dev.qcom_cci.0.errors \
+    dev.qcom_cci.0.timeouts 2>&1
+dmesg | grep -E "camss_gcc|camss_tlmm" | tail -30
+[ "$step" = id ] && exit 0
+
+keep() {
+	# the pictures for Linux: the smallest first, as many as fit in
+	# /dev/pro1xshot (3 MiB with tar's headers and blocks)
+	ls -la $out
+	files=
+	total=10240
+	for f in $(cd $out && ls -S -r); do
+		n=$(( ($(stat -f %z $out/$f) + 511) / 512 * 512 + 512 ))
+		[ $((total + n)) -le 3100000 ] || continue
+		files="$files $f"
+		total=$((total + n))
+	done
+	if [ -n "$files" ] && [ -c /dev/pro1xshot ] &&
+	    (cd $out && tar -cf - $files) > /dev/pro1xshot; then
+		echo "kept in /dev/pro1xshot (tar, about $total bytes):$files"
+	fi
+	# the writable pool: everything, full size
+	if [ "$(kenv -q pro1x.rootrw)" = 1 ]; then
+		d=/var/db/pro1x-cam/$(date +%Y%m%d-%H%M%S)
+		mkdir -p $d && cp $out/* $d/ && echo "full size in $d"
+	fi
+}
+
+echo "--- raw: frames into memory"
+for s in $sensors; do
+	pro1x-cam $v $opts raw -o $out/$s $s 2>&1
+	echo "pro1x-cam raw $s: $?"
+done
+sysctl dev.qcom_camss.0 2>&1 | grep -v "\.gcc"
+dmesg | grep -E "camss" | tail -40
+if [ "$step" = raw ]; then
+	keep
+	exit 0
+fi
+
+echo "--- jpeg: pictures"
+for s in $sensors; do
+	af=
+	[ $s = rear ] && af=-a
+	pro1x-cam $v $opts shot $af -o $out/$s.jpg $s 2>&1
+	echo "pro1x-cam shot $s: $?"
+done
+dmesg | grep -E "camss" | tail -20
+keep
+exit 0

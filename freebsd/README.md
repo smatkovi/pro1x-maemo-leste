@@ -206,7 +206,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | audio | no: the codecs sit behind the ADSP (APR, LPASS macros, SoundWire); only APR as `/dev/apr` so far (`dsp/`) |
 | FM radio | built, untested on the phone: the Bluetooth UART (`qcom_geni_uart`), the chip and its receiver from user space (`pro1x-fmd`), the app; no sound (`fm/README.md`) |
 | sensors, step counter | built, untested on the phone: the DSP stack (`dsp/`), `pro1x-steps`, `pro1x-proximity` (the proximity sensor on D-Bus only while the stand-by screen watches it) |
-| cameras | no: CAMSS and the sensors' CCI, none in FreeBSD |
+| cameras | built, untested on the phone: `qcom_camss.ko` (the CCI as iicbus buses, the camera clocks, pins and power domain, `/dev/camss0`), `pro1x-cam` (power, chip IDs; `camera/README.md`) |
 
 ## Files
 
@@ -247,6 +247,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `pkgfetch.py`, `mkspec.py` | packages with dependencies, checked; the image's owners and modes |
 | `hildon/` | Leste's Hildon desktop cross-compiled for FreeBSD |
 | `fm/` | the FM radio: the Bluetooth UART, the WCN3950's receiver, its tests (`fm/README.md`) |
+| `camera/` | the cameras: CCI, clocks, pins, CAMSS, `pro1x-cam`, its tests (`camera/README.md`) |
 
 The root filesystem is the release's `/rescue` (one static binary for sh,
 init, mount, ifconfig...) from `base.txz`, built into the kernel

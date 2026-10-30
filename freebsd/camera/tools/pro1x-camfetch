@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""pro1x-camfetch: on Leste (as root), after a FreeBSD camera run, fetch
+what FreeBSD kept in /dev/pro1xshot: the spare splash memory at 0x5cc00000,
+"PRO1X-SHOT\\n", the length (32 bits little endian at offset 12), the data
+from offset 16 (freebsd/patches/0014). The camera test (pro1x-camtest)
+puts a tar archive there: the pictures, raw frames, their statistics.
+
+  pro1x-camfetch [-o DIR] [--raw FILE]
+
+/dev/mem is read with mmap in aligned 8-byte words (read() fails there,
+freebsd/README.md). Optionally (--png) every .raw10 frame in the archive is
+turned into a 16-bit grey PNG (pure Python, slow but needs nothing).
+"""
+import argparse
+import io
+import mmap
+import os
+import struct
+import sys
+import tarfile
+import zlib
+
+PA = 0x5cc00000
+SIZE = 3 * 1024 * 1024 + 16
+MAGIC = b'PRO1X-SHOT\n'
+
+
+def read_shot():
+    fd = os.open('/dev/mem', os.O_RDONLY | os.O_SYNC)
+    try:
+        mm = mmap.mmap(fd, SIZE, mmap.MAP_SHARED, mmap.PROT_READ, offset=PA)
+    finally:
+        os.close(fd)
+    # 8 bytes at a time, as the RAM console reader does: the uncached
+    # mapping of the no-map memory takes only aligned accesses
+    hdr = b''.join(mm[i:i + 8] for i in range(0, 16, 8))
+    if not hdr.startswith(MAGIC):
+        sys.exit('no PRO1X-SHOT header at %#x (%r)' % (PA, hdr))
+    n = struct.unpack_from('<I', hdr, 12)[0]
+    if n > SIZE - 16:
+        sys.exit('length %d too large' % n)
+    out = bytearray()
+    for off in range(16, 16 + n, 8):
+        out += mm[off:off + 8]
+    mm.close()
+    return bytes(out[:n])
+
+
+def png16(path, w, h, px):
+    raw = bytearray()
+    for y in range(h):
+        raw.append(0)
+        for x in range(w):
+            raw += struct.pack('>H', px[y * w + x] << 6)
+    def chunk(t, d):
+        c = struct.pack('>I', len(d)) + t + d
+        return c + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+    with open(path, 'wb') as f:
+        f.write(b'\x89PNG\r\n\x1a\n')
+        f.write(chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 16, 0, 0, 0, 0)))
+        f.write(chunk(b'IDAT', zlib.compress(bytes(raw), 6)))
+        f.write(chunk(b'IEND', b''))
+
+
+def unpack_raw10(data, w, h, stride):
+    px = [0] * (w * h)
+    for y in range(h):
+        line = data[y * stride:(y + 1) * stride]
+        for x in range(0, w, 4):
+            b = line[x * 5 // 4:x * 5 // 4 + 5]
+            if len(b) < 5:
+                break
+            for i in range(4):
+                if x + i < w:
+                    px[y * w + x + i] = (b[i] << 2) | ((b[4] >> (2 * i)) & 3)
+    return px
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('-o', default='.', help='directory for the files')
+    ap.add_argument('--raw', help='write the shot as it is to this file')
+    ap.add_argument('--png', action='store_true',
+                    help='.raw10 frames also as 16-bit grey PNG')
+    a = ap.parse_args()
+    data = read_shot()
+    print('shot: %d bytes' % len(data))
+    if a.raw:
+        with open(a.raw, 'wb') as f:
+            f.write(data)
+    os.makedirs(a.o, exist_ok=True)
+    try:
+        t = tarfile.open(fileobj=io.BytesIO(data), mode='r:')
+    except tarfile.TarError as e:
+        sys.exit('not a tar archive (%s); --raw keeps it' % e)
+    for m in t.getmembers():
+        if not m.isfile() or '/' in m.name or m.name.startswith('.'):
+            continue
+        with open(os.path.join(a.o, m.name), 'wb') as f:
+            f.write(t.extractfile(m).read())
+        print('  %s (%d bytes)' % (m.name, m.size))
+        if a.png and m.name.endswith('.raw10'):
+            # <name>.raw10 with <name>.txt: "width W height H stride S"
+            info = os.path.join(a.o, m.name[:-6] + '.txt')
+            if os.path.exists(info):
+                kv = open(info).read().split()
+                d = dict(zip(kv[::2], kv[1::2]))
+                w, h, s = int(d['width']), int(d['height']), int(d['stride'])
+                raw = open(os.path.join(a.o, m.name), 'rb').read()
+                png16(os.path.join(a.o, m.name[:-6] + '-raw.png'), w, h,
+                      unpack_raw10(raw, w, h, s))
+                print('  %s-raw.png' % m.name[:-6])
+
+
+if __name__ == '__main__':
+    main()
