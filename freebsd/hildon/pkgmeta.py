@@ -477,6 +477,9 @@ REVISION = {
     # 2026-10-30: the lock in /var/run (0003), location-ui's dialogs asked
     # when it runs, without MCE (0004), the dialogs' answers (0005, 0006)
     'liblocation': 1,
+    # 2026-10-30: asks for the headphones (their cable is the antenna) when
+    # pro1x-audiod reports none plugged in
+    'pro1x-fm': 1,
 }
 
 # Maemo 5's sounds as Leste's archive has them: Nokia's (debian/copyright:
