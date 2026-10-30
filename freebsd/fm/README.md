@@ -312,11 +312,15 @@ register sequences that can go into `pro1x-fmaudio` through the windows
 phone has shown that the bus and the AFE come up (3a, 3b). Two things
 make it cheaper once the phone is back: Linux on the same phone plays to
 the headphones (`docs/audio.md`), and its kernel has tracepoints
-(`CONFIG_TRACING`): `test/leste-hph-trace.sh`, run once under Leste,
-records every regmap write of the RX/TX/VA macros and the WCD9370 and the
-DAPM power sequence of one headphone playback — the exact register
-sequence 3c has to repeat (the SoundWire masters' own registers are
-`writel`, not regmap; they come from `qcom.c`).
+(`CONFIG_TRACING`): `test/leste-hph-trace.sh` (now a link to
+`../audio/test/leste-audio-trace.sh`, the trace of the whole sound stack,
+`../audio/README.md`), run once under Leste, records every regmap write
+of the RX/TX/VA macros, the WCD9370 and the AW87339s, the DAPM power
+sequence, the ADSP's clocks and the APR packets' order of a headphone,
+loudspeaker, earpiece and microphone run, with a snapshot of all their
+registers (the SoundWire masters' too) while the sound runs — the exact
+register sequence 3c has to repeat. `../audio/tools/trace2seq.py` turns
+it into the replay sequences that 3c and FreeBSD's sound share.
 
 ## Stage 4: the app and the sound
 
@@ -514,7 +518,7 @@ same (the stage 4 check is then left out, its `off` would end it).
 | `tools/pro1x-fmaudio/pro1x-fmaudio.c`, `mmio.c`, `fmaudio.h` | the steps, the QMI client, the windows, the daemon |
 | `test/test_fmaudio.c` | its host test (simulated NGD, manager, chip, ADSP) |
 | `test/fakeaudio.sh` | a stand-in for pro1x-fmaudio in `run.sh` |
-| `test/leste-hph-trace.sh` | for 3c: Linux's register sequence of one headphone playback, recorded under Leste |
+| `test/leste-hph-trace.sh` | for 3c: a link to `../audio/test/leste-audio-trace.sh` (Linux's register sequences of the sound paths, recorded under Leste) |
 | `../rootfs/usr/local/libexec/pro1x-fmtest`, `../rootfs/etc/rc.local` | the device runs |
 | `../rootfs/usr/local/etc/rc.d/pro1x_fmd` | the daemon at boot (off) |
 | `../../apps/pro1x-fm/` | the app, both systems |
