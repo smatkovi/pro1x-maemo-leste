@@ -262,8 +262,9 @@ To try on the phone (with someone there):
   back after replugging.
 - Bluetooth at 3 Mbaud: throughput and that the controller still comes up.
 - The audio card suspends after 300 s of silence because of the
-  loudspeaker pop (`50-pro1x.pa`); the N9 used 1-5 s. Fixing the pop in
-  the aw87339 sequencing would allow 5 s.
+  loudspeaker pop (`50-pro1x.pa`); the N9 used 1-5 s. Patch 0026
+  (7.1.0-pro1x.8) changes the aw87339 sequencing; its test and the switch
+  to 3 s: `docs/audio.md`.
 - MPM: GPIOs 106, 107 (keyboard) and 112 are not in the MPM map, so the
   keyboard cannot wake the SoC from vmin; the MPM's timer wake-up is not
   programmed by mainline.
@@ -338,7 +339,7 @@ Leste and MeeGo on 7.1.0-pro1x.1, display off, on the battery):
   runs. If so, every sound costs 5 minutes at +100 mA, and it keeps
   `pro1x-autosuspend` (which waits for running substreams) from suspending
   meanwhile: then the pop has to be fixed (aw87339 sequencing) so that the
-  timeout can go down to the N9's 1-5 s.
+  timeout can go down to the N9's 1-5 s (patch 0026, `docs/audio.md`).
 - **Steady state, 27-48 interrupts a second on Leste (41-64 on MeeGo).**
   On 2026-10-25 (MeeGo, about 170 a second then) they were mostly timers
   and IPIs: function-call IPIs 57/s (remote task wake-ups go through
@@ -375,18 +376,23 @@ Leste and MeeGo on 7.1.0-pro1x.1, display off, on the battery):
 
 What it shows: whether the RPM takes the SoC into vlow/vmin once the MPM
 hands it over (patch 0011), and whether the RTC alarm (PMIC RTC over the
-SPMI arbiter, an MPM pin) wakes it again. The test runs on 7.1.0-pro1x.7
-(0001-0025; it has everything of pro1x.6).
+SPMI arbiter, an MPM pin) wakes it again. The test runs on 7.1.0-pro1x.8
+(0001-0026: everything of pro1x.7, plus the loudspeaker pop change of
+`docs/audio.md`).
 
-Before: the kernel on the phone, from the build host (Leste, over USB):
+Before the flash, on the old kernel: the reference listening of
+`docs/audio.md` (its step 0). Then the kernel on the phone, from the build
+host (Leste, over USB):
 
     WORK=/run/media/sebastian/2e638a7f-26db-4e89-9446-81d688464798/pro1x-leste
     PHONE="ssh ... root@172.16.42.1" \
-        WORK=$WORK OUT=$WORK/out-pro1x.7 bash scripts/65-kernel-update.sh prepare
-    PHONE=... WORK=$WORK OUT=$WORK/out-pro1x.7 bash scripts/65-kernel-update.sh flash
+        WORK=$WORK OUT=$WORK/out-pro1x.8 bash scripts/65-kernel-update.sh prepare
+    PHONE=... WORK=$WORK OUT=$WORK/out-pro1x.8 bash scripts/65-kernel-update.sh flash
 
 then a reboot with the owner there (trial boot, `pro1x-boot-trial`
-confirms it), `uname -r` 7.1.0-pro1x.7, Wi-Fi up, and its address.
+confirms it), `uname -r` 7.1.0-pro1x.8, Wi-Fi up, and its address. The
+loudspeaker test (`docs/audio.md`, steps 1-6) fits in after the RPM test,
+with the cable in again.
 
 The test: the cable out (the USB gadget does not come back from a
 suspend yet), over Wi-Fi, the phone lying still:

@@ -16,7 +16,7 @@ there, every boot image variant that was tested: [docs/HANDOFF.md](docs/HANDOFF.
 | Wi-Fi | works, stable MAC | modem up via `rmtfs`/`tqftpserv`; MAC derived from the serial |
 | Bluetooth | controller up | linux-firmware 2025 (`qca/cmbtfw12.tlv`); pairing not tested |
 | Modem in oFono | detected | `rmnet_data0..3` for oFono's `qrtrsoc`; calls/SMS/data untested (no SIM) |
-| Loudspeaker, microphone | works | NixOS UCM profile, PulseAudio 48 kHz, suspend after 5 min (pops) |
+| Loudspeaker, microphone | works | NixOS UCM profile, PulseAudio 48 kHz, suspend after 5 min (pops; fix in 7.1.0-pro1x.8 untested, `docs/audio.md`) |
 | Earpiece, headphones | untested | |
 | Battery, charging | works | upower |
 | Accelerometer, light, proximity, compass | works | ADSP sensors: hexagonrpcd + libssc + iio-sensor-proxy 3.9 |

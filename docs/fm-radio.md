@@ -12,7 +12,7 @@ plan, with sources: `~/ps/pro1x-fm-research.md` (not in this repository).
 | 0 | Bluetooth comes up | patch 0013, **works** (7.1.0-pro1x.4) |
 | 1 | FM commands and events over the Bluetooth UART | patch 0014, **works** |
 | 2 | V4L2 radio device `/dev/radio0` (tune, seek, signal, RDS) | patches 0015, 0017, **tune and seek work** (no antenna yet) |
-| 3 | Audio: SLIMbus, WCN3950 codec, q6afe `SLIMBUS_8_TX` | patches 0018-0021 in 7.1.0-pro1x.6, built, not booted |
+| 3 | Audio: SLIMbus, WCN3950 codec, q6afe `SLIMBUS_8_TX` | patches 0018-0021 since 7.1.0-pro1x.6 (in pro1x.8 for the 2026-10-31 flash), built, not booted |
 | 4 | Hildon app (`apps/pro1x-fm`), shell tests (`tools/pro1x-fm`) | written, compile-checked |
 
 ## Stage 0: why Bluetooth failed since 7.1.0-pro1x.1
@@ -144,24 +144,28 @@ Not done: Bluetooth SCO/A2DP over SLIMBUS_7, the NGD's missing
 `disable_stream` (an upstream patch exists; it only matters when the rate
 changes), and the DSP's own loopback (hostless), which would save power.
 
-## Test plan for 7.1.0-pro1x.6 (owner's OK for prepare and flash)
+## Test plan for 7.1.0-pro1x.8 (2026-10-31, with the owner)
 
-Kernel: `$WORK/out-pro1x.6` = pro1x.5 (0001-0017) + 0018-0021. `PHONE` is
-the usual root ssh to Leste.
+Written for pro1x.6; the flash on 2026-10-31 is pro1x.8, which contains it.
+Kernel: `$WORK/out-pro1x.8` = 0001-0026: pro1x.5 (0001-0017), the audio
+path 0018-0021, pro1x.7's power patches 0022-0025 and the loudspeaker
+change 0026 (`docs/audio.md`). It is the same prepare and flash as the
+notify_rpm test in `docs/power-management.md`: once. `PHONE` is the usual
+root ssh to Leste.
 
 0. **Without a flash:** run `qrtr-lookup` on the phone. The NGD needs the
    ADSP's SLIMbus QMI service 769 (0x301), version 1. If the ADSP does
-   not list it, pro1x.6 cannot give FM sound.
+   not list it, pro1x.8 cannot give FM sound either.
 
 1. **Prepare.** Writes files on the phone, no partition:
 
-       PHONE="..." WORK=$WORK OUT=$WORK/out-pro1x.6 bash scripts/65-kernel-update.sh prepare
+       PHONE="..." WORK=$WORK OUT=$WORK/out-pro1x.8 bash scripts/65-kernel-update.sh prepare
 
 2. **Flash**, with the owner there:
 
-       PHONE="..." WORK=$WORK OUT=$WORK/out-pro1x.6 bash scripts/65-kernel-update.sh flash
+       PHONE="..." WORK=$WORK OUT=$WORK/out-pro1x.8 bash scripts/65-kernel-update.sh flash
 
-   - This saves boot_b (pro1x.5) as `/host/boot_b-before-7.1.0-pro1x.6.img`.
+   - This saves the current boot_b as `/host/boot_b-before-7.1.0-pro1x.8.img`.
    - Slot b is then on trial for 3 starts. The owner reboots.
 3. **Check that nothing else broke:**
    - `uname -r`;
@@ -186,10 +190,10 @@ the usual root ssh to Leste.
 5. **Rollback:**
    - From Leste:
 
-         TARGET=b IMG=/host/boot_b-before-7.1.0-pro1x.6.img VBMETA= sh scripts/60-flash-slot-b.sh flash
+         TARGET=b IMG=/host/boot_b-before-7.1.0-pro1x.8.img VBMETA= sh scripts/60-flash-slot-b.sh flash
 
    - From fastboot: flash
-     `$WORK/out-pro1x.6/boot_b-before-7.1.0-pro1x.6.img` into boot_b.
+     `$WORK/out-pro1x.8/boot_b-before-7.1.0-pro1x.8.img` into boot_b.
    - If the new kernel does not boot at all, the trial falls back to slot a
      (Sailfish OS) after 3 failed starts.
 
