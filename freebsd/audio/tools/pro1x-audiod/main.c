@@ -561,13 +561,14 @@ request(char *line, char *ans, size_t alen)
 		snprintf(ans, alen, "%s plug=%s watched=%d mode=%s mv=%d "
 		    "polls=%u interrupts=%u reports=%u errors=%u "
 		    "adc_failures=%u held=%u swr_irqs=%u spurious=%u alerts=%u "
-		    "wcd_alerts=%u missed=%u clock_stops=%u wakeups=%u%s",
+		    "wcd_alerts=%u missed=%u clock_stops=%u wakeups=%u "
+		    "storms=%u%s",
 		    r == 0 ? "ok" : "error EIO", mbhc_plug_name(D.mbhc.plug),
 		    D.jack_on, jack_mode_name(D.jack_mode), D.mbhc.last_mv,
 		    D.mbhc.polls, D.mbhc.irqs, D.mbhc.reports, D.mbhc.errors,
 		    D.mbhc.adc_failures, D.njack_regs, D.swr[0].irqs,
 		    D.swr[0].spurious, D.swr[0].alerts, D.swr[0].impl_alerts,
-		    D.jack_missed, D.jack_sleeps, D.jack_wakes,
+		    D.jack_missed, D.jack_sleeps, D.jack_wakes, D.jack_storms,
 		    D.jack_clkstop ? " stopped" : "");
 		return;
 	}

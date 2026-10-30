@@ -14,9 +14,14 @@
  * pro1x-suspend -k (the panel left as it is; the next alarm as the RTC's
  * alarm, no suspend within 70 s of one) and the CPUs freeze until a device
  * interrupt: the power key, the RTC alarm, the modem (a call, a message:
- * its GLINK and SMP2P interrupts), the keyboard, a cable (devd's
- * pro1x_power.conf: hw.pro1x_pm.wake=1), Wi-Fi traffic. Then it stays up
- * (-a after a wake-up source, -s after anything else) and looks again.
+ * its GLINK and SMP2P interrupts), the keyboard, Wi-Fi traffic. A cable
+ * or a charger raises none that ends the freeze: a child reads devd's
+ * events (/var/run/devd.seqpacket.pipe, beside devd's own rules, which
+ * run only the first match: no rule of ours may shadow pro1x_typec.conf's
+ * or pro1x.conf's) and ends the suspend with hw.pro1x_pm.wake=1 on a
+ * Type-C attach or the battery's change on external power. Then it stays
+ * up (-a after a wake-up from user space, -w per interrupt, -s after
+ * anything else) and looks again.
  *
  * Each suspend goes to the system log with what ended it; the totals
  * (how often, how long, by which interrupt, named from hw.intrnames) are
@@ -40,6 +45,7 @@
  */
 
 #include <sys/types.h>
+#include <sys/procctl.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
@@ -69,6 +75,7 @@
 #define	INHIBIT		"/var/run/pro1x-autosleep.inhibit"
 #define	STATS		"/var/run/pro1x-autosleep.stats"
 #define	PIDFILE		"/var/run/pro1x-autosleep.pid"
+#define	DEVD_PIPE	"/var/run/devd.seqpacket.pipe"
 #define	NSRC		32
 
 static struct as_conf conf;
@@ -366,6 +373,53 @@ last_suspend(char *buf, size_t len)
 }
 
 
+/*
+ * devd's events, in a child: a cable plugged (pro1x_typec's ATTACH), the
+ * battery's change on external power (a charger) end a suspend in
+ * progress; harmless while none is. Ends with its parent.
+ */
+static pid_t
+devd_watch(void)
+{
+	struct sockaddr_un sun;
+	char ev[1024];
+	ssize_t n;
+	pid_t pid;
+	int s, one = 1, sig = SIGTERM;
+
+	if ((pid = fork()) != 0)
+		return (pid);
+	(void)procctl(P_PID, 0, PROC_PDEATHSIG_CTL, &sig);
+	signal(SIGTERM, SIG_DFL);
+	signal(SIGUSR1, SIG_IGN);
+	signal(SIGHUP, SIG_IGN);
+	for (;;) {
+		if ((s = socket(AF_UNIX, SOCK_SEQPACKET, 0)) < 0)
+			_exit(1);
+		memset(&sun, 0, sizeof(sun));
+		sun.sun_family = AF_UNIX;
+		strlcpy(sun.sun_path, DEVD_PIPE, sizeof(sun.sun_path));
+		if (connect(s, (struct sockaddr *)&sun, sizeof(sun)) != 0) {
+			close(s);
+			sleep(30);	/* devd not (yet) there */
+			continue;
+		}
+		while ((n = recv(s, ev, sizeof(ev) - 1, 0)) > 0) {
+			ev[n] = '\0';
+			if (strstr(ev, "system=PRO1X") == NULL)
+				continue;
+			if ((strstr(ev, "subsystem=TYPEC") != NULL &&
+			    strstr(ev, "type=ATTACH") != NULL) ||
+			    (strstr(ev, "subsystem=BATTERY") != NULL &&
+			    get_int("hw.acpi.acline", "acline") == 1))
+				(void)sysctlbyname("hw.pro1x_pm.wake", NULL,
+				    NULL, &one, sizeof(one));
+		}
+		close(s);
+		sleep(5);
+	}
+}
+
 static void
 on_signal(int sig)
 {
@@ -397,6 +451,7 @@ main(int argc, char **argv)
 {
 	struct as_state s;
 	char why[64], last[512], name[96], was[64] = "";
+	pid_t watcher = -1;
 	unsigned intid, ms;
 	int c, wait, r, how;
 	FILE *f;
@@ -431,6 +486,8 @@ main(int argc, char **argv)
 	signal(SIGHUP, on_signal);
 	signal(SIGUSR1, on_signal);
 	st.since_ms = now_ms();
+	if (testdir == NULL)
+		watcher = devd_watch();
 	logm(LOG_NOTICE, "on: after %u s with the display off%s; up %u s after "
 	    "a wake-up source, %u s after other interrupts%s", conf.delay_s,
 	    conf.in_standby ? " or the stand-by screen" : "", conf.stay_s,
@@ -483,6 +540,8 @@ main(int argc, char **argv)
 		stats_write();
 	}
 	stats_write();
+	if (watcher > 0)
+		kill(watcher, SIGTERM);
 	unlink(PIDFILE);
 	logm(LOG_NOTICE, "off: %u suspends, %ju s asleep", st.suspends,
 	    (uintmax_t)(st.asleep_ms / 1000));

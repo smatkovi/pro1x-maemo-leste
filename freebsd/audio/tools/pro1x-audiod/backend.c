@@ -845,10 +845,38 @@ jack_stop(struct audiod *d)
 void
 jack_master(struct audiod *d)
 {
+	uint64_t now;
+
 	if (!d->jack_on || d->jack_clkstop)
 		return;
-	if (swr_irq(&d->swr[0]) != 0)
-		d->jack_busy_at = fma_now_ms();
+	now = fma_now_ms();
+	if (swr_irq(&d->swr[0]) != 0) {
+		d->jack_busy_at = now;
+		d->jack_spurious_row = 0;
+	} else
+		d->jack_spurious_row++;
+	/*
+	 * A line that stays up (a status bit INTERRUPT_CLEAR does not
+	 * clear, or nothing at all behind it: the level/pulse bit's
+	 * meaning is only Linux's comment) would fire again at once, and
+	 * this daemon runs at real-time priority: more than 100 a second,
+	 * or 20 with nothing to do in a row, and the jack is polled again.
+	 */
+	if (now - d->jack_irq_win >= 1000) {
+		d->jack_irq_win = now;
+		d->jack_irq_n = 0;
+	}
+	if (++d->jack_irq_n > JACK_IRQ_MAX || d->jack_spurious_row >= 20) {
+		fma_log("jack: the master's interrupt keeps coming (%u in a "
+		    "second, %u in a row with nothing to do; status %#x): "
+		    "polled from now on", d->jack_irq_n, d->jack_spurious_row,
+		    swr_status(&d->swr[0]));
+		jack_arm(d, QCOM_SWR_MASTER, false);
+		d->jack_mode = JACK_POLL;
+		d->jack_poll_at = now + JACK_POLL_MS;
+		d->jack_storms++;
+		return;
+	}
 	jack_arm(d, QCOM_SWR_MASTER, true);
 }
 

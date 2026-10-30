@@ -46,7 +46,7 @@ unchanged until the device runs below pass.
 | `tools/pro1x-drain` | the battery's drain over an hour with the RPM's and autosleep's counts (stage 6's device runs) |
 | `test/vm-wakeups.sh` | a Hildon session's idle wake-ups in the VM (DTrace: per process, the kernel's timers, interrupts) |
 | `../patches/0036-*`, `0037-*` | `pro1x.power=on`: the profile's kernel settings; LinuxKPI 802.11: the driver's power save (`ifconfig wlan0 powersave`) |
-| `../rootfs/usr/local/etc/rc.d/pro1x_autosleep`, `pro1x_power`, `../rootfs/usr/local/etc/devd/pro1x_power.conf`, `../rootfs/usr/local/share/pro1x/power.subr` | the profile in the full system |
+| `../rootfs/usr/local/etc/rc.d/pro1x_autosleep`, `pro1x_power`, `../rootfs/usr/local/share/pro1x/power.subr` | the profile in the full system |
 
 `freebsd/build.sh` copies `sys/` into the sources like `dsp/` and `fm/`;
 `freebsd/PRO1X` has `device psci_idle` and `device pro1x_pm` (inert
@@ -773,9 +773,13 @@ Every suspend goes to the log with its end (`... ended by INTID 215 (a
 device: the power key) [INTID 215 (gic0,s183: ...)]; up 30 s`), the
 totals per interrupt to `/var/run/pro1x-autosleep.stats` (`service
 pro1x_autosleep stats`, also on SIGUSR1). A cable or a charger raises no
-interrupt that ends the freeze: devd's `pro1x_power.conf` (Type-C
-attach, the battery's change on external power) ends it through
-`hw.pro1x_pm.wake=1`, seen between the epochs. Tested: the policy on the
+interrupt that ends the freeze: a child of the daemon reads devd's
+events (`/var/run/devd.seqpacket.pipe`; not a rule in a devd file: devd
+runs only the first rule that matches an event, which would take
+`pro1x_typec.conf`'s role switch and `pro1x.conf`'s status LED their
+events) and on a Type-C attach, or the battery's change on external
+power, ends the suspend through `hw.pro1x_pm.wake=1`, seen between the
+epochs. Tested: the policy on the
 PC (`cc -I freebsd/pm/tools/pro1x-autosleep -o /tmp/ast
 freebsd/pm/test/autosleep_test.c
 freebsd/pm/tools/pro1x-autosleep/policy.c && /tmp/ast`, 30 checks), the
@@ -825,7 +829,7 @@ comment on some firmware's unstable STA power save applies).
 | `pro1x.usbrole=1` (kenv) | the USB controller follows the cable (`pro1x-usbrole`, stage 4c): the gadget off without one | off (profile: on) |
 | `pro1x.standby_off=N` (kenv) | the panel off after N minutes of the stand-by screen (`pro1x-standby -O`), 0 at once | never (profile: 10) |
 | `hw.pro1x_pm.mpm_veto`, `mpm_spi` | above | "100 102", 1 |
-| `hw.pro1x_pm.wake=1` | ends a suspend in progress | |
+| `hw.pro1x_pm.wake=1` | ends a suspend in progress (pro1x-autosleep's devd reader) | |
 | `service pro1x_power status` | what is on, the last suspend, the RPM's counts | |
 
 Not done: the page daemon's and IGMP/MLD's kernel timers; sensor

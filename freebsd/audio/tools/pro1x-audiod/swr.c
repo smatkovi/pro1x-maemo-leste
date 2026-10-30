@@ -638,6 +638,12 @@ swr_irq(struct swr *w)
 	return (seen);
 }
 
+uint32_t
+swr_status(struct swr *w)
+{
+	return (w->clk_stopped ? 0 : rd(w, SWRM_INTERRUPT_STATUS));
+}
+
 /* an alert waiting at the master: its status, or the device's ping */
 bool
 swr_alert_pending(struct swr *w)

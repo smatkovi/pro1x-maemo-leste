@@ -352,7 +352,10 @@ each stop (Linux does not for a simple clock stop slave; device run 18
 of `../pm/README.md` tries both). Both lines are MPM pins (5, 24):
 `pro1x_pm` enables them while they are armed, so the jack wakes the SoC
 from vlow/vmin too. `pro1x-audioctl jack` counts polls, alerts, the
-WCD's interrupts, misses, clock stops and wake-ups.
+WCD's interrupts, misses, clock stops and wake-ups. A line that keeps
+firing (more than 100 a second, or 20 in a row with nothing to do: a
+status bit the clear does not clear; the daemon runs at real-time
+priority) is disarmed and the jack polled (`storms`).
 
 Without `[jack-up]` (no trace yet) the jack is not watched. `-J` turns it
 off.

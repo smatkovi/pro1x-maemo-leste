@@ -774,6 +774,7 @@ static struct {
 	bool wake;			/* the wake-up line */
 	unsigned unclocked;		/* accesses with the TX macro's clock off */
 	unsigned alerts_raised;
+	uint32_t sticky;		/* status bits CLEAR does not clear */
 } S;
 
 static struct {
@@ -820,7 +821,7 @@ s_rd(struct mmio *m, uint32_t off)
 	case 0x534 + 8: return (0x0000000a);
 	case 0x30c: return (S.rd_ready ? 1 << 16 : 0);
 	case 0x318: S.rd_ready = false; return (S.rdfifo);
-	case 0x200: return (S.ist | (s_alerting() ? 1 : 0));
+	case 0x200: return (S.ist | S.sticky | (s_alerting() ? 1 : 0));
 	}
 	return (S.r[off / 4]);
 }
@@ -1526,7 +1527,7 @@ k2_run(struct audiod *d)
 			jack_event(d, QCOM_SWR_WAKE);
 			n++;
 		} else if ((K2.armed & QCOM_SWR_MASTER) &&
-		    (S.ist != 0 || s_alerting())) {
+		    (S.ist != 0 || S.sticky != 0 || s_alerting())) {
 			K2.armed &= ~QCOM_SWR_MASTER;
 			jack_event(d, QCOM_SWR_MASTER);
 			n++;
@@ -1641,6 +1642,19 @@ test_jack_irq(void)
 	CHECK(d.jack_missed == 2 && d.jack_mode == JACK_POLL &&
 	    !(K2.armed & QCOM_SWR_MASTER));
 	CHECK(jack_next_ms(&d, fma_now_ms()) <= JACK_POLL_MS);
+	jack_stop(&d);
+	/* a line that stays up: the storm guard polls instead */
+	memset(&K2, 0, sizeof(K2));
+	d.jack_mode = JACK_IRQ;
+	d.jack_check_ms = 0;
+	S.slave[0x41] = 0x07;
+	CHECK(jack_start(&d) == 0 && d.jack_mode == JACK_IRQ);
+	S.sticky = 1u << 12;	/* AUTO_ENUM_TABLE_IS_FULL, never cleared */
+	for (irqs = 0; irqs < 30 && d.jack_mode == JACK_IRQ; irqs++)
+		(void)k2_run(&d);
+	CHECK(d.jack_mode == JACK_POLL && d.jack_storms == 1 &&
+	    !(K2.armed & QCOM_SWR_MASTER));
+	S.sticky = 0;
 	jack_stop(&d);
 	/* poll mode: no alert set up, the 100 ms poll as before */
 	memset(&K2, 0, sizeof(K2));

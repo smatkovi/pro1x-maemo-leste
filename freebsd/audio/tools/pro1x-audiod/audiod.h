@@ -323,6 +323,7 @@ void swr_dump(struct swr *w, const char *why);
 int swr_slave_init(struct swr *w, uint8_t dev);
 uint32_t swr_irq(struct swr *w);	/* the status bits handled */
 bool swr_alert_pending(struct swr *w);
+uint32_t swr_status(struct swr *w);	/* INTERRUPT_STATUS, for the log */
 int swr_clock_stop(struct swr *w);
 int swr_clock_start(struct swr *w);
 
@@ -417,7 +418,9 @@ struct audiod {
 	unsigned	jack_check_ms;	/* irq: the slow poll (0: none) */
 	uint64_t	jack_busy_at;	/* the last alert, the wake-up */
 	uint64_t	jack_poll_at;	/* the next poll or check */
-	unsigned	jack_missed, jack_sleeps, jack_wakes;
+	unsigned	jack_missed, jack_sleeps, jack_wakes, jack_storms;
+	unsigned	jack_irq_n, jack_spurious_row;	/* the storm guard */
+	uint64_t	jack_irq_win;
 	bool		in_jack_seq;	/* [jack-up]/[jack-down] running */
 	uint32_t	jack_regs[256];	/* target << 24 | reg the jack holds */
 	unsigned	njack_regs;
@@ -438,6 +441,7 @@ enum { JACK_POLL, JACK_IRQ, JACK_CLKSTOP };
 #define	JACK_POLL_MS	100
 #define	JACK_CHECK_MS	2000
 #define	JACK_CLKSTOP_MS	3000	/* qcom.c's autosuspend delay */
+#define	JACK_IRQ_MAX	100	/* the master's interrupts a second, at most */
 
 const char *eff_route(struct audiod *d);
 const char *eff_recroute(struct audiod *d);
