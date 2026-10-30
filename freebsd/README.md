@@ -202,7 +202,8 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | storage | UFS on the link Linux brought up; no SD card |
 | Hildon, Xfce | yes, switchable |
 | USB (network to the PC, host) | not yet: FreeBSD's dwc3 is host only, and Linux takes the controller down at kexec |
-| Wi-Fi, Bluetooth, modem, GPS | no: all run through the modem and ADSP firmware (remoteproc, QMI over GLINK, ath10k over SNOC), none of which FreeBSD has |
+| Wi-Fi, Bluetooth | built, untested on the phone: the DSP stack (`dsp/`: remoteproc, GLINK, QRTR, QMI, ath10k over SNOC) |
+| modem: calls, SMS, GPS | built, untested on the phone: `pro1x-modemd` (QMI over QRTR through libqmi) as oFono's D-Bus API, so Leste's sphone runs unchanged (tried in the VM against a simulated modem); the voice of a call through `pro1x-audiod` (`pro1x-callaudio`); GPS through gpsd, location-daemon and liblocation (`modem/README.md`); no mobile data |
 | audio | built, untested on the phone: sound(4) as `snd_pro1x.ko` (`/dev/dsp`, `/dev/mixer`), the PCM through the ADSP by `pro1x-audiod` (ASM, ADM, AFE over `/dev/apr`), SoundWire and the codec from replay sequences of a Leste trace (recorded 2026-10-31); nothing heard before those (`audio/README.md`) |
 | FM radio | built, untested on the phone: the Bluetooth UART (`qcom_geni_uart`), the chip and its receiver from user space (`pro1x-fmd`), the app; no sound (`fm/README.md`) |
 | sensors, step counter | built, untested on the phone: the DSP stack (`dsp/`), `pro1x-steps`, `pro1x-proximity` (the proximity sensor on D-Bus only while the stand-by screen watches it) |
