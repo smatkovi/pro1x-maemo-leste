@@ -123,6 +123,9 @@ sudo -n sed -i '/ttyMSM0/d' "$DST_MNT/etc/inittab"
 sudo -n mount -t proc proc "$DST_MNT/proc"
 sudo -n mount -t sysfs sys "$DST_MNT/sys"
 sudo -n mount --bind /dev "$DST_MNT/dev"
+# a slave, so that unmounting dev/pts here leaves the PC's /dev/pts mounted
+# (as a peer of the PC's /dev it took it along)
+sudo -n mount --make-rslave "$DST_MNT/dev"
 sudo -n mount --bind /dev/pts "$DST_MNT/dev/pts"
 
 # Hardware support (45..49): apt, source builds, overlay. Under qemu this

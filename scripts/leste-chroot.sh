@@ -126,6 +126,10 @@ do_mount() {
   mountpoint -q "$R/proc" || sudo -n mount -t proc proc "$R/proc"
   mountpoint -q "$R/sys" || sudo -n mount -t sysfs sys "$R/sys"
   mountpoint -q "$R/dev" || sudo -n mount --bind /dev "$R/dev"
+  # a slave of the PC's /dev: a bind of a shared mount is its peer, and
+  # unmounting the chroot's dev/pts then unmounted the PC's /dev/pts too
+  # (2026-10-30: no new terminals on the PC)
+  sudo -n mount --make-rslave "$R/dev"
   mountpoint -q "$R/dev/pts" || sudo -n mount --bind /dev/pts "$R/dev/pts"
   sudo -n rm -f "$R/etc/resolv.conf"
   sudo -n cp -L /etc/resolv.conf "$R/etc/resolv.conf"
