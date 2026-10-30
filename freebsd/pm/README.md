@@ -674,7 +674,7 @@ phone N seconds after the start whatever happens.
 
 7. **The power key** (with someone at the phone), as 6 plus
    `pro1x.suspend_key=1`: at `C: suspend until the power key` press the
-   power key once. Expected: `ended by INTID 215 (a device)` (the SPMI
+   power key once. Expected: `ended by INTID 215 (a device: the power key)` (the SPMI
    arbiter's interrupt, SPI 183), a few seconds after the press at most.
    The press also reaches `qcom_pon` (its devctl/evdev event) as usual.
 
