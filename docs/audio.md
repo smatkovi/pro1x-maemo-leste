@@ -66,6 +66,7 @@ shutdown plots, SYSCTRL, the input high-pass); the Pro1X's vendor kernel
 v0.2.0, the `aw87xxx_mode_switch_*` controls in `bengal.c`) and its
 `mixer_paths.xml`; Xiaomi's `techpack/audio/asoc/codecs/wcd937x/wcd937x.c`
 (`AW87xxx_SPK`); Awinic's aw87339 reference driver (the power-down write).
+Copies of all of them on the build host: `$WORK/dl/aw87339/`.
 
 ## Test on the phone (with 7.1.0-pro1x.8)
 
@@ -83,7 +84,8 @@ power sequencing and the second shows a cut or clicking start:
 
 0. **Before the flash, on the old kernel** (the reference): steps 2 and 3,
    to hear the pop as it is.
-1. **After the flash:** `uname -r` is 7.1.0-pro1x.8;
+1. **After the flash:** `uname -r` is 7.1.0-pro1x.8; `cat /proc/asound/cards`
+   shows the card id (`Pro1X` is assumed below, in `hw:Pro1X,0`);
    `dmesg | grep -i aw87339` shows `AW87339 found` twice and no
    `enable sequence failed`;
    `grep . /sys/module/snd_soc_aw87339/parameters/*` shows 40 and Y.
@@ -140,7 +142,7 @@ power sequencing and the second shows a cut or clicking start:
      `SPK PA` (the `Settle` widgets have no trace events of their own).
      Power-down (`event=2`): `SPK PA` `val=4` (PRE_PMD) before
      `HPHL PGA` `val=4`.
-   - The widget states: `grep . "/sys/kernel/debug/asoc/F(x)tec Pro1X/"aw87339*/dapm/*`
+   - The widget states: `grep . "/sys/kernel/debug/asoc/F(x)tec Pro1X/"*aw87339*/dapm/*`
      (`SPK PA: On` while a sound plays, `Off` 3 s after it).
 6. **Pass:** no click in five tries of the silence file and the beep
    starting the same after idle as with the card open. Then the
