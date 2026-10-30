@@ -1,10 +1,22 @@
-### Pro1X: every resume of the sound card pops in the loudspeaker (codec and
-### amplifier power-up). Suspend only after 5 minutes of silence instead of 5 s.
-### Kernel patch 0026 (7.1.0-pro1x.8) should fix the pop. Once the test in
-### docs/audio.md passes on the phone, use the 3 s line instead (the N9 used
-### 1-5 s); the card open for 5 minutes costs about 100 mA.
+### Pro1X: up to kernel 7.1.0-pro1x.7 every resume of the sound card popped
+### in the loudspeaker (codec and amplifier power-up), so the card stayed open
+### for 300 s after a sound instead of PulseAudio's 5 s, about 100 mA and
+### 400 interrupts a second meanwhile. Kernel patch 0026 (pro1x.8 and later)
+### orders the amplifiers after the codec's PA; those kernels have
+### /sys/module/snd_soc_aw87339/parameters/on_delay_ms. With such a kernel
+### the card suspends after 3 s of silence (the N9 used 1-5 s), with an older
+### one after 300 s.
+### Still a pop with the new kernel: touch /etc/pulse/pro1x-suspend-300 and
+### restart PulseAudio (back to 300 s; remove the file to undo).
 .ifexists module-suspend-on-idle.so
 unload-module module-suspend-on-idle
+.endif
+.ifexists /sys/module/snd_soc_aw87339/parameters/on_delay_ms
+load-module module-suspend-on-idle timeout=3
+.else
 load-module module-suspend-on-idle timeout=300
-#load-module module-suspend-on-idle timeout=3
+.endif
+.ifexists /etc/pulse/pro1x-suspend-300
+unload-module module-suspend-on-idle
+load-module module-suspend-on-idle timeout=300
 .endif

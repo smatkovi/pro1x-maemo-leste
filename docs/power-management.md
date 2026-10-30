@@ -124,6 +124,8 @@ for the step counter during suspend.
 
 So pro1x-autosuspend stays disabled until the sensor stack survives a
 suspend, Bluetooth is no longer an immediate wake-up and USB resumes.
+The causes of all three, found later in that log and the kernel's code,
+and their fixes for pro1x.10: "Power fixes for pro1x.10" below.
 
 ## The MPM (2026-10-26, built, untested)
 
@@ -176,7 +178,8 @@ normal start.
 `--test`), each a setting in `/etc/pro1x-autosuspend.conf`:
 
 - `StopServices=pro1x-hexagonrpcd`: stopped before the suspend, started
-  again after it. With hexagonrpcd running, a suspend crashes the ADSP's
+  again after it (since 2026-10-30 only on kernels without patch 0031, see
+  "Power fixes for pro1x.10"). With hexagonrpcd running, a suspend crashes the ADSP's
   sensor process on other Qualcomm phones too; postmarketOS and Debian
   stop it around a suspend
   ([pmaports MR 5400](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/merge_requests/5400),
@@ -184,7 +187,9 @@ normal start.
   hexagonrpcd only serves the ADSP files (configuration, registry), which
   it asks for when the sensors start; libssc and iio-sensor-proxy talk to
   the ADSP over QRTR without it.
-- `NoWakeup=4a8c000.serial`: the Bluetooth UART cannot wake the system.
+- `NoWakeup=4a8c000.serial`: the Bluetooth UART cannot wake the system
+  (since 2026-10-30 left alone while Bluetooth's own wake-up switch is on;
+  pro1x.10's patch 0030 does the rest in the kernel).
   Its wake-up interrupt fired at once. The price: Bluetooth cannot wake the
   phone (an incoming connection, a headset button), and what the chip sends
   during the suspend is lost; it reconnects after the next wake-up.
@@ -371,6 +376,212 @@ Leste and MeeGo on 7.1.0-pro1x.1, display off, on the battery):
   and `jbd2` (writes every few seconds keep UFS waking: a longer
   `vm.dirty_writeback_centisecs`, `commit=` for the root), `dsme-thermal`,
   `icd2` (Wi-Fi scans while disconnected), `haveged`.
+
+## Power fixes for pro1x.10 (2026-10-30, built, untested)
+
+The three failures of the first suspends, Bluetooth while it is off, and
+the sound card's idle time, fixed on the PC; everything has a switch
+back. Kernel patches 0029-0032 (0028 is the alarm power-on's) go into
+7.1.0-pro1x.10, which is built from all of 0001-0032 together. A test
+build of 0001-0027 plus 0029-0032 alone: `$WORK/out-pro1x.10-power`
+(7.1.0-pro1x.10-power, from the worktree `$WORK/build/linux-power`, so
+that `build/linux` stays as it is for the combined build). User space:
+`scripts/71-power-userspace.sh` puts it into the systems on the phone,
+new images get it from their builders.
+
+| What | Fix | Switch back |
+|---|---|---|
+| ADSP `sensor_process` crash at the thaw | 0031: FastRPC calls frozen in place | `echo N > /sys/module/fastrpc/parameters/freezable_invoke` |
+| USB gadget "not attached" after a suspend | 0032: VBUS override written again on resume | boot the old kernel (`docs/kernel-update.md`) |
+| Bluetooth UART waking the system | 0030: its wake-up interrupt only while open, and for a suspend only when Bluetooth may wake | `echo enabled > /sys/bus/serial/devices/serial0/power/wakeup` (Bluetooth may wake it) |
+| Bluetooth chip powered while "off" | 0029: power-off pulse and regulators off at hci down | boot the old kernel |
+| Sound card open 300 s after a sound | 3 s with a kernel that has 0026 (PulseAudio), 3 s on PipeWire | `touch /etc/pulse/pro1x-suspend-300`; WirePlumber: the file below |
+| Wi-Fi power save | on at every start of the interface, NetworkManager keeps it | `touch /etc/pro1x-wlan-powersave-off` |
+| hexagonrpcd stopped for every suspend | only on kernels without 0031 | `StopServices=pro1x-hexagonrpcd` in `/etc/pro1x-autosuspend.conf` |
+
+### The sensor process crash (0031)
+
+The kernel log of 2026-10-25 has the crash 2 ms after the tasks were
+thawed, in the ADSP's FastRPC thread:
+
+    [ 336.683309] Restarting tasks: Starting
+    [ 336.685206] PDM: service 'sensor_process' crash: 'EX:sensor_process:0x1:frpc_dsp:0xc0:PC=0xb2022ad0'
+    [ 336.702919] qcom_q6v5_pas a400000.remoteproc: fatal error received: err_qdi.c:1045:EX:sensor_process:...
+    [ 359.391851] qcom-q6afe aprsvc:service:4:4: AFE close failed -110
+
+hexagonrpcd's reverse-RPC listener waits nearly all the time in a
+`FASTRPC_IOCTL_INVOKE` for the DSP's next request. Mainline's fastrpc
+waits for the answer interruptibly; the freezer's fake signal ends that
+wait with -ERESTARTSYS, the context stays queued with the DSP, the
+user's maps are moved away, and after the thaw the restarted ioctl sends
+the same call as a new context. The DSP gets its listener call twice and
+its sensor process dies in `frpc_dsp`; remoteproc restarts the ADSP and
+the APR audio services are gone until a reboot (Android's adsprpc
+restores the interrupted context instead). Stopping hexagonrpcd for each
+suspend (postmarketOS, Debian, pro1x-autosuspend until now) avoids the
+call, at the price of the sensors' reverse tunnel going down and up
+every time.
+
+`device/kernel/patches/0031-misc-fastrpc-freeze-user-invocations-in-place.patch`
+waits `TASK_KILLABLE | TASK_FREEZABLE` instead (as qcomtee and FUSE do):
+the freezer freezes hexagonrpcd where it waits, nothing is sent twice,
+an answer that arrives meanwhile is taken at the thaw. SIGTERM (no
+handler in hexagonrpcd) still ends it; `rc-service pro1x-hexagonrpcd
+stop` works as before. pro1x-autosuspend stops hexagonrpcd now only when
+`/sys/module/fastrpc/parameters/freezable_invoke` is not `Y` (a kernel
+without 0031, or the switch set back), unless `StopServices` says
+otherwise.
+
+Not changed: the sensors keep streaming into a suspended system (the
+ADSP's glink edge is no wake-up source, so their indications wait);
+batching in the libssc requests is still open.
+
+### The USB gadget after a suspend (0032)
+
+On SM6115 the USB controller's power domain (the USB30 GDSC,
+`PWRSTS_OFF_ON` in gcc-sm6115) is switched off by genpd for s2idle (and
+by runtime PM once the glue's `power/control` is `auto`). The legacy glue
+(`dwc3-qcom-legacy`, which the SM6115's two-node device tree binds) wrote
+the VBUS override into its QSCRATCH registers once at probe; they come
+back at their reset value, so the gadget never sees VBUS again and stays
+"not attached", and switching the role does not help because the role
+switch does not go through this glue. The flattened glue (`dwc3-qcom.c`)
+writes the override again on every role change and run/stop for the same
+reason, downstream after every power collapse.
+`0032-usb-dwc3-qcom-legacy-restore-qscratch-on-resume.patch` writes it
+(and the UTMI clock selection, which the Pro1X does not use) again in the
+glue's resume. "HS-PHY not in L2" was not the cause: a peripheral's PHYs
+are powered off by the core (`dwc3_core_exit()`), not suspended, so the
+message is a debug message for a peripheral now. The other way would be
+`PWRSTS_RET_ON` for the GDSC (as sm8250, sc7180, sm6350 and sm6375 have),
+which keeps the domain on through every suspend.
+
+With it, `SuspendOnUSB=true` and the USB runtime PM rule
+(`rootfs-overlay/usr/share/pro1x/60-usb-runtime-pm.rules`) can be tried;
+both stay off until the test below.
+
+### Bluetooth (0029, 0030)
+
+- **0029:** WCN3950 support (upstream, 2025) added the chip to every
+  WCN399x case of the power-on path but to none of `qca_power_off()`:
+  `hciconfig hci0 down` (or Bluetooth off in the UI) sent no power-off
+  pulse and left its regulators enabled, so its Bluetooth part stayed
+  powered behind a closed UART. Now powered off like the WCN3990 (pulse,
+  regulators; they are shared with Wi-Fi, whose own enable stays). The
+  FM radio brings hci0 up itself (`qca_fm_get()`), so it is not
+  affected.
+- **0030:** the GENI UART requested its wake-up interrupt (RX, GPIO 11) at
+  probe and armed it for every suspend, also with the port closed. The
+  Bluetooth core does not want to be woken there: `hci_qca` asks the
+  serdev controller's `power/wakeup` (off by default) and without it
+  disconnects everything for the suspend. Now the interrupt is there only
+  while the port is open (Bluetooth up), and for a suspend only when the
+  controller may wake the system, so the UART and the Bluetooth core
+  agree. In-band sleep's runtime wake-ups (0023/0024) keep it while the
+  port is open. Bluetooth waking the phone (paired devices allowed to,
+  e.g. a keyboard) is one switch:
+  `echo enabled > /sys/bus/serial/devices/serial0/power/wakeup`.
+  pro1x-autosuspend's `NoWakeup=4a8c000.serial` stays (for older kernels)
+  but leaves the UART alone while that switch is on.
+
+### The sound card's idle time
+
+`rootfs-overlay/etc/pulse/default.pa.d/50-pro1x.pa` (Leste and the MeeGo
+copy, whose session uses Leste's PulseAudio) loads module-suspend-on-idle
+with `timeout=3` when `/sys/module/snd_soc_aw87339/parameters/on_delay_ms`
+exists (kernels with the loudspeaker fix, 0026: pro1x.8 and later),
+otherwise `timeout=300` as before; PulseAudio's `.ifexists` takes absolute
+paths. Still a pop: `touch /etc/pulse/pro1x-suspend-300`, PulseAudio's
+next start is back at 300 s. Kali and Arch run PipeWire, whose
+WirePlumber suspends after 5 s by default and cannot test the kernel:
+`kali/rootfs-overlay/etc/wireplumber/wireplumber.conf.d/50-pro1x-suspend.conf`
+(Arch installs Kali's) sets 3 s; 300 there (or the file removed for 5 s)
+is the way back.
+
+### Wi-Fi power save
+
+cfg80211 starts interfaces with power save on (`CONFIG_CFG80211_DEFAULT_PS`,
+ath10k supports it unless its firmware says `NO_PS`), but nothing checked
+that it stays on. `85-pro1x-wlan-powersave.rules` runs
+`/usr/local/sbin/pro1x-wlan-powersave` (`iw dev wlan0 set power_save on`)
+when the interface appears, on all four systems; on Kali and Arch
+NetworkManager keeps it on for every connection
+(`50-pro1x-wifi-powersave.conf`, `wifi.powersave = 3`). Off for good:
+`touch /etc/pro1x-wlan-powersave-off`.
+
+### Checked, nothing to change (from the code, 2026-10-30)
+
+- **CPU idle:** PSCI OS-initiated mode with per-CPU power-collapse states
+  and two cluster states each (GDHS, power collapse) in `sm6115.dtsi`,
+  `psci-cpuidle-domain` and the menu governor in the kernel; the clusters
+  are not below the MPM (0009), so cpuidle probes. Whether they get there:
+  `Rejected`/`Above` in `/sys/kernel/debug/pm_genpd/power-domain-cpu-cluster*/idle_states`.
+- **GPU:** devfreq (simple_ondemand) over the Adreno 610's OPP table, on
+  CX; the GPU node has no interconnect, so it holds no DDR vote.
+- **Panel off:** `boe-bf060y8m-aj0` sends display off and sleep in, holds
+  reset and switches its five supplies off.
+- **Interconnect votes:** the QUP UART's are dropped with its runtime PM
+  (0023), the USB glue's at its suspend; without a cable the USB
+  controller keeps them while awake until the runtime PM rule is on.
+- **Own user space:** `pro1x-steps` (the ADSP counts, signals at most
+  every 5 s), `pro1x-proximity` (streams only while watched),
+  `pro1x-light` (one reading), `pro1x-volume-osd` (timers only while
+  shown) are event-driven; the init scripts' loops run only at start.
+  Left for the wake-up measurement: cron, rsyslog and jbd2 (a journal
+  commit every 5 s while something logs: `commit=` for the root,
+  `vm.dirty_writeback_centisecs`), dsme-thermal, icd2's scans, haveged.
+
+## Measurements for 2026-10-31
+
+What to compare: pro1x.9 with the old user space (the state of the
+flash) against pro1x.10 with `scripts/71-power-userspace.sh install`.
+Over Wi-Fi with the cable out for anything that suspends (until 0032 is
+proven), the phone lying still, display off.
+
+1. **Awake, display off** (no suspend), on the battery by the charger's
+   input suspend: `pro1x-powerlog <name> 30` (or `68-power-standby.sh`);
+   its last lines give the mean current without the first 5 minutes, the
+   interrupts per second by source and, halfway, `pro1x-wakeups` for a
+   minute. Once on each kernel; on pro1x.10 also after one sound (the
+   `pcm` column: the card closed about 3 s after it).
+2. **Suspended:** `69-rpm-test.sh 600 rpm bt-down` on each kernel, then
+   on pro1x.10 the new parts one at a time:
+   - `69-rpm-test.sh 60 rpm bt-down sensors`: hexagonrpcd running through
+     the suspend; the log's `remoteproc crashes 0`, afterwards
+     `rc-service pro1x-hexagonrpcd status` started, the step counter
+     counting (`GetSteps` before and after a few steps) and a sound
+     playing (q6afe answers).
+   - `69-rpm-test.sh 60 rpm bt-up btwake`: Bluetooth up, the UART's
+     wake-up as the kernel sets it (none with serial0's wakeup disabled);
+     not woken at once. Then `hciconfig hci0 down` and `grep 4a8c000
+     /proc/interrupts`: no `4a8c000.serial:wakeup` line while Bluetooth
+     is down (0030), and Bluetooth up again works (scan, FM radio).
+   - Over USB (cable in, gadget configured): `pro1x-rpmtest 60 norpm`
+     run on the phone from a Wi-Fi shell; afterwards
+     `cat /sys/class/udc/*/state` is `configured` again and the USB
+     network answers (0032). If so, `SuspendOnUSB=true` and the runtime PM
+     rule next.
+3. **Standby per hour:** `rc-service pro1x-autosuspend start` (pro1x.10
+   only, after 2 passed), unplugged, display off, for at least an hour:
+   battery `capacity` and `voltage_now` before and after,
+   `grep pro1x-autosuspend /var/log/syslog` (sleeps, wake-ups, vlow/vmin
+   per sleep), `/sys/kernel/debug/qcom_stats/{vlow,vmin}` Count and
+   Accumulated Duration before and after,
+   `sort -k4 -n -r /sys/kernel/debug/wakeup_sources | head -15` (wakeup
+   counts) and `/sys/power/suspend_stats/*`.
+
+| Measurement | pro1x.9, old user space | pro1x.10, new user space |
+|---|---|---|
+| Awake, display off: mean mA (without the first 5 min) | | |
+| Awake: interrupts/s, top 3 sources | | |
+| Awake: pro1x-wakeups top 3 processes (wake-ups/s) | | |
+| After a sound: seconds until `pcm` 0 | 300 | |
+| rpmtest 600 s: vlow +N / vmin +N, accumulated s | | |
+| rpmtest: woken by | | |
+| rpmtest with `sensors`: remoteproc crashes | 1 (2026-10-25) | |
+| USB `configured` after a suspend | no | |
+| Standby 1 h with autosuspend: % and mV lost | (not run) | |
+| Standby: sleeps, wake-ups and their sources | | |
 
 ## The notify_rpm test (2026-10-31, with the owner)
 

@@ -1,0 +1,140 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 30 Oct 2026 20:10:00 +0100
+Subject: [PATCH] serial: qcom-geni: the wake-up interrupt only while the port
+ is open, and for the system's sleep only when its user wants it
+
+The UART's wake-up interrupt (an edge on RX, a TLMM GPIO) was set up at
+probe and stayed for good: enabled whenever the port runtime suspended
+and armed for every system sleep, also with the port closed. On the
+F(x)tec Pro1X that is the Bluetooth UART: with Bluetooth off (the port
+closed) the interrupt still woke the UART at runtime and the system
+from s2idle for whatever RX did, and the first s2idle on the phone was
+woken by it at once. Yet the
+Bluetooth core does not want to be woken there: hci_qca asks the serdev
+controller's power/wakeup (off by default), and without it the core
+disconnects everything for the suspend (BT_SUSPEND_DISCONNECT).
+
+Request the wake-up interrupt when the port starts up and free it when it
+shuts down. uart_suspend_port() shuts an open port down for the system's
+sleep, with the port marked suspended: then it is kept if the port may
+wake the system, which for a port that a serdev controller owns is that
+controller's power/wakeup (so the UART and the Bluetooth core agree), and
+for any other port as before. uart_resume_port() starts it up again,
+which brings the interrupt back for the runtime wake-ups (in-band sleep).
+The port's own power/wakeup stays as it was, enabled at probe.
+
+To let Bluetooth wake the system (paired devices allowed to, as the
+Bluetooth core sets them up then):
+  echo enabled > /sys/bus/serial/devices/serial0/power/wakeup
+(serial0: the serdev controller on that UART).
+---
+diff --git a/drivers/tty/serial/qcom_geni_serial.c b/drivers/tty/serial/qcom_geni_serial.c
+index bf974d2545..52ee230f17 100644
+--- a/drivers/tty/serial/qcom_geni_serial.c
++++ b/drivers/tty/serial/qcom_geni_serial.c
+@@ -20,6 +20,7 @@
+ #include <linux/pm_runtime.h>
+ #include <linux/pm_wakeirq.h>
+ #include <linux/soc/qcom/geni-se.h>
++#include <linux/serdev.h>
+ #include <linux/serial.h>
+ #include <linux/serial_core.h>
+ #include <linux/slab.h>
+@@ -144,6 +145,7 @@ struct qcom_geni_serial_port {
+ 	unsigned int tx_remaining;
+ 	unsigned int tx_queued;
+ 	int wakeup_irq;
++	bool wake_irq_set;
+ 	bool serdev_owned;
+ 	bool rpm_irq_off;
+ 	bool rx_tx_swap;
+@@ -187,6 +189,49 @@ static bool qcom_geni_serial_serdev_owned(struct uart_port *uport)
+ 	       uport->state->port.client_ops != &tty_port_default_client_ops;
+ }
+ 
++/*
++ * The wake-up interrupt (an edge on RX) is there only while the port is
++ * open: a closed port has nobody to wake, and the chip behind it, powered
++ * off, may leave RX low or let it float. For the system's sleep an open port
++ * that a serdev controller owns keeps it only if that controller may wake
++ * the system: the controller's power/wakeup (off by default), which is also
++ * what hci_qca asks before it lets the Bluetooth core set up wake-ups.
++ * Without it the Bluetooth core disconnects everything for the suspend, and
++ * nothing the chip sends meanwhile is wanted. Called with the port mutex
++ * held, with the port up.
++ */
++static void qcom_geni_serial_set_wake_irq(struct qcom_geni_serial_port *port,
++					  bool on)
++{
++	struct device *dev = port->uport.dev;
++	int ret;
++
++	if (port->wakeup_irq <= 0 || port->wake_irq_set == on)
++		return;
++
++	if (on) {
++		ret = dev_pm_set_dedicated_wake_irq(dev, port->wakeup_irq);
++		if (ret) {
++			dev_warn(dev, "no wake-up interrupt: %d\n", ret);
++			return;
++		}
++	} else {
++		dev_pm_clear_wake_irq(dev);
++	}
++	port->wake_irq_set = on;
++}
++
++static bool qcom_geni_serial_may_wake_system(struct uart_port *uport)
++{
++	struct serdev_controller *ctrl;
++
++	if (!qcom_geni_serial_serdev_owned(uport))
++		return true;
++
++	ctrl = uport->state->port.client_data;
++	return ctrl && device_may_wakeup(&ctrl->dev);
++}
++
+ static struct qcom_geni_serial_port qcom_geni_console_port = {
+ 	.uport = {
+ 		.iotype = UPIO_MEM,
+@@ -1223,6 +1268,11 @@ static void qcom_geni_serial_shutdown(struct uart_port *uport)
+ 
+ 	qcom_geni_serial_cancel_tx_cmd(uport);
+ 	uart_port_unlock_irq(uport);
++
++	/* Kept through the system's sleep only if it may wake the system */
++	qcom_geni_serial_set_wake_irq(to_dev_port(uport),
++			tty_port_suspended(&uport->state->port) &&
++			qcom_geni_serial_may_wake_system(uport));
+ }
+ 
+ static void qcom_geni_serial_flush_buffer(struct uart_port *uport)
+@@ -1303,6 +1353,8 @@ static int qcom_geni_serial_startup(struct uart_port *uport)
+ 
+ 	enable_irq(uport->irq);
+ 
++	qcom_geni_serial_set_wake_irq(port, true);
++
+ 	return 0;
+ }
+ 
+@@ -1965,16 +2017,9 @@ static int qcom_geni_serial_probe(struct platform_device *pdev)
+ 	if (ret)
+ 		goto error;
+ 
+-	if (port->wakeup_irq > 0) {
++	/* The wake-up interrupt itself only while the port is open */
++	if (port->wakeup_irq > 0)
+ 		device_init_wakeup(&pdev->dev, true);
+-		ret = dev_pm_set_dedicated_wake_irq(&pdev->dev,
+-						port->wakeup_irq);
+-		if (ret) {
+-			device_init_wakeup(&pdev->dev, false);
+-			ida_free(&port_ida, uport->line);
+-			goto error;
+-		}
+-	}
+ 
+ 	if (!data->console) {
+ 		pm_runtime_set_autosuspend_delay(&pdev->dev,

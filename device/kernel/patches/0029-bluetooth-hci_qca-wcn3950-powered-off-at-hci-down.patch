@@ -1,0 +1,66 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 30 Oct 2026 20:00:00 +0100
+Subject: [PATCH] Bluetooth: hci_qca: power the WCN3950 off at hci down
+
+WCN3950 support added the chip to every WCN399x case of the power-on
+path (regulators, the 2400 baud power pulses) but to none of
+qca_power_off(): "hciconfig hci0 down", or Bluetooth switched off in the
+UI, sent no power-off pulse and left the regulators enabled: the chip's
+Bluetooth part stayed powered, with the host's UART closed
+(HCI_QUIRK_NON_PERSISTENT_SETUP), anything it sent on RX reaching only
+the UART's wake-up interrupt, and its idle current drawn for as long as
+the phone ran. qca_serdev_remove() skipped it too.
+
+Handle the WCN3950 like the other WCN399x: the power-off pulse at 2400
+baud, then the regulators off; the next hci up already goes through
+qca_regulator_init() (regulators, port reopened, both pulses), which is
+also the first power-on at every boot. The regulators are shared with
+the Wi-Fi part of the chip on the F(x)tec Pro1X; regulator_bulk_disable()
+only drops Bluetooth's own enable.
+
+The pulse is written only while the port is open, as upstream does now
+for the others: qca_close() may power off after hci_uart_close() closed
+the port.
+---
+diff --git a/drivers/bluetooth/hci_qca.c b/drivers/bluetooth/hci_qca.c
+index d99272451e..0a5c032416 100644
+--- a/drivers/bluetooth/hci_qca.c
++++ b/drivers/bluetooth/hci_qca.c
+@@ -2350,12 +2350,19 @@ static void qca_power_off(struct hci_uart *hu)
+ 	power = qcadev->bt_power;
+ 
+ 	switch (soc_type) {
++	case QCA_WCN3950:
+ 	case QCA_WCN3988:
+ 	case QCA_WCN3990:
+ 	case QCA_WCN3991:
+ 	case QCA_WCN3998:
+-		host_set_baudrate(hu, 2400);
+-		qca_send_power_pulse(hu, false);
++		/*
++		 * Both write to the port, which hci_uart_close() may have
++		 * closed already (HCI_QUIRK_NON_PERSISTENT_SETUP)
++		 */
++		if (test_bit(HCI_UART_PROTO_READY, &hu->flags)) {
++			host_set_baudrate(hu, 2400);
++			qca_send_power_pulse(hu, false);
++		}
+ 		break;
+ 	default:
+ 		break;
+@@ -2368,6 +2375,7 @@ static void qca_power_off(struct hci_uart *hu)
+         }
+ 
+ 	switch (soc_type) {
++	case QCA_WCN3950:
+ 	case QCA_WCN3988:
+ 	case QCA_WCN3990:
+ 	case QCA_WCN3991:
+@@ -2692,6 +2700,7 @@ static void qca_serdev_remove(struct serdev_device *serdev)
+ 		of_platform_depopulate(&serdev->dev);
+ 
+ 	switch (qcadev->btsoc_type) {
++	case QCA_WCN3950:
+ 	case QCA_WCN3988:
+ 	case QCA_WCN3990:
+ 	case QCA_WCN3991:

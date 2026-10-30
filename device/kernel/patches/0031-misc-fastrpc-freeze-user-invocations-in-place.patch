@@ -1,0 +1,84 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 30 Oct 2026 20:20:00 +0100
+Subject: [PATCH] misc: fastrpc: freeze a user's invocation in place instead
+ of interrupting it
+
+A user's FASTRPC_IOCTL_INVOKE waits for the DSP interruptibly. Every
+system suspend interrupts it: the freezer's fake signal ends the wait with
+-ERESTARTSYS, which leaves the context queued with the DSP and moves the
+user's maps to the channel's invoke_interrupted_mmaps, and after the thaw
+the restarted ioctl sends the same call again as a new context. The DSP
+then has the call twice.
+
+hexagonrpcd, the reverse-RPC daemon for the DSPs' file system, spends
+nearly all its time in such a call (its listener waits there for the
+DSP's next request). On the F(x)tec Pro1X (SM6115) the first s2idle
+ended exactly so: 2 ms after "Restarting tasks" the ADSP's sensor process
+died in its FastRPC thread
+
+  PDM: service 'sensor_process' crash: 'EX:sensor_process:0x1:frpc_dsp:0xc0:PC=0xb2022ad0'
+  qcom_q6v5_pas a400000.remoteproc: fatal error received: err_qdi.c:1045:EX:sensor_process:...
+
+remoteproc restarted the ADSP, and the APR audio services timed out
+(-110) until a reboot. postmarketOS and Debian work around it by stopping
+hexagonrpcd for every suspend. Downstream's adsprpc restores the
+interrupted context on the restart instead of sending the call again.
+
+Wait with TASK_KILLABLE | TASK_FREEZABLE, as qcomtee's user objects and
+FUSE do: the freezer freezes the task where it waits, nothing is
+interrupted or sent twice, and a DSP answer that arrives meanwhile is
+taken at the thaw. Fatal signals still end the wait (so an unhandled
+SIGTERM still stops hexagonrpcd); other signals wait for the call to
+return. No locks are held across the wait.
+
+freezable_invoke=N (module parameter, writable at runtime) brings back
+the interruptible wait.
+---
+diff --git a/drivers/misc/fastrpc.c b/drivers/misc/fastrpc.c
+index f3a4938458..91b0397876 100644
+--- a/drivers/misc/fastrpc.c
++++ b/drivers/misc/fastrpc.c
+@@ -17,6 +17,7 @@
+ #include <linux/sort.h>
+ #include <linux/of_platform.h>
+ #include <linux/rpmsg.h>
++#include <linux/sched.h>
+ #include <linux/scatterlist.h>
+ #include <linux/slab.h>
+ #include <linux/firmware/qcom/qcom_scm.h>
+@@ -1238,6 +1239,25 @@ static int fastrpc_invoke_send(struct fastrpc_session_ctx *sctx,
+ 
+ }
+ 
++/*
++ * A user's invocation waits for the DSP's answer killable and freezable:
++ * for a system suspend the task is frozen in place, waiting, instead of
++ * being interrupted. Interrupted (-ERESTARTSYS), the context stays queued
++ * with the DSP, the user's maps move to invoke_interrupted_mmaps, and the
++ * restarted ioctl sends the same call again as a new context. For a
++ * daemon such as hexagonrpcd, whose reverse-RPC listener is blocked in an
++ * invocation nearly all the time, every suspend did that: the DSP got its
++ * listener call twice and its process died at the thaw (on the F(x)tec
++ * Pro1X "EX:sensor_process:0x1:frpc_dsp:0xc0", the ADSP restarted, its
++ * audio services gone until a reboot). Fatal signals still end the wait;
++ * other signals are taken once the call has returned.
++ * freezable_invoke=N: the old interruptible wait.
++ */
++static bool freezable_invoke = true;
++module_param(freezable_invoke, bool, 0644);
++MODULE_PARM_DESC(freezable_invoke,
++		 "User invocations frozen in place for a suspend, not interrupted (default Y)");
++
+ static int fastrpc_internal_invoke(struct fastrpc_user *fl,  u32 kernel,
+ 				   u32 handle, u32 sc,
+ 				   struct fastrpc_invoke_args *args)
+@@ -1276,6 +1296,9 @@ static int fastrpc_internal_invoke(struct fastrpc_user *fl,  u32 kernel,
+ 	if (kernel) {
+ 		if (!wait_for_completion_timeout(&ctx->work, 10 * HZ))
+ 			err = -ETIMEDOUT;
++	} else if (READ_ONCE(freezable_invoke)) {
++		err = wait_for_completion_state(&ctx->work,
++						TASK_KILLABLE | TASK_FREEZABLE);
+ 	} else {
+ 		err = wait_for_completion_interruptible(&ctx->work);
+ 	}

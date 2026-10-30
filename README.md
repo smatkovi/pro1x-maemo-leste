@@ -16,7 +16,7 @@ there, every boot image variant that was tested: [docs/HANDOFF.md](docs/HANDOFF.
 | Wi-Fi | works, stable MAC | modem up via `rmtfs`/`tqftpserv`; MAC derived from the serial |
 | Bluetooth | controller up | linux-firmware 2025 (`qca/cmbtfw12.tlv`); pairing not tested |
 | Modem in oFono | detected; mobile data prepared | oFono 2.18 `+pro1x1` (`scripts/49-mobile-data.sh`) sets up the IPA data path itself (DPM port, WDA format, `rmnet0..3` with MAPv4 checksums); calls/SMS/data untested (no SIM), test steps in `docs/leste-mobile-data.md` |
-| Loudspeaker, microphone | works | NixOS UCM profile, PulseAudio 48 kHz, suspend after 5 min (pops; fix in 7.1.0-pro1x.8 untested, `docs/audio.md`) |
+| Loudspeaker, microphone | works | NixOS UCM profile, PulseAudio 48 kHz, card suspended after 3 s with a kernel that has the pop fix (7.1.0-pro1x.8 and later, untested), else 5 min (`docs/audio.md`) |
 | Earpiece, headphones | untested | headset jack prepared: the MBHC's button thresholds (kernel patch 0027, 7.1.0-pro1x.9), PulseAudio switching to headphones and a headset's microphone by the jack (`patches/nixos-audio/0002-ucm-headset-jack.patch`, on the phone with `scripts/64-ucm-install.sh`); test in `docs/audio.md` |
 | Battery, charging | works | upower |
 | Accelerometer, light, proximity, compass | works | ADSP sensors: hexagonrpcd + libssc + iio-sensor-proxy 3.9 |

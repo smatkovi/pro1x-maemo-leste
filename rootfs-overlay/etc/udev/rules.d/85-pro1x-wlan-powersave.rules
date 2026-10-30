@@ -1,0 +1,2 @@
+# Wi-Fi power save on for the Pro1X (see /usr/local/sbin/pro1x-wlan-powersave).
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="ath10k_snoc", RUN+="/usr/local/sbin/pro1x-wlan-powersave %k"

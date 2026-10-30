@@ -16,7 +16,8 @@
 # state, vlow and vmin the counts of the SoC's sleep states, irq/s and
 # ctxt/s since the sample before, idle% the CPUs' idle share in that time,
 # pcm the number of ALSA substreams running (PulseAudio keeps the card
-# running for 300 s after the last sound, 50-pro1x.pa).
+# running for 300 s after the last sound, 3 s with a kernel that has
+# patch 0026, 50-pro1x.pa).
 #
 # For the run the charger's input is suspended (pro1x-charger-icl's
 # input_suspend): the phone runs from its battery with the cable in, which

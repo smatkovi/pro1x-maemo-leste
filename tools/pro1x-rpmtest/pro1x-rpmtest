@@ -4,7 +4,7 @@
 # again by itself; for a test with someone at the phone (docs/power-management.md,
 # "The notify_rpm test").
 #
-#   pro1x-rpmtest [SECONDS] [rpm|norpm] [bt-down|bt-up]   (as root)
+#   pro1x-rpmtest [SECONDS] [rpm|norpm] [bt-down|bt-up] [sensors] [btwake]   (as root)
 #
 #   SECONDS   how long to sleep: the RTC alarm (default 60)
 #   rpm       notify_rpm on for the suspend (default); norpm: the same
@@ -12,6 +12,12 @@
 #   bt-down   Bluetooth down for the suspend (default: only the MPM and the
 #             RPM are tested); bt-up: Bluetooth stays up (the UART powered
 #             down by patches 0023/0024, also through the suspend)
+#   sensors   hexagonrpcd keeps running through the suspend (the test of
+#             kernel patch 0031: its FastRPC call frozen in place, no
+#             sensor_process crash at the thaw)
+#   btwake    the Bluetooth UART's wake-up left as it is (the test of kernel
+#             patch 0030: the UART armed only while Bluetooth is up and
+#             /sys/bus/serial/devices/serial0/power/wakeup is enabled)
 #
 # Order: the RTC alarm first, then notify_rpm on, sync, the suspend; back
 # from it, notify_rpm off before anything else (also when the suspend fails
@@ -20,9 +26,10 @@
 # plus a minute: hold the power key until it restarts (about 10-15 s); the
 # log up to the suspend is on userdata already (synced).
 #
-# Around the suspend, as pro1x-autosuspend does: hexagonrpcd stopped (the
-# ADSP's sensor process crashes otherwise), the Bluetooth UART not a wake-up
-# source (its wake-up interrupt woke the system at once), pm_debug_messages
+# Around the suspend, as pro1x-autosuspend does on older kernels:
+# hexagonrpcd stopped (the ADSP's sensor process crashed at the thaw; not
+# with "sensors"), the Bluetooth UART not a wake-up source (its wake-up
+# interrupt woke the system at once; not with "btwake"), pm_debug_messages
 # on (the kernel logs the time suspended and the wake-up interrupt). All of
 # it put back afterwards. Up to TRIES (3) attempts when a wake-up event
 # aborts the suspend (oFono talking to the modem in the first minutes).
@@ -38,6 +45,15 @@ set -u
 secs=${1:-60}
 mode=${2:-rpm}
 bt=${3:-bt-down}
+keep_sensors= keep_btwake=
+[ $# -gt 3 ] && shift 3 || set --
+for a; do
+	case $a in
+	sensors) keep_sensors=1 ;;
+	btwake) keep_btwake=1 ;;
+	*) echo "option: sensors or btwake" >&2; exit 2 ;;
+	esac
+done
 tries=${TRIES:-3}
 case $secs in *[!0-9]* | '') echo "SECONDS: a number" >&2; exit 2 ;; esac
 case $mode in rpm | norpm) ;; *) echo "mode: rpm or norpm" >&2; exit 2 ;; esac
@@ -63,7 +79,7 @@ trap 'rpm_off; exit 1' INT TERM HUP
 
 mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug 2> /dev/null
 
-say "# pro1x-rpmtest $secs s, $mode, $bt: $(. /etc/os-release 2> /dev/null; echo "${PRETTY_NAME:-?}"), kernel $(uname -r), $(date '+%F %T')"
+say "# pro1x-rpmtest $secs s, $mode, $bt${keep_sensors:+, sensors}${keep_btwake:+, btwake}: $(. /etc/os-release 2> /dev/null; echo "${PRETTY_NAME:-?}"), kernel $(uname -r), $(date '+%F %T')"
 [ -w $NR ] || { say "FAILED: no $NR (a kernel with patch 0011 and the MPM driver loaded)"; exit 1; }
 [ -w $RTC/wakealarm ] || { say "FAILED: no $RTC/wakealarm"; exit 1; }
 grep -q s2idle /sys/power/mem_sleep || { say "FAILED: no s2idle in /sys/power/mem_sleep"; exit 1; }
@@ -104,12 +120,14 @@ echo "ibs: $(ibs)" >> "$log"
 v0=$(count vlow) m0=$(count vmin) vd0=$(dur vlow) md0=$(dur vmin)
 
 # --- the suspend's surroundings ------------------------------------------------
+say "# fastrpc freezable_invoke $(cat /sys/module/fastrpc/parameters/freezable_invoke 2> /dev/null || echo -)," \
+    "serdev wakeup $(cat /sys/bus/serial/devices/serial0/power/wakeup 2> /dev/null || echo -)"
 hexa=
-if rc-service pro1x-hexagonrpcd status > /dev/null 2>&1; then
+if [ -z "$keep_sensors" ] && rc-service pro1x-hexagonrpcd status > /dev/null 2>&1; then
 	rc-service pro1x-hexagonrpcd stop > /dev/null 2>&1 && hexa=1
 fi
 uartwake=
-if [ -n "$UART" ] && [ "$(cat $UART/power/wakeup 2> /dev/null)" = enabled ]; then
+if [ -z "$keep_btwake" ] && [ -n "$UART" ] && [ "$(cat $UART/power/wakeup 2> /dev/null)" = enabled ]; then
 	echo disabled > $UART/power/wakeup && uartwake=1
 fi
 btwas=
@@ -158,6 +176,11 @@ irq_each | awk 'NR == FNR { a[$1] = $2; next } ($1 in a) && $2 > a[$1] { n = $1;
 rm -f /run/pro1x-rpmtest.irq
 sec "kernel log"
 dmesg | sed -n '/pro1x-rpmtest: suspend/,$p' | tail -150 >> "$log"
+crash=$(dmesg | sed -n '/pro1x-rpmtest: suspend/,$p' | grep -c "crash detected\|fatal error received")
+sec "sensors and USB after the suspend"
+echo "remoteproc crashes in the kernel log since the try: $crash" >> "$log"
+echo "hexagonrpcd: $(rc-service pro1x-hexagonrpcd status 2> /dev/null | tr -s ' ')" >> "$log"
+echo "usb gadget: $(cat /sys/class/udc/*/state 2> /dev/null | head -1)" >> "$log"
 
 # put everything back
 [ -n "$dbg0" ] && echo "$dbg0" > /sys/power/pm_debug_messages 2> /dev/null
@@ -168,7 +191,8 @@ dmesg | sed -n '/pro1x-rpmtest: suspend/,$p' | tail -150 >> "$log"
 v1=$(count vlow) m1=$(count vmin) vd1=$(dur vlow) md1=$(dur vmin)
 res="vlow +$((v1 - v0)) (duration +$((vd1 - vd0))), vmin +$((m1 - m0)) (duration +$((md1 - md0)))"
 if [ $ok = 1 ]; then
-	say "OK: suspended ($mode, $bt), $res, woken by irq $(cat /sys/power/pm_wakeup_irq 2> /dev/null)"
+	say "OK: suspended ($mode, $bt${keep_sensors:+, sensors}${keep_btwake:+, btwake}), $res, woken by irq" \
+	    "$(cat /sys/power/pm_wakeup_irq 2> /dev/null), remoteproc crashes $crash"
 else
 	say "FAILED: no suspend in $tries tries, $res"
 fi

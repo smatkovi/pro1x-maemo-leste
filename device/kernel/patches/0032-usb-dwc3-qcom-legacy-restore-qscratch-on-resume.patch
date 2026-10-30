@@ -1,0 +1,100 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 30 Oct 2026 20:30:00 +0100
+Subject: [PATCH] usb: dwc3: qcom-legacy: restore the QSCRATCH settings on
+ resume
+
+The legacy glue sets the VBUS override (QSCRATCH_HS_PHY_CTRL's
+UTMI_OTG_VBUS_VALID and SW_SESSVLD_SEL, QSCRATCH_SS_PHY_CTRL's
+LANE0_PWR_PRESENT) and, with qcom,select-utmi-as-pipe-clk, the UTMI clock
+as pipe clock once at probe, and again only from its extcon notifiers.
+On SM6115 the controller's power domain, the USB30 GDSC, is PWRSTS_OFF_ON:
+genpd switches it off for s2idle (and for runtime PM, once the glue's
+power/control is "auto"), and the QSCRATCH registers come back at their
+reset values. A peripheral then never sees VBUS again: on the F(x)tec
+Pro1X the gadget stayed "not attached" after the first suspend, and
+neither rebinding the gadget nor switching the USB role (the role switch
+does not go through this glue) brought it back, only a reboot did. The
+flattened glue (dwc3-qcom.c) sets the override again on every role
+change and run/stop (pre_set_role, pre_run_stop) for the same reason;
+downstream re-programs QSCRATCH after every power collapse.
+
+Write both again in dwc3_qcom_resume(), after the clocks are back and
+before the core resumes, from the mode probe and the notifiers keep.
+
+"HS-PHY not in L2" at suspend: only a host's PHY is suspended there; for
+a peripheral the core has powered its PHYs off (dwc3_core_exit()), so the
+message (which the same suspend printed) is a debug message in that case.
+
+Keeping the GDSC in retention (PWRSTS_RET_ON, as gcc-sm8250, sc7180,
+sm6350 and sm6375 do for USB) would be the other way; it keeps the
+controller's state but also its power domain on for every suspend.
+---
+diff --git a/drivers/usb/dwc3/dwc3-qcom-legacy.c b/drivers/usb/dwc3/dwc3-qcom-legacy.c
+index d3fad0fcfd..55542eec3a 100644
+--- a/drivers/usb/dwc3/dwc3-qcom-legacy.c
++++ b/drivers/usb/dwc3/dwc3-qcom-legacy.c
+@@ -86,6 +86,7 @@ struct dwc3_qcom {
+ 	struct notifier_block	host_nb;
+ 
+ 	enum usb_dr_mode	mode;
++	bool			ignore_pipe_clk;
+ 	bool			is_suspended;
+ 	bool			pm_suspended;
+ 	struct icc_path		*icc_path_ddr;
+@@ -423,18 +424,29 @@ static void dwc3_qcom_enable_interrupts(struct dwc3_qcom *qcom)
+ 		dwc3_qcom_enable_port_interrupts(&qcom->ports[i]);
+ }
+ 
++static void dwc3_qcom_select_utmi_clk(struct dwc3_qcom *qcom);
++
+ static int dwc3_qcom_suspend(struct dwc3_qcom *qcom, bool wakeup)
+ {
++	bool host = dwc3_qcom_is_host(qcom);
+ 	u32 val;
+ 	int i, ret;
+ 
+ 	if (qcom->is_suspended)
+ 		return 0;
+ 
++	/*
++	 * Only a host's PHY is suspended (L2) here; for a peripheral the core
++	 * has powered its PHYs off instead (dwc3_core_exit()).
++	 */
+ 	for (i = 0; i < qcom->num_ports; i++) {
+ 		val = readl(qcom->qscratch_base + pwr_evnt_irq_stat_reg[i]);
+-		if (!(val & PWR_EVNT_LPM_IN_L2_MASK))
++		if (val & PWR_EVNT_LPM_IN_L2_MASK)
++			continue;
++		if (host)
+ 			dev_err(qcom->dev, "port-%d HS-PHY not in L2\n", i + 1);
++		else
++			dev_dbg(qcom->dev, "port-%d HS-PHY not in L2\n", i + 1);
+ 	}
+ 
+ 	for (i = qcom->num_clocks - 1; i >= 0; i--)
+@@ -483,6 +495,17 @@ static int dwc3_qcom_resume(struct dwc3_qcom *qcom, bool wakeup)
+ 	if (ret)
+ 		dev_warn(qcom->dev, "failed to enable interconnect: %d\n", ret);
+ 
++	/*
++	 * The controller's power domain (the USB30 GDSC) may have been off,
++	 * and the QSCRATCH registers with it: what probe and the extcon
++	 * notifiers set is back at its reset value. Without the VBUS override
++	 * a peripheral never sees VBUS again and stays "not attached".
++	 */
++	if (qcom->ignore_pipe_clk)
++		dwc3_qcom_select_utmi_clk(qcom);
++	if (qcom->mode != USB_DR_MODE_HOST)
++		dwc3_qcom_vbus_override_enable(qcom, true);
++
+ 	/* Clear existing events from PHY related to L2 in/out */
+ 	for (i = 0; i < qcom->num_ports; i++) {
+ 		dwc3_qcom_setbits(qcom->qscratch_base,
+@@ -790,6 +813,7 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
+ 	 */
+ 	ignore_pipe_clk = device_property_read_bool(dev,
+ 				"qcom,select-utmi-as-pipe-clk");
++	qcom->ignore_pipe_clk = ignore_pipe_clk;
+ 	if (ignore_pipe_clk)
+ 		dwc3_qcom_select_utmi_clk(qcom);
+ 

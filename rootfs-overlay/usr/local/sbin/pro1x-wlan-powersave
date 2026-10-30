@@ -1,0 +1,16 @@
+#!/bin/sh
+# Wi-Fi power save on for the Pro1X's WLAN interface (ath10k, WCN3950): the
+# radio sleeps between the access point's beacons and wakes for the traffic
+# it announces. cfg80211 starts every interface with it on
+# (CONFIG_CFG80211_DEFAULT_PS); this sets it again when the interface
+# appears, in case something switched it off before. NetworkManager keeps it
+# on through /etc/NetworkManager/conf.d/50-pro1x-wifi-powersave.conf.
+# Called by /etc/udev/rules.d/85-pro1x-wlan-powersave.rules with the
+# interface name. Off for good: touch /etc/pro1x-wlan-powersave-off (then
+# "iw dev wlan0 set power_save off" for the running interface).
+IFACE=${1:?interface}
+[ -e /etc/pro1x-wlan-powersave-off ] && exit 0
+for iw in /usr/sbin/iw /sbin/iw /usr/bin/iw; do
+	[ -x "$iw" ] && exec "$iw" dev "$IFACE" set power_save on
+done
+exit 0

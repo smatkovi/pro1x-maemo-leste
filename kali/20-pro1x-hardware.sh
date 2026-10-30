@@ -94,10 +94,12 @@ U=$MNT/usr/share/alsa/ucm2
 mkdir -p "$U/sm4250"
 cp -a /usr/share/alsa/ucm2/Pro1X "$U/"
 ln -sfn ../Pro1X/Pro1X.conf "$U/sm4250/sm4250.conf"
-# udev: SSC sensor types and mount matrix, stable WLAN MAC
+# udev: SSC sensor types and mount matrix, stable WLAN MAC, Wi-Fi power save
 install -m 644 "$REPO/rootfs-overlay/etc/udev/rules.d/81-pro1x-sensors.rules" \
-	"$REPO/rootfs-overlay/etc/udev/rules.d/82-pro1x-wlan-mac.rules" "$MNT/etc/udev/rules.d/"
-install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/pro1x-wlan-mac" "$MNT/usr/local/sbin/"
+	"$REPO/rootfs-overlay/etc/udev/rules.d/82-pro1x-wlan-mac.rules" \
+	"$REPO/rootfs-overlay/etc/udev/rules.d/85-pro1x-wlan-powersave.rules" "$MNT/etc/udev/rules.d/"
+install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/pro1x-wlan-mac" \
+	"$REPO/rootfs-overlay/usr/local/sbin/pro1x-wlan-powersave" "$MNT/usr/local/sbin/"
 install -m 644 "$REPO/rootfs-overlay/etc/modprobe.d/pro1x-dt2w.conf" "$MNT/etc/modprobe.d/"
 # After the packages, whose maintainer scripts write /etc/default/gpsd.
 cp -a "$REPO/kali/rootfs-overlay/." "$MNT/"

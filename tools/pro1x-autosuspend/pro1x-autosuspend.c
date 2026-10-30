@@ -10,9 +10,10 @@
  *
  *   - a call (mce's call state is not "none")
  *   - sound being played or recorded (an ALSA substream RUNNING)
- *   - a USB cable (the gadget not "not attached"): the USB controller does
- *     not come back from a suspend yet ("HS-PHY not in L2"); SuspendOnUSB
- *     lets it suspend anyway
+ *   - a USB cable (the gadget not "not attached"): before kernel patch
+ *     0032 (pro1x.10) the USB gadget did not come back from a suspend (its
+ *     VBUS override was lost with the controller's power domain);
+ *     SuspendOnUSB lets it suspend anyway
  *   - a file in /run/pro1x-autosuspend/inhibit
  *   - wake-up events in progress and userspace wake locks
  *     (/sys/power/wake_lock), through the wakeup_count handshake
@@ -26,12 +27,18 @@
  * often the SoC reached its sleep states (qcom_stats vlow and vmin).
  *
  * Around each suspend (also with --test):
- *   - StopServices are stopped and started again after it: hexagonrpcd, as
- *     on postmarketOS and Debian; the ADSP's sensor process crashes when it
- *     is running during a suspend (and audio stays broken until a reboot)
+ *   - StopServices are stopped and started again after it. Not set: only
+ *     hexagonrpcd, and only on a kernel without kernel patch 0031
+ *     (/sys/module/fastrpc/parameters/freezable_invoke Y): there the
+ *     freezer interrupts hexagonrpcd's FastRPC call, the DSP gets it twice
+ *     and the ADSP's sensor process crashes at the thaw (and audio stays
+ *     broken until a reboot); postmarketOS and Debian stop it too
  *   - the devices in NoWakeup cannot wake the system: the Bluetooth UART,
- *     whose wake-up interrupt fires at once (mainline's hci_qca has no
- *     in-band sleep for this chip), so Bluetooth cannot wake it either
+ *     whose wake-up interrupt woke the first suspend at once, unless
+ *     Bluetooth's own wake-up switch is on (the power/wakeup of the serdev
+ *     controller on it, /sys/bus/serial/devices/serial0): then it is left
+ *     alone, and with kernel patch 0030 the UART wakes the system only
+ *     while Bluetooth is up
  *
  *   pro1x-autosuspend             run (/etc/init.d/pro1x-autosuspend)
  *   pro1x-autosuspend --test N    suspend once now with a wake-up after N s,
@@ -39,8 +46,8 @@
  *
  * Settings: /etc/pro1x-autosuspend.conf, group [autosuspend] with Delay,
  * WakeInterval (0: no periodic wake-up) and StayAwake, all in seconds;
- * StopServices (OpenRC services) and NoWakeup (platform devices) as lists;
- * SuspendOnUSB (true/false).
+ * StopServices (OpenRC services; not set: see above, empty: none) and
+ * NoWakeup (platform devices) as lists; SuspendOnUSB (true/false).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -58,10 +65,12 @@
 #define CONF "/etc/pro1x-autosuspend.conf"
 #define INHIBIT_DIR "/run/pro1x-autosuspend/inhibit"
 #define STATS "/sys/kernel/debug/qcom_stats/"
+#define FASTRPC_FIXED "/sys/module/fastrpc/parameters/freezable_invoke"
 #define BUSY_RECHECK_S 30
 
 static int delay_s = 30, wake_interval_s = 900, stay_awake_s = 45;
 static gboolean suspend_on_usb;
+/* stop_services NULL: hexagonrpcd only on kernels without patch 0031 */
 static char **stop_services, **no_wakeup;
 static gboolean display_off, call_active;
 static gint64 display_off_us, awake_until_us;
@@ -225,6 +234,27 @@ static gboolean rc_service(const char *name, const char *action)
 	return g_spawn_check_wait_status(status, NULL);
 }
 
+/* Kernel patch 0031: a frozen hexagonrpcd no longer crashes the ADSP */
+static gboolean fastrpc_freezes_in_place(void)
+{
+	g_autofree char *s = NULL;
+
+	return g_file_get_contents(FASTRPC_FIXED, &s, NULL, NULL) && s[0] == 'Y';
+}
+
+/*
+ * Bluetooth's own wake-up switch for a UART: the power/wakeup of the serdev
+ * controller on it (hci_qca asks it whether to set up wake-ups; kernel
+ * patch 0030 arms the UART's wake-up interrupt for a suspend only then)
+ */
+static gboolean serdev_may_wake(const char *dev)
+{
+	g_autofree char *pattern =
+		g_strdup_printf("/sys/bus/platform/devices/%s/*/*/serial[0-9]*/power/wakeup", dev);
+
+	return glob_any(pattern, "enabled");
+}
+
 /*
  * Before a suspend: the services that must not run during it stopped, the
  * devices that must not wake it without their wake-up. stopped and wakeup
@@ -232,7 +262,12 @@ static gboolean rc_service(const char *name, const char *action)
  */
 static void prepare_suspend(GPtrArray *stopped, GPtrArray *wakeup)
 {
-	for (char **n = stop_services; n && *n; n++) {
+	static char *hexagonrpcd[] = { "pro1x-hexagonrpcd", NULL };
+	char **services = stop_services;
+
+	if (!services)
+		services = fastrpc_freezes_in_place() ? NULL : hexagonrpcd;
+	for (char **n = services; n && *n; n++) {
 		if (!**n || !rc_service(*n, "status"))
 			continue;
 		if (rc_service(*n, "stop"))
@@ -244,7 +279,7 @@ static void prepare_suspend(GPtrArray *stopped, GPtrArray *wakeup)
 		g_autofree char *path = g_strdup_printf("/sys/bus/platform/devices/%s/power/wakeup", *d);
 		g_autofree char *was = NULL;
 
-		if (!**d || !g_file_get_contents(path, &was, NULL, NULL))
+		if (!**d || !g_file_get_contents(path, &was, NULL, NULL) || serdev_may_wake(*d))
 			continue;
 		if (!strcmp(g_strstrip(was), "enabled") && write_str(path, "disabled") == 0)
 			g_ptr_array_add(wakeup, g_steal_pointer(&path));
@@ -484,7 +519,6 @@ int main(int argc, char **argv)
 	alarm_fd = timerfd_create(CLOCK_BOOTTIME_ALARM, TFD_CLOEXEC | TFD_NONBLOCK);
 	if (alarm_fd < 0)
 		syslog(LOG_WARNING, "no wake-up timer (%m): no periodic wake-ups");
-	stop_services = g_strsplit("pro1x-hexagonrpcd", ";", -1);
 	no_wakeup = g_strsplit("4a8c000.serial", ";", -1);
 	load_config();
 	if (test)

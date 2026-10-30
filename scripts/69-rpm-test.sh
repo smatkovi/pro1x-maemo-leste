@@ -5,11 +5,12 @@
 # detached from the SSH session, waits until the phone answers again and
 # fetches the log.
 #
-#   PHONE="ssh ... root@<address>" bash scripts/69-rpm-test.sh [SECONDS] [rpm|norpm] [bt-down|bt-up]
+#   PHONE="ssh ... root@<address>" bash scripts/69-rpm-test.sh [SECONDS] [rpm|norpm] [bt-down|bt-up] [sensors] [btwake]
 #
 # The arguments are pro1x-rpmtest's (default 60 rpm bt-down). Over Wi-Fi
-# with the cable out: the USB gadget does not come back from a suspend yet,
-# so a test over USB loses the connection until a reboot. Logs to OUTDIR
+# with the cable out: before kernel patch 0032 (pro1x.10) the USB gadget did
+# not come back from a suspend, so a test over USB lost the connection until
+# a reboot. Logs to OUTDIR
 # (default ~/ps/pro1x-power/<date>). If the phone does not answer a few
 # minutes after the alarm, it did not wake up: holding the power key
 # restarts it (notify_rpm is off after any restart), and the log of the
@@ -21,6 +22,7 @@ REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 SECS=${1:-60}
 MODE=${2:-rpm}
 BT=${3:-bt-down}
+EXTRA="${*:4}"
 OUTDIR=${OUTDIR:-$HOME/ps/pro1x-power/$(date +%F)}
 mkdir -p "$OUTDIR"
 ph() { timeout "${TO:-30}" $PHONE "$@"; }
@@ -43,8 +45,8 @@ for t in pro1x-rpmtest pro1x-wakeups; do
 	ph "cat > /usr/local/bin/$t && chmod 755 /usr/local/bin/$t" < "$REPO/tools/$t/$t" ||
 		{ log "the phone does not answer"; exit 1; }
 done
-log "kernel $(ph uname -r), pro1x-rpmtest $SECS $MODE $BT"
-ph "setsid nohup /usr/local/bin/pro1x-rpmtest $SECS $MODE $BT > /run/pro1x-rpmtest.out 2>&1 < /dev/null &"
+log "kernel $(ph uname -r), pro1x-rpmtest $SECS $MODE $BT $EXTRA"
+ph "setsid nohup /usr/local/bin/pro1x-rpmtest $SECS $MODE $BT $EXTRA > /run/pro1x-rpmtest.out 2>&1 < /dev/null &"
 log "suspending for $SECS s (the RTC alarm wakes it)"
 sleep $((SECS + 15))
 for i in $(seq 24); do

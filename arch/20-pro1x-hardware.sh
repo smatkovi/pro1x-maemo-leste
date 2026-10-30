@@ -127,11 +127,13 @@ U=$MNT/usr/share/alsa/ucm2
 mkdir -p "$U/sm4250"
 cp -a /usr/share/alsa/ucm2/Pro1X "$U/"
 ln -sfn ../Pro1X/Pro1X.conf "$U/sm4250/sm4250.conf"
-# udev: SSC sensor types and mount matrix, stable WLAN MAC
+# udev: SSC sensor types and mount matrix, stable WLAN MAC, Wi-Fi power save
 install -m 644 "$REPO/rootfs-overlay/etc/udev/rules.d/60-pro1x-ufs.rules" \
 	"$REPO/rootfs-overlay/etc/udev/rules.d/81-pro1x-sensors.rules" \
-	"$REPO/rootfs-overlay/etc/udev/rules.d/82-pro1x-wlan-mac.rules" "$MNT/etc/udev/rules.d/"
-install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/pro1x-wlan-mac" "$MNT/usr/local/sbin/"
+	"$REPO/rootfs-overlay/etc/udev/rules.d/82-pro1x-wlan-mac.rules" \
+	"$REPO/rootfs-overlay/etc/udev/rules.d/85-pro1x-wlan-powersave.rules" "$MNT/etc/udev/rules.d/"
+install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/pro1x-wlan-mac" \
+	"$REPO/rootfs-overlay/usr/local/sbin/pro1x-wlan-powersave" "$MNT/usr/local/sbin/"
 install -D -m 644 "$REPO/rootfs-overlay/etc/modprobe.d/pro1x-dt2w.conf" "$MNT/etc/modprobe.d/pro1x-dt2w.conf"
 
 # systemd units: Kali's Pro1X units (the same for any systemd system), the
@@ -155,6 +157,11 @@ cp -a "$REPO/arch/rootfs-overlay/." "$MNT/"
 install -m 644 "$REPO/kali/rootfs-overlay/etc/ssh/sshd_config.d/pro1x.conf" \
 	"$MNT/etc/ssh/sshd_config.d/pro1x.conf"
 install -m 644 "$REPO/kali/rootfs-overlay/etc/default/gpsd" "$MNT/etc/default/gpsd"
+# PipeWire's card suspend after 3 s, NetworkManager's Wi-Fi power save (as Kali)
+install -D -m 644 "$REPO/kali/rootfs-overlay/etc/wireplumber/wireplumber.conf.d/50-pro1x-suspend.conf" \
+	"$MNT/etc/wireplumber/wireplumber.conf.d/50-pro1x-suspend.conf"
+install -D -m 644 "$REPO/kali/rootfs-overlay/etc/NetworkManager/conf.d/50-pro1x-wifi-powersave.conf" \
+	"$MNT/etc/NetworkManager/conf.d/50-pro1x-wifi-powersave.conf"
 
 # --- configuration -------------------------------------------------------------
 log "configuration"

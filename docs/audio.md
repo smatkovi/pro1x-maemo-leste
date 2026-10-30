@@ -20,7 +20,9 @@ Every power-up of the card popped in the loudspeaker, so
 `rootfs-overlay/etc/pulse/default.pa.d/50-pro1x.pa` lets PulseAudio keep
 the card open for 300 s after a sound instead of 5 s. That costs about
 100 mA and 400 interrupts a second for those 5 minutes and keeps
-`pro1x-autosuspend` from suspending (`docs/power-management.md`).
+`pro1x-autosuspend` from suspending (`docs/power-management.md`). With a
+kernel that has this patch the file now picks 3 s by itself (below,
+"The PulseAudio switch").
 
 What the kernel did (up to pro1x.7): the amplifier's DAPM widget was a PGA
 without a register, the same tier as the codec's `HPHL PGA`/`HPHR PGA`,
@@ -154,16 +156,22 @@ power sequencing and the second shows a cut or clicking start:
    PulseAudio switch below; with `tools/pro1x-powerlog`, the `pcm` column
    and the +100 mA phase after a sound then last about 3 s.
 
-## The PulseAudio switch (after the test passes)
+## The PulseAudio switch (by the kernel since 2026-10-30)
 
-`rootfs-overlay/etc/pulse/default.pa.d/50-pro1x.pa` has the 3 s line
-prepared as a comment: make it the active line and comment out the
-`timeout=300` one, then on the phone
+`rootfs-overlay/etc/pulse/default.pa.d/50-pro1x.pa` chooses by itself: 3 s
+when `/sys/module/snd_soc_aw87339/parameters/on_delay_ms` exists (a kernel
+with patch 0026, pro1x.8 and later), 300 s otherwise. So the reference
+listening on the old kernel (step 0) still has 300 s, and step 2's pactl
+lines are only needed for a PulseAudio started before the file was there.
+It goes to the phone with the other power files:
 
-    scp rootfs-overlay/etc/pulse/default.pa.d/50-pro1x.pa root@172.16.42.1:/etc/pulse/default.pa.d/
+    PHONE="ssh root@172.16.42.1" bash scripts/71-power-userspace.sh
 
-and PulseAudio's next start (a reboot) uses it. The README's audio row and
-the 300 s notes in `docs/power-management.md` go with it.
+(Leste and the MeeGo copy; Kali and Arch get WirePlumber's 3 s), and
+PulseAudio's next start (a reboot) uses it. If the test fails (a pop with
+the new kernel): `touch /etc/pulse/pro1x-suspend-300` in Leste and in the
+MeeGo copy, and the next start is back at 300 s; `71-power-userspace.sh
+restore` puts the old file back.
 
 ## The headset jack (patch 0027, 7.1.0-pro1x.9; UCM patch 0002; untested)
 
