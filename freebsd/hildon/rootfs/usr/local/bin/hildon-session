@@ -73,6 +73,12 @@ if [ -x /usr/local/bin/systemui ]; then
 	respawn /usr/local/bin/systemui &
 	alarm="$alarm $!"
 fi
+# After a start by the RTC alarm (rc.d/pro1x_alarmboot): rings by itself
+# should no alarm dialog come, then asks whether to switch off again
+# (docs/alarm-power-on.md); ends at once after any other start
+if [ -x /usr/local/bin/pro1x-alarmboot ]; then
+	/usr/local/bin/pro1x-alarmboot &
+fi
 # The location dialogs (the disclaimer, "enable positioning") that
 # liblocation's clients ask for over the system bus; Leste's bus activates
 # it through maemo-invoker, which FreeBSD's cannot do into this session

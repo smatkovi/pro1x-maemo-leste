@@ -104,6 +104,15 @@ LOCAL = {
                          'MeeGo-like look is on; a tap or a drag sets it '
                          "(tools/pro1x-volume-osd). Nokia's graphics are not included.",
                          ['UNKNOWN']),
+    'pro1x-alarmboot': ('1.0', 'After the RTC alarm switched the Pro1X on: rings, offers to switch off',
+                        'When the boot menu started FreeBSD for the RTC alarm that FreeBSD '
+                        'had set (kenv pro1x.alarmboot), rc.d/pro1x_alarmboot starts the '
+                        'Hildon session; pro1x-alarmboot there rings by itself should no '
+                        "alarm dialog of alarmd's come (its queue lost with a memory /var), "
+                        'and once the alarm is stopped asks whether to switch the phone off '
+                        'again, as the N900 asked whether to switch it on '
+                        '(tools/pro1x-alarmboot, docs/alarm-power-on.md).',
+                        ['GPLv2+']),
 }
 # The N9's applications of harmattan-qt5 (apps/; harmattan.sh), new ones
 # in QML with com.nokia.meego: what their .desktop files say of them
@@ -235,6 +244,9 @@ RUNTIME = {
                      'ca_root_nss'],
     # the volume it shows is PulseAudio's, which hildon-session starts
     'pro1x-volume-osd': ['pulseaudio', 'hildon-desktop'],
+    # its tone through PulseAudio, alarmd asked for the alarm, the session
+    # whose alarm dialog it watches
+    'pro1x-alarmboot': ['pulseaudio', 'alarmd', 'osso-systemui-alarm', 'hildon-desktop'],
     # pactl is PulseAudio's
     'pro1x-volume-keys': ['pulseaudio'],
     # the modem asks for its files and domains before its file systems
@@ -887,7 +899,7 @@ apps = sorted(x['name'] for x in meta.values()
 apps = sorted(set(apps) | {x['name'] for x in meta.values() if x['name'] in (
     'hildon-input-method-plugins', 'headphoned', 'wifi-assistant', 'hildon-status-menu',
     'osso-systemui-alarm', 'maemo-input-sounds', 'maemo-ringtones-mr0', 'osso-sounds-rtc',
-    'pro1x-volume-osd', 'pro1x-volume-keys')})
+    'pro1x-volume-osd', 'pro1x-volume-keys', 'pro1x-alarmboot')})
 # the N9's own user interface (harmattan.sh), where it is built: all of
 # it but the headers
 harmattan = sorted(x['name'] for x in meta.values()

@@ -65,13 +65,30 @@ if [ -x /sbin/pro1x-bootmenu ] && [ -x /sbin/pro1x-boot ]; then
   # another kernel runs, else this start is one of its tries
   trial=$(pro1x-boot trial-check 2>/dev/null) || trial=none
   entries=$(pro1x-boot entries)
-  want=$(pro1x-boot take-next)
+  # Powered on by the RTC alarm: the system that set the alarm starts at
+  # once, without the menu, so that its alarm rings (pro1x-boot
+  # alarm-check, docs/alarm-power-on.md; it writes /host/pro1x-boot/
+  # alarmboot for that system). A one-shot choice stays for the next
+  # start then, unless it names that system (older Leste init scripts set
+  # one at a shutdown with an alarm).
+  alarm=
+  if aline=$(pro1x-boot alarm-check 2>&1); then
+    alarm=${aline%% *}
+  fi
+  bootlog "alarm-check: $aline"
+  if [ -n "$alarm" ]; then
+    want=$alarm
+    [ "$(cat /host/pro1x-boot/next 2>/dev/null)" != "$alarm" ] || pro1x-boot take-next > /dev/null
+  else
+    want=$(pro1x-boot take-next)
+  fi
   # a one-shot choice (another system tried from the PC, say) gets the
-  # watchdog like a trial start: a hang ends in the default system again
+  # watchdog like a trial start: a hang ends in the default system again;
+  # so does a start by the alarm
   oneshot=${want:+1}
   [ -n "$want" ] || want=$(pro1x-boot get-default)
   timeout=$(pro1x-boot get-timeout)
-  bootlog "want=[$want] oneshot=$oneshot trial=$trial timeout=$timeout"
+  bootlog "want=[$want] oneshot=$oneshot alarm=[$alarm] trial=$trial timeout=$timeout"
   count=0
   default=0
   set --
@@ -86,7 +103,7 @@ if [ -x /sbin/pro1x-bootmenu ] && [ -x /sbin/pro1x-boot ]; then
 $entries
 EOF
   choice=$default
-  if [ "$count" -gt 1 ] && [ "$timeout" -gt 0 ]; then
+  if [ -z "$alarm" ] && [ "$count" -gt 1 ] && [ "$timeout" -gt 0 ]; then
     choice=$(pro1x-bootmenu -t "$timeout" -d "$default" "$@") || choice=$default
   fi
   line=$(echo "$entries" | sed -n "$((choice + 1))p")
@@ -109,7 +126,7 @@ EOF
       n=$(echo "$snaps" | cut -d'|' -f1 | grep -nx "$want" | cut -d: -f1)
       if [ -n "$n" ]; then
         page=$(((n - 1) / 8)) sdefault=$(((n - 1) % 8)) stimeout=$timeout
-        [ "$timeout" -gt 0 ] && [ "$count" -gt 1 ] || direct=1
+        [ "$timeout" -gt 0 ] && [ "$count" -gt 1 ] && [ -z "$alarm" ] || direct=1
       fi ;;
     esac
     while :; do
@@ -164,6 +181,13 @@ SNAPS
         ''|*[!0-9-]*) ;;
         *) args="$args hint.qcom_rtc.0.offset=$off" ;;
       esac
+      # a start by its alarm (kenv pro1x.alarmboot, rc.d/pro1x_alarmboot;
+      # pro1x.alarmdue: the alarm's real time, when the offset is known)
+      if [ "$alarm" = freebsd ]; then
+        args="$args pro1x.alarmboot=1"
+        due=$(sed -n 's/^due=\([0-9][0-9]*\)$/\1/p' /host/pro1x-boot/alarmboot 2>/dev/null)
+        [ -z "$due" ] || args="$args pro1x.alarmdue=$due"
+      fi
       args="FreeBSD:$args"
     fi
     if kexec -s -l "/host$image" --command-line="$args"; then

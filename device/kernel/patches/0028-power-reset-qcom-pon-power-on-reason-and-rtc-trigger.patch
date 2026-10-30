@@ -1,0 +1,261 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 30 Oct 2026 20:00:00 +0100
+Subject: [PATCH] power: reset: qcom-pon: the power-on reason, and the RTC
+ alarm as a power-on source
+
+For alarms that switch the phone on (docs/alarm-power-on.md): whether the
+RTC alarm powered the PMIC on, and whether the RTC alarm may do so.
+
+At probe the driver reads the PON peripheral's reason registers as the
+vendor kernel's qpnp-power-on does (msm-4.19, the Pro1X's LineageOS
+kernel): the subtype (0x05) gives the layout, GEN1 (PON_REASON1 at 0x08,
+WARM_RESET_REASON1 0x0a, POFF_REASON1 0x0c) or GEN2 (0xc0, 0xc2, 0xc5;
+the PM6125's PON is "qcom,pm8998-pon", GEN2). It logs them with
+PON_TRIGGER_EN (0x80), e.g.
+
+  qcom-pon ...pon@800: power-on reason 0x04 (RTC alarm), cold boot
+  (warm reset reason 0x00), power-off reason 0x.., power-on sources 0x..
+  (RTC alarm on)
+
+and shows them in sysfs, read only, as they were at this boot:
+pon_reason, warm_reset_reason, poff_reason (0x%02x). rtc_power_on reads
+the RTC bit (bit 2) of PON_TRIGGER_EN from the PMIC; writing 0 or 1
+changes that bit alone (regmap_update_bits), nothing else of the PON
+block: no key, reset, S2 or PS_HOLD setting. The bits are the vendor
+kernel's enum pon_trigger_source (PON_RTC = 2) and its reason strings.
+GEN3 PON peripherals (PMK8350) keep the reasons elsewhere: no attributes
+there.
+
+The boot menu reads the same registers through the PMIC's regmap in
+debugfs (it runs before this module loads); this is for the running
+systems and the boot log.
+---
+diff --git a/drivers/power/reset/qcom-pon.c b/drivers/power/reset/qcom-pon.c
+index 7e108982a5..f27e7fd243 100644
+--- a/drivers/power/reset/qcom-pon.c
++++ b/drivers/power/reset/qcom-pon.c
+@@ -11,9 +11,41 @@
+ #include <linux/reboot.h>
+ #include <linux/reboot-mode.h>
+ #include <linux/regmap.h>
++#include <linux/sysfs.h>
+ 
+ #define PON_SOFT_RB_SPARE		0x8f
+ 
++/*
++ * What powered the PMIC on, why it last reset or went off, and which
++ * sources may power it on, as the vendor kernel's qpnp-power-on reads them
++ * (msm-4.19): the PON peripheral's subtype says where the reason
++ * registers are (GEN1 or GEN2 layout). They are status registers the PMIC
++ * latches at each power-on; the bootloaders read them too and leave them.
++ */
++#define PON_PERPH_SUBTYPE		0x05
++#define  PON_SUBTYPE_PRIMARY		0x01
++#define  PON_SUBTYPE_SECONDARY		0x02
++#define  PON_SUBTYPE_1REG		0x03
++#define  PON_SUBTYPE_GEN2_PRIMARY	0x04
++#define  PON_SUBTYPE_GEN2_SECONDARY	0x05
++#define PON_GEN1_PON_REASON1		0x08
++#define PON_GEN1_WARM_RESET_REASON1	0x0a
++#define PON_GEN1_POFF_REASON1		0x0c
++#define PON_GEN2_PON_REASON1		0xc0
++#define PON_GEN2_WARM_RESET_REASON1	0xc2
++#define PON_GEN2_POFF_REASON1		0xc5
++/* PON_REASON1 and PON_TRIGGER_EN share these bits (bit 0 only the reason) */
++#define  PON_HARD_RESET			BIT(0)
++#define  PON_SMPL			BIT(1)
++#define  PON_RTC			BIT(2)
++#define  PON_DC_CHG			BIT(3)
++#define  PON_USB_CHG			BIT(4)
++#define  PON_PON1			BIT(5)
++#define  PON_CBLPWR			BIT(6)
++#define  PON_KPDPWR			BIT(7)
++/* the power-on sources; only the RTC bit is ever written here */
++#define PON_TRIGGER_EN			0x80
++
+ #define GEN1_REASON_SHIFT		2
+ #define GEN2_REASON_SHIFT		1
+ 
+@@ -25,8 +57,166 @@ struct qcom_pon {
+ 	u32 baseaddr;
+ 	struct reboot_mode_driver reboot_mode;
+ 	long reason_shift;
++	bool has_reasons;
++	u8 pon_reason;
++	u8 warm_reset_reason;
++	u8 poff_reason;
++};
++
++static const char * const qcom_pon_reason_names[] = {
++	"hard reset", "SMPL", "RTC alarm", "DC charger", "USB charger",
++	"PON1", "cable power", "power key",
++};
++
++/*
++ * The reasons as they were at this boot (read once at probe): pon_reason
++ * (PON_REASON1, bit 2 the RTC alarm), warm_reset_reason (0 after a power-on
++ * from off), poff_reason (POFF_REASON1), each as 0x%02x.
++ */
++static ssize_t pon_reason_show(struct device *dev,
++			       struct device_attribute *attr, char *buf)
++{
++	struct qcom_pon *pon = dev_get_drvdata(dev);
++
++	return sysfs_emit(buf, "0x%02x\n", pon->pon_reason);
++}
++static DEVICE_ATTR_RO(pon_reason);
++
++static ssize_t warm_reset_reason_show(struct device *dev,
++				      struct device_attribute *attr, char *buf)
++{
++	struct qcom_pon *pon = dev_get_drvdata(dev);
++
++	return sysfs_emit(buf, "0x%02x\n", pon->warm_reset_reason);
++}
++static DEVICE_ATTR_RO(warm_reset_reason);
++
++static ssize_t poff_reason_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	struct qcom_pon *pon = dev_get_drvdata(dev);
++
++	return sysfs_emit(buf, "0x%02x\n", pon->poff_reason);
++}
++static DEVICE_ATTR_RO(poff_reason);
++
++/*
++ * rtc_power_on: 1 while the RTC alarm is a power-on source (the RTC bit of
++ * PON_TRIGGER_EN), read from the PMIC each time. Writing 0 or 1 changes
++ * that one bit (read, modify, write) and nothing else of the PON block.
++ */
++static ssize_t rtc_power_on_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct qcom_pon *pon = dev_get_drvdata(dev);
++	unsigned int val;
++	int ret;
++
++	ret = regmap_read(pon->regmap, pon->baseaddr + PON_TRIGGER_EN, &val);
++	if (ret)
++		return ret;
++
++	return sysfs_emit(buf, "%d\n", !!(val & PON_RTC));
++}
++
++static ssize_t rtc_power_on_store(struct device *dev,
++				  struct device_attribute *attr,
++				  const char *buf, size_t count)
++{
++	struct qcom_pon *pon = dev_get_drvdata(dev);
++	bool on;
++	int ret;
++
++	ret = kstrtobool(buf, &on);
++	if (ret)
++		return ret;
++
++	ret = regmap_update_bits(pon->regmap, pon->baseaddr + PON_TRIGGER_EN,
++				 PON_RTC, on ? PON_RTC : 0);
++	if (ret)
++		return ret;
++
++	dev_info(dev, "RTC alarm as a power-on source: %s\n", on ? "on" : "off");
++	return count;
++}
++static DEVICE_ATTR_RW(rtc_power_on);
++
++static struct attribute *qcom_pon_attrs[] = {
++	&dev_attr_pon_reason.attr,
++	&dev_attr_warm_reset_reason.attr,
++	&dev_attr_poff_reason.attr,
++	&dev_attr_rtc_power_on.attr,
++	NULL
+ };
+ 
++static umode_t qcom_pon_attr_visible(struct kobject *kobj,
++				     struct attribute *attr, int n)
++{
++	struct qcom_pon *pon = dev_get_drvdata(kobj_to_dev(kobj));
++
++	return pon && pon->has_reasons ? attr->mode : 0;
++}
++
++static const struct attribute_group qcom_pon_group = {
++	.attrs = qcom_pon_attrs,
++	.is_visible = qcom_pon_attr_visible,
++};
++__ATTRIBUTE_GROUPS(qcom_pon);
++
++/* The reasons of a GEN1 or GEN2 PON peripheral, logged once */
++static void qcom_pon_read_reasons(struct qcom_pon *pon)
++{
++	unsigned int subtype, pon_reason, warm, poff, trig;
++	unsigned int r_pon, r_warm, r_poff;
++	char names[96] = "";
++	int i, ret;
++
++	ret = regmap_read(pon->regmap, pon->baseaddr + PON_PERPH_SUBTYPE, &subtype);
++	if (ret)
++		return;
++
++	switch (subtype) {
++	case PON_SUBTYPE_PRIMARY:
++	case PON_SUBTYPE_SECONDARY:
++	case PON_SUBTYPE_1REG:
++		r_pon = PON_GEN1_PON_REASON1;
++		r_warm = PON_GEN1_WARM_RESET_REASON1;
++		r_poff = PON_GEN1_POFF_REASON1;
++		break;
++	case PON_SUBTYPE_GEN2_PRIMARY:
++	case PON_SUBTYPE_GEN2_SECONDARY:
++		r_pon = PON_GEN2_PON_REASON1;
++		r_warm = PON_GEN2_WARM_RESET_REASON1;
++		r_poff = PON_GEN2_POFF_REASON1;
++		break;
++	default:
++		/* GEN3 keeps the reasons in another peripheral (PON_PBS) */
++		return;
++	}
++
++	if (regmap_read(pon->regmap, pon->baseaddr + r_pon, &pon_reason) ||
++	    regmap_read(pon->regmap, pon->baseaddr + r_warm, &warm) ||
++	    regmap_read(pon->regmap, pon->baseaddr + r_poff, &poff) ||
++	    regmap_read(pon->regmap, pon->baseaddr + PON_TRIGGER_EN, &trig))
++		return;
++
++	pon->pon_reason = pon_reason;
++	pon->warm_reset_reason = warm;
++	pon->poff_reason = poff;
++	pon->has_reasons = true;
++
++	for (i = 0; i < ARRAY_SIZE(qcom_pon_reason_names); i++)
++		if (pon_reason & BIT(i))
++			scnprintf(names + strlen(names), sizeof(names) - strlen(names),
++				  "%s%s", names[0] ? ", " : "",
++				  qcom_pon_reason_names[i]);
++
++	dev_info(pon->dev,
++		 "power-on reason 0x%02x (%s), %s boot (warm reset reason 0x%02x), power-off reason 0x%02x, power-on sources 0x%02x (RTC alarm %s)\n",
++		 pon_reason, names[0] ? names : "none", warm ? "warm" : "cold",
++		 warm, poff, trig, trig & PON_RTC ? "on" : "off");
++}
++
+ static int qcom_pon_reboot_mode_write(struct reboot_mode_driver *reboot,
+ 				    unsigned int magic)
+ {
+@@ -81,6 +271,7 @@ static int qcom_pon_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	platform_set_drvdata(pdev, pon);
++	qcom_pon_read_reasons(pon);
+ 
+ 	return devm_of_platform_populate(&pdev->dev);
+ }
+@@ -100,6 +291,7 @@ static struct platform_driver qcom_pon_driver = {
+ 	.driver = {
+ 		.name = "qcom-pon",
+ 		.of_match_table = qcom_pon_id_table,
++		.dev_groups = qcom_pon_groups,
+ 	},
+ };
+ module_platform_driver(qcom_pon_driver);

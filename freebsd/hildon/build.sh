@@ -858,6 +858,13 @@ if [ $# -eq 0 ] || [[ " $* " == *" pro1x-volume-osd "* ]]; then
 	dsp_tool pro1x-volume-osd bin "gtk+-2.0 gconf-2.0 libpulse-mainloop-glib" -lm ||
 	    failed+=(pro1x-volume-osd)
 fi
+# after a start by the RTC alarm (docs/alarm-power-on.md): its own ringing
+# should alarmd's not come, then the question to switch off again; with
+# rc.d/pro1x_alarmboot (extra/pro1x-alarmboot)
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-alarmboot "* ]]; then
+	dsp_tool pro1x-alarmboot bin "gtk+-2.0 hildon-1 gio-2.0 alarm libpulse-simple" -lm ||
+	    failed+=(pro1x-alarmboot)
+fi
 # the N9's user interface (harmattan.sh): in order, each on the ones before
 kind=harmattan
 for entry in "${HARMATTAN[@]}"; do

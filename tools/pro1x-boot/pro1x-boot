@@ -14,6 +14,8 @@
 #   pro1x-boot trial-ok             (in a system) this start of the kernel on
 #                                   trial went well; the next boot ends the trial
 #   pro1x-boot trial-stop           end a trial by hand (slot b as before)
+#   pro1x-boot pmic                 the PMIC's power-on reason, its RTC and the
+#                                   RTC's alarm (docs/alarm-power-on.md)
 #
 # Systems: leste, meego, kali, luneos, arch, freebsd, kolibri (started from slot b through
 # the boot menu in the initramfs) and sailfish (slot a, its own kernel). MeeGo is
@@ -35,8 +37,10 @@
 # pick the next system from the running one, then reboot.
 #
 # Internal, for the initramfs: entries, snapshots, take-next, get-default, get-timeout,
-# set-current. The initramfs logs each start's choice (the one-shot choice it
-# read, the entries, the preselection, what it started) to $CONF/last-boot.
+# set-current, alarm-check. The initramfs logs each start's choice (the one-shot
+# choice it read, the entries, the preselection, what it started) to $CONF/last-boot.
+# A start by the RTC alarm goes to the system that set the alarm, at once
+# (alarm-check; docs/alarm-power-on.md).
 set -eu
 
 if [ -n "${PRO1X_BOOT_HOST:-}" ]; then HOST=$PRO1X_BOOT_HOST
@@ -132,6 +136,140 @@ active_slot() {
 	a=$(attrs "$1" "$2")
 	# bit 50 of the GPT attributes = slot active (Qualcomm layout)
 	case $(( (0x${a%????????????} >> 2) & 1 )) in 1) echo a ;; *) echo b ;; esac
+}
+
+# The PMIC (PM6125, SPMI slave 0) for alarms that switch the phone on
+# (docs/alarm-power-on.md): what powered it on, the RTC's counter and the
+# RTC's alarm. Read through the PMIC's regmap in debugfs, which is there
+# before qcom-pon and rtc-pm8xxx load and needs no kernel patch: its
+# "registers" file has a line of 9 bytes for every register ("08c0: 04"),
+# register R at byte 9 * R. Only read here, never written.
+# PRO1X_BOOT_REGS: another file of that form (tests/alarm-boot-test.sh).
+PMIC_REGS=${PRO1X_BOOT_REGS:-/sys/kernel/debug/regmap/0-00/registers}
+PON=$((0x800))		# the PON peripheral, "qcom,pm8998-pon"
+RTC_RW=$((0x6000))	# the counter (rtc-pm8xxx's pm8941_regs: read at 0x48)
+RTC_ALARM=$((0x6100))	# the alarm (ALARM_RW 0x40, ALARM_CTRL 0x46 bit 7)
+# A start counts as the alarm's when the counter is at most this many
+# seconds past the alarm's count (ABL and the kernel take about 15 s)
+ALARM_WINDOW=600
+
+# preg R: the register R (a number) as two hex digits
+preg() {
+	l=$(dd if="$PMIC_REGS" bs=9 skip="$1" count=1 2> /dev/null) || return 1
+	case $l in
+	"$(printf %04x "$1"): "[0-9a-f][0-9a-f]) echo "${l#*: }" ;;
+	*) return 1 ;;
+	esac
+}
+
+# preg32 R: R to R+3, little endian, as a number
+preg32() {
+	b0=$(preg "$1") && b1=$(preg $(($1 + 1))) && b2=$(preg $(($1 + 2))) &&
+	    b3=$(preg $(($1 + 3))) || return 1
+	echo $((0x$b3 << 24 | 0x$b2 << 16 | 0x$b1 << 8 | 0x$b0))
+}
+
+# pmic_read: sets pmic_ok (1 when all of it could be read), sub, pon_reason,
+# warm, poff, trig (hex), rtc_now, rtc_alarm (numbers), alarm_on (0/1)
+pmic_read() {
+	pmic_ok= sub=- pon_reason=- warm=- poff=- trig=- rtc_now=- rtc_alarm=- alarm_on=-
+	mounted=
+	if [ -z "${PRO1X_BOOT_REGS:-}" ] && [ ! -e "$PMIC_REGS" ] &&
+	    [ -d /sys/kernel/debug ] && ! grep -q ' /sys/kernel/debug ' /proc/mounts; then
+		mount -t debugfs debugfs /sys/kernel/debug 2> /dev/null && mounted=1
+	fi
+	pmic_read_regs || true
+	[ -z "$mounted" ] || umount /sys/kernel/debug 2> /dev/null || true
+}
+pmic_read_regs() {
+	sub=$(preg $((PON + 0x05))) || return 1
+	# where the reasons are: the vendor kernel's PON_OFFSET (qpnp-power-on)
+	case $sub in
+	01|02|03) o_pon=0x08 o_warm=0x0a o_poff=0x0c ;;
+	04|05) o_pon=0xc0 o_warm=0xc2 o_poff=0xc5 ;;
+	*) return 1 ;;
+	esac
+	pon_reason=$(preg $((PON + o_pon))) && warm=$(preg $((PON + o_warm))) &&
+	    poff=$(preg $((PON + o_poff))) && trig=$(preg $((PON + 0x80))) || return 1
+	# the counter as rtc-pm8xxx reads it: again if the low byte carried
+	rtc_now=$(preg32 $((RTC_RW + 0x48))) || return 1
+	lo=$(preg $((RTC_RW + 0x48))) || return 1
+	[ $((0x$lo)) -ge $((rtc_now & 255)) ] || rtc_now=$(preg32 $((RTC_RW + 0x48))) || return 1
+	rtc_alarm=$(preg32 $((RTC_ALARM + 0x40))) || return 1
+	c=$(preg $((RTC_ALARM + 0x46))) || return 1
+	alarm_on=$(((0x$c >> 7) & 1))
+	pmic_ok=1
+}
+
+# pon_names HEX: the bits of PON_REASON1 / PON_TRIGGER_EN by name
+pon_names() {
+	n=
+	i=0
+	for b in "hard reset" SMPL "RTC alarm" "DC charger" "USB charger" PON1 "cable power" "power key"; do
+		[ $(((0x$1 >> i) & 1)) -eq 0 ] || n="$n${n:+, }$b"
+		i=$((i + 1))
+	done
+	echo "${n:-none}"
+}
+
+# alarm_check: for the initramfs, at every start. The RTC has one alarm,
+# and whichever system sets it there owns it: the alarm's count is noted
+# at each start ($CONF/rtc-alarm: count, owner, "used" once a start went
+# to it); a count that changed since the previous start was set by the
+# system that ran in between ($CONF/current). FreeBSD (which never writes
+# userdata) and KolibriOS are covered the same way, with nothing to do at
+# their shutdown. This start is the alarm's when the PMIC was powered on
+# by the RTC alarm (PON_REASON1 bit 2), the counter is at most
+# ALARM_WINDOW s past that alarm, and its owner is installed: then prints
+# "<owner> <details>", writes $CONF/alarmboot (system=, rtc_alarm=,
+# rtc_now=, due=: the alarm's real time, as alarmd sets the RTC 60 s
+# early) for the system to read, and succeeds. Otherwise prints
+# "none <why> <details>" and fails. $CONF/alarmboot is only ever this
+# start's.
+alarm_check() {
+	pmic_read
+	rm -f "$CONF/alarmboot"
+	state=$CONF/rtc-alarm
+	prev_alarm= prev_owner= prev_used=
+	[ ! -s "$state" ] || read -r prev_alarm prev_owner prev_used < "$state" || true
+	last=$(cat "$CONF/current" 2> /dev/null || echo leste)
+	info="pon=$pon_reason warm=$warm poff=$poff sources=$trig rtc=$rtc_now alarm=$rtc_alarm on=$alarm_on last=$last prev=${prev_alarm:--}:${prev_owner:--}${prev_used:+:$prev_used}"
+	if [ -z "$pmic_ok" ]; then
+		echo "none pmic-unreadable $info"
+		return 1
+	fi
+	used=
+	if [ "$rtc_alarm" = "$prev_alarm" ] && [ -n "$prev_owner" ]; then
+		owner=$prev_owner used=$prev_used
+	else
+		owner=$last
+	fi
+	# a snapshot that is gone: its system
+	case $owner in
+	*@*) snapshots "${owner%@*}" | cut -d'|' -f1 | grep -qx "$owner" || owner=${owner%@*} ;;
+	esac
+	result= why=
+	late=$((rtc_now - rtc_alarm))
+	if [ $((0x$pon_reason & 4)) -eq 0 ]; then why=not-by-the-rtc
+	elif [ "$rtc_alarm" -eq 0 ]; then why=no-alarm
+	elif [ -n "$used" ]; then why=alarm-used-already
+	elif [ "$late" -lt -5 ] || [ "$late" -gt "$ALARM_WINDOW" ]; then why=not-this-alarm
+	elif ! entries | cut -d'|' -f1 | grep -qx "${owner%@*}"; then why=owner-not-installed
+	else result=$owner used=used
+	fi
+	mkdir -p "$CONF"
+	echo "$rtc_alarm $owner${used:+ $used}" > "$state.new" && mv "$state.new" "$state"
+	if [ -z "$result" ]; then
+		echo "none $why owner=$owner late=$late $info"
+		return 1
+	fi
+	off=$(cat "$HOST/pro1x-rtc-offset" 2> /dev/null || true)
+	due=
+	case $off in ''|*[!0-9-]*) ;; *) due=$((rtc_alarm + off + 60)) ;; esac
+	printf 'system=%s\nrtc_alarm=%s\nrtc_now=%s\ndue=%s\n' "$result" "$rtc_alarm" \
+	    "$rtc_now" "$due" > "$CONF/alarmboot"
+	sync
+	echo "$result late=$late due=${due:--} $info"
 }
 
 # Qualcomm A/B attribute bits: 48-49 priority, 50 active, 51-53 retry
@@ -283,8 +421,19 @@ set-current)
 	echo "$2" > "$CONF/current"
 	;;
 get-timeout) cat "$CONF/timeout" 2>/dev/null || echo 5 ;;
+alarm-check) alarm_check ;;
+pmic)
+	pmic_read
+	[ -n "$pmic_ok" ] || die "the PMIC's registers cannot be read ($PMIC_REGS: debugfs, root?)"
+	echo "power-on reason: 0x$pon_reason ($(pon_names "$pon_reason")), $( [ "$warm" = 00 ] && echo cold || echo warm) boot (warm reset reason 0x$warm), power-off reason 0x$poff (PON subtype $sub)"
+	echo "power-on sources: 0x$trig ($(pon_names "$trig"))"
+	if [ "$alarm_on" = 1 ]; then a="on, in $((rtc_alarm - rtc_now)) s"; else a=off; fi
+	echo "RTC: counter $rtc_now, alarm at $rtc_alarm ($a)"
+	echo "the alarm's owner (count owner [used]): $(cat "$CONF/rtc-alarm" 2>/dev/null || echo -)"
+	echo "this start by the alarm: $(tr '\n' ' ' 2>/dev/null < "$CONF/alarmboot" || echo no)"
+	;;
 *)
-	sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'
 	exit 1
 	;;
 esac

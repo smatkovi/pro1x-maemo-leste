@@ -3,7 +3,8 @@
 # (Leste, the MeeGo copy) and pro1x-boot-trial with its boot service in
 # every Linux system the boot menu starts, and the watchdog for systemd's
 # systems (tools/pro1x-boot-trial). Installs only: nothing runs without a
-# trial (pro1x-boot trial, which 65-kernel-update.sh flash starts).
+# trial (pro1x-boot trial, which 65-kernel-update.sh flash starts). Also
+# Leste's pro1x-rtc service where it is installed (docs/alarm-power-on.md).
 #
 # Runs on the phone as root in Leste, the repository (or its tools/ part)
 # in $REPO; 65-kernel-update.sh prepare runs it. Images that are mounted
@@ -20,6 +21,13 @@ install_into() {
 	case $init in
 	openrc)
 		install -D -m 755 "$REPO/tools/pro1x-boot/pro1x-boot" "$root/usr/local/sbin/pro1x-boot"
+		# the clock's service as this repository has it (its shutdown no
+		# longer sets a one-shot choice for an alarm: the boot menu sees
+		# the alarm, docs/alarm-power-on.md); only where it is installed
+		if [ -f "$root/etc/init.d/pro1x-rtc" ] &&
+		    [ -f "$REPO/rootfs-overlay/etc/init.d/pro1x-rtc" ]; then
+			install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-rtc" "$root/etc/init.d/pro1x-rtc"
+		fi
 		install -D -m 755 "$T/pro1x-boot-trial.openrc" "$root/etc/init.d/pro1x-boot-trial"
 		mkdir -p "$root/etc/runlevels/default"
 		ln -sfn /etc/init.d/pro1x-boot-trial "$root/etc/runlevels/default/pro1x-boot-trial"

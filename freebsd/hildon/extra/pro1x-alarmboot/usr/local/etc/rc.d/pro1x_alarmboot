@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_alarmboot
+# REQUIRE: LOGIN dbus
+# KEYWORD: nojail
+#
+# F(x)tec Pro1X: a start by the RTC alarm that FreeBSD had set. The boot
+# menu then starts FreeBSD at once and adds pro1x.alarmboot=1 and
+# pro1x.alarmdue=<the alarm's time, seconds since the epoch> to the kernel
+# environment (docs/alarm-power-on.md). This writes the note that
+# pro1x-alarmboot in the Hildon session reads (/var/run/pro1x-alarmboot)
+# and starts that session as root, as the console's "startx hildon" does,
+# unless X runs already: alarmd and the system UI in it ring the alarm,
+# or pro1x-alarmboot rings by itself (alarmd's queue is lost with the
+# read-only root's memory /var), then asks whether to switch off again.
+# Nothing after any other start.
+
+. /etc/rc.subr
+
+name="pro1x_alarmboot"
+rcvar="pro1x_alarmboot_enable"
+start_cmd="pro1x_alarmboot_start"
+stop_cmd=":"
+
+pro1x_alarmboot_start()
+{
+	local due
+
+	rm -f /var/run/pro1x-alarmboot
+	[ "$(kenv -q pro1x.alarmboot)" = 1 ] || return 0
+	due=$(kenv -q pro1x.alarmdue)
+	case $due in ''|*[!0-9]*) due= ;; esac
+	# rtc_alarm: what makes this alarm's note unique (pro1x-alarmboot
+	# handles each one once)
+	printf 'system=freebsd\nrtc_alarm=%s\ndue=%s\n' "${due:-$(date +%s)}" "$due" \
+	    > /var/run/pro1x-alarmboot
+	echo "Started by the alarm${due:+ of $(date -r "$due" '+%H:%M')}"
+	if [ -x /usr/local/bin/startx ] && [ -x /usr/local/bin/hildon-session ] &&
+	    ! pgrep -x Xorg > /dev/null; then
+		(cd /root && HOME=/root /usr/local/bin/startx hildon \
+		    > /var/log/startx.log 2>&1 &)
+	fi
+}
+
+load_rc_config $name
+: ${pro1x_alarmboot_enable:="YES"}
+run_rc_command "$1"

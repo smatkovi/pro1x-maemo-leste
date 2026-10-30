@@ -31,12 +31,11 @@ stop() {
 	# also next to the system images, for the other systems (FreeBSD gets
 	# it from the boot menu as hint.qcom_rtc.0.offset)
 	/usr/local/sbin/pro1x-rtc-sync save
-	# A wake alarm is set (alarmd, or timed in the MeeGo boot): the phone
-	# powers on for it into the system that set it; not over a one-shot
-	# choice made for this reboot (pro1x-boot next, by hand or from the PC)
-	if [ -n "$(cat /sys/class/rtc/rtc0/wakealarm 2>/dev/null)" ] &&
-	    [ ! -s /host/pro1x-boot/next ]; then
-		/usr/local/sbin/pro1x-boot next "$(/usr/local/sbin/pro1x-boot current)"
-	fi
+	# A wake alarm (alarmd, or timed in the MeeGo boot) stays set: when it
+	# switches the phone on, the boot menu starts this system at once
+	# (pro1x-boot alarm-check in the initramfs, docs/alarm-power-on.md).
+	# Nothing to note here: the menu sees which system set it. (Before, a
+	# one-shot "pro1x-boot next" for this system went here, which also sent
+	# a start by the power key there.)
 	eend 0
 }

@@ -1,0 +1,8 @@
+# F(x)tec Pro1X (sourced by Xsession-post): after a start by the RTC alarm
+# (docs/alarm-power-on.md), pro1x-alarmboot rings by itself should no
+# alarm dialog come, then asks whether to switch the phone off again; it
+# ends at once after any other start (tools/pro1x-alarmboot, package
+# pro1x-alarmboot from scripts/mkdeb-tools.sh).
+if [ -x /usr/bin/pro1x-alarmboot ]; then
+	/usr/bin/pro1x-alarmboot > /dev/null 2>&1 &
+fi

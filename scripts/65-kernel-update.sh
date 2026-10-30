@@ -84,7 +84,7 @@ if [ "$1" = prepare ] || [ "$1" = refresh ]; then
 
 	log "pro1x-boot and the trial's parts into the systems (66-boot-trial-install.sh)"
 	tar -C "$REPO" --owner=0 --group=0 -cf - tools/pro1x-boot tools/pro1x-boot-trial \
-	    scripts/66-boot-trial-install.sh |
+	    scripts/66-boot-trial-install.sh rootfs-overlay/etc/init.d/pro1x-rtc |
 	    ph "set -e; t=\$(mktemp -d); tar -C \$t -xf -; REPO=\$t bash \$t/scripts/66-boot-trial-install.sh; rm -r \$t"
 
 	log "initramfs scripts of this repository into Leste"

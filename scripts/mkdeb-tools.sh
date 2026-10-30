@@ -8,6 +8,10 @@
 #                     Xsession.post/47pro1x-events
 #   pro1x-volume-osd  the N9's volume bar (tools/pro1x-volume-osd),
 #                     Xsession.post/46pro1x-volume-osd
+#   pro1x-alarmboot   after a start by the RTC alarm: its own ringing should
+#                     no alarm dialog come, then the question to switch
+#                     off again (tools/pro1x-alarmboot,
+#                     docs/alarm-power-on.md), Xsession.post/48pro1x-alarmboot
 #
 # Depends: the libraries they link (dpkg-shlibdeps) and the hildon-desktop
 # with patches/meego they need (49-hidpi.sh's +pro1xN). Neither has GConf
@@ -26,7 +30,7 @@ set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 SRC=${SRC:-/root/src}
 OUT=${OUT:-$SRC/debs}
-ONLY=${ONLY:-pro1x-events pro1x-volume-osd}
+ONLY=${ONLY:-pro1x-events pro1x-volume-osd pro1x-alarmboot}
 COMMIT=${COMMIT:-$(git -C "$REPO" rev-parse --short HEAD 2> /dev/null || echo unknown)}
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$REPO" log -1 --format=%ct 2> /dev/null || date +%s)}
 export SOURCE_DATE_EPOCH
@@ -34,7 +38,7 @@ export DEBIAN_FRONTEND=noninteractive
 MAINTAINER="Sebastian Matkovich <sebastian.matkovich@gmail.com>"
 HOMEPAGE=https://github.com/smatkovi/pro1x-maemo-leste
 ARCH=$(dpkg --print-architecture)
-declare -A VERSIONS=([pro1x-events]=1.2 [pro1x-volume-osd]=1.0)
+declare -A VERSIONS=([pro1x-events]=1.2 [pro1x-volume-osd]=1.0 [pro1x-alarmboot]=1.0)
 log() { echo ">> $*"; }
 
 # Build dependencies (49-events.sh's and 49-volume-osd.sh's). The -dev
@@ -44,7 +48,7 @@ log() { echo ">> $*"; }
 pkgs=(gcc g++ libc6-dev pkg-config make gettext binutils dpkg-dev libgconf2-dev
   libjson-glib-dev librtcom-eventlogger-dev hildon-control-panel-dev libosso-dev
   libx11-dev libpulse-dev libtime-dev libical-dev
-  libsqlite3-dev libdbus-1-dev)
+  libsqlite3-dev libdbus-1-dev libalarm-dev)
 pkg-config --exists libcurl 2> /dev/null || pkgs+=(libcurl4-openssl-dev)
 debs=()
 for p in libgtk2.0-dev libhildon1-dev calendar-backend-dev; do
@@ -172,6 +176,27 @@ if want pro1x-volume-osd; then
     "pulseaudio" \
     "Nokia N9 style volume bar for Hildon's MeeGo-like look" \
     "pro1x-volume-osd shows the volume of PulseAudio's default sink as the N9's system UI does when it changes, while Hildon's MeeGo-like look is on (GConf /apps/osso/hildon-desktop/meego_pages); a tap or a drag sets it. Started by the X session (Xsession.post). The N9's graphics are used only where its theme is installed; none are included."
+fi
+
+if want pro1x-alarmboot; then
+  log "pro1x-alarmboot ${VERSIONS[pro1x-alarmboot]}"
+  d=$SRC/pkg/pro1x-alarmboot
+  rm -rf "$d"
+  install -d -m 755 "$d/usr/bin"
+  # shellcheck disable=SC2046,SC2086
+  gcc $CPPFLAGS $CFLAGS -Wall -o "$d/usr/bin/pro1x-alarmboot" \
+    "$REPO/tools/pro1x-alarmboot/pro1x-alarmboot.c" $LDFLAGS \
+    $(pkg-config --cflags --libs gtk+-2.0 hildon-1 gio-2.0 alarm libpulse-simple) -lm
+  chmod 755 "$d/usr/bin/pro1x-alarmboot"
+  install -D -m 644 "$REPO/rootfs-overlay/etc/X11/Xsession.post/48pro1x-alarmboot" \
+    "$d/etc/X11/Xsession.post/48pro1x-alarmboot"
+  # it watches osso-systemui-alarm's dialog and asks alarmd; the switch
+  # off is dsme's
+  mkdeb pro1x-alarmboot \
+    "alarmd, osso-systemui-alarm, dsme" \
+    "pulseaudio" \
+    "After the RTC alarm switched the Pro1X on: rings, offers to switch off" \
+    "When the F(x)tec Pro1X's boot menu started Maemo Leste because Leste's RTC alarm switched the phone on (/host/pro1x-boot/alarmboot), pro1x-alarmboot watches the alarm dialog of alarmd and the system UI. Should none come within two minutes of the alarm's time while alarmd still has the alarm (or does not answer), it rings by itself, a tone through PulseAudio, until Stop. Once the alarm is stopped or snoozed it asks whether to switch the phone off again, as the N900 asked whether to switch it on in its acting-dead mode; no answer keeps it on. After any other start it ends at once. Started by the X session (Xsession.post)."
 fi
 
 ls -l "$OUT"/*.deb
