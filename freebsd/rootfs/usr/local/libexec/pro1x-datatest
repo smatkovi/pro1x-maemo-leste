@@ -1,0 +1,119 @@
+#!/bin/sh
+# pro1x-datatest [STEP]: mobile data's device runs (freebsd/data/README.md;
+# kernel environment pro1x.data, set in the boot menu's freebsd/cmdline
+# with pro1x.test=data), each on the one before:
+#   ipa    qcom_ipa: the RPM votes, the SMMU streams, the first register
+#          reads (ipa_config), the GSI firmware authenticated by TrustZone
+#          (PAS 15), ipa_setup (GSI, endpoints, the immediate commands, the
+#          QMI service); no modem
+#   modem  ipa, then the modem (pro1x-dsptest modem, run dsp6) and the QMI
+#          handshake with it until qmap0 exists
+#   wds    modem, then pro1x-modemd: the SIM (the user's PIN file), the
+#          network, the data port (DPM, WDA); with the user's
+#          /dev/pro1x-host/freebsd/data.conf (the APN) a session, its
+#          addresses on qmap0, ping, DNS, a small download, then off
+# Mobile data costs: without data.conf no session is started. Everything
+# goes to the console (the RAM console keeps it for Linux); a line before
+# each risky step shows where a reset happened.
+step=${1:-$(kenv -q pro1x.data)}
+step=${step:-ipa}
+host=/dev/pro1x-host/freebsd
+conf=$host/data.conf
+FW=/usr/local/share/pro1x/firmware/qcom/sm6115/Fxtec/QX1050/ipa_fws.mbn
+M=/qrtr_0
+echo "=== data test: $step"
+
+ipa_state() {
+	for s in state qmi regs stats; do
+		echo "- dev.qcom_ipa.0.$s: $(sysctl -n dev.qcom_ipa.0.$s 2>&1)"
+	done
+}
+
+prop() {
+	dbus-send --system --print-reply --dest=org.ofono "$1" "$2".GetProperties 2>/dev/null |
+	    awk -v k="\"$3\"" '$0 ~ "string " k { getline; sub(/^ *variant +/, ""); print; exit }'
+}
+
+# 1. the IPA
+echo "--- kldload qcom_dsp qrtr qcom_ipa"
+kldload -n qcom_dsp qrtr qcom_ipa
+echo "kldload: $?"
+sysctl dev.qcom_ipa.0.%desc dev.qcom_ipa.0.version dev.qcom_ipa.0.feature \
+    dev.qcom_ipa.0.modem 2>&1
+dmesg | grep -E "qcom_ipa" | tail -20
+echo "--- power: RPM votes, SMMU streams, the first register reads (a reset here: the IPA's clock or bus)"
+sysctl dev.qcom_ipa.0.power=1
+echo "power: $?"
+dmesg | grep -E "qcom_ipa|qcom_smmu|qcom_rpm" | tail -20
+ipa_state
+echo "--- the GSI firmware (PAS 15) and ipa_setup (a reset here: TrustZone or the GSI)"
+ls -la "$FW" 2>&1
+pro1x-dsp start ipa "$FW" 2>&1
+echo "start: $?"
+pro1x-dsp status ipa 2>&1
+dmesg | grep -E "qcom_ipa" | tail -40
+ipa_state
+[ "$step" = ipa ] && exit 0
+
+# 2. the modem and the handshake
+echo "--- the modem (dsp6)"
+/usr/local/libexec/pro1x-dsptest modem 2>&1
+i=0
+while [ $i -lt 120 ]; do
+	ifconfig qmap0 > /dev/null 2>&1 && break
+	sleep 1
+	i=$((i + 1))
+done
+echo "after $i s: $(ifconfig qmap0 2>&1 | head -1)"
+dmesg | grep -E "qcom_ipa" | tail -40
+ipa_state
+echo "--- QRTR: IPA 0x31 (49), WDS (1), WDA (26), DPM (47)"
+qrtr-lookup 2>&1 | awk 'NR == 1 || $1 == 1 || $1 == 26 || $1 == 47 || $1 == 49'
+[ "$step" = modem ] && exit 0
+
+# 3. pro1x-modemd: the data port, a session
+echo "--- pro1x-modemd with mobile data"
+service dbus onestatus > /dev/null 2>&1 || service dbus onestart
+ls -la $host/sim-pin $conf 2>&1 | awk '{ print $1, $NF }'
+pro1x_modemd_flags="-v" /usr/local/etc/rc.d/pro1x_modemd onestart
+i=0
+while [ $i -lt 90 ]; do
+	st=$(prop $M org.ofono.NetworkRegistration Status)
+	case "$st" in *'"registered"'*|*'"roaming"'*|*'"denied"'*) break ;; esac
+	sleep 1
+	i=$((i + 1))
+done
+echo "after $i s: registration $st"
+i=0
+while [ $i -lt 60 ]; do
+	dbus-send --system --print-reply --dest=org.ofono $M org.ofono.Modem.GetProperties \
+	    2>/dev/null | grep -q '"org.ofono.ConnectionManager"' && break
+	sleep 1
+	i=$((i + 1))
+done
+echo "after $i s: ConnectionManager $([ $i -lt 60 ] && echo there || echo missing)"
+grep -E "data:" /var/log/pro1x-modemd.log
+pro1x-data status 2>&1
+if [ ! -f "$conf" ]; then
+	echo "--- no $conf: no session started (the user writes the APN there: apn=...)"
+	exit 0
+fi
+echo "--- a session"
+pro1x-data up 2>&1
+sleep 3
+pro1x-data status 2>&1
+ifconfig qmap0
+netstat -rn | head -20
+cat /etc/resolv.conf
+grep -E "data:" /var/log/pro1x-modemd.log | tail -30
+echo "--- ping by address, by name; a small download"
+timeout 20 ping -c 3 1.1.1.1 2>&1
+timeout 20 ping -c 3 deb.debian.org 2>&1
+timeout 20 ping -6 -c 3 2606:4700:4700::1111 2>&1 | tail -3
+fetch -o /dev/null -T 30 http://deb.debian.org/debian/dists/stable/Release 2>&1
+netstat -I qmap0 -b 2>&1
+ipa_state
+pro1x-data down 2>&1
+sleep 2
+grep -E "data:" /var/log/pro1x-modemd.log | tail -10
+ifconfig qmap0

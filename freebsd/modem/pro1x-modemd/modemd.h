@@ -13,6 +13,8 @@
  *             NetworkRegistration, VoiceCallManager, VoiceCall,
  *             MessageManager, Message
  *   sms.c     SMS PDUs (KolibriOS for ARM's codec)
+ *   data.c    mobile data: DPM, WDA, WDS sessions; ConnectionManager,
+ *             ConnectionContext (freebsd/data/README.md)
  */
 
 #ifndef _MODEMD_H_
@@ -137,6 +139,24 @@ void ofono_incoming_message(const char *text, const char *sender, time_t t,
 struct message *ofono_message_new(int parts);
 void ofono_message_state(struct message *m, const char *state);
 void ofono_reply_error(GDBusMethodInvocation *inv, const char *err, const char *msg);
+
+/* data.c: mobile data over the IPA (freebsd/data/README.md) */
+struct data_options {
+	const char	*conf;		/* the user's APN file (-c) */
+	const char	*hook;		/* puts the addresses on (-I) */
+	const char	*wda;		/* only this QMAP format (-W) */
+	const char	*ifprefix;	/* qmap: qmap0 is mux id 1 */
+	const char	*ipa_sysctl;	/* qcom_ipa's sysctl tree */
+	guint32		rx_ep, tx_ep;	/* the IPA's endpoint ids (-E rx,tx) */
+	gboolean	disabled;	/* -D: no mobile data */
+	gboolean	no_ifcheck;	/* -X: no interface needed (tests) */
+};
+extern struct data_options dopt;
+int	data_init(GDBusConnection *bus);
+void	data_start(QmiDevice *dev);
+void	data_stop(void);
+gboolean data_available(void);
+void	data_netreg_changed(void);
 
 #define	OFONO_ERROR_FAILED		"org.ofono.Error.Failed"
 #define	OFONO_ERROR_IN_PROGRESS		"org.ofono.Error.InProgress"

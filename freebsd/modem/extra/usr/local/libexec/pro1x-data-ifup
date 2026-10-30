@@ -1,0 +1,73 @@
+#!/bin/sh
+# pro1x-data-ifup up|down INTERFACE: a mobile data session's addresses on
+# its QMAP interface (pro1x-modemd's hook, freebsd/data/README.md), from
+# the environment pro1x-modemd sets: IPV4_ADDRESS, IPV4_NETMASK,
+# IPV4_GATEWAY, IPV4_DNS1, IPV4_DNS2, IPV6_ADDRESS, IPV6_PREFIXLEN,
+# IPV6_GATEWAY, IPV6_DNS1, IPV6_DNS2, MTU (WDS's Get Current Settings).
+# Raw IP, point to point: the gateway as the far end. A default route only
+# when there is none (Wi-Fi stays first); the name servers through
+# resolvconf(8), as rc.d/pro1x_wifi's DHCP does.
+act=$1 ifc=$2
+[ -n "$ifc" ] || { echo "usage: pro1x-data-ifup up|down INTERFACE" >&2; exit 2; }
+
+addrs() {
+	ifconfig "$ifc" 2> /dev/null | awk -v f="$1" '$1 == f && $2 !~ /^fe80:/ { sub(/%.*/, "", $2); print $2 }'
+}
+
+case $act in
+up)
+	[ -n "$MTU" ] && ifconfig "$ifc" mtu "$MTU"
+	for a in $(addrs inet); do
+		[ "$a" = "$IPV4_ADDRESS" ] || ifconfig "$ifc" inet "$a" -alias
+	done
+	if [ -n "$IPV4_ADDRESS" ]; then
+		peer=${IPV4_GATEWAY:-$IPV4_ADDRESS}
+		ifconfig "$ifc" inet "$IPV4_ADDRESS" "$peer" netmask 255.255.255.255
+		echo "inet $IPV4_ADDRESS -> $peer"
+		if ! route -n get -inet default > /dev/null 2>&1; then
+			route -n add -inet default -iface "$ifc" > /dev/null &&
+			    echo "default route via $ifc"
+		else
+			echo "a default route exists: left as it is"
+		fi
+	fi
+	if [ -n "$IPV6_ADDRESS" ]; then
+		ifconfig "$ifc" inet6 -ifdisabled
+		ifconfig "$ifc" inet6 "$IPV6_ADDRESS" prefixlen "${IPV6_PREFIXLEN:-64}"
+		echo "inet6 $IPV6_ADDRESS/${IPV6_PREFIXLEN:-64}"
+		if ! route -n get -inet6 default > /dev/null 2>&1; then
+			route -n add -inet6 default -iface "$ifc" > /dev/null &&
+			    echo "IPv6 default route via $ifc"
+		fi
+	fi
+	ifconfig "$ifc" up
+	ns=""
+	for d in "$IPV4_DNS1" "$IPV4_DNS2" "$IPV6_DNS1" "$IPV6_DNS2"; do
+		[ -n "$d" ] && ns="${ns}nameserver $d
+"
+	done
+	if [ -n "$ns" ]; then
+		printf '%s' "$ns" | resolvconf -a "$ifc" && echo "name servers via resolvconf"
+	fi
+	;;
+down)
+	resolvconf -d "$ifc" 2> /dev/null
+	for fam in inet inet6; do
+		route -n get -$fam default 2> /dev/null | grep -q "interface: $ifc\$" &&
+		    route -n delete -$fam default > /dev/null
+	done
+	for a in $(addrs inet); do
+		ifconfig "$ifc" inet "$a" -alias
+	done
+	for a in $(addrs inet6); do
+		ifconfig "$ifc" inet6 "$a" -alias
+	done
+	ifconfig "$ifc" down
+	echo "$ifc down"
+	;;
+*)
+	echo "usage: pro1x-data-ifup up|down INTERFACE" >&2
+	exit 2
+	;;
+esac
+exit 0

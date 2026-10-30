@@ -92,13 +92,15 @@ cp -a "$REPO/freebsd/camera/sys/." "$SRC/sys/"
 # The sound (freebsd/audio/README.md): sound(4) as a module (the kernel has
 # no "device sound") and its device over the ADSP, snd_pro1x
 cp -a "$REPO/freebsd/audio/sys/." "$SRC/sys/"
+# Mobile data (freebsd/data/README.md): the IPA v4.2, qcom_ipa
+cp -a "$REPO/freebsd/data/sys/." "$SRC/sys/"
 # Power management (pm/): the RPM sleep set (pro1x_rpmsleep, on qcom_dsp);
 # the USB gadget (pm/README.md, stage 4): dwc3dci (pro1x_usb, on qcom_dsp
 # and usb), the template, CDC Ethernet; not loaded unless asked for
 PM_MODULES="pro1x_rpmsleep pro1x_usb usb/template usb/uether usb/cdce"
 # and its serial port (usb_template 8, rc.d/pro1x_usbnet's serial)
 PM_MODULES="$PM_MODULES usb/ucom usb/umodem"
-MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss sound/sound snd_pro1x $PM_MODULES}
+MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss sound/sound snd_pro1x $PM_MODULES qcom_ipa}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \
 	buildkernel)

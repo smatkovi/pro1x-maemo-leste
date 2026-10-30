@@ -1,0 +1,78 @@
+#!/bin/sh
+# pro1x-data: mobile data from the shell, through pro1x-modemd's oFono API
+# (org.ofono.ConnectionManager, ConnectionContext; freebsd/data/README.md)
+#
+#   pro1x-data [status]                the manager, the contexts, qmap0
+#   pro1x-data up | down               context 1 active or not
+#   pro1x-data apn APN [USER PASSWORD [chap|pap|none]]
+#   pro1x-data protocol ip|ipv6|dual
+#   pro1x-data roaming on|off          RoamingAllowed
+#   pro1x-data power on|off            ConnectionManager.Powered
+#
+# The context's settings hold until pro1x-modemd restarts; for good they
+# belong in /dev/pro1x-host/freebsd/data.conf (apn=, username=, password=,
+# auth=, protocol=, roaming=, autoconnect=). The password is not shown.
+M=${PRO1X_MODEM:-/qrtr_0}
+C=$M/context1
+
+ds() {
+	dbus-send --system --print-reply --dest=org.ofono "$@"
+}
+
+# a{sv} replies, readable, the password left out
+show() {
+	awk '/string "Password"/ { print; hide = 1; next }
+	    hide && /variant/ { print "         variant (left out)"; hide = 0; next }
+	    { print }' | grep -vE '^[[:space:]]*(array \[|\]|dict entry\(|\)|method return.*)[[:space:]]*$'
+}
+
+ctx_set() {
+	ds --reply-timeout=90000 "$C" org.ofono.ConnectionContext.SetProperty \
+	    string:"$1" variant:"$2":"$3" > /dev/null
+}
+
+bool() {
+	case $1 in on|yes|true|1) echo true ;; off|no|false|0) echo false ;;
+	*) echo "on or off, not $1" >&2; exit 2 ;; esac
+}
+
+case ${1:-status} in
+status)
+	echo "ConnectionManager:"
+	ds "$M" org.ofono.ConnectionManager.GetProperties | show
+	echo "contexts:"
+	ds "$M" org.ofono.ConnectionManager.GetContexts | show
+	ifconfig qmap0 2>&1
+	;;
+up)
+	ctx_set Active boolean true && echo "context 1 active"
+	;;
+down)
+	ctx_set Active boolean false && echo "context 1 inactive"
+	;;
+apn)
+	[ -n "$2" ] || { echo "usage: pro1x-data apn APN [USER PASSWORD [chap|pap|none]]" >&2; exit 2; }
+	ctx_set AccessPointName string "$2" || exit 1
+	if [ -n "$3" ]; then
+		ctx_set Username string "$3" || exit 1
+		ctx_set Password string "$4" || exit 1
+	fi
+	[ -n "$5" ] && { ctx_set AuthenticationMethod string "$5" || exit 1; }
+	echo "APN $2"
+	;;
+protocol)
+	ctx_set Protocol string "$2" && echo "protocol $2"
+	;;
+roaming)
+	ds "$M" org.ofono.ConnectionManager.SetProperty string:RoamingAllowed \
+	    variant:boolean:"$(bool "$2")" > /dev/null && echo "roaming $2"
+	;;
+power)
+	ds "$M" org.ofono.ConnectionManager.SetProperty string:Powered \
+	    variant:boolean:"$(bool "$2")" > /dev/null && echo "power $2"
+	;;
+*)
+	sed -n '2,15s/^# \{0,1\}//p' "$0" >&2
+	exit 2
+	;;
+esac

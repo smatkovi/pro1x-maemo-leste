@@ -60,7 +60,7 @@ after them (`pro1x-dsp start modem`).
 3. Sensors: FastRPC, hexagonrpcd, libssc (step counter, accelerometer).
 4. Modem: rmtfs, tqftpserv, pd-mapper, the modem started; its QMI
    services answer. Calls, SMS and GPS on top: `../modem/README.md`;
-   mobile data (IPA) is not planned.
+   mobile data (the IPA): `../data/README.md`.
 5. Wi-Fi: ath10k over SNOC, once the modem runs (the WLAN firmware is
    part of it).
 6. Audio: last, not promised.

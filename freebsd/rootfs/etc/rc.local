@@ -8,6 +8,7 @@
 # pro1x.test=cam: the cameras (pro1x-camtest, pro1x.cam=id|raw|jpeg|app)
 # pro1x.test=modem: the modem's calls, SMS, GPS (pro1x-modemtest,
 # pro1x.modem=modem|sms|call|gps, pro1x.modem_wait=SECONDS)
+# pro1x.test=data: mobile data, the IPA (pro1x-datatest, pro1x.data=ipa|modem|wds)
 # pro1x.test=panel: the DCS commands of qcom_dpu (patches/0022), each step
 # with its time on the console: brightness 100/10/50 %, the low power mode
 # (idle mode), partial mode (one half of the panel), the panel off and on,
@@ -64,6 +65,11 @@ elif [ "$(kenv -q pro1x.test)" = modem ]; then
 	/usr/local/libexec/pro1x-modemtest 2>&1
 	echo "=== test done, rebooting in 20 s"
 	(sleep 20; shutdown -r now "pro1x modem test done") > /dev/null 2>&1 &
+elif [ "$(kenv -q pro1x.test)" = data ]; then
+	echo "=== FreeBSD multi-user: mobile data test ==="
+	/usr/local/libexec/pro1x-datatest 2>&1
+	echo "=== test done, rebooting in 20 s"
+	(sleep 20; shutdown -r now "pro1x data test done") > /dev/null 2>&1 &
 elif [ -n "$(kenv -q pro1x.test)" ]; then
 	echo "=== FreeBSD multi-user: test report ==="
 	uname -a

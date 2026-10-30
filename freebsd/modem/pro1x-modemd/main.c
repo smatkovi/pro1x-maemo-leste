@@ -3,6 +3,8 @@
  *
  * pro1x-modemd [-v] [-d qrtr://NODE | -d QMUX-FILE] [-p PIN-FILE] [-P MARK]
  *              [-r TRIES] [-A CALLAUDIO] [-n] [-S] [-s SECONDS] [-m PATH]
+ *              [-c DATA-CONF] [-I HOOK] [-W qmapv5|qmapv4|qmap] [-E RX,TX]
+ *              [-D] [-X]
  *
  * The Pro1X modem's calls, SMS and network on D-Bus as oFono's API
  * (freebsd/modem/README.md):
@@ -20,6 +22,18 @@
  *   -S  the session bus instead of the system bus (tests)
  *   -s  seconds between signal readings (default 30; 0: none)
  *   -m  the modem's object path (default /qrtr_0)
+ *
+ * Mobile data (data.c, freebsd/data/README.md):
+ *   -c  the user's APN file (default /dev/pro1x-host/freebsd/data.conf;
+ *       apn=, username=, password=, auth=, protocol=, roaming=,
+ *       autoconnect=); "" none
+ *   -I  what puts a session's addresses on its interface (default
+ *       /usr/local/libexec/pro1x-data-ifup); "" nothing
+ *   -W  only this QMAP format with WDA (default: QMAPv5, QMAPv4, QMAP)
+ *   -E  the IPA's endpoint ids facing the modem (default: qcom_ipa's
+ *       dev.qcom_ipa.0.modem.{rx,tx}_endpoint_id)
+ *   -D  no mobile data;  -X  no QMAP interface needed (the tests; also
+ *       mobile data over a QMUX file, which is off without it)
  */
 
 #include <errno.h>
@@ -169,6 +183,7 @@ open_ready(QmiDevice *dev, GAsyncResult *res, gpointer data)
 	}
 	mlog("qmi: %s open", qmi_device_get_path_display(dev));
 	qmi_start(dev);
+	data_start(dev);
 }
 
 static void
@@ -308,6 +323,7 @@ on_signal(gpointer data)
 	mlog("stopping");
 	if (audio_pid != 0)
 		kill(audio_pid, SIGTERM);
+	data_stop();
 	if (device != NULL) {
 		qmi_stop(stopped);
 		g_timeout_add_seconds(3, stop_timeout, NULL);
@@ -321,7 +337,8 @@ static void
 usage(void)
 {
 	fprintf(stderr, "usage: " MODEMD_NAME " [-v] [-d qrtr://NODE|QMUX-FILE] [-p PIN-FILE] "
-	    "[-P MARK] [-r TRIES] [-A CALLAUDIO] [-n] [-S] [-s SECONDS] [-m PATH]\n");
+	    "[-P MARK] [-r TRIES] [-A CALLAUDIO] [-n] [-S] [-s SECONDS] [-m PATH]\n"
+	    "    [-c DATA-CONF] [-I HOOK] [-W qmapv5|qmapv4|qmap] [-E RX,TX] [-D] [-X]\n");
 	exit(2);
 }
 
@@ -333,7 +350,7 @@ main(int argc, char **argv)
 	const char *path = "/qrtr_0";
 	int c;
 
-	while ((c = getopt(argc, argv, "vd:p:P:r:A:nSs:m:")) != -1) {
+	while ((c = getopt(argc, argv, "vd:p:P:r:A:nSs:m:c:I:W:E:DX")) != -1) {
 		switch (c) {
 		case 'v': verbose++; break;
 		case 'd': opt.device = optarg; break;
@@ -345,11 +362,24 @@ main(int argc, char **argv)
 		case 'S': opt.session_bus = TRUE; break;
 		case 's': opt.signal_poll = atoi(optarg); break;
 		case 'm': path = optarg; break;
+		case 'c': dopt.conf = optarg[0] ? optarg : NULL; break;
+		case 'I': dopt.hook = optarg; break;
+		case 'W': dopt.wda = optarg; break;
+		case 'E':
+			if (sscanf(optarg, "%u,%u", &dopt.rx_ep, &dopt.tx_ep) != 2)
+				usage();
+			break;
+		case 'D': dopt.disabled = TRUE; break;
+		case 'X': dopt.no_ifcheck = TRUE; break;
 		default: usage();
 		}
 	}
 	if (optind != argc || path[0] != '/' || !g_variant_is_object_path(path))
 		usage();
+	/* mobile data needs the IPA, behind the modem's QRTR node; over a
+	 * QMUX file (the tests' simulated modem) only with -X */
+	if (!g_str_has_prefix(opt.device, "qrtr://") && !dopt.no_ifcheck)
+		dopt.disabled = TRUE;
 	M.path = g_strdup(path);
 	M.pin_retries = M.puk_retries = -1;
 	M.strength = -1;
@@ -365,7 +395,7 @@ main(int argc, char **argv)
 		mlog("D-Bus: %s", error->message);
 		return 1;
 	}
-	if (ofono_init(bus) != 0)
+	if (ofono_init(bus) != 0 || data_init(bus) != 0)
 		return 1;
 	mlog("modem %s, PIN file %s%s", opt.device, opt.pin_file ? opt.pin_file : "none",
 	    opt.callaudio ? ", call audio" : "");

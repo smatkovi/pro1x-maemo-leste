@@ -13,6 +13,7 @@ QMI to the modem and oFono's D-Bus API to the applications:
 | 1 | the modem's calls, SMS, SIM and network as oFono's D-Bus API | `pro1x-modemd` (libqmi over QRTR) | built for FreeBSD/arm64; host tested against a simulated modem; device runs prepared |
 | 2 | the voice of a call: the ADSP's voice session and the codec's earpiece and microphone | `pro1x-callaudio`, through pro1x-audiod (freebsd/audio, the one user of `/dev/apr`) | built; host tested against a stand-in for pro1x-audiod, sphone's Speaker button and DTMF keypad in the VM; needs the audio stack on the phone |
 | 3 | GPS: the modem's GNSS (QMI LOC) into gpsd, positions for Hildon's apps | `pro1x-gnss`, gpsd, `rc.d/pro1x_gps`, Leste's `location-daemon`, `location-ui` and `location-control` (new parts), liblocation patched | the chain runs in the VM on a simulated modem's LOC, up to liblocation's client, with location-ui's dialogs and location-control's applet; device run prepared |
+| 4 | mobile data: DPM, WDA, WDS sessions over the IPA, oFono's ConnectionManager and ConnectionContext | `pro1x-modemd/data.c`, `pro1x-data-ifup`, `pro1x-data`; the kernel side is `freebsd/data` (qcom_ipa) | built for FreeBSD/arm64; host tested against a simulated modem (`freebsd/data/test/data_run.sh`); device run prepared (`freebsd/data/README.md`) |
 
 Nothing here has run on the phone (unreachable until 2026-10-31). No call
 was made and no SMS sent: the tests that dial or send need the user and a
@@ -41,7 +42,8 @@ runs unchanged: what `comm-ofono` uses is all there:
 
 The rest of oFono's methods answer `org.ofono.Error.NotImplemented`
 (hold, swap, multiparty, call forwarding and barring, USSD, cell
-broadcast, mobile data). sphone's `comm-ofono` had no DTMF (only its test
+broadcast). Mobile data (ConnectionManager, ConnectionContext) is stage 4,
+`freebsd/data/README.md`. sphone's `comm-ofono` had no DTMF (only its test
 backend did): `freebsd/hildon/patches/sphone/0001` gives it the DTMF
 button and sends each key of its keypad as `SendTones` (sphone 3). Its
 Speaker button reaches the call's voice through `0002`, sphone's new

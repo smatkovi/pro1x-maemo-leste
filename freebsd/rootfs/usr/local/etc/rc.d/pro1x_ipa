@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_ipa
+# REQUIRE: FILESYSTEMS
+# BEFORE: pro1x_modem
+# KEYWORD: nojail shutdown
+#
+# The IPA, the modem's data path (freebsd/data/README.md): qcom_ipa
+# loaded, then its GSI firmware (ipa_fws.mbn, PAS 15) through pro1x-dsp,
+# which powers and configures the IPA first (the RPM votes, the SMMU
+# streams) and sets it up once TrustZone runs the firmware. Before the
+# modem starts, as on Linux (the IPA driver probes before the modem's
+# remoteproc); the modem's QMI handshake then brings up qmap0.
+#
+#   pro1x_ipa_enable="YES"
+
+. /etc/rc.subr
+
+name=pro1x_ipa
+desc="The IPA (the modem's data path)"
+rcvar=pro1x_ipa_enable
+load_rc_config $name
+: ${pro1x_ipa_enable:=NO}
+: ${pro1x_ipa_firmware:=/usr/local/share/pro1x/firmware/qcom/sm6115/Fxtec/QX1050/ipa_fws.mbn}
+
+start_cmd=pro1x_ipa_start
+stop_cmd=:
+status_cmd=pro1x_ipa_status
+extra_commands=status
+
+pro1x_ipa_start()
+{
+	kldload -n qcom_dsp qrtr qcom_ipa || return 1
+	if /usr/local/sbin/pro1x-dsp status ipa 2> /dev/null | grep -q ": running"; then
+		echo "IPA set up already"
+		return 0
+	fi
+	/usr/local/sbin/pro1x-dsp start ipa "${pro1x_ipa_firmware}"
+}
+
+pro1x_ipa_status()
+{
+	/usr/local/sbin/pro1x-dsp status ipa
+	sysctl -n dev.qcom_ipa.0.state dev.qcom_ipa.0.qmi
+}
+
+run_rc_command "$1"

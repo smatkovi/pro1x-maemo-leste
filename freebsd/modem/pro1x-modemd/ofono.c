@@ -144,6 +144,8 @@ interfaces(void)
 		g_variant_builder_add(&b, "s", "org.ofono.MessageManager");
 	if (M.have_nas && M.online)
 		g_variant_builder_add(&b, "s", "org.ofono.NetworkRegistration");
+	if (data_available())
+		g_variant_builder_add(&b, "s", "org.ofono.ConnectionManager");
 	return g_variant_builder_end(&b);
 }
 
@@ -338,6 +340,8 @@ void
 ofono_netreg_changed(const char *prop)
 {
 	prop_changed(M.path, "org.ofono.NetworkRegistration", prop, netreg_prop);
+	/* ConnectionManager's Attached and Bearer follow the registration */
+	data_netreg_changed();
 }
 
 /* --- calls ------------------------------------------------------------ */
