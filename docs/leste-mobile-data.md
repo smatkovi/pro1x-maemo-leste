@@ -85,8 +85,13 @@ shim: the DPM and WDA messages carry the bytes above; QMAPv5 taken,
 stepping down to QMAP when the modem refuses or reports another protocol,
 the endpoint info after MISSING_ARGUMENT, no DPM service, no answer
 (timeout), WDA refusing everything (no data, modem powered), the three
-variables; `rmnet0..3` came up with flags 0xd. What only the phone can
-show: whether the real modem takes this, and the data context itself.
+variables; `rmnet0..3` came up with flags 0xd. The test is
+[tests/ofono-ipa](../tests/ofono-ipa/README.md) (`bash
+tests/ofono-ipa/run.sh`: the release's packages in a chroot of Leste's
+image, nine cases with their checks); rerun 2026-10-30 against the
+released `ofono 1:2.18.0-1+4m7.1+pro1x1`: all nine passed. What only the
+phone can show: whether the real modem takes this, and the data context
+itself.
 
 ## The user interface (all in Leste already)
 
