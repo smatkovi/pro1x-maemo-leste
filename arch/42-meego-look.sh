@@ -214,6 +214,8 @@ for e in $list; do
 			path=$(awk -v l="$lib" '$1 == l && !p { print $NF; p = 1 }' "$B/ld.cache")
 			[ -n "$path" ] || continue
 			owner=$(pacman -Qqo "$path" 2> /dev/null) || continue
+			# (its own, where an earlier package of it is installed)
+			[ "$owner" != "$name" ] || continue
 			case $deps in *" $owner "*) ;; *) deps="$deps$owner " ;; esac
 		done
 	done < <(find "$PR" -type f \( -perm -u+x -o -name '*.so*' \) -exec sh -c \
