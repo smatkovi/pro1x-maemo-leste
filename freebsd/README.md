@@ -203,7 +203,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | Hildon, Xfce | yes, switchable |
 | USB (network to the PC, host) | not yet: FreeBSD's dwc3 is host only, and Linux takes the controller down at kexec |
 | Wi-Fi, Bluetooth, modem, GPS | no: all run through the modem and ADSP firmware (remoteproc, QMI over GLINK, ath10k over SNOC), none of which FreeBSD has |
-| audio | no: the codecs sit behind the ADSP (APR, LPASS macros, SoundWire); only APR as `/dev/apr` so far (`dsp/`) |
+| audio | built, untested on the phone: sound(4) as `snd_pro1x.ko` (`/dev/dsp`, `/dev/mixer`), the PCM through the ADSP by `pro1x-audiod` (ASM, ADM, AFE over `/dev/apr`), SoundWire and the codec from replay sequences of a Leste trace (recorded 2026-10-31); nothing heard before those (`audio/README.md`) |
 | FM radio | built, untested on the phone: the Bluetooth UART (`qcom_geni_uart`), the chip and its receiver from user space (`pro1x-fmd`), the app; no sound (`fm/README.md`) |
 | sensors, step counter | built, untested on the phone: the DSP stack (`dsp/`), `pro1x-steps`, `pro1x-proximity` (the proximity sensor on D-Bus only while the stand-by screen watches it) |
 | cameras | built, untested on the phone: `qcom_camss.ko` (the CCI as iicbus buses, the camera clocks, pins and power domain, raw frames through CSIPHY, CSID and the TFE into memory, `/dev/camss0`), `pro1x-cam` (power, chip IDs, raw frames, JPEG with exposure and autofocus on the CPU; `camera/README.md`), a small Hildon camera app (built, staged for the next image) |
