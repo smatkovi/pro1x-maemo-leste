@@ -31,10 +31,37 @@
  *                  (Linux's prepare and enable each program the next bank,
  *                  so both end up the same)
  *
- * No interrupt: FreeBSD has no driver for the masters' SPIs, and nothing
- * here needs one (Linux uses them for the broadcast's completion, slave
- * status changes and alerts; the WCD937x's own interrupts, jack detection,
- * come later). Every access is 32 bits in the master's window.
+ *   swr_irq        qcom_swrm_irq_handler: the master's interrupt status
+ *                  (with qcom_swr.ko's /dev/qcom_swr0 the interrupt line;
+ *                  else the status read when the caller looks): a
+ *                  slave's alert (SLAVE_PEND_IRQ: the device whose ping
+ *                  status is ALERT; sdw_handle_slave_alerts: SCP_INT1,
+ *                  the implementation-defined bit to the caller's
+ *                  callback, acknowledged; again while it is set), slave
+ *                  status changes (a device back after a clock stop or a
+ *                  lost sync: sdw_initialize_slave again), command
+ *                  errors (the FIFO flushed), clashes (masked, as Linux)
+ *   swr_slave_init sdw_initialize_slave: SCP_IntMask1 with the WCD937x's
+ *                  scp_int1_mask (implementation-defined, bus clash,
+ *                  parity), without which it never alerts
+ *   swr_clock_stop swrm_runtime_suspend with clock stop: the write FIFO
+ *                  drained, the clash interrupt masked, the slaves
+ *                  (simple_clk_stop_capable: no SCP_SystemCtrl prepare)
+ *                  told ClockStopNow by broadcast; the caller then stops
+ *                  the master's clock (the TX macro's) and arms the wake
+ *                  interrupt
+ *   swr_clock_start swrm_runtime_resume with clock stop, after the caller
+ *                  has the clock back and the CGCR reset done: the bus
+ *                  clock started, the clash cleared and unmasked, the
+ *                  frame generator awaited (not a new init: the master's
+ *                  registers and the slaves' device numbers are kept)
+ *
+ * The interrupt line in level mode (irq_level: COMP_CFG without the pulse
+ * bit Linux sets, which then asks for a rising edge): qcom_swr.ko masks
+ * the line in the GIC when it fires and the daemon arms it again after
+ * INTERRUPT_CLEAR, so a level that stays up until it is cleared is what
+ * fits, and the device tree says level high. Every access is 32 bits in
+ * the master's window.
  */
 
 #include <errno.h>
@@ -54,8 +81,16 @@
 #define	SWRM_COMP_MASTER_ID			0x104
 #define	SWRM_INTERRUPT_STATUS			0x200
 #define	SWRM_INTERRUPT_STATUS_RMSK		0x1ffff
+#define	SWRM_INTERRUPT_SLAVE_PEND_IRQ		(1u << 0)
 #define	SWRM_INTERRUPT_NEW_SLAVE_ATTACHED	(1u << 1)
+#define	SWRM_INTERRUPT_CHANGE_ENUM_SLAVE_STATUS	(1u << 2)
+#define	SWRM_INTERRUPT_MASTER_CLASH_DET		(1u << 3)
+#define	SWRM_INTERRUPT_RD_FIFO_OVERFLOW		(1u << 4)
+#define	SWRM_INTERRUPT_RD_FIFO_UNDERFLOW	(1u << 5)
+#define	SWRM_INTERRUPT_WR_CMD_FIFO_OVERFLOW	(1u << 6)
 #define	SWRM_INTERRUPT_CMD_ERROR		(1u << 7)
+#define	SWRM_INTERRUPT_DOUT_PORT_COLLISION	(1u << 8)
+#define	SWRM_INTERRUPT_READ_EN_RD_VALID_MISMATCH (1u << 9)
 #define	SWRM_INTERRUPT_SPECIAL_CMD_ID_FINISHED	(1u << 10)
 #define	SWRM_INTERRUPT_MASK_ADDR		0x204
 #define	SWRM_INTERRUPT_CLEAR			0x208
@@ -102,6 +137,23 @@
 	((uint32_t)(reg) | (uint32_t)(id) << 16 | (uint32_t)(dev) << 20 | \
 	 (uint32_t)(data) << 24)
 /* the SoundWire slave registers (include/linux/soundwire/sdw_registers.h) */
+#define	SDW_SCP_INT1				0x40
+#define	SDW_SCP_INTMASK1			0x41
+#define	SDW_SCP_INT1_PARITY			(1u << 0)
+#define	SDW_SCP_INT1_BUS_CLASH			(1u << 1)
+#define	SDW_SCP_INT1_IMPL_DEF			(1u << 2)
+#define	SDW_SCP_INT1_PORT0_3			(0xfu << 3)
+#define	SDW_SCP_INT1_SCP2_CASCADE		(1u << 7)
+#define	SDW_SCP_CTRL				0x44
+#define	SDW_SCP_CTRL_CLK_STP_NOW		(1u << 1)
+#define	SDW_SCP_SYSTEMCTRL			0x45
+#define	SDW_SCP_SYSTEMCTRL_WAKE_UP_EN		(1u << 3)
+#define	SDW_SLAVE_ATTACHED			1
+#define	SDW_SLAVE_ALERT				2
+#define	SDW_READ_INTR_CLEAR_RETRY		10
+/* wcd937x-sdw.c: prop.scp_int1_mask */
+#define	WCD_SCP_INT1_MASK	(SDW_SCP_INT1_IMPL_DEF | SDW_SCP_INT1_BUS_CLASH | \
+				 SDW_SCP_INT1_PARITY)
 #define	SDW_SCP_FRAMECTRL_B(b)			(0x60 + 0x10 * (b))
 #define	SDW_DPN_PORTCTRL(n)			(0x02 + 0x100 * (n))
 #define	SDW_DPN_BLOCKCTRL1(n)			(0x03 + 0x100 * (n))
@@ -152,8 +204,12 @@ swr_init(struct swr *w)
 	wr(w, SWRM_COMP_CFG_ADDR, SWRM_COMP_CFG_IRQ_LEVEL_OR_PULSE_MSK);
 	wr(w, SWRM_INTERRUPT_CLEAR, 0xffffffff);
 	wr(w, SWRM_INTERRUPT_CPU_EN, SWRM_INTERRUPT_STATUS_RMSK);
-	wr(w, SWRM_COMP_CFG_ADDR, SWRM_COMP_CFG_IRQ_LEVEL_OR_PULSE_MSK |
-	    SWRM_COMP_CFG_ENABLE_MSK);
+	/* Linux: pulse (with a rising edge asked of the GIC); level here */
+	wr(w, SWRM_COMP_CFG_ADDR, (w->irq_level ? 0 :
+	    SWRM_COMP_CFG_IRQ_LEVEL_OR_PULSE_MSK) | SWRM_COMP_CFG_ENABLE_MSK);
+	w->intr_mask = SWRM_INTERRUPT_STATUS_RMSK;
+	w->slave_status = 0;
+	w->clk_stopped = false;
 	/* swrm_wait_for_frame_gen_enabled: 100 tries of 500 us */
 	for (i = 0; i <= 100; i++) {
 		if (rd(w, SWRM_COMP_STATUS) & SWRM_FRM_GEN_ENABLED)
@@ -420,4 +476,254 @@ swr_dump(struct swr *w, const char *why)
 	    rd(w, SWRM_CMD_FIFO_STATUS), rd(w, SWRM_MCP_FRAME_CTRL_BANK_ADDR(0)),
 	    rd(w, SWRM_MCP_FRAME_CTRL_BANK_ADDR(1)), w->writes, w->reads,
 	    w->errors);
+}
+
+/* --- interrupts, alerts, clock stop --------------------------------------- */
+
+/* the ping status of device dev (MCP_SLV_STATUS, two bits each) */
+static unsigned
+slv_status(uint32_t st, unsigned dev)
+{
+	return ((st >> (dev * 2)) & 3);
+}
+
+/*
+ * sdw_initialize_slave: the slave's SCP interrupts unmasked (its
+ * prop.scp_int1_mask, the WCD937x's), whatever it latched before
+ * acknowledged; without this it never raises an alert
+ */
+int
+swr_slave_init(struct swr *w, uint8_t dev)
+{
+	uint8_t v = 0;
+	int r;
+
+	if (dev == 0)
+		return (-ENODEV);
+	if (swr_read(w, dev, SDW_SCP_INT1, &v) == 0 && (v & WCD_SCP_INT1_MASK))
+		(void)swr_write(w, dev, SDW_SCP_INT1, v & WCD_SCP_INT1_MASK);
+	r = swr_update(w, dev, SDW_SCP_INTMASK1, WCD_SCP_INT1_MASK,
+	    WCD_SCP_INT1_MASK);
+	if (r == 0)
+		w->slave_inited = dev;
+	fma_log("%s: device %u: SCP interrupts %s (IntMask1 %#x)", w->name,
+	    dev, r == 0 ? "unmasked" : "not unmasked", WCD_SCP_INT1_MASK);
+	return (r);
+}
+
+/*
+ * sdw_handle_slave_alerts for one device: SCP_INT1; its implementation-
+ * defined interrupt to the callback (the WCD9370's: wcd_interrupt_callback,
+ * its DIGITAL_INTR_STATUS_*); parity and bus clash noted; the bits
+ * acknowledged (written back), and again while new ones came, at most
+ * SDW_READ_INTR_CLEAR_RETRY times
+ */
+static int
+swr_slave_alert(struct swr *w, uint8_t dev)
+{
+	uint8_t int1 = 0, clear;
+	unsigned count = 0;
+
+	w->alerts++;
+	if (swr_read(w, dev, SDW_SCP_INT1, &int1) != 0)
+		return (-EIO);
+	do {
+		clear = int1 & WCD_SCP_INT1_MASK;
+		if (int1 & SDW_SCP_INT1_PARITY)
+			fma_log("%s: device %u: parity error", w->name, dev);
+		if (int1 & SDW_SCP_INT1_BUS_CLASH)
+			fma_log("%s: device %u: bus clash", w->name, dev);
+		if (int1 & (SDW_SCP_INT1_PORT0_3 | SDW_SCP_INT1_SCP2_CASCADE))
+			fma_log("%s: device %u: port interrupts %#x (not "
+			    "handled)", w->name, dev, int1 &
+			    (SDW_SCP_INT1_PORT0_3 | SDW_SCP_INT1_SCP2_CASCADE));
+		if ((int1 & SDW_SCP_INT1_IMPL_DEF) && w->alert != NULL) {
+			w->impl_alerts++;
+			w->alert(w->alert_ctx, w, dev);
+		}
+		if (clear != 0 && swr_write(w, dev, SDW_SCP_INT1, clear) != 0)
+			return (-EIO);
+		if (swr_read(w, dev, SDW_SCP_INT1, &int1) != 0)
+			return (-EIO);
+		int1 &= WCD_SCP_INT1_MASK;
+	} while (int1 != 0 && ++count < SDW_READ_INTR_CLEAR_RETRY);
+	if (count == SDW_READ_INTR_CLEAR_RETRY)
+		fma_log("%s: device %u: still alerting after %u rounds",
+		    w->name, dev, count);
+	return (0);
+}
+
+/* qcom_swrm_get_device_status for the device we drive: back, gone */
+static void
+swr_status_changed(struct swr *w, uint32_t st)
+{
+	unsigned s = slv_status(st, w->devnum), was;
+
+	was = slv_status(w->slave_status, w->devnum);
+	w->slave_status = st;
+	if (w->devnum == 0 || s == was)
+		return;
+	fma_log("%s: device %u: status %u -> %u", w->name, w->devnum, was, s);
+	if (s == 0)
+		w->slave_inited = 0;
+	else if (was == 0 || w->slave_inited != w->devnum)
+		(void)swr_slave_init(w, w->devnum);
+	if (s == SDW_SLAVE_ALERT)
+		(void)swr_slave_alert(w, w->devnum);
+}
+
+/*
+ * qcom_swrm_irq_handler: the status, each bit as Linux handles it, the
+ * status cleared, again while new bits came. The master must be clocked.
+ * The result: the bits seen (0: nothing was pending, a spurious event).
+ */
+uint32_t
+swr_irq(struct swr *w)
+{
+	uint32_t st, stm, seen = 0, slv, v;
+	unsigned dev, rounds = 0;
+
+	if (w->clk_stopped)
+		return (0);
+	st = rd(w, SWRM_INTERRUPT_STATUS);
+	stm = st & w->intr_mask;
+	while (stm != 0 && rounds++ < 8) {
+		seen |= stm;
+		if (stm & SWRM_INTERRUPT_SLAVE_PEND_IRQ) {
+			slv = rd(w, SWRM_MCP_SLV_STATUS);
+			for (dev = 1; dev <= 11; dev++)
+				if (slv_status(slv, dev) == SDW_SLAVE_ALERT)
+					(void)swr_slave_alert(w, (uint8_t)dev);
+		}
+		if (stm & (SWRM_INTERRUPT_NEW_SLAVE_ATTACHED |
+		    SWRM_INTERRUPT_CHANGE_ENUM_SLAVE_STATUS)) {
+			slv = rd(w, SWRM_MCP_SLV_STATUS);
+			if (slv != w->slave_status)
+				swr_status_changed(w, slv);
+		}
+		if (stm & SWRM_INTERRUPT_MASTER_CLASH_DET) {
+			fma_log("%s: bus clash: its interrupt masked", w->name);
+			w->intr_mask &= ~SWRM_INTERRUPT_MASTER_CLASH_DET;
+			wr(w, SWRM_INTERRUPT_CPU_EN, w->intr_mask);
+		}
+		if (stm & (SWRM_INTERRUPT_RD_FIFO_OVERFLOW |
+		    SWRM_INTERRUPT_RD_FIFO_UNDERFLOW))
+			fma_log("%s: read FIFO %s (FIFO %#x)", w->name,
+			    (stm & SWRM_INTERRUPT_RD_FIFO_OVERFLOW) ? "overflow" :
+			    "underflow", rd(w, SWRM_CMD_FIFO_STATUS));
+		if (stm & (SWRM_INTERRUPT_WR_CMD_FIFO_OVERFLOW |
+		    SWRM_INTERRUPT_CMD_ERROR)) {
+			v = rd(w, SWRM_CMD_FIFO_STATUS);
+			fma_log("%s: command %s (FIFO %#x): flushed", w->name,
+			    (stm & SWRM_INTERRUPT_CMD_ERROR) ? "error" :
+			    "FIFO overflow", v);
+			wr(w, SWRM_CMD_FIFO_CMD, SWRM_CMD_FIFO_FLUSH);
+		}
+		if (stm & (SWRM_INTERRUPT_DOUT_PORT_COLLISION |
+		    SWRM_INTERRUPT_READ_EN_RD_VALID_MISMATCH)) {
+			fma_log("%s: %s: its interrupt masked", w->name,
+			    (stm & SWRM_INTERRUPT_DOUT_PORT_COLLISION) ?
+			    "port collision" : "read enable mismatch");
+			w->intr_mask &= ~(stm & (SWRM_INTERRUPT_DOUT_PORT_COLLISION |
+			    SWRM_INTERRUPT_READ_EN_RD_VALID_MISMATCH));
+			wr(w, SWRM_INTERRUPT_CPU_EN, w->intr_mask);
+		}
+		wr(w, SWRM_INTERRUPT_CLEAR, st);
+		st = rd(w, SWRM_INTERRUPT_STATUS);
+		stm = st & w->intr_mask;
+	}
+	w->irqs++;
+	if (seen == 0)
+		w->spurious++;
+	return (seen);
+}
+
+/* an alert waiting at the master: its status, or the device's ping */
+bool
+swr_alert_pending(struct swr *w)
+{
+	if (w->clk_stopped || w->devnum == 0)
+		return (false);
+	return ((rd(w, SWRM_INTERRUPT_STATUS) & SWRM_INTERRUPT_SLAVE_PEND_IRQ) ||
+	    slv_status(rd(w, SWRM_MCP_SLV_STATUS), w->devnum) == SDW_SLAVE_ALERT);
+}
+
+/* swrm_wait_for_wr_fifo_done: what is queued has gone out */
+static void
+wait_wr_fifo_done(struct swr *w)
+{
+	unsigned i;
+
+	for (i = 0; i <= 30; i++) {
+		if (SWRM_WR_CMD_FIFO_CNT(rd(w, SWRM_CMD_FIFO_STATUS)) == 0)
+			return;
+		fma_sleep_ms(1);
+	}
+	fma_log("%s: the write FIFO did not drain", w->name);
+}
+
+/*
+ * swrm_runtime_suspend (clock stop supported): the clash masked, no
+ * prepare for simple_clk_stop_capable slaves (wake_en: SCP_SystemCtrl's
+ * WakeUpEnable written anyway, which Linux does only for slaves that
+ * prepare), ClockStopNow broadcast. The caller stops the master's clock.
+ */
+int
+swr_clock_stop(struct swr *w)
+{
+	int r;
+
+	if (w->clk_stopped)
+		return (0);
+	wait_wr_fifo_done(w);
+	w->intr_mask &= ~SWRM_INTERRUPT_MASTER_CLASH_DET;
+	wr(w, SWRM_INTERRUPT_MASK_ADDR, w->intr_mask);
+	wr(w, SWRM_INTERRUPT_CPU_EN, w->intr_mask);
+	if (w->wake_en && w->devnum != 0)
+		(void)swr_write(w, w->devnum, SDW_SCP_SYSTEMCTRL,
+		    SDW_SCP_SYSTEMCTRL_WAKE_UP_EN);
+	r = swr_write(w, SDW_BROADCAST_DEV_NUM, SDW_SCP_CTRL,
+	    SDW_SCP_CTRL_CLK_STP_NOW);
+	if (r != 0) {
+		/* nobody acknowledged it: the bus stays as it is */
+		w->intr_mask |= SWRM_INTERRUPT_MASTER_CLASH_DET;
+		wr(w, SWRM_INTERRUPT_MASK_ADDR, w->intr_mask);
+		wr(w, SWRM_INTERRUPT_CPU_EN, w->intr_mask);
+		fma_log("%s: clock stop refused (%d)", w->name, r);
+		return (r);
+	}
+	w->clk_stopped = true;
+	w->clkstops++;
+	return (0);
+}
+
+/*
+ * swrm_runtime_resume (clock stop supported), after the master's clock is
+ * back and its CGCR reset done: the bus clock started, the clash cleared
+ * and unmasked, the frame generator awaited. The slaves (simple clock
+ * stop) need nothing; one that lost sync re-attaches, which swr_irq sees.
+ */
+int
+swr_clock_start(struct swr *w)
+{
+	unsigned i;
+
+	wr(w, SWRM_MCP_BUS_CTRL, SWRM_MCP_BUS_CLK_START);
+	wr(w, SWRM_INTERRUPT_CLEAR, SWRM_INTERRUPT_MASTER_CLASH_DET);
+	w->intr_mask |= SWRM_INTERRUPT_MASTER_CLASH_DET;
+	wr(w, SWRM_INTERRUPT_MASK_ADDR, w->intr_mask);
+	wr(w, SWRM_INTERRUPT_CPU_EN, w->intr_mask);
+	for (i = 0; i <= 100; i++) {
+		if (rd(w, SWRM_COMP_STATUS) & SWRM_FRM_GEN_ENABLED)
+			break;
+		fma_sleep_ms(1);
+	}
+	w->clk_stopped = false;
+	w->clkstarts++;
+	if (i > 100) {
+		fma_log("%s: the frame generator did not come back after the "
+		    "clock stop", w->name);
+		return (-EIO);
+	}
+	return (0);
 }

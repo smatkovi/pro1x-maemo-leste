@@ -1,0 +1,12 @@
+# The Pro1X's power profile (freebsd/pm/README.md, "Stage 6"), for the
+# rc.d scripts: on with pro1x.power=on in freebsd/cmdline (kernel
+# environment: SMP and the CPUs' idle states too) or
+# pro1x_power_enable="YES" in rc.conf (user space only). Each part can
+# still be set on its own; an explicit setting wins over the profile.
+pro1x_power_on()
+{
+	case "${pro1x_power_enable:-NO}" in
+	[Yy][Ee][Ss]|[Tt][Rr][Uu][Ee]|[Oo][Nn]|1) return 0 ;;
+	esac
+	[ "$(/bin/kenv -q pro1x.power 2> /dev/null)" = on ]
+}

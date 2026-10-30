@@ -756,7 +756,25 @@ test_pcm(void)
 	printf("pcm: done\n");
 }
 
-/* --- the sequences ------------------------------------------------------- */
+/* --- a simulated SoundWire master with the WCD9370 behind it --------------- */
+
+static struct {
+	uint32_t r[0x2000 / 4 + 0x800];
+	uint8_t slave[0x4000];		/* the WCD's SCP/DPn and own registers */
+	uint32_t wcmds[256];
+	unsigned nwcmds;
+	uint32_t rdfifo;
+	bool rd_ready;
+	uint32_t ist;			/* INTERRUPT_STATUS, latched */
+	/* the alert model (test_swr_irq, test_jack_irq) */
+	bool live;
+	uint8_t int1;			/* SCP_INT1's latched bits */
+	uint8_t wcd_pending;		/* DIGITAL_INTR_STATUS_0 */
+	bool stopped;			/* ClockStopNow seen, not started */
+	bool wake;			/* the wake-up line */
+	unsigned unclocked;		/* accesses with the TX macro's clock off */
+	unsigned alerts_raised;
+} S;
 
 static struct {
 	uint32_t regs[TGT_NMMIO][1024];
@@ -764,6 +782,90 @@ static struct {
 	unsigned nlog;
 	uint8_t sdw[0x4000], aw[2][256];
 } C;
+
+/* SCP_INT1 as the WCD shows it: latched, and its own interrupts */
+static uint8_t
+s_int1(void)
+{
+	return (S.int1 | ((S.wcd_pending & (uint8_t)~S.slave[0x346b]) ?
+	    0x04 : 0));
+}
+
+static bool
+s_alerting(void)
+{
+	return (S.live && !S.stopped && (s_int1() & S.slave[0x41]) != 0);
+}
+
+static void
+s_clock_check(void)
+{
+	/* the master's clock is the TX macro's (register 0 of the window) */
+	if (S.live && C.regs[TGT_TXMACRO][0] == 0)
+		S.unclocked++;
+}
+
+static uint32_t
+s_rd(struct mmio *m, uint32_t off)
+{
+	(void)m;
+	s_clock_check();
+	switch (off) {
+	case 0x000: return (0x01060000);	/* v1.6.0 */
+	case 0x014: return (1);			/* frame generator on */
+	case 0x100: return (5 | 0 << 5 | 8 << 10 | 8 << 15);
+	case 0x104: return (2);
+	case 0x1090: return ((s_alerting() ? 2u : 1u) << 2);	/* device 1 */
+	case 0x530 + 8: return (0x01170223);	/* the WCD9370's TX id */
+	case 0x534 + 8: return (0x0000000a);
+	case 0x30c: return (S.rd_ready ? 1 << 16 : 0);
+	case 0x318: S.rd_ready = false; return (S.rdfifo);
+	case 0x200: return (S.ist | (s_alerting() ? 1 : 0));
+	}
+	return (S.r[off / 4]);
+}
+
+static void
+s_wr(struct mmio *m, uint32_t off, uint32_t v)
+{
+	uint16_t reg = v & 0xffff;
+	uint8_t id = (v >> 16) & 0xf, dev = (v >> 20) & 0xf, data = v >> 24;
+
+	(void)m;
+	s_clock_check();
+	if (off == 0x300) {
+		if (S.nwcmds < 256)
+			S.wcmds[S.nwcmds++] = v;
+		if (dev == 15) {
+			S.ist |= 1u << 10;	/* SPECIAL_CMD_ID_FINISHED */
+			if (reg == 0x44 && (data & 2))
+				S.stopped = true;
+		}
+		if (reg == 0x40)		/* SCP_INT1: write 1 to clear */
+			S.int1 &= (uint8_t)~data;
+		else if (reg == 0x3471)		/* DIGITAL_INTR_CLEAR_0 */
+			S.wcd_pending &= (uint8_t)~data;
+		else if (reg < sizeof(S.slave))
+			S.slave[reg] = data;
+		return;
+	}
+	if (off == 0x304) {
+		S.rdfifo = (uint32_t)id << 8 | (reg == 0x40 ? s_int1() :
+		    reg == 0x346e ? S.wcd_pending : reg < sizeof(S.slave) ?
+		    S.slave[reg] : 0);
+		S.rd_ready = true;
+		return;
+	}
+	if (off == 0x208)
+		S.ist &= ~v;
+	if (off == 0x1044 && (v & 2)) {		/* the bus clock started */
+		S.stopped = false;
+		S.wake = false;
+	}
+	S.r[off / 4] = v;
+}
+
+/* --- the sequences ------------------------------------------------------- */
 
 static uint32_t
 c_rd(struct mmio *m, uint32_t off)
@@ -952,59 +1054,6 @@ test_seq(void)
 	CHECK(seq_run(&s, "a", &io) == 1);	/* an 8-bit register */
 	seq_free(&s);
 	printf("sequences: done\n");
-}
-
-/* --- a simulated SoundWire master with the WCD9370 behind it --------------- */
-
-static struct {
-	uint32_t r[0x2000 / 4 + 0x800];
-	uint8_t slave[0x800];		/* the WCD's SCP/DPn registers */
-	uint32_t wcmds[256];
-	unsigned nwcmds;
-	uint32_t rdfifo;
-	bool rd_ready;
-} S;
-
-static uint32_t
-s_rd(struct mmio *m, uint32_t off)
-{
-	(void)m;
-	switch (off) {
-	case 0x000: return (0x01060000);	/* v1.6.0 */
-	case 0x014: return (1);			/* frame generator on */
-	case 0x100: return (5 | 0 << 5 | 8 << 10 | 8 << 15);
-	case 0x104: return (2);
-	case 0x1090: return (1 << 2);		/* device 1 attached */
-	case 0x530 + 8: return (0x01170223);	/* the WCD9370's TX id */
-	case 0x534 + 8: return (0x0000000a);
-	case 0x30c: return (S.rd_ready ? 1 << 16 : 0);
-	case 0x318: S.rd_ready = false; return (S.rdfifo);
-	case 0x200: return (1 << 10);		/* broadcasts finish at once */
-	}
-	return (S.r[off / 4]);
-}
-
-static void
-s_wr(struct mmio *m, uint32_t off, uint32_t v)
-{
-	uint16_t reg = v & 0xffff;
-	uint8_t id = (v >> 16) & 0xf;
-
-	(void)m;
-	if (off == 0x300) {
-		if (S.nwcmds < 256)
-			S.wcmds[S.nwcmds++] = v;
-		if (reg < sizeof(S.slave))
-			S.slave[reg] = v >> 24;
-		return;
-	}
-	if (off == 0x304) {
-		S.rdfifo = (uint32_t)id << 8 | (reg < sizeof(S.slave) ?
-		    S.slave[reg] : 0);
-		S.rd_ready = true;
-		return;
-	}
-	S.r[off / 4] = v;
 }
 
 static void
@@ -1364,6 +1413,247 @@ test_jack_policy(void)
 	printf("jack policy: done\n");
 }
 
+/* the alert, status changes, errors and the clock stop of swr.c */
+static unsigned irq_alerts;
+
+static void
+t_alert(void *ctx, struct swr *w, uint8_t dev)
+{
+	(void)ctx, (void)w;
+	if (dev == 1) {
+		irq_alerts++;
+		S.wcd_pending = 0;	/* the WCD's interrupt handled */
+	}
+}
+
+static void
+test_swr_irq(void)
+{
+	static struct audiod d;
+	struct mmio m = { .name = "swr0", .rd = s_rd, .wr = s_wr };
+	struct swr *w;
+	uint32_t seen;
+
+	memset(&S, 0, sizeof(S));
+	memset(&C, 0, sizeof(C));
+	C.regs[TGT_TXMACRO][0] = 1;		/* clocked */
+	S.live = true;
+	backend_init(&d);
+	w = &d.swr[0];
+	w->m = &m;
+	w->irq_level = true;
+	CHECK(swr_init(w) == 0);
+	CHECK(S.r[0x04 / 4] == 1);		/* level: no pulse bit */
+	CHECK(swr_enumerate(w, 3, 10) == 0 && w->devnum == 1);
+	/* sdw_initialize_slave: IntMask1 = impl. defined, clash, parity */
+	S.int1 = 0x02;				/* a clash latched before */
+	CHECK(swr_slave_init(w, 1) == 0 && S.slave[0x41] == 0x07);
+	CHECK(S.int1 == 0 && w->slave_inited == 1);
+	/* the WCD's interrupt: an alert, the callback, everything acked */
+	w->alert = t_alert;
+	S.slave[0x346b] = 0x00;			/* unmasked in the WCD */
+	S.wcd_pending = 0x10;
+	CHECK(s_alerting());
+	seen = swr_irq(w);
+	CHECK((seen & 1) && irq_alerts == 1 && !s_alerting());
+	CHECK(w->alerts == 1 && w->impl_alerts == 1 && S.ist == 0);
+	/* masked in the slave's IntMask1: no alert */
+	S.slave[0x41] = 0;
+	S.wcd_pending = 0x10;
+	CHECK(!s_alerting() && swr_irq(w) == 0 && w->spurious == 1);
+	S.slave[0x41] = 0x07;
+	(void)swr_irq(w);
+	CHECK(irq_alerts == 2);
+	/* a command error: the FIFO flushed */
+	S.ist = 1u << 7;
+	S.r[0x308 / 4] = 0;
+	CHECK(swr_irq(w) == (1u << 7) && S.r[0x308 / 4] == 1 && S.ist == 0);
+	/* a status change: the device gone, back, unmasked again */
+	w->slave_status = 0;
+	S.ist = 1u << 2;
+	S.slave[0x41] = 0;
+	(void)swr_irq(w);
+	CHECK(S.slave[0x41] == 0x07 && w->slave_status == 1u << 2);
+	/* the clock stop: clash masked, ClockStopNow broadcast */
+	S.nwcmds = 0;
+	CHECK(swr_clock_stop(w) == 0 && w->clk_stopped && S.stopped);
+	CHECK(S.wcmds[S.nwcmds - 1] == (0x44u | 15u << 16 | 15u << 20 |
+	    0x02u << 24));
+	CHECK((S.r[0x210 / 4] & 0x8) == 0 && (S.r[0x204 / 4] & 0x8) == 0);
+	CHECK(swr_irq(w) == 0);			/* nothing read while stopped */
+	/* and the start: the bus clock, the clash cleared and unmasked */
+	S.r[0x208 / 4] = 0;
+	CHECK(swr_clock_start(w) == 0 && !w->clk_stopped && !S.stopped);
+	CHECK(S.r[0x1044 / 4] == 2 && (S.r[0x210 / 4] & 0x8) &&
+	    S.r[0x208 / 4] == 0x8);
+	/* WakeUpEnable on request (-W) */
+	w->wake_en = true;
+	CHECK(swr_clock_stop(w) == 0 && S.slave[0x45] == 0x08);
+	CHECK(swr_clock_start(w) == 0);
+	CHECK(S.unclocked == 0);
+	printf("soundwire interrupts: done\n");
+}
+
+/* the jack with qcom_swr0's lines: alerts, the clock stop, the wake-up */
+static struct {
+	uint32_t armed;
+	unsigned arms;
+} K2;
+
+static int
+k2_arm(void *ctx, uint32_t bits, bool on)
+{
+	(void)ctx;
+	if (on) {
+		K2.armed |= bits;
+		K2.arms++;
+	} else
+		K2.armed &= ~bits;
+	return (0);
+}
+
+static struct swr_irq_io k2_io = { k2_arm, NULL };
+
+/* the kernel's side: an armed line that is up fires once, then masked */
+static unsigned
+k2_run(struct audiod *d)
+{
+	unsigned n = 0, i;
+
+	for (i = 0; i < 8; i++) {
+		if ((K2.armed & QCOM_SWR_WAKE) && S.wake) {
+			K2.armed &= ~QCOM_SWR_WAKE;
+			jack_event(d, QCOM_SWR_WAKE);
+			n++;
+		} else if ((K2.armed & QCOM_SWR_MASTER) &&
+		    (S.ist != 0 || s_alerting())) {
+			K2.armed &= ~QCOM_SWR_MASTER;
+			jack_event(d, QCOM_SWR_MASTER);
+			n++;
+		} else
+			break;
+	}
+	return (n);
+}
+
+static void
+test_jack_irq(void)
+{
+	static struct audiod d;
+	static struct mmio sw0, txm, lcc;
+	struct seq sq;
+	char e[128];
+	uint64_t t0;
+	unsigned irqs;
+	const char *text =
+	    "[jack-up]\nw txmacro 0x0 0x1\nw lpasscc 0x0 0x1\n"
+	    "swr init swr0\nswr enum swr0\nswr wcd-init\n"
+	    "[jack-down]\nw txmacro 0x0 0x0\n"
+	    "[tx-up]\nmark tx-up\n[tx-down]\nmark tx-down\n";
+
+	setup(&d);
+	memset(&S, 0, sizeof(S));
+	memset(&C, 0, sizeof(C));
+	memset(&K2, 0, sizeof(K2));
+	S.live = true;
+	CHECK(seq_parse(&sq, text, "jack.seq", e, sizeof(e)) == 0);
+	d.seq = sq;
+	d.have_seq = true;
+	d.q.core_ready = true;
+	d.powered = true;
+	sw0 = (struct mmio){ .name = "swr0", .rd = s_rd, .wr = s_wr };
+	txm = (struct mmio){ .name = "txmacro", .rd = c_rd, .wr = c_wr,
+	    .priv = (void *)(intptr_t)TGT_TXMACRO };
+	lcc = (struct mmio){ .name = "lpasscc", .rd = c_rd, .wr = c_wr,
+	    .priv = (void *)(intptr_t)TGT_LPASSCC };
+	d.cio.win[TGT_SWR0] = &sw0;
+	d.cio.win[TGT_TXMACRO] = &txm;
+	d.cio.win[TGT_LPASSCC] = &lcc;
+	d.swr[0].m = &sw0;
+	d.cio.afe = p_afe;
+	d.swrio = &k2_io;
+	d.jack_mode = JACK_CLKSTOP;
+	d.clkstop_ms = 3000;
+	CHECK(jack_start(&d) == 0 && d.jack_on);
+	CHECK(d.swr[0].irq_level && S.r[0x04 / 4] == 1);
+	CHECK(S.slave[0x41] == 0x07 && (K2.armed & QCOM_SWR_MASTER));
+	/* the MBHC's switch interrupt: an alert, handled, nothing polled */
+	irqs = d.mbhc.irqs;
+	S.wcd_pending = 0x10;
+	CHECK(k2_run(&d) >= 1 && d.mbhc.irqs == irqs + 1 && S.wcd_pending == 0);
+	CHECK(d.mbhc.polls == 0 && (K2.armed & QCOM_SWR_MASTER));
+	/* no timer while the detection's corrections are not running */
+	d.mbhc.correcting = false;
+	t0 = fma_now_ms();
+	d.jack_busy_at = t0;
+	CHECK(jack_next_ms(&d, t0) == 3000);
+	CHECK(audiod_timeout_ms(&d, t0) == 3000);
+	/* 3 s later: the clock stopped, the TX macro's clock off, wake armed */
+	d.jack_busy_at = t0 - 3000;
+	jack_tick(&d);
+	CHECK(d.jack_clkstop && S.stopped && C.regs[TGT_TXMACRO][0] == 0);
+	CHECK(K2.armed == QCOM_SWR_WAKE && d.jack_sleeps == 1);
+	CHECK(jack_next_ms(&d, fma_now_ms()) == -1);
+	CHECK(audiod_timeout_ms(&d, fma_now_ms()) == -1);	/* asleep */
+	CHECK(S.unclocked == 0);
+	/* a plug while stopped: the wake-up line; clocks back, no new init */
+	S.r[0x500 / 4] = 0;		/* the enumerator's: init would set 1 */
+	S.wcd_pending = 0x10;
+	S.wake = true;
+	CHECK(k2_run(&d) >= 1);
+	CHECK(!d.jack_clkstop && !S.stopped && C.regs[TGT_TXMACRO][0] == 1);
+	CHECK(S.r[0x500 / 4] == 0 && S.r[0x1044 / 4] == 2);
+	CHECK(d.mbhc.irqs == irqs + 2 && S.wcd_pending == 0);
+	CHECK(d.jack_wakes == 1 && (K2.armed & QCOM_SWR_MASTER));
+	CHECK(S.unclocked == 0);
+	/* stopped again; a back end's sequence wakes the bus first */
+	d.mbhc.correcting = false;
+	d.jack_busy_at = fma_now_ms() - 3000;
+	jack_tick(&d);
+	CHECK(d.jack_clkstop);
+	CHECK(backend_get(&d, BE_TX) == 0 && !d.jack_clkstop &&
+	    C.regs[TGT_TXMACRO][0] == 1 && d.jack_wakes == 2);
+	/* no clock stop while a back end is up */
+	d.jack_busy_at = fma_now_ms() - 10000;
+	jack_tick(&d);
+	CHECK(!d.jack_clkstop);
+	backend_put(&d, BE_TX);
+	backend_tick(&d);
+	CHECK(!d.be[BE_TX].up);
+	CHECK(S.unclocked == 0);
+	/* the jack off: the lines disarmed, [jack-down] */
+	jack_stop(&d);
+	CHECK(!d.jack_on && K2.armed == 0 && C.regs[TGT_TXMACRO][0] == 0);
+	/* auto: irq with a slow check that falls back to polling */
+	memset(&K2, 0, sizeof(K2));
+	d.jack_mode = JACK_IRQ;
+	d.jack_check_ms = 2000;
+	d.jack_enabled = true;
+	CHECK(jack_start(&d) == 0 && d.jack_mode == JACK_IRQ);
+	S.slave[0x41] = 0;		/* the alerts lost (IntMask1 cleared) */
+	S.wcd_pending = 0x80;
+	d.jack_poll_at = 0;
+	jack_tick(&d);
+	CHECK(d.jack_missed == 1 && S.wcd_pending == 0);
+	S.wcd_pending = 0x80;
+	d.jack_poll_at = 0;
+	jack_tick(&d);
+	CHECK(d.jack_missed == 2 && d.jack_mode == JACK_POLL &&
+	    !(K2.armed & QCOM_SWR_MASTER));
+	CHECK(jack_next_ms(&d, fma_now_ms()) <= JACK_POLL_MS);
+	jack_stop(&d);
+	/* poll mode: no alert set up, the 100 ms poll as before */
+	memset(&K2, 0, sizeof(K2));
+	d.jack_mode = JACK_POLL;
+	S.slave[0x41] = 0;
+	CHECK(jack_start(&d) == 0 && K2.arms == 0 && S.slave[0x41] == 0);
+	CHECK(S.r[0x04 / 4] == 3);	/* the pulse, as Linux */
+	jack_stop(&d);
+	seq_free(&d.seq);
+	d.have_seq = false;
+	printf("jack interrupts: done\n");
+}
+
 /* a file of tools/trace2seq.py (the Makefile's sample.seq), and base.seq */
 static void
 test_file(const char *path)
@@ -1391,9 +1681,11 @@ main(int argc, char **argv)
 	test_pcm();
 	test_seq();
 	test_swr();
+	test_swr_irq();
 	test_voice();
 	test_mbhc();
 	test_jack_policy();
+	test_jack_irq();
 	if (failures != 0) {
 		printf("%d failure(s)\n", failures);
 		return (1);

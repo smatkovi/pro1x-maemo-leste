@@ -15,6 +15,12 @@
 #   pro1x_audiod_enable="YES"
 #   pro1x_audiod_adsp="YES"           start the ADSP first
 #   pro1x_audiod_args="-r hph"        the headphones (spk, ear)
+#   pro1x_audiod_jack="auto"          the jack's interrupts (pro1x-audiod -j):
+#                                     auto (SoundWire alerts through
+#                                     qcom_swr.ko, checked; else polled),
+#                                     irq, poll, clkstop (alerts and the
+#                                     bus' clock stopped between them: the
+#                                     power profile's default)
 
 . /etc/rc.subr
 
@@ -24,20 +30,28 @@ rcvar=pro1x_audiod_enable
 load_rc_config $name
 : ${pro1x_audiod_enable:=NO}
 : ${pro1x_audiod_adsp:=NO}
-: ${pro1x_audiod_modules:="qcom_dsp qrtr qcom_apr qcom_lpass sound snd_pro1x"}
+: ${pro1x_audiod_modules:="qcom_dsp qrtr qcom_apr qcom_lpass qcom_swr sound snd_pro1x"}
 : ${pro1x_audiod_log:=/var/log/pro1x-audiod.log}
 : ${pro1x_audiod_args:=}
+if [ -z "${pro1x_audiod_jack}" ]; then
+	pro1x_audiod_jack=auto
+	[ -r /usr/local/share/pro1x/power.subr ] &&
+	    . /usr/local/share/pro1x/power.subr && pro1x_power_on &&
+	    pro1x_audiod_jack=clkstop
+fi
 
 pidfile=/var/run/${name}.pid
 procname=/usr/local/sbin/pro1x-audiod
 command=/usr/sbin/daemon
-command_args="-o ${pro1x_audiod_log} -p ${pidfile} ${procname} -d ${pro1x_audiod_args}"
+command_args="-o ${pro1x_audiod_log} -p ${pidfile} ${procname} -d -j ${pro1x_audiod_jack} ${pro1x_audiod_args}"
 start_precmd=pro1x_audiod_prestart
 
 pro1x_audiod_prestart()
 {
 	local i
-	kldload -n ${pro1x_audiod_modules}
+	# qcom_swr: without it the jack is polled
+	kldload -n ${pro1x_audiod_modules} ||
+	    for i in ${pro1x_audiod_modules}; do kldload -n $i; done
 	if checkyesno pro1x_audiod_adsp &&
 	    ! sysctl -n hw.qcom_apr 2> /dev/null | grep -q "^open"; then
 		service pd_mapper onestart

@@ -298,11 +298,27 @@ cb_swr(void *ctx, const char *what)
 	for (p = strtok(buf, " "); p != NULL && n < 12; p = strtok(NULL, " "))
 		w[n++] = p;
 	if (n == 1 && strcmp(w[0], "wcd-init") == 0)
-		return (wcd_init(d));
+		return (d->jack_waking ? 0 : wcd_init(d));
 	if (n < 2 || (s = swr_by_name(d, w[1])) == NULL)
 		return (-EINVAL);
 	if (s->m == NULL)
 		return (-ENXIO);
+	/*
+	 * [jack-up] as the wake-up from a clock stop: the master keeps its
+	 * registers and the slaves their device numbers across it (Linux's
+	 * swrm_runtime_resume with clock stop): no init, no enumeration, the
+	 * bus clock started instead (after the section's CGCR reset)
+	 */
+	if (d->jack_waking && s == &d->swr[0]) {
+		if (strcmp(w[0], "init") == 0)
+			return (swr_clock_start(s));
+		if (strcmp(w[0], "enum") == 0)
+			return (s->devnum != 0 ? 0 : -ENODEV);
+	}
+	if (strcmp(w[0], "clkstop") == 0)
+		return (swr_clock_stop(s));
+	if (strcmp(w[0], "clkstart") == 0)
+		return (swr_clock_start(s));
 	if (strcmp(w[0], "init") == 0)
 		return (swr_init(s));
 	if (strcmp(w[0], "enum") == 0)
@@ -404,6 +420,8 @@ backend_init(struct audiod *d)
 	io->var = cb_var;
 	io->skip = cb_skip;
 	d->jack_enabled = true;
+	if (d->clkstop_ms == 0)
+		d->clkstop_ms = JACK_CLKSTOP_MS;
 }
 
 /* --- up and down ---------------------------------------------------------- */
@@ -415,6 +433,9 @@ section(struct audiod *d, const char *name)
 
 	if (!d->have_seq)
 		return (-ENOENT);
+	/* every other sequence may touch swr0, the TX macro, the WCD */
+	if (d->jack_clkstop && !d->in_jack_seq)
+		jack_wake(d);
 	r = seq_run(&d->seq, name, &d->cio);
 	if (r == -ENOENT)
 		fma_dbg("codec: no sequence [%s]", name);
@@ -622,6 +643,8 @@ backend_route(struct audiod *d, const char *route)
  * registers of the same blocks still go. The WCD9370 and the amplifiers
  * stay every route's.
  */
+#define	R_WCD_INTR_STATUS_0	0x346e	/* wcd937x.h: DIGITAL_INTR_STATUS_0 */
+
 static bool
 jack_holds(struct audiod *d, int target, uint32_t reg)
 {
@@ -691,6 +714,38 @@ mb_now(void *ctx)
 	return (fma_now_ms());
 }
 
+/*
+ * The WCD9370's alert (swr_irq, its implementation-defined interrupt):
+ * wcd_interrupt_callback, the latched interrupts until none is left
+ */
+static void
+jack_alert(void *ctx, struct swr *w, uint8_t dev)
+{
+	struct audiod *d = ctx;
+	int i;
+
+	if (dev != w->devnum || !d->jack_on)
+		return;
+	for (i = 0; i < 4 && mbhc_irq(&d->mbhc) > 0; i++)
+		;
+	d->jack_busy_at = fma_now_ms();
+}
+
+static void
+jack_arm(struct audiod *d, uint32_t bits, bool on)
+{
+	if (d->swrio != NULL && d->swrio->arm(d->swrio->ctx, bits, on) != 0)
+		fma_log("jack: %s %#x: %s", on ? "arming" : "disarming", bits,
+		    strerror(errno));
+}
+
+const char *
+jack_mode_name(int mode)
+{
+	return (mode == JACK_CLKSTOP ? "clkstop" : mode == JACK_IRQ ?
+	    "irq" : "poll");
+}
+
 int
 jack_start(struct audiod *d)
 {
@@ -711,6 +766,12 @@ jack_start(struct audiod *d)
 		section(d, "power");
 		d->powered = true;
 	}
+	if (d->jack_mode != JACK_POLL && d->swrio == NULL) {
+		fma_log("jack: no /dev/qcom_swr0 (kldload qcom_swr): polled");
+		d->jack_mode = JACK_POLL;
+	}
+	/* swr_init in [jack-up] sets the master's line as it is used */
+	d->swr[0].irq_level = d->jack_mode != JACK_POLL;
 	d->njack_regs = 0;
 	d->jack_swr = 0;
 	for (i = 0; i < sec->count; i++) {
@@ -738,8 +799,25 @@ jack_start(struct audiod *d)
 	if ((r = mbhc_init(&d->mbhc)) != 0)
 		return (r);
 	d->jack_on = true;
-	fma_log("jack: watched (%u registers held, masters %#x)",
-	    d->njack_regs, d->jack_swr);
+	d->jack_busy_at = d->jack_poll_at = fma_now_ms();
+	if (d->jack_mode != JACK_POLL) {
+		/* sdw_initialize_slave, then the alerts through swr_irq */
+		d->swr[0].alert = jack_alert;
+		d->swr[0].alert_ctx = d;
+		d->swr[0].slave_status = 0;
+		if (swr_slave_init(&d->swr[0], d->swr[0].devnum) != 0) {
+			fma_log("jack: the WCD9370's alerts not unmasked: "
+			    "polled");
+			d->jack_mode = JACK_POLL;
+		} else {
+			jack_arm(d, QCOM_SWR_MASTER, true);
+			jack_master(d);
+		}
+	}
+	fma_log("jack: watched (%u registers held, masters %#x; %s%s)",
+	    d->njack_regs, d->jack_swr, jack_mode_name(d->jack_mode),
+	    d->jack_mode == JACK_IRQ && d->jack_check_ms ?
+	    ", checked by a slow poll" : "");
 	return (0);
 }
 
@@ -748,11 +826,216 @@ jack_stop(struct audiod *d)
 {
 	if (!d->jack_on)
 		return;
+	if (d->jack_clkstop)
+		jack_wake(d);
+	jack_arm(d, QCOM_SWR_MASTER | QCOM_SWR_WAKE, false);
+	d->swr[0].alert = NULL;
 	d->jack_on = false;
 	d->in_jack_seq = true;
 	section(d, "jack-down");
 	d->in_jack_seq = false;
 	d->mbhc.up = false;
+}
+
+/*
+ * The master's interrupt (or a look at its status): swr_irq, its alert
+ * to jack_alert; then the line armed again. Not while the clock is
+ * stopped: the master's registers are not clocked then.
+ */
+void
+jack_master(struct audiod *d)
+{
+	if (!d->jack_on || d->jack_clkstop)
+		return;
+	if (swr_irq(&d->swr[0]) != 0)
+		d->jack_busy_at = fma_now_ms();
+	jack_arm(d, QCOM_SWR_MASTER, true);
+}
+
+/* nothing else may need swr0, the TX macro or the WCD right now */
+static bool
+jack_may_sleep(struct audiod *d)
+{
+	int i;
+
+	if (d->jack_mode != JACK_CLKSTOP || !d->jack_on || d->jack_clkstop ||
+	    !mbhc_idle(&d->mbhc) || d->fm_on ||
+	    (d->voice != NULL && d->voice->state == VP_UP))
+		return (false);
+	for (i = 0; i < BE_N; i++)
+		if (d->be[i].up)
+			return (false);
+	return (true);
+}
+
+/*
+ * The clock stop (Linux's swrm_runtime_suspend, 3 s after the last use,
+ * its autosuspend delay): the master's line disarmed (its registers lose
+ * their clock), what is pending handled, ClockStopNow, the TX macro's
+ * clocks off ([jack-sleep], else the trace's [jack-down]: the suspends
+ * after Linux served the jack), the wake-up interrupt armed. A plug or a
+ * button then wakes the bus through it (jack_wake).
+ */
+int
+jack_sleep(struct audiod *d)
+{
+	int r;
+
+	if (!jack_may_sleep(d))
+		return (0);
+	jack_arm(d, QCOM_SWR_MASTER, false);
+	(void)swr_irq(&d->swr[0]);
+	if ((r = swr_clock_stop(&d->swr[0])) != 0) {
+		jack_arm(d, QCOM_SWR_MASTER, true);
+		d->jack_busy_at = fma_now_ms();
+		return (r);
+	}
+	d->in_jack_seq = true;
+	r = section(d, seq_find(&d->seq, "jack-sleep") != NULL ?
+	    "jack-sleep" : "jack-down");
+	d->in_jack_seq = false;
+	d->jack_clkstop = true;
+	d->jack_sleeps++;
+	fma_dbg("jack: the bus' clock stopped (%u)", d->jack_sleeps);
+	jack_arm(d, QCOM_SWR_WAKE, true);
+	return (r < 0 && r != -ENOENT ? r : 0);
+}
+
+/*
+ * The wake-up (Linux's qcom_swrm_wake_irq_handler: a runtime resume):
+ * the TX macro's clocks and the CGCR reset ([jack-wake], else [jack-up]
+ * with its master init and enumeration taken as the bus clock's start,
+ * cb_swr), the clock started, the master's line armed and its status
+ * looked at: the alert that woke it comes there.
+ */
+void
+jack_wake(struct audiod *d)
+{
+	int r;
+
+	if (!d->jack_clkstop)
+		return;
+	jack_arm(d, QCOM_SWR_WAKE, false);
+	d->in_jack_seq = true;
+	d->jack_waking = true;
+	r = section(d, seq_find(&d->seq, "jack-wake") != NULL ? "jack-wake" :
+	    "jack-up");
+	d->jack_waking = false;
+	d->in_jack_seq = false;
+	if (d->swr[0].clk_stopped)	/* the section had no "init swr0" */
+		(void)swr_clock_start(&d->swr[0]);
+	d->jack_clkstop = false;
+	d->jack_wakes++;
+	d->jack_busy_at = fma_now_ms();
+	if (r < 0)
+		fma_log("jack: the wake-up's sequence failed (%d)", r);
+	jack_master(d);
+}
+
+/* qcom_swr0's events: QCOM_SWR_WAKE, QCOM_SWR_MASTER */
+void
+jack_event(struct audiod *d, uint32_t fired)
+{
+	if (fired & QCOM_SWR_WAKE)
+		jack_wake(d);
+	if (fired & QCOM_SWR_MASTER)
+		jack_master(d);
+}
+
+/*
+ * The jack's time: the poll (every 100 ms), or with interrupts the MBHC's
+ * corrections and long presses, the check (a slow poll in irq mode that
+ * falls back to polling should an interrupt not come), the clock stop.
+ */
+void
+jack_tick(struct audiod *d)
+{
+	uint64_t now = fma_now_ms();
+	uint8_t st = 0;
+
+	if (!d->jack_on)
+		return;
+	if (d->jack_mode == JACK_POLL) {
+		if (now >= d->jack_poll_at) {
+			mbhc_tick(&d->mbhc);
+			d->jack_poll_at = fma_now_ms() + JACK_POLL_MS;
+		}
+		return;
+	}
+	if (d->jack_clkstop)
+		return;
+	mbhc_timers(&d->mbhc);
+	if (d->jack_mode == JACK_IRQ && d->jack_check_ms != 0 &&
+	    now >= d->jack_poll_at) {
+		d->jack_poll_at = now + d->jack_check_ms;
+		if (mb_read(d, R_WCD_INTR_STATUS_0, &st) == 0 &&
+		    (st & d->mbhc.irq_enabled) != 0) {
+			if (swr_alert_pending(&d->swr[0]))
+				jack_master(d);	/* on its way */
+			else {
+				d->jack_missed++;
+				fma_log("jack: status %#x latched without an "
+				    "alert (%u)", st, d->jack_missed);
+				mbhc_tick(&d->mbhc);
+				if (d->jack_missed >= 2) {
+					fma_log("jack: the alerts do not come: "
+					    "polled from now on");
+					jack_arm(d, QCOM_SWR_MASTER, false);
+					d->jack_mode = JACK_POLL;
+					d->jack_poll_at = now + JACK_POLL_MS;
+				}
+			}
+		}
+	}
+	if (jack_may_sleep(d) && now >= d->jack_busy_at + d->clkstop_ms)
+		(void)jack_sleep(d);
+}
+
+/* milliseconds until jack_tick has something to do; -1: nothing */
+int
+jack_next_ms(struct audiod *d, uint64_t now)
+{
+	int64_t due = -1, t;
+
+	if (!d->jack_on)
+		return (-1);
+	if (d->jack_mode == JACK_POLL)
+		return (d->jack_poll_at > now ? (int)(d->jack_poll_at - now) : 0);
+	if (d->jack_clkstop)
+		return (-1);
+	if ((t = mbhc_next_ms(&d->mbhc, now)) >= 0)
+		due = t;
+	if (d->jack_mode == JACK_IRQ && d->jack_check_ms != 0) {
+		t = d->jack_poll_at > now ? (int64_t)(d->jack_poll_at - now) : 0;
+		if (due < 0 || t < due)
+			due = t;
+	}
+	if (jack_may_sleep(d)) {
+		t = d->jack_busy_at + d->clkstop_ms > now ?
+		    (int64_t)(d->jack_busy_at + d->clkstop_ms - now) : 0;
+		if (due < 0 || t < due)
+			due = t;
+	}
+	return ((int)due);
+}
+
+/* the daemon's poll(2) timeout: the back ends' power-down, the jack */
+int
+audiod_timeout_ms(struct audiod *d, uint64_t now)
+{
+	int64_t due = -1, t;
+	int i;
+
+	for (i = 0; i < BE_N; i++)
+		if (d->be[i].up && d->be[i].users == 0 && d->be[i].idle_at != 0) {
+			t = d->be[i].idle_at > now ?
+			    (int64_t)(d->be[i].idle_at - now) : 0;
+			if (due < 0 || t < due)
+				due = t;
+		}
+	if ((t = jack_next_ms(d, now)) >= 0 && (due < 0 || t < due))
+		due = t;
+	return ((int)due);
 }
 
 void

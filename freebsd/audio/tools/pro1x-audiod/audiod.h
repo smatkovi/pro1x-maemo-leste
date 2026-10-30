@@ -31,6 +31,7 @@
 
 #include "../../../fm/tools/pro1x-fmaudio/fmaudio.h"
 #include "../../sys/arm64/qualcomm/audio/pro1x_pcm.h"
+#include "../../sys/arm64/qualcomm/audio/qcom_swr.h"
 
 /* --- APR ---------------------------------------------------------------- */
 
@@ -297,6 +298,18 @@ struct swr {
 	unsigned	timeout_ms;
 	unsigned	writes, reads, errors;
 	bool		up;
+	/* interrupts and clock stop (swr_irq, swr_clock_stop) */
+	bool		irq_level;	/* the line in level mode (qcom_swr.ko) */
+	bool		wake_en;	/* SCP_SystemCtrl WakeUpEnable at stop */
+	bool		clk_stopped;
+	uint32_t	intr_mask;	/* Linux's ctrl->intr_mask */
+	uint32_t	slave_status;	/* MCP_SLV_STATUS as last seen */
+	uint8_t		slave_inited;	/* the device swr_slave_init unmasked */
+	/* a device's implementation-defined interrupt (the WCD9370's) */
+	void		(*alert)(void *ctx, struct swr *w, uint8_t dev);
+	void		*alert_ctx;
+	unsigned	irqs, spurious, alerts, impl_alerts, clkstops,
+			clkstarts;
 };
 
 int swr_init(struct swr *w);
@@ -307,6 +320,11 @@ int swr_read(struct swr *w, uint8_t dev, uint16_t reg, uint8_t *val);
 int swr_stream(struct swr *w, const uint8_t *ports, unsigned nports,
     const uint8_t *chmask, bool on);
 void swr_dump(struct swr *w, const char *why);
+int swr_slave_init(struct swr *w, uint8_t dev);
+uint32_t swr_irq(struct swr *w);	/* the status bits handled */
+bool swr_alert_pending(struct swr *w);
+int swr_clock_stop(struct swr *w);
+int swr_clock_start(struct swr *w);
 
 /* --- the headset jack (mbhc.c): the WCD9370's MBHC ---------------------- */
 
@@ -340,6 +358,10 @@ int mbhc_adc_mv(unsigned val, int micbias_mv);
 int mbhc_plug_from_mv(int mv, int hph_thr, int hs_thr);
 int mbhc_init(struct mbhc *m);
 int mbhc_tick(struct mbhc *m);	/* < 0 error, 1 an interrupt handled */
+int mbhc_irq(struct mbhc *m);	/* the latched interrupts only */
+void mbhc_timers(struct mbhc *m);
+int mbhc_next_ms(const struct mbhc *m, uint64_t now);	/* -1: none */
+bool mbhc_idle(const struct mbhc *m);
 
 /* --- the daemon (backend.c, main.c) ----------------------------------- */
 
@@ -386,7 +408,16 @@ struct audiod {
 	struct mbhc	mbhc;
 	struct mbhc_io	mbio;
 	bool		jack_enabled;	/* -J turns it off */
-	bool		jack_on;	/* [jack-up] ran, MBHC polled */
+	bool		jack_on;	/* [jack-up] ran, MBHC watched */
+	int		jack_mode;	/* JACK_POLL, JACK_IRQ, JACK_CLKSTOP */
+	struct swr_irq_io *swrio;	/* qcom_swr0's lines; NULL: none */
+	bool		jack_clkstop;	/* swr0's clock stopped */
+	bool		jack_waking;	/* [jack-up] runs as the wake-up */
+	unsigned	clkstop_ms;	/* idle before the clock stop (3000) */
+	unsigned	jack_check_ms;	/* irq: the slow poll (0: none) */
+	uint64_t	jack_busy_at;	/* the last alert, the wake-up */
+	uint64_t	jack_poll_at;	/* the next poll or check */
+	unsigned	jack_missed, jack_sleeps, jack_wakes;
 	bool		in_jack_seq;	/* [jack-up]/[jack-down] running */
 	uint32_t	jack_regs[256];	/* target << 24 | reg the jack holds */
 	unsigned	njack_regs;
@@ -397,11 +428,30 @@ struct audiod {
 	void		(*notify)(struct audiod *, const char *event);
 };
 
+/* qcom_swr.ko's /dev/qcom_swr0 (main.c), or the host test's */
+struct swr_irq_io {
+	int	(*arm)(void *ctx, uint32_t bits, bool on);	/* 0 or -1 */
+	void	*ctx;
+};
+
+enum { JACK_POLL, JACK_IRQ, JACK_CLKSTOP };
+#define	JACK_POLL_MS	100
+#define	JACK_CHECK_MS	2000
+#define	JACK_CLKSTOP_MS	3000	/* qcom.c's autosuspend delay */
+
 const char *eff_route(struct audiod *d);
 const char *eff_recroute(struct audiod *d);
 int jack_start(struct audiod *d);
 void jack_stop(struct audiod *d);
 void jack_report(void *ctx, int plug);
+const char *jack_mode_name(int mode);
+void jack_master(struct audiod *d);
+void jack_event(struct audiod *d, uint32_t fired);
+int jack_sleep(struct audiod *d);
+void jack_wake(struct audiod *d);
+void jack_tick(struct audiod *d);
+int jack_next_ms(struct audiod *d, uint64_t now);
+int audiod_timeout_ms(struct audiod *d, uint64_t now);
 void jack_button(void *ctx, unsigned mask, bool pressed);
 int voice_up(struct audiod *d, struct voice *v);
 int voice_down(struct audiod *d, struct voice *v);

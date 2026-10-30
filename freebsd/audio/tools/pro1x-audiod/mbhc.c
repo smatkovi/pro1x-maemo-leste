@@ -29,10 +29,11 @@
  * master's interrupt (swr0, SPI 296; its wake interrupt SPI 79 while the
  * bus' clock is stopped) runs the slave's interrupt callback, which reads
  * DIGITAL_INTR_STATUS_0-2 (regmap-irq). The WCD node has no interrupt line
- * of its own. FreeBSD has no driver for those SPIs: the daemon reads
- * DIGITAL_INTR_STATUS_0 over SoundWire every tick (mbhc_tick) while the
- * jack is watched, which needs swr0's bus running (the [jack-up]
- * sequence). Not ported: impedance detection (a line-out is taken as a
+ * of its own. FreeBSD: qcom_swr.ko hands swr0's interrupt lines to the
+ * daemon, swr.c's swr_irq finds the alert and calls mbhc_irq
+ * (backend.c's jack_*); without them (or with -j poll) the daemon reads
+ * DIGITAL_INTR_STATUS_0 over SoundWire every 100 ms (mbhc_tick), which
+ * needs swr0's bus running (the [jack-up] sequence). Not ported: impedance detection (a line-out is taken as a
  * headphone), moisture detection (off in Linux's default too), the US/EU
  * switch (the Pro1X has no us-euro GPIO).
  */
@@ -769,12 +770,15 @@ mbhc_init(struct mbhc *m)
 	return (m->up ? 0 : -EIO);
 }
 
-/* one poll: the latched interrupts, the corrections' and long press' time */
+/*
+ * The latched interrupts (DIGITAL_INTR_STATUS_0), as regmap-irq's thread
+ * handles them: from a SoundWire alert (wcd_interrupt_callback) or a
+ * poll. 1: something handled, 0: nothing latched, < 0 an error.
+ */
 int
-mbhc_tick(struct mbhc *m)
+mbhc_irq(struct mbhc *m)
 {
 	uint8_t st = 0;
-	uint64_t now;
 
 	if (!m->up)
 		return (0);
@@ -782,30 +786,40 @@ mbhc_tick(struct mbhc *m)
 		m->errors++;
 		return (-EIO);
 	}
-	m->polls++;
 	st &= m->irq_enabled;
-	if (st != 0) {
-		/* regmap-irq: ack (use_ack, clear_ack), then handle_post_irq */
-		wr(m, R_DIGITAL_INTR_CLEAR_0, st);
-		wr(m, R_DIGITAL_INTR_CLEAR_0, 0);
-		m->irqs++;
-		if (st & I_SW_DET)
-			plug_detect(m);
-		if (st & I_BTN_PRESS)
-			btn_press(m);
-		if (st & I_BTN_RELEASE)
-			btn_release(m);
-		if (st & I_ELECT_INS_REM)
-			hs_rem(m);
-		if (st & I_ELECT_INS_REM_LEG)
-			hs_ins(m);
-		if (st & (I_HPHL_OCP | I_HPHR_OCP)) {
-			fma_log("jack: over-current on %s", st & I_HPHL_OCP ?
-			    "HPHL" : "HPHR");
-			wf(m, F_OCP_FSM_EN, 0);
-			wf(m, F_OCP_FSM_EN, 1);
-		}
+	if (st == 0)
+		return (0);
+	/* regmap-irq: ack (use_ack, clear_ack), then handle_post_irq */
+	wr(m, R_DIGITAL_INTR_CLEAR_0, st);
+	wr(m, R_DIGITAL_INTR_CLEAR_0, 0);
+	m->irqs++;
+	if (st & I_SW_DET)
+		plug_detect(m);
+	if (st & I_BTN_PRESS)
+		btn_press(m);
+	if (st & I_BTN_RELEASE)
+		btn_release(m);
+	if (st & I_ELECT_INS_REM)
+		hs_rem(m);
+	if (st & I_ELECT_INS_REM_LEG)
+		hs_ins(m);
+	if (st & (I_HPHL_OCP | I_HPHR_OCP)) {
+		fma_log("jack: over-current on %s", st & I_HPHL_OCP ?
+		    "HPHL" : "HPHR");
+		wf(m, F_OCP_FSM_EN, 0);
+		wf(m, F_OCP_FSM_EN, 1);
 	}
+	return (1);
+}
+
+/* the corrections' and the long press' time */
+void
+mbhc_timers(struct mbhc *m)
+{
+	uint64_t now;
+
+	if (!m->up)
+		return;
 	now = m->io->now_ms(m->io->ctx);
 	if (m->correcting) {
 		if (now > m->c_until)
@@ -821,5 +835,44 @@ mbhc_tick(struct mbhc *m)
 		m->long_reported = true;
 		m->long_at = 0;
 	}
-	return (st != 0);
+}
+
+/* milliseconds until mbhc_timers has something to do; -1: nothing */
+int
+mbhc_next_ms(const struct mbhc *m, uint64_t now)
+{
+	uint64_t due = 0;
+
+	if (!m->up)
+		return (-1);
+	if (m->correcting)
+		due = m->c_next < m->c_until + 1 ? m->c_next : m->c_until + 1;
+	if (m->long_at != 0 && !m->long_reported && (due == 0 ||
+	    m->long_at < due))
+		due = m->long_at;
+	if (due == 0)
+		return (-1);
+	return (due > now ? (int)(due - now) : 0);
+}
+
+/* nothing in progress: the bus may stop its clock until the next alert */
+bool
+mbhc_idle(const struct mbhc *m)
+{
+	return (!m->correcting && (m->long_at == 0 || m->long_reported));
+}
+
+/* one poll: the latched interrupts, the corrections' and long press' time */
+int
+mbhc_tick(struct mbhc *m)
+{
+	int r;
+
+	if (!m->up)
+		return (0);
+	m->polls++;
+	if ((r = mbhc_irq(m)) < 0)
+		return (r);
+	mbhc_timers(m);
+	return (r);
 }

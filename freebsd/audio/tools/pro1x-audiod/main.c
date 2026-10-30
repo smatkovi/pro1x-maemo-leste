@@ -25,12 +25,25 @@
  *   wr <target> <reg> <val>    write one
  *   swr <words>                SoundWire: init, enum, stream, dump
  *
- *   pro1x-audiod [-d] [-v] [-T] [-n] [-J] [-s seqfile] [-r route]
- *                [-i iicdev] [-t idle_ms] [-S socket]
+ *   pro1x-audiod [-d] [-v] [-T] [-n] [-J] [-j mode] [-W] [-C ms]
+ *                [-s seqfile] [-r route] [-i iicdev] [-t idle_ms]
+ *                [-S socket]
  *     -d  stay in the foreground, log to stdout   -v  every command
  *     -T  every register access                   -n  no /dev/pro1x_pcm
- *     -J  no jack detection (it keeps swr0's bus and the TX macro's clocks
- *         running to poll the WCD9370)
+ *     -J  no jack detection
+ *     -j  how the jack's interrupts come (backend.c's jack_*):
+ *           poll     DIGITAL_INTR_STATUS_0 read every 100 ms (swr0's bus
+ *                    and the TX macro's clocks running all the time)
+ *           irq      the WCD9370's SoundWire alerts through qcom_swr.ko's
+ *                    /dev/qcom_swr0 (the bus running, no polling)
+ *           clkstop  irq, and the bus' clock stopped 3 s (-C) after the
+ *                    last event, the TX macro's clocks off; the wake-up
+ *                    interrupt starts it again (the power profile's)
+ *           auto     irq where /dev/qcom_swr0 is, checked by a read every
+ *                    2 s that falls back to poll should an alert not come;
+ *                    else poll (the default)
+ *     -W  SCP_SystemCtrl's WakeUpEnable written at each clock stop (Linux
+ *         leaves it to the WCD9370, a simple clock stop slave)
  *
  * The jack's events also go to devd (snd_pro1x: system PRO1X, subsystem
  * audio, type JACK or BUTTON) and to evdev: /dev/uinput's "Pro1X headset
@@ -77,6 +90,7 @@ static struct audiod D;
 static struct voice V;
 static volatile sig_atomic_t stop;
 static int apr_fd = -1, pcm_fd = -1, gpio_fd = -1, iic_fd = -1, ui_fd = -1;
+static int swr_fd = -1;
 #define	NWATCH	8
 static int watchers[NWATCH];
 static const char *seq_path, *sock_path = SOCK_PATH, *iic_path;
@@ -153,6 +167,45 @@ pcm_fail_fd(void *ctx, struct pro1x_pcm_advance *a)
 }
 
 static struct pcm_io pcmio = { pcm_read_fd, pcm_advance_fd, pcm_fail_fd, NULL };
+
+/* qcom_swr.ko's swr0: its interrupt lines armed or masked */
+static int
+swr_arm_fd(void *ctx, uint32_t bits, bool on)
+{
+	(void)ctx;
+	return (ioctl(swr_fd, on ? QCOM_SWR_ARM : QCOM_SWR_DISARM, &bits));
+}
+
+static struct swr_irq_io swrio = { swr_arm_fd, NULL };
+
+static void
+open_swr(void)
+{
+	struct qcom_swr_info info;
+	char path[32];
+
+	snprintf(path, sizeof(path), "%s0", QCOM_SWR_DEV);
+	if ((swr_fd = open(path, O_RDWR | O_NONBLOCK)) < 0) {
+		fma_log("%s: %s (kldload qcom_swr): the jack polled", path,
+		    strerror(errno));
+		return;
+	}
+	if (ioctl(swr_fd, QCOM_SWR_INFO, &info) != 0 ||
+	    !(info.have & QCOM_SWR_MASTER)) {
+		fma_log("%s: no master interrupt: the jack polled", path);
+		close(swr_fd);
+		swr_fd = -1;
+		return;
+	}
+	fma_log("%s: master INTID %u, wake-up %s%u", path, info.intid[0],
+	    (info.have & QCOM_SWR_WAKE) ? "INTID " : "none ",
+	    (info.have & QCOM_SWR_WAKE) ? info.intid[1] : 0);
+	if (!(info.have & QCOM_SWR_WAKE) && D.jack_mode == JACK_CLKSTOP) {
+		fma_log("jack: no wake-up interrupt: no clock stop");
+		D.jack_mode = JACK_IRQ;
+	}
+	D.swrio = &swrio;
+}
 
 /* --- the platform: windows, GPIOs, rails, I2C, delays ------------------- */
 
@@ -488,9 +541,10 @@ request(char *line, char *ans, size_t alen)
 		    D.q.async_pkts, D.q.timeouts, D.q.refused,
 		    D.swr[0].up ? "up" : "down", D.swr[0].devnum,
 		    D.swr[1].up ? "up" : "down", D.swr[1].devnum);
-		snprintf(msg, sizeof(msg), " jack=%s in_use=%s/%s",
+		snprintf(msg, sizeof(msg), " jack=%s in_use=%s/%s jack_mode=%s%s",
 		    !D.jack_on ? "off" : mbhc_plug_name(D.mbhc.plug),
-		    eff_route(&D), eff_recroute(&D));
+		    eff_route(&D), eff_recroute(&D), jack_mode_name(D.jack_mode),
+		    D.jack_clkstop ? "(stopped)" : "");
 		strlcat(ans, msg, alen);
 		return;
 	}
@@ -504,12 +558,17 @@ request(char *line, char *ans, size_t alen)
 			r = 0;
 		} else
 			r = 0;
-		snprintf(ans, alen, "%s plug=%s watched=%d mv=%d polls=%u "
-		    "interrupts=%u reports=%u errors=%u adc_failures=%u "
-		    "held=%u", r == 0 ? "ok" : "error EIO",
-		    mbhc_plug_name(D.mbhc.plug), D.jack_on, D.mbhc.last_mv,
+		snprintf(ans, alen, "%s plug=%s watched=%d mode=%s mv=%d "
+		    "polls=%u interrupts=%u reports=%u errors=%u "
+		    "adc_failures=%u held=%u swr_irqs=%u spurious=%u alerts=%u "
+		    "wcd_alerts=%u missed=%u clock_stops=%u wakeups=%u%s",
+		    r == 0 ? "ok" : "error EIO", mbhc_plug_name(D.mbhc.plug),
+		    D.jack_on, jack_mode_name(D.jack_mode), D.mbhc.last_mv,
 		    D.mbhc.polls, D.mbhc.irqs, D.mbhc.reports, D.mbhc.errors,
-		    D.mbhc.adc_failures, D.njack_regs);
+		    D.mbhc.adc_failures, D.njack_regs, D.swr[0].irqs,
+		    D.swr[0].spurious, D.swr[0].alerts, D.swr[0].impl_alerts,
+		    D.jack_missed, D.jack_sleeps, D.jack_wakes,
+		    D.jack_clkstop ? " stopped" : "");
 		return;
 	}
 	if (strcmp(w[0], "route") == 0 && n == 2) {
@@ -584,6 +643,7 @@ request(char *line, char *ans, size_t alen)
 		char text[128];
 		struct seq one;
 
+		jack_wake(&D);	/* the WCD, swr0 and the TX macro clocked */
 		snprintf(text, sizeof(text), "[x]\n%s %s %s %s\n",
 		    w[0][0] == 'r' ? "r" : "w", w[1], w[2], n == 4 ? w[3] : "");
 		if (seq_parse(&one, text, "request", msg, sizeof(msg)) != 0) {
@@ -610,6 +670,7 @@ request(char *line, char *ans, size_t alen)
 			strlcat(words, w[i], sizeof(words));
 			strlcat(words, " ", sizeof(words));
 		}
+		jack_wake(&D);
 		r = D.cio.swr(&D, words);
 		snprintf(ans, alen, r == 0 ? "ok" : "error EIO %s", q6_err(r));
 		return;
@@ -675,8 +736,9 @@ listen_sock(void)
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: pro1x-audiod [-dvTn] [-s seqfile] [-r route] "
-	    "[-i iicdev] [-t idle_ms] [-S socket]\n");
+	fprintf(stderr, "usage: pro1x-audiod [-dvTnJW] [-j poll|irq|clkstop|"
+	    "auto] [-C ms] [-s seqfile] [-r route] [-i iicdev] [-t idle_ms] "
+	    "[-S socket]\n");
 	exit(2);
 }
 
@@ -684,19 +746,23 @@ int
 main(int argc, char **argv)
 {
 	struct pro1x_pcm_event ev[16];
-	struct pollfd pfd[3];
+	struct qcom_swr_event sev;
+	struct pollfd pfd[4];
 	struct rtprio rt = { RTP_PRIO_REALTIME, 10 };
 	char msg[256];
-	int c, ls, n, i, fg = 0, nopcm = 0, nojack = 0, timeout;
-	uint64_t now, next, jack_next = 0;
+	int c, ls, n, i, fg = 0, nopcm = 0, nojack = 0, timeout, ipcm, iswr;
+	const char *jmode = "auto";
 
-	while ((c = getopt(argc, argv, "dvTnJs:r:i:t:S:")) != -1)
+	while ((c = getopt(argc, argv, "dvTnJWj:C:s:r:i:t:S:")) != -1)
 		switch (c) {
 		case 'd': fg = 1; break;
 		case 'v': fma_verbose = 1; break;
 		case 'T': D.cio.trace = 1; break;
 		case 'n': nopcm = 1; break;
 		case 'J': nojack = 1; break;
+		case 'j': jmode = optarg; break;
+		case 'W': D.swr[0].wake_en = true; break;
+		case 'C': D.clkstop_ms = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 's': seq_path = optarg; break;
 		case 'r': snprintf(D.route, sizeof(D.route), "%s", optarg); break;
 		case 'i': iic_path = optarg; break;
@@ -707,6 +773,17 @@ main(int argc, char **argv)
 	backend_init(&D);
 	D.voice = &V;
 	D.jack_enabled = !nojack;
+	if (strcmp(jmode, "poll") == 0)
+		D.jack_mode = JACK_POLL;
+	else if (strcmp(jmode, "irq") == 0)
+		D.jack_mode = JACK_IRQ;
+	else if (strcmp(jmode, "clkstop") == 0)
+		D.jack_mode = JACK_CLKSTOP;
+	else if (strcmp(jmode, "auto") == 0) {
+		D.jack_mode = JACK_IRQ;
+		D.jack_check_ms = JACK_CHECK_MS;
+	} else
+		usage();
 	D.notify = on_notify;
 	D.cio.gpio = cb_gpio;
 	D.cio.rail = cb_rail;
@@ -728,6 +805,8 @@ main(int argc, char **argv)
 		return (1);
 	}
 	map_windows();
+	if (!nojack && D.jack_mode != JACK_POLL)
+		open_swr();
 	if (load_seq(msg, sizeof(msg)) != 0)
 		fma_log("sequences: %s: no codec path, the ADSP's side alone",
 		    msg);
@@ -747,23 +826,28 @@ main(int argc, char **argv)
 	signal(SIGPIPE, SIG_IGN);
 	ui_open();
 	jack_start(&D);
-	fma_log("pro1x-audiod: ready (route %s, idle %u ms, jack %s)", D.route,
-	    D.idle_ms, D.jack_on ? "watched" : "not watched");
+	fma_log("pro1x-audiod: ready (route %s, idle %u ms, jack %s, %s)",
+	    D.route, D.idle_ms, D.jack_on ? "watched" : "not watched",
+	    jack_mode_name(D.jack_mode));
 	while (!stop) {
 		n = 0;
+		ipcm = iswr = -1;
 		pfd[n++] = (struct pollfd){ apr_fd, POLLIN, 0 };
 		pfd[n++] = (struct pollfd){ ls, POLLIN, 0 };
-		if (pcm_fd >= 0)
+		if (pcm_fd >= 0) {
+			ipcm = n;
 			pfd[n++] = (struct pollfd){ pcm_fd, POLLIN, 0 };
-		now = fma_now_ms();
-		next = now + 1000;
-		for (i = 0; i < BE_N; i++)
-			if (D.be[i].idle_at != 0 && D.be[i].idle_at < next)
-				next = D.be[i].idle_at;
-		/* the jack: the WCD9370's interrupt status every 100 ms */
-		if (D.jack_on && jack_next < next)
-			next = jack_next > now ? jack_next : now;
-		timeout = next > now ? (int)(next - now) : 0;
+		}
+		if (swr_fd >= 0 && D.jack_on && D.jack_mode != JACK_POLL) {
+			iswr = n;
+			pfd[n++] = (struct pollfd){ swr_fd, POLLIN, 0 };
+		}
+		/*
+		 * asleep until something comes or is due (the back ends'
+		 * power-down, the jack's poll or timers): no wake-up of its
+		 * own while idle
+		 */
+		timeout = audiod_timeout_ms(&D, fma_now_ms());
 		if (poll(pfd, (nfds_t)n, timeout) < 0 && errno != EINTR)
 			break;
 		if (pfd[0].revents & (POLLIN | POLLHUP | POLLERR))
@@ -771,17 +855,17 @@ main(int argc, char **argv)
 				fma_log("/dev/apr: the ADSP went away");
 				break;
 			}
-		if (pcm_fd >= 0 && (pfd[2].revents & POLLIN))
+		if (ipcm >= 0 && (pfd[ipcm].revents & POLLIN))
 			while ((c = D.pcm->read_events(NULL, ev, 16)) > 0)
 				for (i = 0; i < c; i++)
 					pcm_event(&D, &ev[i]);
+		if (iswr >= 0 && (pfd[iswr].revents & POLLIN) &&
+		    read(swr_fd, &sev, sizeof(sev)) == (ssize_t)sizeof(sev))
+			jack_event(&D, sev.fired);
 		if (pfd[1].revents & POLLIN)
 			serve(ls);
 		backend_tick(&D);
-		if (D.jack_on && fma_now_ms() >= jack_next) {
-			mbhc_tick(&D.mbhc);
-			jack_next = fma_now_ms() + 100;
-		}
+		jack_tick(&D);
 	}
 	fma_log("pro1x-audiod: stopping");
 	pcm_stop_all(&D);
