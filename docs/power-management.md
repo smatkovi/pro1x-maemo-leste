@@ -393,7 +393,7 @@ new images get it from their builders.
 |---|---|---|
 | ADSP `sensor_process` crash at the thaw | 0031: FastRPC calls frozen in place | `echo N > /sys/module/fastrpc/parameters/freezable_invoke` |
 | USB gadget "not attached" after a suspend | 0032: VBUS override written again on resume | boot the old kernel (`docs/kernel-update.md`) |
-| Bluetooth UART waking the system | 0030: its wake-up interrupt only while open, and for a suspend only when Bluetooth may wake | `echo enabled > /sys/bus/serial/devices/serial0/power/wakeup` (Bluetooth may wake it) |
+| Bluetooth UART waking the system | 0030: its wake-up interrupt only while open, and for a suspend only when Bluetooth may wake | Bluetooth may wake it: `echo enabled > /sys/bus/serial/devices/serial0/power/wakeup`; lost Bluetooth events: `echo on > .../4a8c000.serial/power/control` (0023's switch) |
 | Bluetooth chip powered while "off" | 0029: power-off pulse and regulators off at hci down | boot the old kernel |
 | Sound card open 300 s after a sound | 3 s with a kernel that has 0026 (PulseAudio), 3 s on PipeWire | `touch /etc/pulse/pro1x-suspend-300`; WirePlumber: the file below |
 | Wi-Fi power save | on at every start of the interface, NetworkManager keeps it | `touch /etc/pro1x-wlan-powersave-off` |
@@ -482,7 +482,11 @@ both stay off until the test below.
   e.g. a keyboard) is one switch:
   `echo enabled > /sys/bus/serial/devices/serial0/power/wakeup`.
   pro1x-autosuspend's `NoWakeup=4a8c000.serial` stays (for older kernels)
-  but leaves the UART alone while that switch is on.
+  but leaves the UART alone while that switch is on. If Bluetooth loses
+  events while awake (`Frame reassembly failed`, a connection that does
+  not answer), the way back is 0023's: `echo on >
+  /sys/devices/platform/soc@0/4ac0000.geniqup/4a8c000.serial/power/control`
+  keeps the UART up, its wake-up interrupt is then not needed.
 
 ### The sound card's idle time
 

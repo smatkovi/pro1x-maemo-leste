@@ -249,8 +249,10 @@ static gboolean fastrpc_freezes_in_place(void)
  */
 static gboolean serdev_may_wake(const char *dev)
 {
+	/* the serial core's devices in between: <dev>:0 and <dev>:0.0 */
 	g_autofree char *pattern =
-		g_strdup_printf("/sys/bus/platform/devices/%s/*/*/serial[0-9]*/power/wakeup", dev);
+		g_strdup_printf("/sys/bus/platform/devices/%s/%s:*/%s:*/serial[0-9]*/power/wakeup",
+				dev, dev, dev);
 
 	return glob_any(pattern, "enabled");
 }
