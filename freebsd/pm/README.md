@@ -351,12 +351,31 @@ what is missing:
   failures. Not tested: the driver against hardware or a model (QEMU has
   no DWC3 device side); the control state machine, the PHY and clock
   bring-up and the SMMU stream are first tried on the phone.
-- **Not done:** the serial console (`hw.usb.template=8`, CDC Ethernet and
-  a serial port, with `umodem.ko` and a getty on `/dev/ttyU0`: the next
-  step, cheap once the Ethernet works), the full system's side
-  (`rc.conf`: load the modules, `ifconfig_ue0="inet 172.16.42.1/24"`,
-  sshd), the HSTX trim, USB3, the PMI632's VBUS and Type-C detection
-  (VBUS is forced valid).
+- **The full system** (`freebsd/rootfs/usr/local/etc/rc.d/pro1x_usbnet`,
+  in the root image): off by default (the driver is untested), on with
+  any of `pro1x.usb=1` in `freebsd/cmdline`, a file `freebsd/usb-net` next
+  to the kernel on userdata (seen while userdata is mounted below
+  `/dev/pro1x-host`, i.e. with the read-only `root.zfs`), or
+  `pro1x_usbnet_enable="YES"` in `rc.conf`. It loads `qcom_dsp`, `usb`,
+  `usb_template`, `uether`, `if_cdce`, sets `hw.usb.template=1` and
+  `hw.dwc3dci.enable=1`, loads `pro1x_usb`, waits up to 30 s for `ue0`,
+  gives it 172.16.42.1/24 and starts an sshd of its own listening on that
+  address only, public keys only (`PasswordAuthentication no`,
+  `KbdInteractiveAuthentication no`, `PermitRootLogin prohibit-password`),
+  the keys from `/usr/local/etc/ssh/pro1x_authorized_keys`: `rootfs.sh`
+  puts the PC user's `SSH_PUBKEY` there (default `~/.ssh/id_ed25519.pub`,
+  the convention of `scripts/40-make-rootfs.sh` for Leste; only a `.pub`
+  file, never a private key). Host keys: `/etc/ssh`'s on the writable
+  root, else made at each start in `/var/run/pro1x-sshd` (the read-only
+  root: a new host key each boot, so the PC's `ssh` wants
+  `-o UserKnownHostsFile=/dev/null` or its own known hosts file there).
+  `service pro1x_usbnet status` shows the bring-up, the counters, `ue0`.
+- **Serial console:** `pro1x.usb=serial` (or `pro1x_usbnet_serial="YES"`):
+  `usb_template` 8 (CDC Ethernet and a modem port), `ucom` and `umodem`
+  too, and a getty on `/dev/ttyU0` (kept running by `daemon -r`); on the
+  PC `/dev/ttyACM0`, 115200 baud.
+- **Not done:** the HSTX trim, USB3, the PMI632's VBUS and Type-C
+  detection (VBUS is forced valid).
 
 **Device run:**
 
@@ -399,6 +418,20 @@ what is missing:
     `ue0` (the control stage machine: the stack's descriptors not sent,
     the PC's `dmesg` shows "device descriptor read error"); `ue0` but no
     ping (the bulk endpoints).
+
+11. **The full system over the cable** (needs 10; the joint root image with
+    `rc.d/pro1x_usbnet`, the modules and the key): in `freebsd/cmdline`
+    `pro1x.usb=1` (or, with a serial port, `pro1x.usb=serial`), boot
+    FreeBSD from the menu with the cable to the PC. On the PC: the
+    address as in 10, then `ssh -o UserKnownHostsFile=/dev/null
+    root@172.16.42.1` (the key of `SSH_PUBKEY`; passwords are refused),
+    with the serial port also `screen /dev/ttyACM0 115200`. Expected in
+    the system log: `pro1x_usbnet: ...bring-up...`, `USB gadget: ue0
+    172.16.42.1, sshd on it`. Failure signs: `no ue0 after 30 s` (as in
+    10: `service pro1x_usbnet status` on the console shows the counters);
+    `pro1x_authorized_keys is empty: no sshd` (the image was built
+    without the PC's public key: `SSH_PUBKEY=... freebsd/rootfs.sh`).
+    Afterwards `pro1x.usb=1` out of `cmdline` again until it works.
 
 ## Device runs (prepared, for 2026-10-31)
 
@@ -521,8 +554,9 @@ phone N seconds after the start whatever happens.
 
 8. With all eight CPUs: 6 with `kern.smp.disabled=0` (needs 1 and 4).
 
-9. The USB probe (`pro1x.test=usb`) and 10. the gadget
-   (`pro1x.test=usbnet`): see stage 4 above.
+9. The USB probe (`pro1x.test=usb`), 10. the gadget
+   (`pro1x.test=usbnet`) and 11. the full system over the cable
+   (`pro1x.usb=1`): see stage 4 above.
 
 The vMPM hand-over and the sleep set are the parts with the most
 unknowns: they are copied from Linux and KolibriOS, neither of which

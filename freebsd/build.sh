@@ -96,6 +96,8 @@ cp -a "$REPO/freebsd/audio/sys/." "$SRC/sys/"
 # the USB gadget (pm/README.md, stage 4): dwc3dci (pro1x_usb, on qcom_dsp
 # and usb), the template, CDC Ethernet; not loaded unless asked for
 PM_MODULES="pro1x_rpmsleep pro1x_usb usb/template usb/uether usb/cdce"
+# and its serial port (usb_template 8, rc.d/pro1x_usbnet's serial)
+PM_MODULES="$PM_MODULES usb/ucom usb/umodem"
 MODULES=${MODULES:-qcom_dsp qrtr $WIFI_MODULES qcom_geni_uart qcom_apr qcom_lpass qcom_camss sound/sound snd_pro1x $PM_MODULES}
 (cd "$SRC" && "${MAKE[@]}" KERNCONF=PRO1X MODULES_OVERRIDE="$MODULES" \
 	-DWITH_KERNEL_BIN ${KERNFAST:+KERNFAST=1} ${NOCLEAN:+-DNO_KERNELCLEAN} \

@@ -179,6 +179,19 @@ printf '\n# a boot environment before pkg changes packages (pro1x-pkg)\nalias pk
 mkdir -p "$R/usr/local/share/pro1x/root"
 cp -a "$R/root/." "$R/usr/local/share/pro1x/root/"
 cp -a "$REPO/freebsd/rootfs/." "$R/"
+# The USB gadget's sshd (rc.d/pro1x_usbnet, pm/README.md): the PC user's
+# public key, as scripts/40-make-rootfs.sh puts it into Leste; only a .pub
+# file, never a private key
+SSH_PUBKEY=${SSH_PUBKEY:-$HOME/.ssh/id_ed25519.pub}
+case "$SSH_PUBKEY" in
+*.pub)
+	if [ -f "$SSH_PUBKEY" ] && ! grep -q "PRIVATE KEY" "$SSH_PUBKEY"; then
+		mkdir -p "$R/usr/local/etc/ssh"
+		install -m 644 "$SSH_PUBKEY" \
+		    "$R/usr/local/etc/ssh/pro1x_authorized_keys"
+	fi
+	;;
+esac
 # The zone copied, as tzsetup does; its name for clockd goes to
 # /var/db/zoneinfo at boot (rc.d/pro1x_setup: /var is in memory)
 if [ -n "$TIMEZONE" ]; then

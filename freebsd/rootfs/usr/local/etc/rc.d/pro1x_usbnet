@@ -1,0 +1,141 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_usbnet
+# REQUIRE: NETWORKING pro1x_setup
+# BEFORE: LOGIN
+# KEYWORD: nojail shutdown
+#
+# The USB gadget (freebsd/pm/README.md, stage 4): the PC reaches FreeBSD
+# over the cable as it reaches Leste. dwc3dci (pro1x_usb.ko) with CDC
+# Ethernet (usb_template 1, if_cdce), ue0 as 172.16.42.1/24 (the PC
+# 172.16.42.2), and an sshd of its own on that address only, public keys
+# only, the keys in /usr/local/etc/ssh/pro1x_authorized_keys (rootfs.sh:
+# the PC user's SSH_PUBKEY, as scripts/40-make-rootfs.sh does it for
+# Leste). The driver is untested on the phone: off unless asked for, by
+#
+#   pro1x.usb=1                    in freebsd/cmdline (kernel environment)
+#   freebsd/usb-net                a file next to the kernel on userdata
+#                                  (seen while userdata is mounted below
+#                                  /dev/pro1x-host, i.e. with root.zfs)
+#   pro1x_usbnet_enable="YES"      in rc.conf
+#
+#   pro1x_usbnet_serial="YES"      (or pro1x.usb=serial) CDC Ethernet and a
+#                                  serial port (usb_template 8, umodem):
+#                                  a getty on /dev/ttyU0 (the PC's ttyACM0)
+#
+# sshd's host keys: /etc/ssh's when the root is writable (rc.d/sshd makes
+# them there), else new ones in /var/run/pro1x-sshd at every start (the
+# read-only root.zfs: the PC sees a new host key each boot).
+
+. /etc/rc.subr
+
+name=pro1x_usbnet
+desc="USB gadget: CDC Ethernet to the PC, sshd on it"
+rcvar=pro1x_usbnet_enable
+load_rc_config $name
+
+pro1x_usbnet_asked()
+{
+	case "$(kenv -q pro1x.usb)" in
+	1|yes|YES|serial) return 0 ;;
+	esac
+	[ -e /dev/pro1x-host/freebsd/usb-net ]
+}
+if pro1x_usbnet_asked; then
+	: ${pro1x_usbnet_enable:=YES}
+fi
+: ${pro1x_usbnet_enable:=NO}
+[ "$(kenv -q pro1x.usb)" != serial ] || pro1x_usbnet_serial=YES
+: ${pro1x_usbnet_serial:=NO}
+: ${pro1x_usbnet_addr:=172.16.42.1}
+: ${pro1x_usbnet_wait:=30}
+: ${pro1x_usbnet_modules:="qcom_dsp usb usb_template uether if_cdce"}
+: ${pro1x_usbnet_keys:=/usr/local/etc/ssh/pro1x_authorized_keys}
+
+start_cmd=pro1x_usbnet_start
+stop_cmd=pro1x_usbnet_stop
+status_cmd=pro1x_usbnet_status
+extra_commands=status
+
+SSHD_PID=/var/run/pro1x-sshd.pid
+
+pro1x_usbnet_hostkeys()
+{
+	local d t
+
+	if [ -w /etc/ssh ]; then
+		d=/etc/ssh
+	else
+		d=/var/run/pro1x-sshd
+		mkdir -p -m 700 $d
+	fi
+	for t in ed25519 ecdsa rsa; do
+		[ -f $d/ssh_host_${t}_key ] ||
+		    ssh-keygen -q -t $t -N '' -f $d/ssh_host_${t}_key
+		echo "-o HostKey=$d/ssh_host_${t}_key"
+	done
+}
+
+pro1x_usbnet_start()
+{
+	local i mods template
+
+	mods=${pro1x_usbnet_modules}
+	template=1
+	if checkyesno pro1x_usbnet_serial; then
+		mods="$mods ucom umodem"
+		template=8
+	fi
+	# in order: the root image's /boot/modules has no linker.hints
+	kldload -n $mods || return 1
+	sysctl -q hw.usb.template=$template > /dev/null
+	kenv hw.dwc3dci.enable=1 > /dev/null
+	kldload -n pro1x_usb || return 1
+	sysctl -n dev.dwc3dci.0.bringup 2> /dev/null | logger -t pro1x_usbnet
+	# ue0 comes when the PC has configured the gadget
+	i=0
+	while ! ifconfig ue0 > /dev/null 2>&1 && [ $i -lt ${pro1x_usbnet_wait} ]; do
+		sleep 1
+		i=$((i + 1))
+	done
+	if ! ifconfig ue0 > /dev/null 2>&1; then
+		warn "no ue0 after ${pro1x_usbnet_wait} s (cable? see dev.dwc3dci.0.stats)"
+		return 1
+	fi
+	ifconfig ue0 inet ${pro1x_usbnet_addr}/24 up
+	if [ -s ${pro1x_usbnet_keys} ]; then
+		/usr/sbin/sshd -o ListenAddress=${pro1x_usbnet_addr} \
+		    -o PasswordAuthentication=no \
+		    -o KbdInteractiveAuthentication=no \
+		    -o PubkeyAuthentication=yes \
+		    -o PermitRootLogin=prohibit-password \
+		    -o AuthorizedKeysFile=${pro1x_usbnet_keys} \
+		    -o PidFile=${SSHD_PID} $(pro1x_usbnet_hostkeys)
+	else
+		warn "${pro1x_usbnet_keys} is empty: no sshd"
+	fi
+	if checkyesno pro1x_usbnet_serial && [ -c /dev/ttyU0 ]; then
+		daemon -r -P /var/run/pro1x-getty.pid \
+		    /usr/libexec/getty 3wire.115200 ttyU0
+	fi
+	echo "USB gadget: ue0 ${pro1x_usbnet_addr}, sshd on it"
+}
+
+pro1x_usbnet_stop()
+{
+	[ -f /var/run/pro1x-getty.pid ] && kill "$(cat /var/run/pro1x-getty.pid)"
+	[ -f ${SSHD_PID} ] && kill "$(cat ${SSHD_PID})"
+	ifconfig ue0 down 2> /dev/null
+	kldunload pro1x_usb 2> /dev/null
+	return 0
+}
+
+pro1x_usbnet_status()
+{
+	sysctl dev.dwc3dci.0.bringup dev.dwc3dci.0.stats 2> /dev/null ||
+	    echo "dwc3dci not attached"
+	ifconfig ue0 2> /dev/null
+	[ -f ${SSHD_PID} ] && echo "sshd: pid $(cat ${SSHD_PID})"
+}
+
+run_rc_command "$1"
