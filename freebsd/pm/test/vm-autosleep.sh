@@ -23,7 +23,7 @@ chmod 755 "$T/suspend"
 n() { [ -f "$T/suspend.log" ] && wc -l < "$T/suspend.log" | tr -d ' ' || echo 0; }
 fail=0
 check() { if eval "$2"; then echo "PASS: $1"; else echo "FAIL: $1 ($(n) suspends)"; fail=1; fi; }
-"$BIN" -d -D 5 -a 8 -s 1 -T "$T" > "$T/log" 2>&1 &
+"$BIN" -d -D 5 -a 8 -s 1 -w "215:8 100:8" -T "$T" > "$T/log" 2>&1 &
 pid=$!
 sleep 8
 check "display on 8 s: no suspend" '[ "$(n)" -eq 0 ]'

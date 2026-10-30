@@ -29,11 +29,40 @@ as_conf_init(struct as_conf *c)
 	c->on_power = false;
 	/*
 	 * the SPMI arbiter (power and volume keys, the RTC alarm, the
-	 * charger), the modem's GLINK edge and SMP2P
+	 * charger): 30 s; the modem's GLINK edge and SMP2P (a call, a
+	 * message, but also its indications: a cell change, the network's
+	 * time): 10 s, a call then holds it up by itself (pro1x-callaudio)
 	 */
-	c->wake[c->nwake++] = 215;
-	c->wake[c->nwake++] = 100;
-	c->wake[c->nwake++] = 102;
+	(void)as_parse_wake(c, "215:30 100:10 102:10");
+}
+
+int
+as_parse_wake(struct as_conf *c, const char *s)
+{
+	unsigned n = 0, intid, secs;
+	char *end;
+
+	while (*s != '\0') {
+		while (*s == ' ' || *s == ',')
+			s++;
+		if (*s == '\0')
+			break;
+		intid = (unsigned)strtoul(s, &end, 10);
+		if (end == s || n == AS_MAXWAKE)
+			return (-1);
+		secs = c->stay_s;
+		if (*end == ':') {
+			s = end + 1;
+			secs = (unsigned)strtoul(s, &end, 10);
+			if (end == s)
+				return (-1);
+		}
+		c->wake[n] = intid;
+		c->wake_s[n++] = secs;
+		s = end;
+	}
+	c->nwake = n;
+	return (0);
 }
 
 static int
@@ -106,7 +135,7 @@ as_after(struct as_track *t, const char *last, const struct as_conf *c,
     uint64_t now_ms, unsigned *intid, unsigned *ms)
 {
 	const char *p;
-	unsigned i, n = 0, sec = 0, frac = 0;
+	unsigned i, n = 0, sec = 0, frac = 0, stay = c->stay_s;
 	int how;
 
 	*intid = 0;
@@ -121,15 +150,17 @@ as_after(struct as_track *t, const char *last, const struct as_conf *c,
 	    sscanf(p, "ended by INTID %u", &n) == 1) {
 		*intid = n;
 		how = AS_END_OTHER;
+		stay = c->settle_s;
 		for (i = 0; i < c->nwake; i++)
-			if (c->wake[i] == n)
+			if (c->wake[i] == n) {
 				how = AS_END_WAKE;
+				stay = c->wake_s[i];
+			}
 	} else if (strstr(last, "ended by a wake-up") != NULL)
 		how = AS_END_WAKE;
 	else
 		/* our deadline: an alarm's time (pro1x-suspend's) */
 		how = AS_END_DEADLINE;
-	t->awake_until = now_ms + (uint64_t)(how == AS_END_OTHER ?
-	    c->settle_s : c->stay_s) * 1000;
+	t->awake_until = now_ms + (uint64_t)stay * 1000;
 	return (how);
 }

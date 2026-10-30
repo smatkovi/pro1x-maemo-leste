@@ -23,15 +23,18 @@
  * in /var/run/pro1x-autosleep.stats, also on SIGUSR1 in the log.
  *
  *   pro1x-autosleep [-dv] [-D delay] [-a stay] [-s settle] [-n bytes/s]
- *                   [-L] [-P] [-w "215 100 102"] [-T dir]
+ *                   [-L] [-P] [-w "215:30 100:10 102:10"] [-T dir]
  *     -d  in the foreground, the log on stderr too   -v  every look
  *     -D  seconds the display is off first (30)
- *     -a  seconds up after a wake-up source's interrupt (30)
+ *     -a  seconds up after a wake-up from user space (a cable, devd) or
+ *         the deadline (an alarm's time) (30)
  *     -s  seconds up after any other interrupt (2)
  *     -n  a transfer above this many bytes a second keeps it up (4096)
  *     -L  not while the stand-by screen shows (only with the panel off)
  *     -P  also on external power
- *     -w  the wake-up sources' INTIDs (215: PMIC, 100/102: the modem)
+ *     -w  the wake-up sources' INTIDs and the seconds up after each
+ *         (215:30, the PMIC: power key, RTC alarm, charger; 100:10 and
+ *         102:10, the modem's GLINK edge and SMP2P); -w after -a
  *     -T  a test's directory: display, lpm, acline from files there, its
  *         ./suspend instead of pro1x-suspend (the VM's test)
  */
@@ -376,26 +379,6 @@ sleep_ms(int ms)
 }
 
 static void
-parse_wake(const char *s)
-{
-	char *end;
-	unsigned long v;
-
-	conf.nwake = 0;
-	while (*s != '\0' && conf.nwake < AS_MAXWAKE) {
-		while (*s == ' ' || *s == ',')
-			s++;
-		if (*s == '\0')
-			break;
-		v = strtoul(s, &end, 10);
-		if (end == s)
-			break;
-		conf.wake[conf.nwake++] = (unsigned)v;
-		s = end;
-	}
-}
-
-static void
 usage(void)
 {
 	fprintf(stderr, "usage: pro1x-autosleep [-dvLP] [-D delay] [-a stay] "
@@ -423,7 +406,10 @@ main(int argc, char **argv)
 		case 'a': conf.stay_s = (unsigned)atoi(optarg); break;
 		case 's': conf.settle_s = (unsigned)atoi(optarg); break;
 		case 'n': conf.net_bps = (unsigned)atoi(optarg); break;
-		case 'w': parse_wake(optarg); break;
+		case 'w':
+			if (as_parse_wake(&conf, optarg) != 0)
+				usage();
+			break;
 		case 'T': testdir = optarg; break;
 		default: usage();
 		}
@@ -484,8 +470,8 @@ main(int argc, char **argv)
 			    "a wake-up", sizeof(name));
 		logm(LOG_INFO, "%s%s [%s]; up %u s", how == AS_END_FAILED ?
 		    "not suspended: " : "", last[0] != '\0' ? last :
-		    "(no hw.pro1x_pm.last)", name, how == AS_END_OTHER ?
-		    conf.settle_s : how == AS_END_FAILED ? 60 : conf.stay_s);
+		    "(no hw.pro1x_pm.last)", name, (unsigned)
+		    ((track.awake_until - now_ms() + 500) / 1000));
 		if (r != 0)
 			logm(LOG_WARNING, "pro1x-suspend: exit %d", r);
 		stats_write();

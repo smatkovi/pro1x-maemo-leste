@@ -117,7 +117,12 @@ main(void)
 	    strcmp(why, "up after a suspend") == 0);
 	CHECK(as_after(&t, "suspended 1.000 s in 0 epochs, ended by INTID 100 "
 	    "(a device); x", &c, s.now_ms, &intid, &ms) == AS_END_WAKE &&
-	    intid == 100);
+	    intid == 100 && t.awake_until == s.now_ms + 10000);
+	/* the sources by option */
+	CHECK(as_parse_wake(&c, "215:45, 309") == 0 && c.nwake == 2 &&
+	    c.wake_s[0] == 45 && c.wake[1] == 309 && c.wake_s[1] == c.stay_s);
+	CHECK(as_parse_wake(&c, "x") == -1 && as_parse_wake(&c, "1:") == -1);
+	CHECK(as_parse_wake(&c, "215:30 100:10 102:10") == 0 && c.nwake == 3);
 	CHECK(as_after(&t, "suspended 4.500 s in 0 epochs, ended by INTID 309 "
 	    "(a device); x", &c, s.now_ms, &intid, &ms) == AS_END_OTHER &&
 	    intid == 309 && t.awake_until == s.now_ms + 2000);

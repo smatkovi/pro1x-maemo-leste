@@ -48,15 +48,29 @@ export PATH=$PATH:/usr/local/lib/qt5/bin
 
 # A daemon restarted when it ends, for as long as this session runs: a
 # loop left over from a session that was killed would restart a daemon
-# without its bus every 2 s for ever.
+# without its bus every 2 s for ever. One that ends at once again and
+# again waits longer each time, up to 5 minutes (systemui without its
+# plugins restarted every 2 s: some 30 wake-ups a second of it, D-Bus,
+# syslogd and polkit in the VM, freebsd/pm/test/vm-wakeups.sh); one that
+# ran a minute starts over at 2 s.
 session=$$
 respawn() {
 	trap 'kill $pid 2> /dev/null; exit 0' TERM
+	pause=2
 	while kill -0 "$session" 2> /dev/null; do
+		started=$(date +%s)
 		"$@" &
 		pid=$!
 		wait $pid
-		sleep 2
+		if [ $(($(date +%s) - started)) -ge 60 ]; then
+			pause=2
+		elif [ $pause -lt 300 ]; then
+			pause=$((pause * 2))
+			[ $pause -le 300 ] || pause=300
+			[ $pause -lt 64 ] || logger -t hildon-session \
+			    "$1 keeps ending: restarted in $pause s"
+		fi
+		sleep $pause
 	done
 }
 # The alarm daemon and the system UI, which shows its alarm dialog (Leste:

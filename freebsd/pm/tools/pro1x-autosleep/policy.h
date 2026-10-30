@@ -30,13 +30,14 @@ struct as_state {
 
 struct as_conf {
 	unsigned	delay_s;	/* the display off this long first */
-	unsigned	stay_s;		/* up after a wake-up source's interrupt */
+	unsigned	stay_s;		/* up after a user space wake-up, the deadline */
 	unsigned	settle_s;	/* up after any other interrupt */
 	unsigned	net_bps;	/* more than this is a transfer */
 	bool		in_standby;	/* also while the stand-by screen shows */
 	bool		on_power;	/* also on a charger or a PC's cable */
 	unsigned	nwake;
 	unsigned	wake[AS_MAXWAKE];	/* the wake-up sources' INTIDs */
+	unsigned	wake_s[AS_MAXWAKE];	/* and the stay after each */
 };
 
 struct as_track {
@@ -48,6 +49,8 @@ struct as_track {
 
 /* the defaults (Leste's pro1x-autosuspend: Delay 30, StayAwake 45) */
 void as_conf_init(struct as_conf *c);
+/* "215:30 100:10 102:10": the wake-up sources, INTID:seconds; 0 or -1 */
+int as_parse_wake(struct as_conf *c, const char *s);
 /*
  * 0: suspend now; else the milliseconds until the next look, why says
  * what holds the phone up ("display on", "a call", ...)
