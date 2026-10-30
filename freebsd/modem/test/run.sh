@@ -73,6 +73,9 @@ stop_modemd() {
 	rm -f "$T/modemd.pid"
 	grep -E "ERROR: (Address|Undefined|Leak)Sanitizer|runtime error" "$T/modemd.log" &&
 	    { echo "FAIL sanitizer"; fails=$((fails + 1)); }
+	# libqmi's own decoders disagreeing with the simulated modem's TLVs
+	grep -E "Qmi-(WARNING|CRITICAL).*(unread|Cannot read|invalid)" "$T/modemd.log" &&
+	    { echo "FAIL libqmi could not decode the simulated modem"; fails=$((fails + 1)); }
 	return 0
 }
 

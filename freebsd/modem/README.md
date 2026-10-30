@@ -44,12 +44,27 @@ The rest of oFono's methods answer `org.ofono.Error.NotImplemented`
 broadcast, mobile data). sphone's `comm-ofono` has no DTMF (only its test
 backend does); `SendTones` is there for other clients.
 
-**Conversations** shows sphone's messages (the event log), but sending
-from it needs telepathy-ring (with telepathy-glib and mission-control's
-plugins), which FreeBSD's Hildon does not have yet: deferred. Since
-telepathy-ring is an oFono client as well, it would need no backend
+**Conversations** builds its overview per Telepathy account: without
+telepathy-ring's `ring` account it shows none of the messages sphone logs
+(tried in the VM: "accounts= 0 ... nothing to insert"), and sending from
+it goes through telepathy-ring too, which FreeBSD's Hildon does not have
+yet (it needs telepathy-glib and mission-control's plugins): deferred.
+Since telepathy-ring is an oFono client as well, it would need no backend
 either; its use of `org.ofono.VoiceCallAgent` and `SmsHistory` (Nokia's
-oFono extensions) would have to be checked then.
+oFono extensions) would have to be checked then. Until then sphone is the
+messages app (its threads and history are its own UI on the event log).
+
+**The event log on FreeBSD** (`freebsd/hildon/patches/rtcom-eventlogger/
+0001`): rtcom-eventlogger built its INSERT with SQLite's printf and C99's
+`PRIiMAX`, which is `"li"` with glibc but `"ji"` on FreeBSD; SQLite's
+printf has no `j`, so every new event failed ("can't compile SQL statement
+... incomplete input") and no call or message was ever logged. The two
+statements take `long long` now; found with sphone in the VM.
+
+**sphone's call window** asks for portrait, for which hildon-desktop
+rotates the CRTC; the VM's X server and the phone's scfb cannot, and the
+picture went black (Clutter's scale 0). The package sets sphone's
+`LandscapeCalls=1` (`extra/usr/local/share/sphone/sphone.ini.d`).
 
 ## Stage 1: pro1x-modemd
 
@@ -184,6 +199,28 @@ and runs:
     the right one: the SIM ready and `MessageManager` there;
   - in every scenario: no sanitizer report, the daemon ends cleanly on
     SIGTERM, the PIN in no log.
+
+**sphone in the FreeBSD VM** (`test/vm-sphone.sh`, freebsd/vm): the
+FreeBSD build of pro1x-modemd (libqmi 1.34 for FreeBSD, QMUX on a pty to
+`fakemodem.py` under the VM's Python) on the VM's system bus with the
+package's D-Bus policy, Leste's sphone unchanged in Hildon on Xvfb
+(2160x1080), driven with xdotool: sphone finds the modem ("comm-ofono:
+Using modem: /qrtr_0"); a call comes in: its window with the number and
+Answer/Hangup, Answer clicked (`VOICE Answer-Call`, active), Hangup
+clicked (`End-Call`, disconnected); an SMS comes in with umlauts, braces
+and the Euro sign: sphone's notification shows sender and text; the
+dialler opened with a number (`sphone -c dialer-open -n ...`), Call
+clicked: `Dial-Call`, dialing, alerting, active once the far end
+answers, Hangup; a new SMS (`sphone -c sms-new -n ...`) typed and sent:
+`Raw-Send` with the PDU decoding to the number and text, the message
+`sent`. With the event log's patch all of it is in rtcom-eventlogger
+(local uid `sphone/ofono`: the SMS in and out, the missed call, the call
+out). Doing the same in the VM again:
+
+    tar -C <dir with pro1x-modemd, lib/, fakemodem.py, vm-sphone.sh,
+        pro1x-modemd.conf> -czf - . | vm 'mkdir -p /root/modemtest &&
+        tar -xzf - -C /root/modemtest'
+    vm sh /root/modemtest/vm-sphone.sh start      # then ctl, click, shot, stop
 
 What the simulated modem cannot tell is how the Pro1X's modem answers:
 which services it announces when, whether its firmware supports DMS's

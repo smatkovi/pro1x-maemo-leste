@@ -288,18 +288,22 @@ class Modem:
     def registered(self):
         return self.mode == MODE_ONLINE and self.sim_ready()
 
-    def serving_tlvs(self):
+    def serving_tlvs(self, indication=False):
+        """Get Serving System's output, or its indication's: the same
+        fields, but from 0x1C on under other TLV ids (LAC, CID, TAC: 0x1C,
+        0x1D, 0x24 in the response, 0x1D, 0x1E, 0x25 in the indication)"""
         if self.registered():
             ss = bytes([REG_YES, 1, 1, 2, 1, RADIO_LTE])
+            lac, cid, tac = (0x1D, 0x1E, 0x25) if indication else (0x1C, 0x1D, 0x24)
             return (tlv(0x01, ss) + tlv(0x10, bytes([0x01])) +   # roaming indicator: off (home)
                     tlv(0x12, struct.pack('<HH', 232, 3) + pstr('Fake Telecom')) +
-                    tlv(0x1C, struct.pack('<H', 0x1234)) + tlv(0x1D, struct.pack('<I', 0x0abcdef)) +
-                    tlv(0x24, struct.pack('<H', 0x4321)))
+                    tlv(lac, struct.pack('<H', 0x1234)) + tlv(cid, struct.pack('<I', 0x0abcdef)) +
+                    tlv(tac, struct.pack('<H', 0x4321)))
         st = REG_SEARCHING if self.mode == MODE_ONLINE else REG_NOT
         return tlv(0x01, bytes([st, 0, 0, 0, 0]))
 
     def serving_changed(self):
-        self.indicate(SVC_NAS, 0x0024, self.serving_tlvs())
+        self.indicate(SVC_NAS, 0x0024, self.serving_tlvs(indication=True))
         if self.registered():
             t = time.gmtime()
             self.indicate(SVC_NAS, 0x004C, tlv(0x01, struct.pack('<HBBBBBB', t.tm_year, t.tm_mon,

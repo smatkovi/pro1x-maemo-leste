@@ -1710,9 +1710,10 @@ qmi_dial(const char *number, const char *clir, GDBusMethodInvocation *inv)
 		ofono_reply_error(inv, OFONO_ERROR_IN_PROGRESS, "dialling");
 		return;
 	}
-	/* the CLIR override has no TLV in libqmi's Dial Call: the network's */
-	if (clir[0] && strcmp(clir, "default"))
-		mlog("voice: hide_callerid \"%s\" not passed on (the network's setting)", clir);
+	/* the CLIR override has no TLV in libqmi's Dial Call: the network's
+	 * setting stays ("disabled", showing the number, is sphone's default) */
+	if (!strcmp(clir, "enabled"))
+		mlog("voice: hide_callerid \"enabled\" not passed on (the network's setting)");
 	x = g_new0(struct dial_ctx, 1);
 	x->inv = inv;
 	x->number = g_strdup(number);

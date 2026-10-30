@@ -1,0 +1,40 @@
+SQLite's printf (sqlite3_vmprintf, behind rtcom_el_db_exec_printf) knows
+the length modifiers l and ll but not C99's j. glibc's PRIiMAX is "li",
+FreeBSD's is "ji": on FreeBSD the INSERT of every new event stopped at the
+storage time ("can't compile SQL statement ... VALUES ( 3, 10, :
+incomplete input"), so no call or message was ever logged (sphone's
+store-rtcom, the SMS and call plugins). The two statements that go through
+SQLite's printf with a time take long long instead; the query builder's
+PRIiMAX (g_string_append_printf, the C library's printf) stays.
+
+--- a/src/eventlogger.c
++++ b/src/eventlogger.c
+@@ -825,13 +825,13 @@
+         "flags, bytes_sent, bytes_received, "
+         "local_uid, local_name, remote_uid, "
+         "channel, free_text, group_uid) VALUES ( "
+-        "%d, %d, %" PRIiMAX ", %" PRIiMAX ", %" PRIiMAX ", %d, %d, %d, %d, %d, "
++        "%d, %d, %lld, %lld, %lld, %d, %d, %d, %d, %d, "
+         "%Q, %Q, %Q, %Q, %Q, %Q);",
+         service_id,
+         eventtype_id,
+-        (intmax_t)time(NULL),
+-        (intmax_t)(RTCOM_EL_EVENT_IS_SET(ev, start_time) ? RTCOM_EL_EVENT_GET_FIELD(ev, start_time) : 0),
+-        (intmax_t)(RTCOM_EL_EVENT_IS_SET(ev, end_time) ? RTCOM_EL_EVENT_GET_FIELD(ev, end_time): 0),
++        (long long)time(NULL),
++        (long long)(RTCOM_EL_EVENT_IS_SET(ev, start_time) ? RTCOM_EL_EVENT_GET_FIELD(ev, start_time) : 0),
++        (long long)(RTCOM_EL_EVENT_IS_SET(ev, end_time) ? RTCOM_EL_EVENT_GET_FIELD(ev, end_time): 0),
+         RTCOM_EL_EVENT_IS_SET(ev, is_read) ? RTCOM_EL_EVENT_GET_FIELD(ev, is_read): 0,
+         RTCOM_EL_EVENT_IS_SET(ev, outgoing) ? RTCOM_EL_EVENT_GET_FIELD(ev, outgoing): 0,
+         RTCOM_EL_EVENT_IS_SET(ev, flags) ? RTCOM_EL_EVENT_GET_FIELD(ev, flags) : 0,
+@@ -1565,8 +1565,8 @@
+         return TRUE;
+ 
+     if (!rtcom_el_db_exec_printf (priv->db, NULL, NULL, error,
+-        "UPDATE Events SET end_time=%" PRIiMAX " WHERE id=%d",
+-        (intmax_t)end_time, event_id))
++        "UPDATE Events SET end_time=%lld WHERE id=%d",
++        (long long)end_time, event_id))
+       {
+         return FALSE;
+       }
