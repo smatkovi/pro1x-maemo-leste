@@ -207,6 +207,10 @@ stage() {
 	30) in_root -euo pipefail -s "$H/$name" "$pr" "$name" "$HS" <<'EOF'
 d=$1 pr=$2 name=$3 hs=$4
 cd "$d"
+# make runs qmake again where the files a Makefile was made from are newer
+# (the packages installed before this one have makepkg's times): with the
+# MeeGo features where 30 had them, or the parts link without libmeegotouch
+export QMAKEFEATURES=/usr/share/qt/mkspecs/features
 # qmake's Makefiles take INSTALL_ROOT (DESTDIR is their build output
 # there), the others DESTDIR
 if head -5 Makefile | grep qmake > /dev/null; then make install INSTALL_ROOT="$pr"
