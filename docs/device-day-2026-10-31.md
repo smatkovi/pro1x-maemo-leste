@@ -636,6 +636,49 @@ The versions are in `/root/devday/leste-install-*.log`, the files in
    - In the MeeGo copy (`pro1x-boot next meego`, [OK] reboot): the N9 home
      comes up. Back to Leste afterwards.
 
+### 6b. mce +pro1x5: the power key in the stand-by mode (found 19:19-19:30)
+
+With mce +pro1x3 (and the fresh image's +pro1x4) a short press of the
+power key did not switch the display on; about 5 s after the last press
+only the stand-by screen came (dark), and only a press then gave the
+desktop (`~/ps/pro1x-runs/2026-10-31/pk-*.txt`). Cause and fix:
+[`patches/lpm/README.md`](../patches/lpm/README.md), "Fixed in +pro1x5";
+the package is in the pre-release
+[leste-hildon-2026.10.31.1](https://github.com/smatkovi/pro1x-maemo-leste/releases/tag/leste-hildon-2026.10.31.1)
+(untested on the phone). The low power mode itself (behaviour, settings,
+the stand-by screen) is documented in `patches/lpm/README.md`, the
+panel's side in `docs/power-management.md`, "The panel's low power modes".
+
+1. On the phone, as root: `pro1x-update` (read the plan: mce
+   1.10.17+pro1x5), then `pro1x-update --yes`. Or with the package from
+   the release copied to the phone, with services blocked: the package's
+   postinst would restart mce (`invoke-rc.d mce restart`), and a
+   restarted mce leaves the display off (`scripts/49-hidpi.sh`):
+   ```sh
+   [ -e /usr/sbin/policy-rc.d ] || { printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d; chmod 755 /usr/sbin/policy-rc.d; G=1; }
+   apt install --allow-change-held-packages ./mce_1.10.17+pro1x5_arm64.deb
+   [ -z "${G:-}" ] || rm /usr/sbin/policy-rc.d
+   apt-mark hold mce
+   ```
+   So the new mce runs only after the next reboot. Each reboot while
+   slot b's pro1x.5 trial is pending costs a try (see "Rollback"):
+   install it now and let it come with a reboot that is due anyway.
+2. [OK] after that reboot, [HAND]:
+   - Let the display time out: dimmed, then the stand-by screen (the
+     clock, 20 %) for a minute, then black.
+   - Power key in the black: the display on at once, with the lock screen;
+     about 5 s untouched, then the stand-by screen.
+   - Power key on the stand-by screen: on again, with the lock screen.
+   - Double tap on the stand-by screen: on, with the lock screen.
+   - Keyboard slide opened in the black or on the stand-by screen: the
+     desktop.
+   - While the stand-by screen shows:
+     `dbus-send --system --print-reply --dest=com.nokia.mce /com/nokia/mce/request com.nokia.mce.request.get_display_status`
+     says `lpm` (+pro1x3/4 said `off`).
+   - `collect.sh 06b-mce-pro1x5`.
+3. The way back: `mce_1.10.17+pro1x4_arm64.deb` (leste-hildon-2026.10.31)
+   the same way, with `--allow-downgrades` added, then a reboot.
+
 ## Block 7: power measurements (should; 60-120 min) [HAND]
 
 Plan and table: `docs/power-management.md` "Measurements for 2026-10-31".

@@ -218,8 +218,9 @@ Pro1X's panel (BOE BF060Y8M-AJ0) takes the same standard DCS commands:
   them: idle mode, only the rows around the clock and icons driven (about
   a fifth of the panel), the brightness low, the panel off while the
   proximity sensor is covered. On FreeBSD it runs in the X session;
-  on Leste mce blanks the display itself, so there it needs mce's side
-  (not done yet).
+  on Leste mce runs the low power mode (`patches/lpm`, documented in
+  `patches/lpm/README.md`; working since mce +pro1x5) and
+  `pro1x-standby -M` draws the stand-by screen.
 
 Not possible on this panel: the N9's link power-down between updates
 (ULPS), which needs a command-mode panel with its own frame memory; this

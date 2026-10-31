@@ -86,4 +86,13 @@ mode with the X session.
 Built and tried: the patched mce compiles for Leste daedalus (arm64);
 `pro1x-standby -M` against simulated `display_status_ind` signals (shows
 on `lpm`, sends `req_display_state_on` on a double tap, hides on `on`).
-Untested on the phone.
+`tests/mce-lpm/run-pc.sh` runs the built mce (under qemu in
+`scripts/leste-chroot.sh`'s chroot, in its own PID, mount and network
+namespaces) against a fake panel, a FIFO for the power key and the slide,
+a private system bus and a stand-in system UI. On 2026-10-31 +pro1x4
+reproduced the phone (a press while blank: still off, 5 s later the
+stand-by screen with the status "off", the touchscreen off on it, the
+double tap's request refused, the slide unlocking without light); +pro1x5
+switched the display on after each press and slide, said `lpm` on the
+stand-by screen and honoured the request. +pro1x5 is untested on the
+phone.
