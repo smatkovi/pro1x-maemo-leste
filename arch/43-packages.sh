@@ -68,7 +68,7 @@ mkdir -p "$OUT" "$MNT$P/root" "$MNT$P/pkg" "$MNT$P/done" "$MNT$P/log"
 # patches (scripts/49-hidpi.sh), the versions of its own tools
 declare -A PRO1X=()
 eval "$(sed -n 's/^ *"\([a-z0-9-]*\)|[0-9a-f]*|\([0-9]*\)".*/PRO1X[\1]=\2/p' "$REPO/scripts/49-hidpi.sh")"
-declare -A VERSIONS=([pro1x-fm]=1.0 [pro1x-sessions]=1.1 [meego-clock]=0.1 [statusmenu-plugins]=0.1
+declare -A VERSIONS=([pro1x-fm]=1.1 [pro1x-sessions]=1.1 [meego-clock]=0.2 [statusmenu-plugins]=0.1
 	[libngf]=0.29 [ngfd]=1.4.13 [vte]=0.28.2 [libical3]=3.0.20 [qt5-positioning]=5.15.19)
 eval "$(sed -n 's/^declare -A VERSIONS=(\(.*\))$/VERSIONS+=(\1)/p' "$REPO/scripts/mkdeb-tools.sh")"
 # the parts' repositories: 40's (freebsd/hildon/build.sh), 41's (apps.sh,

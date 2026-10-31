@@ -257,7 +257,7 @@ REV+=(
 	[countdowntimer]=ddc1f7027af9 [easylist]=d5c5bcc6c677 [flappybird]=21f81151207a
 	[qshot]=f10335de9c66 [mihphoto]=bab0cb18bc0e
 	[hamsterfiler]=19ac58143e2e [qt-components]=c967fbd79e75
-	[meego-clock]=8c9e205 [meecast]=f8f26737cb74
+	[meego-clock]=73af05f [meecast]=f8f26737cb74
 	[ffmpeg8-libs]=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
 	[qt5-webengine]=c5de7df005189a2ef727a40b13408ff3a14a0bbedce07af986aac59722d4cf09
 	[qt5-webkit]=9ca126da9273664dd23a3ccd0c9bebceb7bb534bddd743db31caf6a5a6d4a9e6

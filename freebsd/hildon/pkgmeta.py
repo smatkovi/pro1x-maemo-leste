@@ -197,7 +197,8 @@ UPSTREAM = {
                       "needs; their look comes from a meegotouch theme in "
                       "/usr/local/share/themes (the N9's blanco from one's own "
                       "firmware), which is not included.", ['BSD3CLAUSE']),
-    'meego-clock': ('0.1', "The Nokia N9's clock for Hildon",
+    # 0.2: the seconds hand only while the clock is seen
+    'meego-clock': ('0.2', "The Nokia N9's clock for Hildon",
                     "meego-clock: the analog clock and the alarms, and the alarm "
                     "editor with the N9's two-circle time picker, in QML with "
                     "com.nokia.meego, on alarmd; it draws with the N9's blanco "
