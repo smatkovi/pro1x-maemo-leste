@@ -17,7 +17,7 @@ entry uses the Leste image.
 | 35 | `35-nokshim.sh` | Nokia EGL extensions (`EGL_NOK_image_shared`, lock_surface2, ...) on top of Mesa (`nokshim/`) |
 | 36 | `36-aegis-permissive.sh` | libcreds without the Aegis kernel module: every credential check passes, tokens translate; aegis-exec as a plain user switch (`aegis/`) |
 | 37 | `37-harmattan-user.sh` | Harmattan's user gets Leste's uid 1000 |
-| 38 | `38-hardware-adaptation.sh` | Touch input in the N9's format for Qt and mcompositor (`touch/`), the battery from the kernel's power supply class in place of the N9's BME (`bme/`), timed's wake alarms translated for the Pro1X's RTC (`../tools/pro1x-rtc`), small binary patches |
+| 38 | `38-hardware-adaptation.sh` | Touch input in the N9's format for Qt and mcompositor (`touch/`), the battery from the kernel's power supply class in place of the N9's BME (`bme/`), timed's wake alarms translated for the Pro1X's RTC (`../tools/pro1x-rtc`), the SGX's PVRTC textures decoded for N9 games such as NFS Shift, started through `pvrtc-run` (`pvrtc/`), small binary patches |
 | 39 | `39-leste-mce.sh` | Leste's mce closes Harmattan's lock screen (`patches/`) and has Harmattan's radio states, mapped onto the device mode (`mce/`) |
 | 41 | `41-leste-helpers.sh` | Leste-side helpers of the session: the Pro1X's sensors, slide switch and side keys as the N9's input device (`sensors/`), dsme's IP heartbeat service (`iphb/`), PulseAudio's main volume interface for the volume bar (`mainvolume/`), BME's event file (`bme/`), Nokia's positioning daemon for QtLocation on Leste's gpsd (`positioning/`), Leste applications in Harmattan's application grid (`leste-apps/`) |
 | 40 | `40-harmattan-session.sh` | Mounts and starts the session (installed as `/usr/lib/pro1x-meego/harmattan-session`, run by the `pro1x-meego` OpenRC service in the MeeGo boot); runs Harmattan's own upstart jobs (`run_job`) |
@@ -67,6 +67,12 @@ In this order:
 
 Open details: the edge swipe's "sneak peek" animation renders black
 (compositing in general works; ruled out: server grab, unredirection,
-the dim shader, window alpha), tearing (Xorg 21.1's modesetting driver has no TearFree;
-the screen is rotated and scaled), MIT-SHM BadAccess when applications go
-to the background.
+the dim shader, window alpha), tearing (the rotated, scaled screen
+reaches the panel through Xorg's rotation shadow, the one buffer the
+panel scans out, redrawn from the block handler without waiting for the
+vertical blank, and modesetting does not page flip a rotated CRTC; a
+swap interval in mcompositor cannot change that. TearFree, which flips
+between two such buffers, is only in xserver master: its series,
+db9e9d45, 07ad7a11 without the ABI bump and 80d0035e to 53b02054,
+applies to 21.1.7 but is not built), MIT-SHM BadAccess when applications
+go to the background.

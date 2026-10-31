@@ -1,0 +1,11 @@
+#!/bin/sh
+# Start an N9 program whose textures are PVRTC compressed (the SGX's
+# format, which Adreno and Mesa lack): the GLES libraries in
+# /usr/lib/pro1x/pvrtc, under the SGX driver's names, come first in its
+# library path and decode them (pvrtc-shim.c). The desktop entries of such
+# programs start them through this script (38-hardware-adaptation.sh).
+#
+#   pvrtc-run /opt/ea-mobile-nfsshift/startup.sh
+LD_LIBRARY_PATH=/usr/lib/pro1x/pvrtc${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export LD_LIBRARY_PATH
+exec "$@"

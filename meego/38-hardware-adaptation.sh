@@ -83,7 +83,7 @@ for m in proc sys dev; do
 	mountpoint -q "$D/$m" || mount --bind "/$m" "$D/$m"
 done
 chroot "$D" env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-	gcc libc6-dev libx11-dev libxi-dev libxtst-dev > /dev/null
+	gcc libc6-dev libx11-dev libxi-dev libxtst-dev libgles-dev > /dev/null
 
 # mcompositor's edge swipes (to the home screen and the app switcher, and
 # away from the lock screen) open a touchscreen whose name contains "Atmel",
@@ -122,4 +122,33 @@ fi
 for l in harmattan-touch harmattan-compat rtc-realtime; do
 	grep -qxF /usr/lib/pro1x/lib$l.so "$H$P" 2>/dev/null ||
 		echo /usr/lib/pro1x/lib$l.so >> "$H$P"
+done
+
+# PVRTC, the SGX's compressed texture format, which Adreno and Mesa lack:
+# games for the N9 ship their textures in it (NFS Shift's cars and tracks)
+# and draw without them. pvrtc/ decodes them in GLES libraries under the
+# SGX driver's names (libGLES_CM.so, libGLESv2.so) in /usr/lib/pro1x/pvrtc,
+# over Debian's; pvrtc-run puts that directory first in the library path
+# of the programs started through it: the games' desktop entries.
+B=$D/tmp/pro1x-build
+rm -rf "$B"
+cp -r "$SRC/pvrtc" "$B"
+chroot "$D" sh -c 'cd /tmp/pro1x-build && ML=/usr/lib/arm-linux-gnueabihf &&
+	for v in "libGLES_CM.so libGLESv1_CM.so.1" "libGLESv2.so libGLESv2.so.2"; do
+		set -- $v
+		gcc -O2 -Wall -fPIC -shared -fvisibility=hidden -DREAL_LIB=\"$2\" \
+			-Wl,-soname,$1 -o $1 pvrtc-shim.c pvrtc-decode.c \
+			-Wl,--no-as-needed $ML/$2 || exit 1
+	done'
+for f in pvrtc/libGLES_CM.so pvrtc/libGLESv2.so pvrtc-run; do
+	m=644; [ $f = pvrtc-run ] && m=755
+	install -D -m $m "$B/${f#pvrtc/}" "$H/usr/lib/pro1x/$f"
+	grep -qxF "/usr/lib/pro1x/$f" "$STATE/added" || echo "/usr/lib/pro1x/$f" >> "$STATE/added"
+done
+rm -rf "$B"
+for app in ea-mobile-nfsshift nfsshift-mp; do
+	f=/usr/share/applications/$app.desktop
+	[ -f "$H$f" ] || continue
+	grep -q '^Exec=/usr/lib/pro1x/pvrtc-run ' "$H$f" ||
+		patch_file "$f" 's|^Exec=|Exec=/usr/lib/pro1x/pvrtc-run |'
 done
