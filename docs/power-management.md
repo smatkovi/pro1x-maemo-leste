@@ -1033,8 +1033,10 @@ What changed in each:
   FreeBSD; a pull still updates); after a failure again after 5, 10, 20,
   40 and 60 minutes, after a rejected token not until the settings change.
   The home timeline is asked with its ETag (`If-None-Match`; Mastodon's
-  Rails answers 304, checked on mastodon.social); Open-Meteo sends no
-  validator, so the weather is asked for every 30 minutes as before.
+  Rails answers 304: checked on mastodon.social's public
+  `/api/v1/trends/statuses`, the home timeline needs a token and was not
+  tried); Open-Meteo sends no validator, so the weather is asked for
+  every 30 minutes as before.
   Cache files without fsync (`g_file_set_contents_full` without
   `DURABLE`), GConf only where a value differs.
 - **pro1x-volume-osd 1.1**, **pro1x-fm** (FreeBSD revision 2, Arch 1.1),
@@ -1047,7 +1049,13 @@ What changed in each:
 - **pro1x-standby 1.2** (`4aed93a`): the signal above, `-O` in seconds
   (`87s`; minutes as before), a timer slack of 100 ms on Linux. FreeBSD's
   `.xinitrc` passes `pro1x.standby_off` minus the stand-by screen's delay
-  as seconds.
+  as seconds. Untested on FreeBSD's hildon-desktop (its stop on "off" is
+  upstream's code, not tried in the VM). To look at: pro1x-alarmboot takes
+  a display "off" during its 10 s "switching off" countdown for the power
+  key (Leste's mce sends "off" for it) and stays on; on FreeBSD the panel's
+  time-out now sends "off" too, which can fall into that countdown only
+  after about two minutes without input. On FreeBSD the power key gives
+  "lpm" (the stand-by screen), not "off".
 
 Checked, nothing to change:
 

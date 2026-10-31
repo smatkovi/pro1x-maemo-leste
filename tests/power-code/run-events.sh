@@ -42,8 +42,6 @@ g bool show_calendar false
 python3 -I "$HERE/server.py" "$PORT" "$REQ" "$WEATHER" & PIDS+=($!)
 sleep 1
 "$BIN" > "$RUN/prog.log" 2>&1 & P=$!; PIDS+=($P)
-GC=$(dbus-send --print-reply=literal --dest=org.freedesktop.DBus / org.freedesktop.DBus.GetConnectionUnixProcessID string:org.gnome.GConf 2>/dev/null | awk '{print $2}')
-[ -n "$GC" ] && PIDS+=($GC)
 cs() { local s=0 v; for f in /proc/$P/task/*/status; do v=$(awk '/^voluntary_ctxt_switches/{print $2}' "$f" 2>/dev/null); s=$((s + ${v:-0})); done; echo $s; }
 rq() { awk -v a="$1" -v b="$2" '$1>=a && $1<b' "$REQ" | wc -l; }
 bursts() { awk -v a="$1" -v b="$2" '$1>=a && $1<b {if ($1-l>10) n++; l=$1} END{print n+0}' "$REQ"; }
@@ -52,4 +50,7 @@ t0=$(date +%s.%N); c0=$(cs); sleep "$ON"; t1=$(date +%s.%N); c1=$(cs)
 DBUS_SESSION_BUS_ADDRESS="$SYS" dbus-send --session --type=signal /com/nokia/mce/signal com.nokia.mce.signal.display_status_ind string:off
 sleep 5
 t2=$(date +%s.%N); c2=$(cs); sleep "$OFF"; t3=$(date +%s.%N); c3=$(cs)
+# the gconfd the session bus started, stopped with the rest
+GC=$(dbus-send --print-reply=literal --dest=org.freedesktop.DBus / org.freedesktop.DBus.GetConnectionUnixProcessID string:org.gnome.GConf 2>/dev/null | awk '{print $2}')
+[ -n "$GC" ] && PIDS+=($GC)
 echo "$LABEL on: ${ON}s wakeups=$((c1-c0)) requests=$(rq $t0 $t1) bursts=$(bursts $t0 $t1) | off: ${OFF}s wakeups=$((c3-c2)) requests=$(rq $t2 $t3) bursts=$(bursts $t2 $t3) | run $RUN"
