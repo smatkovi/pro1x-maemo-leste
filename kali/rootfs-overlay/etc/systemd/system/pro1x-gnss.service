@@ -1,24 +1,33 @@
 # The modem's GNSS engine over QMI, as NMEA to gpsd (udp://127.0.0.1:29470).
 #
-# Only while gpsd runs, as on Leste (whose location-daemon starts gpsd for
-# an application): gpsd.socket starts gpsd for its first client, gpsd pulls
-# this in (WantedBy) and stops it with itself (BindsTo); SIGTERM makes
-# pro1x-gnss stop the LOC session. Started at boot instead (until
-# 2026-10-31) the engine computed a fix every second for ever, with a
-# wake-up of the phone for each. gpsd and the engine keep running after
-# the last client; "systemctl stop gpsd.service" switches both off (the
-# socket starts them again). Back to the engine from boot on:
-# "systemctl enable gpsd.service".
+# Only while someone reads, as on Leste (whose location-daemon starts and
+# stops gpsd for an application):
+# - gpsd.socket starts gpsd for its first client, gpsd pulls this in
+#   (WantedBy) and stops it with itself (BindsTo); SIGTERM makes pro1x-gnss
+#   stop the LOC session.
+# - gpsd (without -n) closes its UDP source a minute after its last client;
+#   30 s later pro1x-gnss stops the LOC session and the engine (-g, its
+#   default), and starts it again when gpsd reads again (within 10 s).
+# - 60 s after that stop it exits with status 3 (-x 60), and gpsd is stopped
+#   too (its socket starts both again for the next client): gpsd 3.25 and
+#   later wake every 2 s even while idle.
+# Started at boot instead (until 2026-10-31) the engine computed a fix
+# every second for ever, with a wake-up of the phone for each. Back to the
+# engine from boot on: "systemctl enable gpsd.service"; never stopped while
+# gpsd runs: "-g 0" in a drop-in's ExecStart.
 [Unit]
 Description=Pro1X GNSS (modem LOC service to gpsd)
 BindsTo=gpsd.service
 After=rmtfs.service gpsd.service
 
 [Service]
-ExecStart=/usr/lib/pro1x/pro1x-gnss -p 29470
+ExecStart=/usr/lib/pro1x/pro1x-gnss -p 29470 -x 60
 Environment=LD_LIBRARY_PATH=/usr/lib/pro1x
 Restart=on-failure
 RestartSec=10
+# 3: nobody read for long enough; then gpsd goes too
+SuccessExitStatus=3
+ExecStopPost=/bin/sh -c 'test "$$EXIT_STATUS" != 3 || exec systemctl --no-block stop gpsd.service'
 
 [Install]
 WantedBy=gpsd.service

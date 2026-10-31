@@ -11,10 +11,21 @@
  * NMEA, so GGA and RMC are built from the position report of each fix;
  * NMEA the modem does send is passed through unchanged.
  *
- *   pro1x-gnss [-n node] [-p port] [-i interval_ms] [-v] [-d qmux-file]
+ *   pro1x-gnss [-n node] [-p port] [-i interval_ms] [-g grace_s] [-x idle_s]
+ *              [-v] [-d qmux-file]
  *
  * -d takes the modem from a file that speaks QMUX instead of a QRTR node
  * (the tests' simulated modem on a pty, freebsd/modem/test).
+ *
+ * Only while someone reads: gpsd (without -n) opens its udp:// source only
+ * while a client watches, and closes it a minute after the last one. The
+ * datagrams go out on a connected UDP socket, so a closed port comes back
+ * as ECONNREFUSED; when nothing has been read for -g seconds (default 30,
+ * 0: never) the LOC session stops, and the modem's GNSS engine with it.
+ * Meanwhile an NMEA TXT sentence every 5 s asks whether the port is open
+ * again; once one goes through, the session starts again. -x: exit (status
+ * 3) after that many seconds with the session stopped, for a service
+ * manager that then stops gpsd too (pro1x-gnss.service on Kali and Arch).
  *
  * Build: gcc -O2 -Wall -o pro1x-gnss pro1x-gnss.c \
  *          $(pkg-config --cflags --libs qmi-glib qrtr-glib)
@@ -27,6 +38,7 @@
 #include <libqmi-glib.h>
 #include <libqrtr-glib.h>
 #include <netinet/in.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,12 +47,16 @@
 #include <unistd.h>
 
 #define SESSION_ID 1
+#define WATCH_S 5            /* s between the checks whether gpsd reads */
+#define EXIT_IDLE 3          /* -x: exited, nobody read for long enough */
 
 static guint node_id;
 static const char *qmux_file;
 static guint udp_port = 29470;
 static guint interval_ms = 1000;
 static gboolean verbose;
+static guint grace_s = 30;   /* -g: s unread until the session stops, 0: never */
+static guint idle_exit_s;    /* -x: s stopped until the exit, 0: never */
 
 static GMainLoop *loop;
 static QrtrBus *bus;
@@ -49,6 +65,10 @@ static QmiClientLoc *client;
 static int udp_fd = -1;
 static struct sockaddr_in udp_dst;
 static int exit_code = EXIT_FAILURE;
+
+/* the session's state, and what the UDP socket told of its reader */
+static gboolean session_on, session_busy, session_started_once;
+static gint64 last_sent, last_refused, last_watch, unread_since, stopped_since;
 
 static void die (const char *what, GError *error)
 {
@@ -64,7 +84,10 @@ static void send_line (const char *line)
 {
     if (verbose)
         g_print ("%s", line);
-    sendto (udp_fd, line, strlen (line), 0, (struct sockaddr *) &udp_dst, sizeof udp_dst);
+    last_sent = g_get_monotonic_time ();
+    /* an earlier datagram's port unreachable, reported on this one */
+    if (send (udp_fd, line, strlen (line), 0) < 0 && errno == ECONNREFUSED)
+        last_refused = last_sent;
 }
 
 static void nmea_cb (QmiClientLoc *self, QmiIndicationLocNmeaOutput *output, gpointer data)
@@ -203,21 +226,33 @@ static void start_ready (QmiClientLoc *c, GAsyncResult *res, gpointer data)
     QmiMessageLocStartOutput *out;
 
     (void) data;
+    session_busy = FALSE;
     out = qmi_client_loc_start_finish (c, res, &error);
     if (!out || !qmi_message_loc_start_output_get_result (out, &error)) {
         if (out)
             qmi_message_loc_start_output_unref (out);
-        die ("start session", error);
+        if (!session_started_once) {
+            die ("start session", error);
+            return;
+        }
+        /* a restart: tried again at the next check that finds a reader */
+        g_printerr ("pro1x-gnss: start session again: %s\n", error ? error->message : "failed");
+        g_clear_error (&error);
         return;
     }
     qmi_message_loc_start_output_unref (out);
     g_print ("pro1x-gnss: session %d started, NMEA to udp://127.0.0.1:%u\n", SESSION_ID, udp_port);
+    session_on = TRUE;
+    session_started_once = TRUE;
+    unread_since = 0;
     exit_code = EXIT_SUCCESS;
 }
 
 static void start_session (void)
 {
     QmiMessageLocStartInput *in = qmi_message_loc_start_input_new ();
+
+    session_busy = TRUE;
 
     qmi_message_loc_start_input_set_session_id (in, SESSION_ID, NULL);
     qmi_message_loc_start_input_set_intermediate_report_state (in, QMI_LOC_INTERMEDIATE_REPORT_STATE_ENABLE, NULL);
@@ -376,6 +411,78 @@ static void stop_ready (QmiClientLoc *c, GAsyncResult *res, gpointer data)
     g_main_loop_quit (loop);
 }
 
+/* Nobody read for -g seconds: the session (and the GNSS engine) stops */
+static void idle_stop_ready (QmiClientLoc *c, GAsyncResult *res, gpointer data)
+{
+    QmiMessageLocStopOutput *out = qmi_client_loc_stop_finish (c, res, NULL);
+
+    (void) data;
+    if (out)
+        qmi_message_loc_stop_output_unref (out);
+    session_busy = FALSE;
+    session_on = FALSE;
+    stopped_since = g_get_monotonic_time ();
+    g_print ("pro1x-gnss: nobody reads the positions: session %d stopped\n", SESSION_ID);
+}
+
+static void idle_stop (void)
+{
+    QmiMessageLocStopInput *in = qmi_message_loc_stop_input_new ();
+
+    session_busy = TRUE;
+    qmi_message_loc_stop_input_set_session_id (in, SESSION_ID, NULL);
+    qmi_client_loc_stop (client, in, 3, NULL, (GAsyncReadyCallback) idle_stop_ready, NULL);
+    qmi_message_loc_stop_input_unref (in);
+}
+
+/*
+ * Every WATCH_S: did anything sent since the last check come back refused
+ * (gpsd's UDP port closed), or did it go through (someone reads)? Then the
+ * session stops after -g seconds unread, starts again once read, and a
+ * probe goes out whenever nothing else did.
+ */
+static gboolean watch_cb (gpointer data)
+{
+    gint64 now = g_get_monotonic_time ();
+    int err = 0;
+    socklen_t len = sizeof err;
+    gboolean sent, refused;
+
+    (void) data;
+    if (getsockopt (udp_fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err == ECONNREFUSED)
+        last_refused = now;
+    sent = last_sent >= last_watch;
+    refused = last_refused >= last_watch;
+    if (refused) {
+        if (!unread_since)
+            unread_since = now;
+    } else if (sent)
+        unread_since = 0;
+
+    if (client && session_started_once && !session_busy) {
+        if (session_on && unread_since && now - unread_since >= (gint64) grace_s * G_USEC_PER_SEC)
+            idle_stop ();
+        else if (!session_on && sent && !refused) {
+            g_print ("pro1x-gnss: read again: session %d starts\n", SESSION_ID);
+            start_session ();
+        } else if (!session_on && idle_exit_s &&
+                   now - stopped_since >= (gint64) idle_exit_s * G_USEC_PER_SEC) {
+            g_print ("pro1x-gnss: nobody read for %u s: exit\n", idle_exit_s);
+            exit_code = EXIT_IDLE;
+            qmi_device_release_client (device, QMI_CLIENT (client), QMI_DEVICE_RELEASE_CLIENT_FLAGS_RELEASE_CID,
+                                       3, NULL, NULL, NULL);
+            g_main_loop_quit (loop);
+            return G_SOURCE_REMOVE;
+        }
+    }
+
+    last_watch = now;
+    /* nothing else told whether someone reads: an NMEA text sentence */
+    if (!sent || !session_on)
+        send_sentence ("GPTXT,01,01,02,pro1x-gnss");
+    return G_SOURCE_CONTINUE;
+}
+
 static gboolean on_signal (gpointer data)
 {
     QmiMessageLocStopInput *in;
@@ -396,15 +503,17 @@ int main (int argc, char **argv)
 {
     int opt;
 
-    while ((opt = getopt (argc, argv, "n:p:i:vd:")) != -1) {
+    while ((opt = getopt (argc, argv, "n:p:i:g:x:vd:")) != -1) {
         switch (opt) {
         case 'd': qmux_file = optarg; break;
         case 'n': node_id = (guint) strtoul (optarg, NULL, 10); break;
         case 'p': udp_port = (guint) strtoul (optarg, NULL, 10); break;
         case 'i': interval_ms = (guint) strtoul (optarg, NULL, 10); break;
+        case 'g': grace_s = (guint) strtoul (optarg, NULL, 10); break;
+        case 'x': idle_exit_s = (guint) strtoul (optarg, NULL, 10); break;
         case 'v': verbose = TRUE; break;
         default:
-            fprintf (stderr, "usage: %s [-n qrtr-node] [-p udp-port] [-i interval-ms] [-v] [-d qmux-file]\n", argv[0]);
+            fprintf (stderr, "usage: %s [-n qrtr-node] [-p udp-port] [-i interval-ms] [-g grace-s] [-x idle-s] [-v] [-d qmux-file]\n", argv[0]);
             return EXIT_FAILURE;
         }
     }
@@ -418,10 +527,17 @@ int main (int argc, char **argv)
     udp_dst.sin_family = AF_INET;
     udp_dst.sin_port = htons ((uint16_t) udp_port);
     udp_dst.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+    /* connected: a port nobody listens on comes back as ECONNREFUSED */
+    if (connect (udp_fd, (struct sockaddr *) &udp_dst, sizeof udp_dst) < 0) {
+        perror ("connect");
+        return EXIT_FAILURE;
+    }
 
     loop = g_main_loop_new (NULL, FALSE);
     g_unix_signal_add (SIGINT, on_signal, NULL);
     g_unix_signal_add (SIGTERM, on_signal, NULL);
+    if (grace_s)
+        g_timeout_add_seconds (WATCH_S, watch_cb, NULL);
     if (qmux_file) {
         GFile *f = g_file_new_for_path (qmux_file);
 

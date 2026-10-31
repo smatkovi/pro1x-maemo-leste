@@ -32,7 +32,7 @@ PARTS=(
   "hildon-status-menu|33ba47660e7c|2"
   "hildon-home|0d34886acdc2|1"
   "hildon-desktop|1273f9eee252|5"
-  "mce|422d5f2bd618|3"
+  "mce|422d5f2bd618|4"
   # the location framework's bugs (patches/fixes): liblocation linked to
   # its libraries, its dialog calls with dbus-glib's output terminator, the
   # user's methods (the "enable positioning" dialog's yes); location-ui's
@@ -42,6 +42,10 @@ PARTS=(
   # location-daemon kept running by controls not started
   "liblocation|d1ae86503411|4"
   "location-ui|55b9700aed33|2"
+  # location-daemon stops the gpsd it started once its clients are gone
+  # (patches/fixes): gpsd, pro1x-gnss and the modem's GNSS engine ran
+  # until the next boot after the first application that asked
+  "location-daemon|fc26fe2bf897|1"
   # repeating appointments on 64-bit (patches/fixes): none was expanded,
   # in qalendar's views and on the Events page (pro1x-events)
   "calendar-backend|7a149bfc9f76|1"

@@ -1,0 +1,38 @@
+diff --git a/location-daemon.c b/location-daemon.c
+index 77bf8d9..c6c54e9 100644
+--- a/location-daemon.c
++++ b/location-daemon.c
+@@ -52,6 +52,8 @@ static GThread *poll_thread;
+ static DBusConnection *dbus;
+ static struct gps_data_t gpsdata;
+ static int running = 0;
++/* gpsd was started here: stopped again when the clients are gone */
++static int started_gpsd = 0;
+ 
+ int sighandler(gpointer sig)
+ {
+@@ -307,6 +309,7 @@ int main(int argc, char *argv[])
+ 		g_debug("Could not connect to gpsd, attempting to start it");
+ 		switch (system("sudo /etc/init.d/gpsd start")) {
+ 		case 0:
++			started_gpsd = 1;
+ 			/* Give time to settle */
+ 			sleep(1);
+ 			break;
+@@ -354,6 +357,16 @@ int main(int argc, char *argv[])
+ 	(void)gps_stream(&gpsdata, WATCH_DISABLE, NULL);
+ 	(void)gps_close(&gpsdata);
+ 
++	/*
++	 * The clients are gone (or a signal): the gpsd started for them
++	 * stops again (the sudoers file allows it), else gpsd and the
++	 * receiver behind it ran until the next boot after the first
++	 * application that asked for a position. A gpsd that ran before
++	 * location-daemon came is left alone.
++	 */
++	if (started_gpsd && system("sudo /etc/init.d/gpsd stop") != 0)
++		g_warning("unable to stop gpsd via initscript");
++
+ 	g_main_loop_unref(mainloop);
+ 
+ 	return 0;

@@ -2,8 +2,13 @@
 # modem's position reports into NMEA and sends them to gpsd over UDP.
 #
 # Leste's location-daemon starts and stops gpsd on demand
-# (sudo /etc/init.d/gpsd start|stop); pro1x-gnss follows gpsd, so the GNSS
-# engine only runs while some application asks for the position.
+# (sudo /etc/init.d/gpsd start|stop; the stop with patches/fixes/
+# location-daemon.patch, before it gpsd ran on until the next boot);
+# pro1x-gnss follows gpsd, so the GNSS engine only runs while some
+# application asks for the position. While gpsd runs without a client
+# (gpsd closes its UDP source a minute after the last one), pro1x-gnss
+# stops its LOC session after 30 s and starts it again when gpsd reads
+# again (tools/pro1x-gnss, -g).
 
 GPSD_DEVICES="udp://127.0.0.1:29470"
 
