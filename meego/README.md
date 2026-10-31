@@ -49,12 +49,20 @@ In this order:
    volume keys (done)
 3. Battery (done)
 4. Connectivity UI: Harmattan's radio states API in Leste's mce (built,
-   active after the next reboot; to test: flight mode in the status menu)
+   active after the next reboot; to test: flight mode in the status menu);
+   the status bar's WLAN icon from Leste's icd2 (`icd2-context/`, since
+   2026-10-31, untested). Open: the status menu's internet row looks
+   icd2's IAP up in Harmattan's GConf, which has other ids than Leste's
 5. Bluetooth: Harmattan's own bluetoothd 4.91 (its UI speaks bluez 4's
    API) runs for the session in place of Leste's bluez 5, which comes back
-   when the session ends; the adapter is named Pro1X. Open: Bluetooth audio
-   (Leste's PulseAudio only knows bluez 5); discovery and pairing still to
-   be tried with a device in range
+   when the session ends; the adapter is named Pro1X. Its maemo6 plugin
+   powers the adapter as mce's Bluetooth radio bit says: since mce
+   +pro1x6 (`mce/radiostates.c`) the bit is off at the start, as on
+   Leste, and follows the settings' switch (untested; until then the
+   adapter was on with every session). The system bus lets it call the
+   pairing agent (`bluez4/`). Open: Bluetooth audio (Leste's PulseAudio
+   only knows bluez 5); discovery and pairing still to be tried with a
+   device in range
 6. GPS (QtLocation through `positioning/` and Leste's gpsd; gpsd only starts
    once Leste's location disclaimer is accepted; tested with injected NMEA)
 7. Cameras: Leste's camera app (pro1x-camera on libcamera) starts from
@@ -64,6 +72,14 @@ In this order:
    packages and starts them on Harmattan's request
    (/etc/pro1x-meego/leste-apps leaves some out or adds others). Harmattan's
    own camera application needs the N9's camera stack and stays out
+
+The N9's stand-by screen: mce's low power mode (`../patches/lpm`, mce
++pro1x5) with `mce/harmattan-lpm.c` (+pro1x6, loaded in MeeGo's own
+system only), which opens sysuid's low power mode view as Harmattan's mce
+did; the double tap on the dark screen needs kernel 0033 (pro1x.11).
+Untested on the phone. MyDocs comes from `/host/MyDocs` when that
+directory exists (40-harmattan-session.sh), instead of harmattan.img's
+7.8 GB.
 
 Open details: the edge swipe's "sneak peek" animation renders black
 (compositing in general works; ruled out: server grab, unredirection,

@@ -70,6 +70,19 @@ display on; about 5 s after the last press only the stand-by screen came
   display in it. The touchscreen stayed as it was between `LPM_ON` and
   `LPM_OFF` with the lock screen up.
 
+## The MeeGo boot (+pro1x6)
+
+Harmattan's sysuid has its own stand-by screen, the lock screen's low
+power mode view (time, notifications), which Harmattan's mce opened with
+`tklock_open` mode `TKLOCK_ENABLE_LPM_UI` and paused with
+`TKLOCK_PAUSE_UI`; Leste's lock-tklock only opens the lock screen. The
+module `meego/mce/harmattan-lpm.c`, built into mce since +pro1x6 and
+loaded only in MeeGo's own system (`meego/39-leste-mce.sh`), adds those
+calls while locked: 6 on `LPM_ON`, 7 from `LPM_ON` to `LPM_OFF`, 1 (the
+lock screen) when the display comes on. `tests/mce-lpm/run-pc.sh` with
+`MODULES_USER="radiostates;harmattan-lpm"` shows them in the stand-in
+system UI's requests. Untested on the phone.
+
 Open (2026-10-31): hildon-desktop (`src/util/hd-dbus.c` at 1273f9eee252)
 knows only `on` (draw again) and `off` (stop drawing) of
 `display_status_ind`. From on or dimmed to `lpm` it keeps drawing, so

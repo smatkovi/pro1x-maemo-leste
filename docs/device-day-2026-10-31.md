@@ -98,6 +98,7 @@ commands without running them.
 | 14 | Whisperfish | could | 20-40 min | - | Signal on the main phone |
 | 15 | Waydroid | could | 60 min | - | touch, keyboard |
 | 16 | N950 | should | 60-120 min | install, boots | cable, power key |
+| 17 | The MeeGo session's problems of 22:30 (mce +pro1x6, helpers, libraries) | should | 40-60 min | session stop, reboot | tests in MeeGo |
 
 The total is about 10-14 hours, more than one day. If time runs short,
 do blocks 0-5 and 9 first, then FreeBSD G1 and the dsp runs, then the
@@ -1221,6 +1222,119 @@ Sources: `~/ps/n950-maemo-leste` (`docs/install.md`), `~/ps/kolibrios-arm/docs/n
    - Photograph the screen [HAND].
    - The way back: power key, then `cp /boot/kolibri-test.bin
      /boot/kolibri.bin` under Leste.
+
+## Block 17: the MeeGo session's problems of 22:30 (should; 40-60 min) [OK] [HAND]
+
+The user's findings in the MeeGo session (snapshot:
+`~/ps/pro1x-runs/2026-10-31/meego-issues/collect.txt`). Causes and fixes
+are in the commits 4a1ed33, 160ed35, 28461f4, 4a42630 and b42a173 and in
+`meego/README.md`; everything here is untested on the phone. All steps run
+in the **MeeGo boot**, as root, on MeeGo's own copy
+(`/host/meego-leste.img`) and the shared `/host/harmattan.img`; nothing
+changes in Leste's image except where step 8 says so.
+
+| # | Finding | Cause | Fix |
+|---|---|---|---|
+| 1 | Bluetooth cannot be switched off | Harmattan's bluetoothd (bluez 4.91, maemo6 plugin) powers the adapter as mce's Bluetooth radio bit says; our radiostates module said "on" for every radio and dropped the switch's request. The status menu's row and the settings applet are Nokia's (conn-dui-settings-bt), not harmattan-qt5's. Not seen: why the switch did not stick (bluetoothd's stored mode was last written on 10-25) | mce +pro1x6: the bit off at the start, as on Leste, kept and signalled; the bus policy for bluez 4's agent calls (`meego/bluez4/`) |
+| 2 | WLAN works, no icon; Firefox offline | sysuid's icon reads contextkit's `Internet.*`, which Harmattan's own icd2 provided (`com.nokia.icd2.context`); Leste's icd2 has none. Firefox: the Wi-Fi was really gone 22:24:52-22:33:46, and Firefox stays offline | `meego/icd2-context/`; Firefox's `network.manage-offline-status` false. Open: the status menu's row (IAP ids differ between Leste's and Harmattan's GConf) |
+| 3 | Ö1 stutters | not found: same PulseAudio set-up as Leste; at the same time the Wi-Fi dropped (signal about -71 dBm, auth time-outs for 9 minutes) and Firefox started | `pro1x-wlan-powersave` now honours `/etc/pro1x-wlan-powersave-off`; test recipe in step 7 |
+| 4 | Tearing | Xorg 21.1.7's rotation shadow: one buffer, redrawn without vblank; no page flips on a rotated CRTC; no TearFree in 21.1 | none yet: TearFree backport (16 xserver-master commits) applies to 21.1.7, not built (`meego/README.md`) |
+| 5 | No sneak peek | mce +pro1x5 not installed; `60-pro1x.ini`'s `ModulesUser=radiostates` replaced 50-pro1x.ini's modules (no proximity, LEDs, keyboard light, vibration); nothing opened sysuid's low power mode view; double tap needs kernel 0033 | mce +pro1x6 with `harmattan-lpm`; `39-leste-mce.sh BUILD=0` writes the full list |
+| 6 | No USB network for 10 minutes | the PC saw no device on the port until 22:28:52 and the phone's charger no input until t=556 s, while g_cdc and usb0 were up at t=21 s: the cable or VBUS, not the boot | none; ask whether the cable was replugged then. Check: step 6 |
+| 7 | Brightness not settable | the slider writes Harmattan's GConf (its own gconfd on the system bus); Leste's mce reads Leste's | `meego/compat/harmattan-compat.c` passes the level to mce. Open: the display time-out setting has the same split |
+| 8 | UI turned 180° | 3de3559 applied iio-sensor-proxy's mount matrix in n9-sensors; sensord wants libssc's frame | the flip removed (`meego/sensors/n9-sensors.c`) |
+| 9 | "Only 8 GB" | RAM 7.5 GB is right; storage: MyDocs is a directory in harmattan.img (7.8 GB) | `/host/MyDocs`, when it exists, bound over MyDocs (step 5) |
+| 10 | NFS Shift incomplete | 758 of its 1188 images are PVRTC; Mesa/freedreno has no PVRTC: every upload `GL_INVALID_ENUM` | `meego/pvrtc/`: decoding GLES libraries, the game started through `pvrtc-run` |
+| 11 | Copies at the apps' edges | not found: every MeeGo Touch window is 960x480 (target `custom`, autodetect), a root capture of the home screen is clean | none; captures in step 7 |
+
+1. PC, in the repository (pull first): the files and the package.
+   ```sh
+   git archive HEAD meego rootfs-overlay/usr/local/sbin/pro1x-wlan-powersave |
+     bash $D/phone.sh ssh meego 'mkdir -p /root/meego-1031 && tar -C /root/meego-1031 -x'
+   DEB=$WORK/out/mce-pro1x6/mce_1.10.17+pro1x6_arm64.deb   # or from leste-hildon-2026.10.31.2
+   bash $D/phone.sh ssh meego 'cat > /root/meego-1031/mce_1.10.17+pro1x6_arm64.deb' < $DEB
+   sha256sum $DEB; bash $D/phone.sh ssh meego 'sha256sum /root/meego-1031/*.deb'
+   ```
+   The two sums must be equal (3b5c6ac7...c274).
+2. [OK] Stop the session (the screen goes dark; Leste's desktop does not
+   start in the MeeGo boot): `rc-service pro1x-meego stop`.
+3. mce +pro1x6 and its settings, with services blocked (a restarted mce
+   leaves the display off):
+   ```sh
+   cd /root/meego-1031
+   [ -e /usr/sbin/policy-rc.d ] || { printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d; chmod 755 /usr/sbin/policy-rc.d; G=1; }
+   apt install --allow-change-held-packages ./mce_1.10.17+pro1x6_arm64.deb
+   [ -z "${G:-}" ] || rm /usr/sbin/policy-rc.d
+   apt-mark hold mce
+   cat /etc/hostname                     # must say meego
+   BUILD=0 bash meego/39-leste-mce.sh    # 60-pro1x.ini: 50's list;radiostates;harmattan-lpm
+   ```
+4. The helpers and Harmattan's libraries (38 needs the network once, for
+   the Debian tree's `libgles-dev`):
+   ```sh
+   H=/mnt/harmattan; mountpoint -q $H || mount -o loop /host/harmattan.img $H
+   H=$H bash meego/41-leste-helpers.sh      # n9-sensors (rotation), icd2-context,
+                                            # bus policies, Firefox's pref
+   D=/host/debian-armhf H=$H bash meego/38-hardware-adaptation.sh   # brightness, PVRTC
+   install -m 755 meego/40-harmattan-session.sh /usr/lib/pro1x-meego/harmattan-session
+   [ ! -e /usr/local/sbin/pro1x-wlan-powersave ] ||
+     install -m 755 rootfs-overlay/usr/local/sbin/pro1x-wlan-powersave /usr/local/sbin/
+   ```
+5. [OPT] [OK] MyDocs on /host (copies MyDocs out of the image, at most
+   its 2.6 GB; the image's copy stays as it is):
+   `du -sh $H/home/user/MyDocs`, then
+   `mkdir /host/MyDocs && cp -a $H/home/user/MyDocs/. /host/MyDocs/ && chown 1000:1000 /host/MyDocs`.
+   The way back: `rm -r /host/MyDocs` after copying anything new back.
+6. [OK] Reboot into MeeGo (`pro1x-boot next meego`, reboot): the new mce
+   reads its modules only at its start. [HAND] Item 6: the cable in from
+   the start and not touched. `bash $D/phone.sh wait 3`: answering within
+   about a minute means the 22:20 boot's ten minutes were the cable. If
+   not, once it answers: `dmesg | grep -i "input in"` (the charger saw
+   USB at t=20 s in Leste, at t=556 s in the MeeGo boot of 22:20).
+7. Tests [HAND], then `collect.sh 17-meego-fixes`:
+   - Item 8: landscape with the keyboard towards you upright, both
+     portraits the right way round.
+   - Item 1: Bluetooth off after the start (`hciconfig hci0`: DOWN);
+     Settings > Bluetooth on, then off: `hciconfig` follows,
+     `dbus-send --system --print-reply --dest=com.nokia.mce /com/nokia/mce/request com.nokia.mce.request.get_radio_states`
+     has bit 8 set while on (63 instead of 55). If the switch still
+     springs back: `dbus-monitor --system "interface='org.bluez.Adapter'"`
+     while switching, and `cat /mnt/harmattan/var/lib/bluetooth/*/config`.
+   - Item 2: the WLAN icon in the status bar while connected;
+     `dbus-send --system --print-reply --dest=com.nokia.icd2.context /org/maemo/contextkit/Internet/NetworkState org.maemo.contextkit.Property.Get`
+     says `connected`. Firefox after a Wi-Fi drop and reconnect: a reload
+     loads.
+   - Item 7: Settings > Display, the slider: `cat /sys/class/backlight/5e94000.dsi.0/brightness` follows.
+   - Item 5: let the display time out: dimmed, then the stand-by screen
+     (sysuid's: time, notifications) at 20 %, after a minute black;
+     covered for 5 s black. Power key: the lock screen. The double tap
+     only with kernel pro1x.11 or later (0033) in this boot: `uname -r`.
+   - Item 10: NFS Shift from the grid: cars and tracks textured.
+     `grep pvrtc /mnt/harmattan/var/log/pro1x-session/*.log` or start it by
+     hand with `PVRTC_TRACE=1` (`meego/pvrtc/pvrtc-run`): "over libGLES..."
+     and "N levels decoded". Neither line: the game opens GL by path.
+   - Item 9: Settings > Storage shows /host's size (if step 5 was done).
+   - Item 3: Ö1 for 5 minutes, Firefox closed; every 5 s
+     `iw dev wlan0 station dump` (signal, tx retries) and, as user,
+     `pacmd list-sink-inputs`. If it stutters: [OK]
+     `iw dev wlan0 set power_save off` and again.
+   - Item 11: with an app that shows the copies in front:
+     `su user -c "DISPLAY=:0 XAUTHORITY=/home/user/.Xauthority xwd -root -silent" > /tmp/root.xwd`
+     and the same with `xwd -id <id>` of its window
+     (`xwininfo -root -tree`): copies in the window's own image are the
+     application's or EGL's, only in the root's mcompositor's or X's.
+8. Leste's own image, at the next Leste boot: before 45 made MeeGo's
+   copy, both shared one image, so Leste may have the same
+   `60-pro1x.ini`. `cat /etc/mce/mce.ini.d/60-pro1x.ini`; if its
+   `ModulesUser` is `radiostates` only, `BUILD=0 bash meego/39-leste-mce.sh`
+   there too (the hostname is not meego: no harmattan-lpm), then the next
+   reboot. mce +pro1x6 for Leste through `pro1x-update` (same as +pro1x5
+   there).
+9. The way back: mce +pro1x5 (leste-hildon-2026.10.31.1) as in 6b with
+   `--allow-downgrades`, and `60-pro1x.ini` with `ModulesUser=radiostates`
+   again; the other parts by running steps 1 and 4 with
+   `git archive 4a1ed33^` instead of HEAD (before these fixes),
+   then a reboot. `/host/MyDocs` is used only while it exists.
 
 ## End of the day (15 min)
 
