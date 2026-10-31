@@ -52,6 +52,24 @@
  * Sections: show_notifications, show_weather, show_calendar, show_mastodon
  * (all on by default).
  *
+ * Power: the page does nothing while it is not seen, that is while the
+ * look is off, while hildon-desktop says it is not on the view in front
+ * (_HILDON_APPLET_ON_CURRENT_DESKTOP deleted: another view, an
+ * application, the display off) or while mce's display_status_ind says
+ * "off" or "lpm" (the stand-by screen): no timer, no update, no redraw;
+ * new notifications are read once it is seen again. While it is seen, one
+ * timer wakes it for what is due next (an update, midnight, the next
+ * appointment's start or end), no minute ticks. The two updates go
+ * together: one that is due within BATCH comes along with the other, so
+ * that the radio wakes once for both (the feed every 15 minutes, the
+ * weather every second time). None while GLib's network monitor sees no
+ * network (no default route); one that failed is tried again after 5
+ * minutes, then 10, 20, 40, 60. The feed is asked with its last ETag
+ * (If-None-Match; Mastodon answers 304 Not Modified without the posts).
+ * The weather's cache is not asked for anew while it is younger than 30
+ * minutes, the cache files are written without fsync (a cache), GConf only
+ * where a value differs.
+ *
  * Sizes and colours as the N9's Events view (its home screen's style,
  * meegotouchhome.css, in the N9's millimetres of 10 of its pixels, which
  * HILDON_SCALE makes ours, as for the status bar): the day in light 4 mm,
@@ -65,6 +83,9 @@
 #include <string.h>
 #include <time.h>
 #include <utime.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #include <glib/gstdio.h>
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
@@ -113,7 +134,9 @@
 #define WEATHER_URL "https://api.open-meteo.com/v1/forecast"
 #define WEATHER_SITE "https://open-meteo.com/"
 #define WEATHER_EVERY (30 * 60)	/* s between updates while seen */
-#define WEATHER_RETRY (5 * 60)	/* after one that failed */
+#define RETRY_FIRST (5 * 60)	/* s after an update that failed, doubled */
+#define RETRY_MAX (60 * 60)	/* each time up to this */
+#define BATCH (5 * 60)		/* s: due this soon, it comes along */
 #define WEATHER_DAYS 5		/* today and four more */
 #define CAL_DAYS 7
 #define CAL_LIMIT 12		/* appointments at most */
@@ -248,6 +271,54 @@ static gint64 moved_at;		/* the scroll indicator's last movement */
 static double spin;		/* the update spinner's angle */
 static gint64 feed_time;	/* the last update of the feed */
 static gboolean feed_busy;
+static gint64 feed_next;	/* monotonic time of the next update; 0 at once,
+				 * G_MAXINT64 until the settings change */
+static int feed_fails, weather_fails;	/* updates that failed in a row */
+static char *feed_etag;		/* of the posts shown (If-None-Match) */
+static int feed_etag_day = -1;	/* the day they were laid out ("Yesterday") */
+
+/* seen: the look on, the page not closed, the display on (mce), the page
+ * on the view in front (hildon-desktop); on_view -1 while hildon-desktop
+ * has not said */
+static gboolean display_on = TRUE;
+static int on_view = -1;
+static gboolean net_up = TRUE;	/* GLib's network monitor */
+static gboolean was_seen;
+static gboolean stale;		/* notifications changed while unseen */
+static guint tick_id;
+
+static gboolean seen(void)
+{
+	return look_on && !closed && display_on && on_view != 0;
+}
+
+static gint64 retry_after(int fails)
+{
+	gint64 s = RETRY_FIRST;
+
+	while (--fails > 0 && s < RETRY_MAX)
+		s *= 2;
+	return MIN(s, RETRY_MAX) * G_USEC_PER_SEC;
+}
+
+static int today(void)
+{
+	GDateTime *now = g_date_time_new_now_local();
+	int d = g_date_time_get_day_of_year(now);
+
+	g_date_time_unref(now);
+	return d;
+}
+
+/* a cache file: replaced whole, not synced to the flash (it is a cache) */
+static void cache_write(const char *path, const void *data, gsize len)
+{
+#if GLIB_CHECK_VERSION(2, 66, 0)
+	g_file_set_contents_full(path, data, len, G_FILE_SET_CONTENTS_CONSISTENT, 0644, NULL);
+#else
+	g_file_set_contents(path, data, len, NULL);
+#endif
+}
 
 #define TAP_SLOP MM(1.0)
 #define PULL_UPDATE MM(8.0)	/* pulled this far, it updates */
@@ -259,7 +330,7 @@ static double max_offset(void)
 
 static void redraw(void)
 {
-	if (win && GTK_WIDGET_REALIZED(win))
+	if (win && GTK_WIDGET_REALIZED(win) && seen())
 		gtk_widget_queue_draw(win);
 }
 
@@ -801,14 +872,22 @@ static void mails_reload(void)
 /* changes come in bursts: one reload after them */
 static guint reload_id;
 
+static void schedule(void);
+
 static gboolean reload_cb(gpointer data)
 {
 	(void)data;
 	reload_id = 0;
+	if (!seen()) {
+		stale = TRUE;	/* read when it is seen again */
+		return FALSE;
+	}
+	stale = FALSE;
 	notes_reload();
 	mails_reload();
 	calendar_reload();
 	rebuild();
+	schedule();	/* (the next appointment's time) */
 	return FALSE;
 }
 
@@ -847,6 +926,8 @@ typedef struct {
 	GPtrArray *items;	/* Item, with their icons */
 	char *error;
 	gboolean settings;	/* the error is the settings' */
+	char *etag;		/* asked with, then the answer's */
+	gboolean not_modified;	/* 304: the posts shown are still the newest */
 } Fetch;
 
 static size_t curl_write(void *p, size_t size, size_t n, void *data)
@@ -859,8 +940,23 @@ static size_t curl_write(void *p, size_t size, size_t n, void *data)
 	return size * n;
 }
 
-/* the body of a GET (NULL on no answer), its HTTP status */
-static GByteArray *http_get(const char *url, const char *token, long *status, char **error)
+/* the answer's ETag */
+static size_t curl_header(char *p, size_t size, size_t n, void *data)
+{
+	char **etag = data;
+	size_t len = size * n;
+
+	if (len > 5 && !g_ascii_strncasecmp(p, "etag:", 5)) {
+		g_free(*etag);
+		*etag = g_strstrip(g_strndup(p + 5, len - 5));
+	}
+	return len;
+}
+
+/* the body of a GET (NULL on no answer), its HTTP status; with ETAG asked
+ * If-None-Match (304: an empty body), the answer's ETag in *NEW_ETAG */
+static GByteArray *http_get(const char *url, const char *token, const char *etag,
+			    long *status, char **error, char **new_etag)
 {
 	CURL *c = curl_easy_init();
 	GByteArray *b = g_byte_array_new();
@@ -890,7 +986,18 @@ static GByteArray *http_get(const char *url, const char *token, long *status, ch
 		h = curl_slist_append(h, a);
 		h = curl_slist_append(h, "Accept: application/json");
 		g_free(a);
+	}
+	if (etag && *etag) {
+		char *a = g_strconcat("If-None-Match: ", etag, NULL);
+
+		h = curl_slist_append(h, a);
+		g_free(a);
+	}
+	if (h)
 		curl_easy_setopt(c, CURLOPT_HTTPHEADER, h);
+	if (new_etag) {
+		curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, curl_header);
+		curl_easy_setopt(c, CURLOPT_HEADERDATA, new_etag);
 	}
 	r = curl_easy_perform(c);
 	curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, status);
@@ -1024,10 +1131,10 @@ static GdkPixbuf *avatar(Fetch *f, const char *url)
 	g_free(sum);
 	if (g_stat(path, &st) || time(NULL) - st.st_mtime > AVATAR_DAYS * 86400) {
 		long status;
-		GByteArray *b = http_get(url, NULL, &status, NULL);
+		GByteArray *b = http_get(url, NULL, NULL, &status, NULL, NULL);
 
 		if (b && status == 200 && b->len < AVATAR_MAX)
-			g_file_set_contents(path, (char *)b->data, b->len, NULL);
+			cache_write(path, b->data, b->len);
 		if (b)
 			g_byte_array_free(b, TRUE);
 	}
@@ -1042,6 +1149,7 @@ static GdkPixbuf *media_preview(Fetch *f, const char *url, int size, gboolean vi
 {
 	char *sum, *name, *path;
 	GdkPixbuf *src, *p = NULL;
+	GStatBuf st;
 	int w, h;
 
 	if (!url || !g_str_has_prefix(url, "http"))
@@ -1050,16 +1158,16 @@ static GdkPixbuf *media_preview(Fetch *f, const char *url, int size, gboolean vi
 	name = g_strconcat("media-", sum, NULL);
 	path = g_build_filename(f->cache, name, NULL);
 	g_free(sum), g_free(name);
-	if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
+	if (g_stat(path, &st)) {
 		long status;
-		GByteArray *b = http_get(url, NULL, &status, NULL);
+		GByteArray *b = http_get(url, NULL, NULL, &status, NULL, NULL);
 
 		if (b && status == 200 && b->len < AVATAR_MAX)
-			g_file_set_contents(path, (char *)b->data, b->len, NULL);
+			cache_write(path, b->data, b->len);
 		if (b)
 			g_byte_array_free(b, TRUE);
-	} else
-		g_utime(path, NULL);	/* still seen: kept */
+	} else if (time(NULL) - st.st_mtime > 86400)
+		g_utime(path, NULL);	/* still seen: kept (once a day, not each update) */
 	src = gdk_pixbuf_new_from_file(path, NULL);
 	g_free(path);
 	if (!src)
@@ -1238,20 +1346,33 @@ static gboolean fetch_done(gpointer data)
 	g_free(feed_hint);
 	feed_hint = f->error;
 	feed_hint_settings = f->settings;
-	if (!f->error) {
-		g_ptr_array_unref(feed);
-		feed = f->items;
-		f->items = NULL;
+	if (f->error) {
+		feed_fails++;
+		/* (a token not taken: not again until the settings change) */
+		feed_next = f->settings ? G_MAXINT64 : feed_time + retry_after(feed_fails);
+	} else {
+		feed_fails = 0;
+		feed_next = feed_time + (gint64)FEED_EVERY * G_USEC_PER_SEC;
+		if (!f->not_modified) {
+			g_ptr_array_unref(feed);
+			feed = f->items;
+			f->items = NULL;
+			g_free(feed_etag);
+			feed_etag = f->etag;
+			f->etag = NULL;
+			feed_etag_day = today();
+		}
 		if (!feed->len)
 			feed_hint = g_strdup(_("Nothing new in the home timeline."));
 	}
 	if (f->items)
 		g_ptr_array_unref(f->items);
-	g_free(f->server), g_free(f->token), g_free(f->cache);
+	g_free(f->server), g_free(f->token), g_free(f->cache), g_free(f->etag);
 	g_free(f);
 	notes_reload();
 	mails_reload();
 	rebuild();
+	schedule();
 	return FALSE;
 }
 
@@ -1263,9 +1384,9 @@ static gpointer fetch_thread(gpointer data)
 	long status;
 	GByteArray *b;
 
-	media_expire(f->cache);
-	b = http_get(url, f->token, &status, &error);
+	char *etag = NULL;
 
+	b = http_get(url, f->token, f->etag, &status, &error, &etag);
 	if (!b) {
 		f->error = g_strdup_printf(_("No connection to %s (%s)."), f->server,
 					   error ? error : "?");
@@ -1273,10 +1394,16 @@ static gpointer fetch_thread(gpointer data)
 		f->error = g_strdup(_("Mastodon does not take the access token: "
 				      "set it anew in Settings, Events."));
 		f->settings = TRUE;
+	} else if (status == 304 && f->etag) {
+		f->not_modified = TRUE;
 	} else if (status != 200 && status != 206) {
 		f->error = g_strdup_printf(_("%s answered %ld."), f->server, status);
-	} else
+	} else {
+		media_expire(f->cache);
 		parse_feed(f, (const char *)b->data, b->len);
+	}
+	g_free(f->etag);
+	f->etag = etag;
 	if (b)
 		g_byte_array_free(b, TRUE);
 	g_free(error);
@@ -1315,6 +1442,7 @@ static void feed_update(void)
 	token = gconf_client_get_string(gconf, KEY_TOKEN, NULL);
 	if (!server || !*server || !token || !*token) {
 		g_free(server), g_free(token);
+		feed_next = G_MAXINT64;	/* until there is an account */
 		g_ptr_array_set_size(feed, 0);
 		g_free(feed_hint);
 		feed_hint = g_strdup(_("Add a Mastodon account in Settings, Events, "
@@ -1334,6 +1462,9 @@ static void feed_update(void)
 	for (i = 1; i <= MEDIA_MAX; i++)
 		f->msize[i] = media_size(i);
 	f->items = g_ptr_array_new_with_free_func(item_free);
+	/* (the posts laid out on another day: anew, for their "Yesterday") */
+	if (feed_etag && feed_etag_day == today())
+		f->etag = g_strdup(feed_etag);
 	g_mkdir_with_parents(f->cache, 0700);
 	g_free(server);
 	feed_busy = TRUE;
@@ -1342,8 +1473,9 @@ static void feed_update(void)
 		g_thread_unref(t);
 	else {
 		feed_busy = FALSE;
+		feed_next = g_get_monotonic_time() + retry_after(++feed_fails);
 		g_ptr_array_unref(f->items);
-		g_free(f->server), g_free(f->token), g_free(f->cache), g_free(f);
+		g_free(f->server), g_free(f->token), g_free(f->cache), g_free(f->etag), g_free(f);
 	}
 	rebuild();
 }
@@ -1535,9 +1667,15 @@ static void weather_load_cache(void)
 	/* (a day old, its days are gone) */
 	if (!g_stat(path, &st) && time(NULL) - st.st_mtime < 2 * 86400 &&
 	    g_file_get_contents(path, &data, &len, NULL) && (w = parse_weather(data, len))) {
+		gint64 age = time(NULL) - st.st_mtime;
+
 		w->fetched = st.st_mtime;
 		weather_drop_past(w);
 		weather = w;
+		/* new enough: not asked for again at once (a new session) */
+		if (age >= 0 && age < WEATHER_EVERY)
+			weather_next = g_get_monotonic_time() +
+				       (WEATHER_EVERY - age) * G_USEC_PER_SEC;
 	}
 	g_free(data);
 	g_free(path);
@@ -1578,10 +1716,14 @@ static gboolean weather_done(gpointer data)
 		weather = f->w;
 		weather_drop_past(weather);
 	}
-	weather_next = g_get_monotonic_time() +
-		       (gint64)(f->w ? WEATHER_EVERY : WEATHER_RETRY) * G_USEC_PER_SEC;
+	if (f->w) {
+		weather_fails = 0;
+		weather_next = g_get_monotonic_time() + (gint64)WEATHER_EVERY * G_USEC_PER_SEC;
+	} else
+		weather_next = g_get_monotonic_time() + retry_after(++weather_fails);
 	g_free(f->url), g_free(f->cache), g_free(f);
 	rebuild();
+	schedule();
 	return FALSE;
 }
 
@@ -1590,7 +1732,7 @@ static gpointer weather_thread(gpointer data)
 	WeatherFetch *f = data;
 	char *error = NULL;
 	long status;
-	GByteArray *b = http_get(f->url, NULL, &status, &error);
+	GByteArray *b = http_get(f->url, NULL, NULL, &status, &error, NULL);
 
 	if (!b)
 		f->error = g_strdup_printf(_("No connection to Open-Meteo (%s)."), error ? error : "?");
@@ -1600,7 +1742,7 @@ static gpointer weather_thread(gpointer data)
 		f->error = g_strdup(_("Open-Meteo's answer was not understood."));
 	else {
 		f->w->fetched = time(NULL);
-		g_file_set_contents(f->cache, (const char *)b->data, b->len, NULL);
+		cache_write(f->cache, b->data, b->len);
 	}
 	if (b)
 		g_byte_array_free(b, TRUE);
@@ -1643,6 +1785,7 @@ static void weather_update(void)
 		g_thread_unref(t);
 	else {
 		weather_busy = FALSE;
+		weather_next = g_get_monotonic_time() + retry_after(++weather_fails);
 		g_free(f->url), g_free(f->cache), g_free(f);
 	}
 	rebuild();
@@ -1850,18 +1993,146 @@ static void calendar_signal(GDBusConnection *c, const char *sender, const char *
 
 /* --- updates ------------------------------------------------------------- */
 
-static gboolean feed_timer(gpointer data)
+/* the updates that are due, together: one due within BATCH comes along
+ * with the other, so that the radio wakes once for both; only while the
+ * page is seen and there is a network */
+static void refresh_due(void)
 {
-	gint64 now = g_get_monotonic_time();
+	gint64 now = g_get_monotonic_time(), soon = now + (gint64)BATCH * G_USEC_PER_SEC;
+	gboolean f = show_feed && !feed_busy && feed_next != G_MAXINT64;
+	gboolean w = show_weather && place_set() && !weather_busy;
+
+	if (!seen() || !net_up || !((f && now >= feed_next) || (w && now >= weather_next)))
+		return;
+	if (f && feed_next <= soon)
+		feed_update();
+	if (w && weather_next <= soon)
+		weather_update();
+}
+
+/* midnight: the date and "Yesterday" anew */
+static void day_check(void)
+{
+	static int day = -1;
+	int d = today();
+
+	if (day != -1 && d != day)
+		reload_soon();
+	day = d;
+}
+
+static gboolean tick_cb(gpointer data)
+{
+	(void)data;
+	tick_id = 0;
+	day_check();
+	if (time(NULL) >= cal_next)
+		reload_soon();
+	refresh_due();
+	schedule();
+	return FALSE;
+}
+
+/* One timer, while the page is seen, for what is due next: an update (not
+ * without a network: network_changed), midnight, the next appointment's
+ * start or end. None while it is unseen. */
+static void schedule(void)
+{
+	gint64 now = g_get_monotonic_time(), t;
+	GDateTime *n, *d, *mid;
+	guint s;
+
+	if (tick_id)
+		g_source_remove(tick_id);
+	tick_id = 0;
+	if (!seen())
+		return;
+	n = g_date_time_new_now_local();
+	d = g_date_time_new_local(g_date_time_get_year(n), g_date_time_get_month(n),
+				  g_date_time_get_day_of_month(n), 0, 0, 0);
+	mid = g_date_time_add_days(d, 1);
+	t = now + (g_date_time_to_unix(mid) - g_date_time_to_unix(n) + 1) * G_USEC_PER_SEC;
+	g_date_time_unref(mid), g_date_time_unref(d), g_date_time_unref(n);
+	if (cal_next != G_MAXINT64)
+		t = MIN(t, now + (cal_next - (gint64)time(NULL)) * G_USEC_PER_SEC);
+	if (net_up && show_feed && !feed_busy && feed_next != G_MAXINT64)
+		t = MIN(t, feed_next);
+	if (net_up && show_weather && place_set() && !weather_busy)
+		t = MIN(t, weather_next);
+	/* (at least hourly: the clock may have been set) */
+	s = t <= now ? 1 : (guint)MIN((t - now + G_USEC_PER_SEC - 1) / G_USEC_PER_SEC, 3600);
+	tick_id = g_timeout_add_seconds(s, tick_cb, NULL);
+}
+
+static void anim_start(void);
+
+/* seen or not any more: everything waits while it is not */
+static void seen_changed(void)
+{
+	gboolean now = seen();
+
+	if (now == was_seen)
+		return;
+	was_seen = now;
+#ifdef __linux__
+	/* unseen nothing here is in a hurry: its wake-ups may be grouped */
+	prctl(PR_SET_TIMERSLACK, now ? 0UL : 200000000UL, 0UL, 0UL, 0UL);
+#endif
+	if (now) {
+		day_check();
+		if (stale || time(NULL) >= cal_next)
+			reload_cb(NULL);
+		else
+			redraw();
+		refresh_due();
+		anim_start();	/* (the spinner of an update still running) */
+	}
+	schedule();
+}
+
+/* mce's display_status_ind: "on", "dimmed", "off", "lpm" (patches/lpm:
+ * the stand-by screen over everything) */
+static void display_status(const char *s)
+{
+	gboolean on = g_strcmp0(s, "off") && g_strcmp0(s, "lpm");
+
+	if (on != display_on) {
+		display_on = on;
+		seen_changed();
+	}
+}
+
+static void mce_signal(GDBusConnection *c, const char *sender, const char *path,
+		       const char *iface, const char *signal, GVariant *p, gpointer data)
+{
+	(void)c, (void)sender, (void)path, (void)iface, (void)signal, (void)data;
+	if (g_variant_is_of_type(p, G_VARIANT_TYPE("(s)"))) {
+		const char *s;
+
+		g_variant_get(p, "(&s)", &s);
+		display_status(s);
+	}
+}
+
+static void mce_status_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	GVariant *v = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), res, NULL);
 
 	(void)data;
-	if (look_on && !closed) {
-		if (show_feed && now - feed_time > (gint64)FEED_EVERY * G_USEC_PER_SEC)
-			feed_update();
-		if (show_weather && now >= weather_next)
-			weather_update();
+	if (v) {
+		mce_signal(NULL, NULL, NULL, NULL, NULL, v, NULL);
+		g_variant_unref(v);
 	}
-	return TRUE;
+}
+
+static void network_changed(GNetworkMonitor *m, gboolean available, gpointer data)
+{
+	(void)m, (void)data;
+	if (!available == !net_up)
+		return;
+	net_up = available;
+	refresh_due();
+	schedule();
 }
 
 /* --- the page's items --------------------------------------------------- */
@@ -2544,9 +2815,11 @@ static gboolean expose_cb(GtkWidget *w, GdkEventExpose *e, gpointer data)
 
 static gboolean anim_cb(gpointer data);
 
+static gint64 anim_prev;
+
 static void anim_start(void)
 {
-	if (!anim_id)
+	if (!anim_id && seen())
 		anim_id = g_timeout_add(16, anim_cb, NULL);
 }
 
@@ -2554,14 +2827,18 @@ static void anim_start(void)
  * spinner, the scroll indicator fading */
 static gboolean anim_cb(gpointer data)
 {
-	static gint64 prev;
 	gint64 now = g_get_monotonic_time();
 	/* the time since the last step (a slow machine steps less often) */
-	double dt = prev ? MIN(now - prev, 100000) / 1e6 : 0.016;
+	double dt = anim_prev ? MIN(now - anim_prev, 100000) / 1e6 : 0.016;
 	gboolean more = FALSE;
 
 	(void)data;
-	prev = now;
+	if (!seen()) {	/* again when it is seen */
+		anim_id = 0;
+		anim_prev = 0;
+		return FALSE;
+	}
+	anim_prev = now;
 	if (!pressed) {
 		if (fabs(velocity) > MM(2)) {
 			offset += velocity * dt;
@@ -2603,7 +2880,7 @@ static gboolean anim_cb(gpointer data)
 	redraw();
 	if (!more) {
 		anim_id = 0;
-		prev = 0;
+		anim_prev = 0;
 		return FALSE;
 	}
 	return TRUE;
@@ -2884,11 +3161,38 @@ static gboolean pointer_cb(GtkWidget *w, GdkEvent *e, gpointer data)
 
 /* --- the window ---------------------------------------------------------- */
 
+/* GConf written only where it differs: each write is one of gconfd's
+ * files on the flash, and hildon-desktop lays the applets out anew */
+static void gconf_int_is(const char *key, int v)
+{
+	GConfValue *cur = gconf_client_get(gconf, key, NULL);
+	gboolean same = cur && cur->type == GCONF_VALUE_INT && gconf_value_get_int(cur) == v;
+
+	if (cur)
+		gconf_value_free(cur);
+	if (!same)
+		gconf_client_set_int(gconf, key, v, NULL);
+}
+
+static void gconf_pos_is(const char *key, int x, int y)
+{
+	GSList *cur = gconf_client_get_list(gconf, key, GCONF_VALUE_INT, NULL);
+	gboolean same = g_slist_length(cur) == 2 && GPOINTER_TO_INT(cur->data) == x &&
+			GPOINTER_TO_INT(cur->next->data) == y;
+
+	g_slist_free(cur);
+	if (!same) {
+		GSList *pos = g_slist_append(g_slist_append(NULL, GINT_TO_POINTER(x)),
+					     GINT_TO_POINTER(y));
+
+		gconf_client_set_list(gconf, key, GCONF_VALUE_INT, pos, NULL);
+		g_slist_free(pos);
+	}
+}
+
 static void place(void)
 {
 	GdkScreen *s = gdk_screen_get_default();
-	GSList *pos = NULL;
-	GError *e = NULL;
 
 	width = gdk_screen_get_width(s);
 	height = gdk_screen_get_height(s) - bar_height;
@@ -2896,13 +3200,9 @@ static void place(void)
 	gtk_window_resize(GTK_WINDOW(win), width, height);
 	gtk_window_move(GTK_WINDOW(win), 0, bar_height);
 	/* the first home view, right below the status bar (hildon-desktop) */
-	gconf_client_set_int(gconf, APPLET_KEY "/view", 1, &e);
-	g_clear_error(&e);
-	pos = g_slist_append(pos, GINT_TO_POINTER(0));
-	pos = g_slist_append(pos, GINT_TO_POINTER(bar_height));
-	gconf_client_set_list(gconf, APPLET_KEY "/position", GCONF_VALUE_INT, pos, NULL);
-	gconf_client_set_list(gconf, APPLET_KEY "/position_portrait", GCONF_VALUE_INT, pos, NULL);
-	g_slist_free(pos);
+	gconf_int_is(APPLET_KEY "/view", 1);
+	gconf_pos_is(APPLET_KEY "/position", 0, bar_height);
+	gconf_pos_is(APPLET_KEY "/position_portrait", 0, bar_height);
 	layout_all();
 }
 
@@ -2931,14 +3231,11 @@ static void show_page(void)
 
 	if (want && !GTK_WIDGET_VISIBLE(win)) {
 		place();
+		on_view = -1;	/* until hildon-desktop says */
 		gtk_widget_show(win);
-		if (!feed_time || g_get_monotonic_time() - feed_time >
-				  (gint64)FEED_EVERY * G_USEC_PER_SEC)
-			feed_update();
-		if (g_get_monotonic_time() >= weather_next)
-			weather_update();
 	} else if (!want && GTK_WIDGET_VISIBLE(win))
 		gtk_widget_hide(win);
+	seen_changed();	/* (the updates that are due) */
 }
 
 /* the look: the root window's _HILDON_MEEGO_LOOK (hildon-desktop's) */
@@ -2975,17 +3272,16 @@ static GdkFilterReturn root_filter(GdkXEvent *xe, GdkEvent *e, gpointer data)
 	return GDK_FILTER_CONTINUE;
 }
 
-/* the page on the view in front again (hildon-desktop's
- * _HILDON_APPLET_ON_CURRENT_DESKTOP): an update if it is old */
+/* the page on the view in front or not (hildon-desktop's
+ * _HILDON_APPLET_ON_CURRENT_DESKTOP, deleted for another view, an
+ * application in front, the display off): updates when it is seen again
+ * and they are due */
 static gboolean property_cb(GtkWidget *w, GdkEventProperty *e, gpointer data)
 {
 	(void)w, (void)data;
-	if (e->atom == gdk_atom_intern_static_string("_HILDON_APPLET_ON_CURRENT_DESKTOP") &&
-	    e->state == GDK_PROPERTY_NEW_VALUE) {
-		if (g_get_monotonic_time() - feed_time > (gint64)FEED_EVERY * G_USEC_PER_SEC)
-			feed_update();
-		if (g_get_monotonic_time() >= weather_next)
-			weather_update();
+	if (e->atom == gdk_atom_intern_static_string("_HILDON_APPLET_ON_CURRENT_DESKTOP")) {
+		on_view = e->state == GDK_PROPERTY_NEW_VALUE;
+		seen_changed();
 	}
 	return FALSE;
 }
@@ -3064,9 +3360,10 @@ static gboolean place_cb(gpointer data)
 	weather_hint = NULL;
 	weather_load_cache();
 	weather_next = 0;
-	if (look_on && !closed)
-		weather_update();
+	weather_fails = 0;
+	refresh_due();
 	rebuild();
+	schedule();
 	return FALSE;
 }
 
@@ -3081,9 +3378,13 @@ static void settings_changed(GConfClient *c, guint id, GConfEntry *e, gpointer d
 		g_ptr_array_set_size(items, 0);
 		g_ptr_array_set_size(feed, 0);
 		feed_time = 0;
+		feed_next = 0;
+		feed_fails = 0;
+		g_free(feed_etag);
+		feed_etag = NULL;
 		rebuild();
-		if (look_on)
-			feed_update();
+		refresh_due();
+		schedule();
 	} else if (!strcmp(e->key, KEY_WEATHER_ICONS)) {
 		iconset_reset();
 		rebuild();
@@ -3095,28 +3396,11 @@ static void settings_changed(GConfClient *c, guint id, GConfEntry *e, gpointer d
 		/* a section on or off */
 		calendar_reload();
 		rebuild();
-		if (look_on && !closed) {
-			if (show_feed && !feed->len && !feed_busy)
-				feed_update();
-			if (show_weather && g_get_monotonic_time() >= weather_next)
-				weather_update();
-		}
+		if (show_feed && !feed->len && feed_next != G_MAXINT64)
+			feed_next = 0;
+		refresh_due();
+		schedule();
 	}
-}
-
-/* the date at midnight, the times of the items */
-static gboolean minute_cb(gpointer data)
-{
-	static int day = -1;
-	GDateTime *now = g_date_time_new_now_local();
-	int d = g_date_time_get_day_of_year(now);
-
-	(void)data;
-	g_date_time_unref(now);
-	if ((day != -1 && d != day) || time(NULL) >= cal_next)
-		reload_soon();
-	day = d;
-	return TRUE;
 }
 
 static void size_changed(GdkScreen *s, gpointer data)
@@ -3150,6 +3434,8 @@ static double hildon_scale(void)
 int main(int argc, char **argv)
 {
 	GdkWindow *root;
+	GDBusConnection *system_bus;
+	GNetworkMonitor *netmon;
 
 	setlocale(LC_ALL, "");
 	bindtextdomain(DOMAIN, LOCALEDIR);
@@ -3161,6 +3447,21 @@ int main(int argc, char **argv)
 	gconf = gconf_client_get_default();
 	gconf_client_add_dir(gconf, KEY_DIR, GCONF_CLIENT_PRELOAD_NONE, NULL);
 	gconf_client_notify_add(gconf, KEY_DIR, settings_changed, NULL, NULL, NULL);
+	system_bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
+	if (system_bus) {
+		/* (from any sender: where there is no mce, pro1x-standby -e) */
+		g_dbus_connection_signal_subscribe(system_bus, NULL, "com.nokia.mce.signal",
+						   "display_status_ind", "/com/nokia/mce/signal",
+						   NULL, G_DBUS_SIGNAL_FLAGS_NONE, mce_signal, NULL,
+						   NULL);
+		g_dbus_connection_call(system_bus, "com.nokia.mce", "/com/nokia/mce/request",
+				       "com.nokia.mce.request", "get_display_status", NULL,
+				       G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NO_AUTO_START, 5000,
+				       NULL, mce_status_cb, NULL);
+	}
+	netmon = g_network_monitor_get_default();
+	net_up = g_network_monitor_get_network_available(netmon);
+	g_signal_connect(netmon, "network-changed", G_CALLBACK(network_changed), NULL);
 	bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
 	if (bus) {
 		g_dbus_connection_signal_subscribe(bus, "com.nokia.modest", NULL, NULL, NULL, NULL,
@@ -3222,8 +3523,6 @@ int main(int argc, char **argv)
 	gdk_window_set_events(root, gdk_window_get_events(root) | GDK_PROPERTY_CHANGE_MASK);
 	gdk_window_add_filter(root, root_filter, NULL);
 	look_update();
-	g_timeout_add_seconds(60, feed_timer, NULL);
-	g_timeout_add_seconds(60, minute_cb, NULL);
 	gtk_main();
 	return 0;
 }

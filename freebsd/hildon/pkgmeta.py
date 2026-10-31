@@ -89,8 +89,10 @@ LOCAL = {
                       'included.', ['UNKNOWN']),
     # 1.1: the weather (Open-Meteo) and the calendar's appointments
     # (calendar-backend), each section on or off; 1.2: the posts' pictures
-    # as the N9's feeds showed theirs
-    'pro1x-events': ('1.2', "The Nokia N9's Events page for Hildon's MeeGo-like look",
+    # as the N9's feeds showed theirs; 1.3: nothing while unseen (display
+    # off, another view), one timer, both updates together, If-None-Match,
+    # backoff, GConf written only where it differs
+    'pro1x-events': ('1.3', "The Nokia N9's Events page for Hildon's MeeGo-like look",
                      'pro1x-events shows on the first home view the date, the weather '
                      "of a place (Open-Meteo, MeeCast's icons where MeeCast is installed), "
                      'the missed calls, messages and chats (rtcom-eventlogger), unread '
@@ -115,7 +117,8 @@ LOCAL = {
                   '(pro1x_battery); off otherwise and while suspended, steady, '
                   'without a timer (freebsd/pm/tools/pro1x-led), with its rc.d '
                   'script.', ['BSD2CLAUSE']),
-    'pro1x-volume-osd': ('1.0', "The Nokia N9's volume bar for Hildon's MeeGo-like look",
+    # 1.1: not while the display is off (mce's display_status_ind)
+    'pro1x-volume-osd': ('1.1', "The Nokia N9's volume bar for Hildon's MeeGo-like look",
                          'pro1x-volume-osd shows the volume of PulseAudio\'s default sink '
                          "as the N9's system UI does when it changes, while Hildon's "
                          'MeeGo-like look is on; a tap or a drag sets it '

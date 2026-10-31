@@ -39,7 +39,7 @@ export DEBIAN_FRONTEND=noninteractive
 MAINTAINER="Sebastian Matkovich <sebastian.matkovich@gmail.com>"
 HOMEPAGE=https://github.com/smatkovi/pro1x-maemo-leste
 ARCH=$(dpkg --print-architecture)
-declare -A VERSIONS=([pro1x-events]=1.2 [pro1x-volume-osd]=1.0 [pro1x-alarmboot]=1.3)
+declare -A VERSIONS=([pro1x-events]=1.3 [pro1x-volume-osd]=1.1 [pro1x-alarmboot]=1.3)
 log() { echo ">> $*"; }
 
 # Build dependencies (49-events.sh's and 49-volume-osd.sh's). The -dev

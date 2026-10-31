@@ -15,6 +15,10 @@
  * with 5 mm below it, 1.5 s on screen after the last change, faded in and
  * out in 250 ms. The graphics are the N9's own where its theme (blanco,
  * Nokia's, not part of this) is installed, else drawn alike.
+ *
+ * Not while the display is off or shows the stand-by screen (mce's
+ * display_status_ind "off" or "lpm"): a volume key in the pocket changes
+ * the volume without a window mapped and faded for nobody.
  */
 #include <math.h>
 #include <stdio.h>
@@ -52,6 +56,7 @@ static pa_context *ctx;
 static char *sink;
 static pa_cvolume sink_volume;
 static gboolean known;		/* the first volume is no change */
+static gboolean display_on = TRUE;	/* mce's display_status_ind */
 static double volume;		/* 0..1 */
 static gboolean muted;
 
@@ -289,7 +294,7 @@ static void sink_cb(pa_context *c, const pa_sink_info *i, int eol, void *data)
 	if (known && (fabs(v - volume) > 0.001 || !i->mute != !muted)) {
 		volume = v;
 		muted = i->mute;
-		if (gconf_client_get_bool(gconf, KEY_MEEGO, NULL))
+		if (display_on && gconf_client_get_bool(gconf, KEY_MEEGO, NULL))
 			show();
 	}
 	volume = v;
@@ -370,6 +375,42 @@ static void connect_pulse(void)
 		fprintf(stderr, "pro1x-volume-osd: %s\n", pa_strerror(pa_context_errno(ctx)));
 }
 
+/* mce: "on", "dimmed", "off", "lpm" (the stand-by screen, patches/lpm) */
+static void mce_signal(GDBusConnection *c, const char *sender, const char *path,
+		       const char *iface, const char *signal, GVariant *p, gpointer data)
+{
+	const char *s;
+
+	(void)c, (void)sender, (void)path, (void)iface, (void)signal, (void)data;
+	if (!g_variant_is_of_type(p, G_VARIANT_TYPE("(s)")))
+		return;
+	g_variant_get(p, "(&s)", &s);
+	display_on = strcmp(s, "off") && strcmp(s, "lpm");
+	if (!display_on && win && GTK_WIDGET_VISIBLE(win)) {
+		/* (nobody sees it fade) */
+		if (fade_id)
+			g_source_remove(fade_id);
+		if (hide_id)
+			g_source_remove(hide_id);
+		fade_id = hide_id = 0;
+		fade_dir = 0;
+		opacity = 0;
+		dragging = FALSE;
+		gtk_widget_hide(win);
+	}
+}
+
+static void mce_status_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	GVariant *v = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), res, NULL);
+
+	(void)data;
+	if (v) {
+		mce_signal(NULL, NULL, NULL, NULL, NULL, v, NULL);
+		g_variant_unref(v);
+	}
+}
+
 /* A tap or a drag sets the volume where it is */
 static gboolean pointer_cb(GtkWidget *w, GdkEvent *e, gpointer data)
 {
@@ -393,6 +434,7 @@ int main(int argc, char **argv)
 {
 	GdkScreen *s;
 	GdkColormap *rgba;
+	GDBusConnection *sys;
 
 	gtk_init(&argc, &argv);
 	gconf = gconf_client_get_default();
@@ -413,6 +455,17 @@ int main(int argc, char **argv)
 	g_signal_connect(win, "button-release-event", G_CALLBACK(pointer_cb), NULL);
 	g_signal_connect(win, "motion-notify-event", G_CALLBACK(pointer_cb), NULL);
 
+	if ((sys = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, NULL))) {
+		/* (any sender: where no mce runs, pro1x-standby says it) */
+		g_dbus_connection_signal_subscribe(sys, NULL, "com.nokia.mce.signal",
+						   "display_status_ind", "/com/nokia/mce/signal",
+						   NULL, G_DBUS_SIGNAL_FLAGS_NONE, mce_signal, NULL,
+						   NULL);
+		g_dbus_connection_call(sys, "com.nokia.mce", "/com/nokia/mce/request",
+				       "com.nokia.mce.request", "get_display_status", NULL,
+				       G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NO_AUTO_START, 5000,
+				       NULL, mce_status_cb, NULL);
+	}
 	pa_loop = pa_glib_mainloop_new(NULL);
 	connect_pulse();
 	gtk_main();

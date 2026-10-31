@@ -128,6 +128,61 @@ static gboolean gconf_number(GConfClient *gc, const char *key, double *r)
 	return ok;
 }
 
+/* Written only where they differ: each write is one of gconfd's files on
+ * the flash, and the page acts on every change (a new place or account is
+ * asked for over the network at once) */
+static void set_bool(GConfClient *gc, const char *key, gboolean v)
+{
+	GConfValue *cur = gconf_client_get(gc, key, NULL);
+	gboolean same = cur && cur->type == GCONF_VALUE_BOOL && !gconf_value_get_bool(cur) == !v;
+
+	if (cur)
+		gconf_value_free(cur);
+	if (!same)
+		gconf_client_set_bool(gc, key, v, NULL);
+}
+
+static void set_int(GConfClient *gc, const char *key, int v)
+{
+	GConfValue *cur = gconf_client_get(gc, key, NULL);
+	gboolean same = cur && cur->type == GCONF_VALUE_INT && gconf_value_get_int(cur) == v;
+
+	if (cur)
+		gconf_value_free(cur);
+	if (!same)
+		gconf_client_set_int(gc, key, v, NULL);
+}
+
+static void set_float(GConfClient *gc, const char *key, double v)
+{
+	GConfValue *cur = gconf_client_get(gc, key, NULL);
+	gboolean same = cur && cur->type == GCONF_VALUE_FLOAT && gconf_value_get_float(cur) == v;
+
+	if (cur)
+		gconf_value_free(cur);
+	if (!same)
+		gconf_client_set_float(gc, key, v, NULL);
+}
+
+static void set_string(GConfClient *gc, const char *key, const char *v)
+{
+	char *cur = gconf_client_get_string(gc, key, NULL);
+
+	if (g_strcmp0(cur, v))
+		gconf_client_set_string(gc, key, v, NULL);
+	g_free(cur);
+}
+
+static void unset(GConfClient *gc, const char *key)
+{
+	GConfValue *cur = gconf_client_get_without_default(gc, key, NULL);
+
+	if (cur) {
+		gconf_value_free(cur);
+		gconf_client_unset(gc, key, NULL);
+	}
+}
+
 static void set_number(GtkWidget *entry, double v)
 {
 	char buf[G_ASCII_DTOSTR_BUF_SIZE];
@@ -518,28 +573,27 @@ osso_return_t execute(osso_context_t *osso, gpointer data, gboolean user_activat
 			continue;
 		}
 		for (i = 0; i < G_N_ELEMENTS(sections); i++)
-			gconf_client_set_bool(gc, sections[i].key,
-					      hildon_check_button_get_active(
-						      HILDON_CHECK_BUTTON(checks[i])), NULL);
+			set_bool(gc, sections[i].key,
+				 hildon_check_button_get_active(HILDON_CHECK_BUTTON(checks[i])));
 		a = hildon_picker_button_get_active(HILDON_PICKER_BUTTON(days));
-		gconf_client_set_int(gc, KEY_CAL_DAYS,
-				     day_counts[CLAMP(a, 0, (int)G_N_ELEMENTS(day_counts) - 1)], NULL);
+		set_int(gc, KEY_CAL_DAYS,
+			day_counts[CLAMP(a, 0, (int)G_N_ELEMENTS(day_counts) - 1)]);
 		/* (the place last: the page takes all three when it changes) */
 		if (*np) {
-			gconf_client_set_float(gc, KEY_LAT, la, NULL);
-			gconf_client_set_float(gc, KEY_LON, lo, NULL);
-			gconf_client_set_string(gc, KEY_PLACE, np, NULL);
+			set_float(gc, KEY_LAT, la);
+			set_float(gc, KEY_LON, lo);
+			set_string(gc, KEY_PLACE, np);
 		} else {
-			gconf_client_unset(gc, KEY_LAT, NULL);
-			gconf_client_unset(gc, KEY_LON, NULL);
-			gconf_client_unset(gc, KEY_PLACE, NULL);
+			unset(gc, KEY_LAT);
+			unset(gc, KEY_LON);
+			unset(gc, KEY_PLACE);
 		}
 		if (*ns && *nt) {
-			gconf_client_set_string(gc, KEY_SERVER, ns, NULL);
-			gconf_client_set_string(gc, KEY_TOKEN, nt, NULL);
+			set_string(gc, KEY_SERVER, ns);
+			set_string(gc, KEY_TOKEN, nt);
 		} else {
-			gconf_client_unset(gc, KEY_TOKEN, NULL);
-			gconf_client_unset(gc, KEY_SERVER, NULL);
+			unset(gc, KEY_TOKEN);
+			unset(gc, KEY_SERVER);
 		}
 		g_free(ns), g_free(nt), g_free(np);
 		break;
