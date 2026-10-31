@@ -78,24 +78,56 @@ if [ -n "$PKGS" ]; then
 	n=0
 	: > "$WORK/spec.pkgs"
 	: > "$P/users"
+	: > "$P/samples"
 	while read -r f; do
 		bsdtar -xf "$f" -C "$R" --exclude '+*' 2> /dev/null
 		bsdtar -cf - --format=mtree --exclude '+*' @"$f" | grep -v '^#' \
 			>> "$WORK/spec.pkgs"
-		# The users and groups its install script would add with pw(8)
+		# The users and groups its install script would add with pw(8),
+		# and its @sample files (into the second argument's file): the
+		# configuration pkg copies from FILE.sample to FILE when there is
+		# none, in a Lua post-install script per file
 		bsdtar -xOf "$f" +MANIFEST | python3 -I -c '
-import json, re, sys
+import json, os, re, sys
 m = json.load(sys.stdin)
 for s in m.get("scripts", {}).values():
     for g in re.finditer(r"groupadd (\S+) -g (\d+)", s):
         print("group", g.group(1), g.group(2), sep="\t")
     for u in re.finditer(r"useradd (\S+) -u (\d+) -g (\d+)\s+-c \"([^\"]*)\" -d (\S+) -s (\S+)", s):
         print("user", *u.groups()[:3], u.group(5), u.group(6), u.group(4), sep="\t")
-' >> "$P/users"
+prefix = m.get("prefix", "/usr/local")
+full = lambda a: a if a.startswith("/") else os.path.join(prefix, a)
+with open(sys.argv[1], "a") as out:
+    for s in m.get("lua_scripts", {}).get("post-install", []):
+        a = re.match(r"-- args: (.*)", s)
+        if a is None or "pkg.copy(sample_file" not in s:
+            continue
+        a = a.group(1).split()
+        if not a:
+            continue
+        src = full(a[0])
+        dst = full(a[1]) if len(a) > 1 else re.sub(r"\.sample$", "", src)
+        print(src, dst, sep="\t", file=out)
+' "$P/samples" >> "$P/users"
 		n=$((n + 1))
 	done < "$P/list"
 	specs+=("$WORK/spec.pkgs")
 	log "$n packages unpacked"
+	# pkg's @sample: the configuration files that a package installs as
+	# FILE.sample, copied to FILE where there is none, as pkg install
+	# does (and the test VM, whose packages pkg installed, has them).
+	# Without them PulseAudio refused to start (no default.pa: "Daemon
+	# startup without any loaded modules"), and with it went
+	# module-suspend-on-idle, which closes /dev/dsp 5 s after the last
+	# sound so that pro1x-audiod powers the codec path down.
+	ns=0
+	while IFS=$'\t' read -r src dst; do
+		if [ -f "$R$src" ] && [ ! -e "$R$dst" ]; then
+			cp -p "$R$src" "$R$dst"
+			ns=$((ns + 1))
+		fi
+	done < "$P/samples"
+	log "$ns configuration files from their .sample (pkg's @sample)"
 
 	if [ -n "$HILDON" ]; then
 		# Mesa's software renderer (hildon-desktop draws with GLES)
