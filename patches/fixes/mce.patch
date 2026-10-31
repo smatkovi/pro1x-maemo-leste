@@ -1,0 +1,18 @@
+The battery low LED pattern (pro1x-maemo-leste patches/fixes): mce's
+battery module raises PatternBatteryLow while upower reports the warning
+level, as the N900's never did (compiled out). The Pro1X's
+mce.ini.d/50-pro1x.ini lists and defines it (a red flash with the display
+off); with mce.ini's own list, which lacks it, nothing changes.
+
+diff --git a/src/modules/battery-upower.c b/src/modules/battery-upower.c
+--- a/src/modules/battery-upower.c
++++ b/src/modules/battery-upower.c
+@@ -54,7 +54,7 @@
+ #define UPDATE_DELAY 100
+ 
+ /** Whether to support legacy pattery low led pattern; nonzero for yes */
+-#define SUPPORT_BATTERY_LOW_LED_PATTERN 0
++#define SUPPORT_BATTERY_LOW_LED_PATTERN 1
+ 
+ /** How long we want battery state to be forced after charger state changed */
+ #define FORCE_STATE_TIME 10

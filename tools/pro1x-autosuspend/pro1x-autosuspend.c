@@ -39,6 +39,11 @@
  *     controller on it, /sys/bus/serial/devices/serial0): then it is left
  *     alone, and with kernel patch 0030 the UART wakes the system only
  *     while Bluetooth is up
+ *   - the LEDs in LedsOff are switched off and get their brightness back
+ *     after it: mce's software LED patterns run from its timers, which do
+ *     not run while the system sleeps, and leds-qcom-lpg keeps an LED on
+ *     through a suspend, so a pattern's "on" half would last the whole
+ *     sleep. An LED with a kernel trigger is left alone.
  *
  *   pro1x-autosuspend             run (/etc/init.d/pro1x-autosuspend)
  *   pro1x-autosuspend --test N    suspend once now with a wake-up after N s,
@@ -47,7 +52,9 @@
  * Settings: /etc/pro1x-autosuspend.conf, group [autosuspend] with Delay,
  * WakeInterval (0: no periodic wake-up) and StayAwake, all in seconds;
  * StopServices (OpenRC services; not set: see above, empty: none) and
- * NoWakeup (platform devices) as lists; SuspendOnUSB (true/false).
+ * NoWakeup (platform devices) and LedsOff (names in /sys/class/leds; default
+ * the status LED's red:status, green:status and blue:status; empty: none) as
+ * lists; SuspendOnUSB (true/false).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -71,7 +78,7 @@
 static int delay_s = 30, wake_interval_s = 900, stay_awake_s = 45;
 static gboolean suspend_on_usb;
 /* stop_services NULL: hexagonrpcd only on kernels without patch 0031 */
-static char **stop_services, **no_wakeup;
+static char **stop_services, **no_wakeup, **leds_off;
 static gboolean display_off, call_active;
 static gint64 display_off_us, awake_until_us;
 static guint check_id;
@@ -262,7 +269,7 @@ static gboolean serdev_may_wake(const char *dev)
  * devices that must not wake it without their wake-up. stopped and wakeup
  * remember what to give back (restore_after).
  */
-static void prepare_suspend(GPtrArray *stopped, GPtrArray *wakeup)
+static void prepare_suspend(GPtrArray *stopped, GPtrArray *wakeup, GPtrArray *leds)
 {
 	static char *hexagonrpcd[] = { "pro1x-hexagonrpcd", NULL };
 	char **services = stop_services;
@@ -286,10 +293,29 @@ static void prepare_suspend(GPtrArray *stopped, GPtrArray *wakeup)
 		if (!strcmp(g_strstrip(was), "enabled") && write_str(path, "disabled") == 0)
 			g_ptr_array_add(wakeup, g_steal_pointer(&path));
 	}
+	/* leds: pairs of the brightness file and the value to give back */
+	for (char **l = leds_off; l && *l; l++) {
+		g_autofree char *trig = g_strdup_printf("/sys/class/leds/%s/trigger", *l);
+		g_autofree char *path = g_strdup_printf("/sys/class/leds/%s/brightness", *l);
+		g_autofree char *t = NULL, *was = NULL;
+
+		if (!**l || !g_file_get_contents(path, &was, NULL, NULL))
+			continue;
+		/* "[none] timer pattern ...": an LED driven by a trigger stays */
+		if (g_file_get_contents(trig, &t, NULL, NULL) && !strstr(t, "[none]"))
+			continue;
+		g_strstrip(was);
+		if (!strcmp(was, "0") || write_str(path, "0") != 0)
+			continue;
+		g_ptr_array_add(leds, g_steal_pointer(&path));
+		g_ptr_array_add(leds, g_steal_pointer(&was));
+	}
 }
 
-static void restore_after(GPtrArray *stopped, GPtrArray *wakeup)
+static void restore_after(GPtrArray *stopped, GPtrArray *wakeup, GPtrArray *leds)
 {
+	for (guint i = 0; i + 1 < leds->len; i += 2)
+		write_str(leds->pdata[i], leds->pdata[i + 1]);
 	for (guint i = 0; i < wakeup->len; i++)
 		write_str(wakeup->pdata[i], "enabled");
 	for (guint i = 0; i < stopped->len; i++)
@@ -308,6 +334,7 @@ static gboolean suspend_once(int alarm_s)
 	guint64 vlow0 = stat_count("vlow"), vmin0 = stat_count("vmin"), expirations;
 	g_autoptr(GPtrArray) stopped = g_ptr_array_new_with_free_func(g_free);
 	g_autoptr(GPtrArray) wakeup = g_ptr_array_new_with_free_func(g_free);
+	g_autoptr(GPtrArray) leds = g_ptr_array_new_with_free_func(g_free);
 	int err;
 
 	syslog(LOG_DEBUG, "reading wakeup_count");
@@ -316,10 +343,10 @@ static gboolean suspend_once(int alarm_s)
 		return FALSE;
 	}
 	/* before the handshake: stopping a service may itself be a wake-up event */
-	prepare_suspend(stopped, wakeup);
+	prepare_suspend(stopped, wakeup, leds);
 	if (!read_wakeup_count(count, sizeof(count))) {
 		syslog(LOG_WARNING, "cannot read /sys/power/wakeup_count");
-		restore_after(stopped, wakeup);
+		restore_after(stopped, wakeup, leds);
 		return FALSE;
 	}
 	arm_alarm(alarm_s);
@@ -327,7 +354,7 @@ static gboolean suspend_once(int alarm_s)
 	if (write_str("/sys/power/wakeup_count", count) != 0) {
 		syslog(LOG_INFO, "wake-up event in progress, not suspending");
 		arm_alarm(0);
-		restore_after(stopped, wakeup);
+		restore_after(stopped, wakeup, leds);
 		return FALSE;
 	}
 	syslog(LOG_INFO, "suspending");
@@ -340,7 +367,7 @@ static gboolean suspend_once(int alarm_s)
 	if (alarm_fd >= 0)
 		while (read(alarm_fd, &expirations, sizeof(expirations)) > 0)
 			;
-	restore_after(stopped, wakeup);
+	restore_after(stopped, wakeup, leds);
 	if (err) {
 		syslog(LOG_WARNING, "suspend failed: %s", strerror(err));
 		return FALSE;
@@ -495,6 +522,10 @@ static void load_config(void)
 		g_strfreev(stop_services);
 		stop_services = g_key_file_get_string_list(kf, "autosuspend", "StopServices", NULL, NULL);
 	}
+	if (g_key_file_has_key(kf, "autosuspend", "LedsOff", NULL)) {
+		g_strfreev(leds_off);
+		leds_off = g_key_file_get_string_list(kf, "autosuspend", "LedsOff", NULL, NULL);
+	}
 	if (g_key_file_has_key(kf, "autosuspend", "NoWakeup", NULL)) {
 		g_strfreev(no_wakeup);
 		no_wakeup = g_key_file_get_string_list(kf, "autosuspend", "NoWakeup", NULL, NULL);
@@ -522,6 +553,7 @@ int main(int argc, char **argv)
 	if (alarm_fd < 0)
 		syslog(LOG_WARNING, "no wake-up timer (%m): no periodic wake-ups");
 	no_wakeup = g_strsplit("4a8c000.serial", ";", -1);
+	leds_off = g_strsplit("red:status;green:status;blue:status", ";", -1);
 	load_config();
 	if (test)
 		return suspend_once(atoi(argv[2])) ? 0 : 1;
