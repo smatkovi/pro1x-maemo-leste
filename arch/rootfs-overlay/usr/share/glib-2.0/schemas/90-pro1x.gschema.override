@@ -1,0 +1,7 @@
+# Pro1X (Arch, Phosh): the display off after 2 minutes without input
+# instead of GNOME's 5 (Phosh blanks after the session's idle delay).
+# Needs glib-compile-schemas /usr/share/glib-2.0/schemas after a change;
+# a user's own setting (Settings, Power) wins. Back: remove this file and
+# compile again.
+[org.gnome.desktop.session]
+idle-delay=uint32 120

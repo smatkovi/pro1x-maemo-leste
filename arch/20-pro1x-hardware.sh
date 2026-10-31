@@ -159,6 +159,8 @@ cp -a "$REPO/arch/rootfs-overlay/." "$MNT/"
 install -m 644 "$REPO/kali/rootfs-overlay/etc/ssh/sshd_config.d/pro1x.conf" \
 	"$MNT/etc/ssh/sshd_config.d/pro1x.conf"
 install -m 644 "$REPO/kali/rootfs-overlay/etc/default/gpsd" "$MNT/etc/default/gpsd"
+# write-back every 15 s instead of 5 (Btrfs commits every 30 s by itself)
+install -D -m 644 "$REPO/rootfs-overlay/etc/sysctl.d/60-pro1x-writeback.conf" "$MNT/etc/sysctl.d/60-pro1x-writeback.conf"
 # PipeWire's card suspend after 3 s, NetworkManager's Wi-Fi power save (as Kali)
 install -D -m 644 "$REPO/kali/rootfs-overlay/etc/wireplumber/wireplumber.conf.d/50-pro1x-suspend.conf" \
 	"$MNT/etc/wireplumber/wireplumber.conf.d/50-pro1x-suspend.conf"
@@ -190,6 +192,14 @@ chmod 440 /etc/sudoers.d/10-wheel
 # root on the loop device the initramfs sets up; /host is moved in by it
 grep -q '^/dev/loop0' /etc/fstab || echo '/dev/loop0 / ext4 defaults,noatime 0 0' >> /etc/fstab
 mkdir -p /host
+# Bluetooth off until switched on (Phosh's quick setting; as on Leste)
+if [ -f /etc/bluetooth/main.conf ]; then
+	sed -i 's/^#\?AutoEnable=.*/AutoEnable=false/' /etc/bluetooth/main.conf
+	grep -q '^AutoEnable=false' /etc/bluetooth/main.conf ||
+		printf '\n[Policy]\nAutoEnable=false\n' >> /etc/bluetooth/main.conf
+fi
+# rootfs-overlay's 90-pro1x.gschema.override: the display off after 2 min
+glib-compile-schemas /usr/share/glib-2.0/schemas
 
 systemctl enable pro1x-rtc.service pro1x-hexagonrpcd.service pro1x-sensors.service \
 	pro1x-gnss.service pro1x-steps.service pro1x-audio-init.service pro1x-usb0.service \

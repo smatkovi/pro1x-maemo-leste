@@ -113,6 +113,21 @@ rc-update add pro1x-rmtfs default
 rc-update add pro1x-modem-wait default
 rc-update add pro1x-cal default
 rc-update add bluetooth default
+# Bluetooth off until switched on (bluetoothctl power on, or an application
+# that powers the adapter): BlueZ powers every adapter at its start
+# (AutoEnable, the default since 5.65), which kept the WCN3950's Bluetooth
+# part, its UART and their wake-ups going for nothing. The FM radio brings
+# hci0 up by itself (kernel patch 0014). Back: AutoEnable=true.
+if [ -f /etc/bluetooth/main.conf ]; then
+  sed -i 's/^#\?AutoEnable=.*/AutoEnable=false/' /etc/bluetooth/main.conf
+  grep -q '^AutoEnable=false' /etc/bluetooth/main.conf ||
+    printf '\n[Policy]\nAutoEnable=false\n' >> /etc/bluetooth/main.conf
+fi
+# The display's backlight time-out 2 minutes (Settings, Display; Leste's
+# default 30 s), as a system-wide gconf default: a value the user sets
+# wins. mce's stand-by screen follows for LowPowerModeBlankTimeout s.
+gconftool-2 --direct --config-source=xml:readwrite:/etc/gconf/gconf.xml.defaults \
+  --type int --set /system/osso/dsm/display/display_dim_timeout 120
 
 # --- Audio: UCM profile and helpers from the NixOS port --------------------
 log "UCM profile Pro1X"

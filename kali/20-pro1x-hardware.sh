@@ -101,6 +101,8 @@ install -m 644 "$REPO/rootfs-overlay/etc/udev/rules.d/81-pro1x-sensors.rules" \
 install -m 755 "$REPO/rootfs-overlay/usr/local/sbin/pro1x-wlan-mac" \
 	"$REPO/rootfs-overlay/usr/local/sbin/pro1x-wlan-powersave" "$MNT/usr/local/sbin/"
 install -m 644 "$REPO/rootfs-overlay/etc/modprobe.d/pro1x-dt2w.conf" "$MNT/etc/modprobe.d/"
+# write-back every 15 s instead of 5 (the root's commit=30 below)
+install -D -m 644 "$REPO/rootfs-overlay/etc/sysctl.d/60-pro1x-writeback.conf" "$MNT/etc/sysctl.d/60-pro1x-writeback.conf"
 # After the packages, whose maintainer scripts write /etc/default/gpsd.
 cp -a "$REPO/kali/rootfs-overlay/." "$MNT/"
 
@@ -128,8 +130,17 @@ id kali > /dev/null 2>&1 || useradd -m -s "$shell" -G "$groups" kali
 echo kali:kali | chpasswd
 
 # root on the loop device the initramfs sets up; /host is moved in by it
-grep -q '^/dev/loop0' /etc/fstab || echo '/dev/loop0 / ext4 defaults,noatime 0 0' >> /etc/fstab
+# with the initramfs's options (pro1x-loop-root), else systemd's remount
+# of / drops lazytime again
+grep -q '^/dev/loop0' /etc/fstab || echo '/dev/loop0 / ext4 defaults,noatime,lazytime,commit=30 0 0' >> /etc/fstab
 mkdir -p /host
+# Bluetooth off until switched on (as on Leste, scripts/45): BlueZ powered
+# every adapter at its start (AutoEnable)
+if [ -f /etc/bluetooth/main.conf ]; then
+	sed -i 's/^#\?AutoEnable=.*/AutoEnable=false/' /etc/bluetooth/main.conf
+	grep -q '^AutoEnable=false' /etc/bluetooth/main.conf ||
+		printf '\n[Policy]\nAutoEnable=false\n' >> /etc/bluetooth/main.conf
+fi
 
 systemctl enable pro1x-rtc.service pro1x-hexagonrpcd.service pro1x-sensors.service pro1x-gnss.service pro1x-steps.service \
 	pro1x-audio-init.service pro1x-usb0.service rmtfs.service tqftpserv.service \

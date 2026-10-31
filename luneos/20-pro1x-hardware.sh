@@ -70,6 +70,12 @@ cp -a "$REPO/luneos/rootfs-overlay/." "$MNT/"
 log "configuration"
 # The PinePhone's boot partition does not exist; systemd would wait for it.
 sed -i '/[[:space:]]\/boot[[:space:]]/d' "$MNT/etc/fstab"
+# A line for / gets the initramfs's options (pro1x-loop-root), else
+# systemd's remount of / drops lazytime again; write-back every 15 s
+awk 'BEGIN { OFS = "\t" } $1 !~ /^#/ && $2 == "/" {
+	if ($4 !~ /lazytime/) $4 = $4 ",lazytime"; if ($4 !~ /commit=/) $4 = $4 ",commit=30" } { print }' \
+	"$MNT/etc/fstab" > "$MNT/etc/fstab.pro1x" && cat "$MNT/etc/fstab.pro1x" > "$MNT/etc/fstab" && rm "$MNT/etc/fstab.pro1x"
+install -D -m 644 "$REPO/rootfs-overlay/etc/sysctl.d/60-pro1x-writeback.conf" "$MNT/etc/sysctl.d/60-pro1x-writeback.conf"
 echo luneos > "$MNT/etc/hostname"
 # The USB link: the kernel's built-in CDC composite gadget (g_cdc, as under
 # Leste) holds the controller from boot on, so LuneOS's configfs gadget

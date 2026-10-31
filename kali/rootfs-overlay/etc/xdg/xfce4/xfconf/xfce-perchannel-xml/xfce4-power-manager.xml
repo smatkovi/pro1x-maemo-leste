@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  Pro1X: Kali's own settings (kali-themes: the power button, no panel
+  label) and the display off after 2 minutes without input, on the
+  battery and on a charger (xfce4-power-manager's defaults: 5 and 10
+  minutes on the battery, 10 and 15 on a charger). kali-themes copies its
+  file here only when there is none, so upgrades keep this one. A user's
+  own settings (Settings, Power Manager) win over these.
+-->
+<channel name="xfce4-power-manager" version="1.0">
+  <property name="xfce4-power-manager" type="empty">
+    <property name="power-button-action" type="uint" value="3"/>
+    <property name="show-panel-label" type="int" value="0"/>
+    <property name="dpms-enabled" type="bool" value="true"/>
+    <property name="dpms-on-battery-sleep" type="uint" value="2"/>
+    <property name="dpms-on-battery-off" type="uint" value="2"/>
+    <property name="dpms-on-ac-sleep" type="uint" value="2"/>
+    <property name="dpms-on-ac-off" type="uint" value="2"/>
+  </property>
+</channel>

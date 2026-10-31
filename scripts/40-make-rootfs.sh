@@ -106,6 +106,12 @@ sudo -n install -m 0755 "$REPO/initramfs/init-bottom/pro1x-move-host" \
 echo ">> adjusting fstab (no separate /boot on this device)"
 sudo -n sed -i 's|^/dev/mmcblk0p1 /boot|#&  # Pro1X: /boot lives in the rootfs image|' \
   "$DST_MNT/etc/fstab"
+# The root's options as the initramfs mounts it (pro1x-loop-root: journal
+# commits every 30 s, timestamps written lazily): checkroot.sh remounts /
+# with the fstab's options, "defaults" without a line, which would drop
+# lazytime again. Pass 0: the image is checked by nobody at boot.
+grep -q '^/dev/loop0[[:space:]]' "$DST_MNT/etc/fstab" ||
+  echo '/dev/loop0 / ext4 rw,lazytime,commit=30 0 0' | sudo -n tee -a "$DST_MNT/etc/fstab" > /dev/null
 
 echo ">> setting up access"
 binfmt_use_static

@@ -28,7 +28,8 @@ SIZE=${SIZE:-16G}
 SRC=/mnt/arch-ext4
 TOP=/mnt/arch-btrfs
 ROOT=/mnt/arch-root
-OPTS=noatime,compress=zstd:1
+# lazytime: timestamps written lazily (as the initramfs mounts the root)
+OPTS=noatime,lazytime,compress=zstd:1
 log() { echo ">> $*"; }
 
 [ "$(blkid -o value -s TYPE "$IMG")" = ext4 ] || { echo "$IMG is not ext4"; exit 1; }
