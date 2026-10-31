@@ -127,7 +127,8 @@ gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
 for p in linux-aarch64 linux-aarch64-headers mkinitcpio linux-firmware; do
 	! pacman -Q "$p" > /dev/null 2>&1 || pacman -Rdd --noconfirm "$p" > /dev/null
 done
-pacman -Qq | grep '^linux-firmware-' | xargs -r pacman -Rdd --noconfirm > /dev/null
+# (none left on a second run, after an update that failed: grep finds nothing)
+pacman -Qq | { grep '^linux-firmware-' || true; } | xargs -r pacman -Rdd --noconfirm > /dev/null
 pacman -Syu --noconfirm > /dev/null
 pacman -Scc --noconfirm > /dev/null
 gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
