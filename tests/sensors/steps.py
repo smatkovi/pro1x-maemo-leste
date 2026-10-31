@@ -13,6 +13,7 @@
 # held, GetSteps without a flush answer, a step counter that starts over,
 # the disable at the end, and the accelerometer where there is no step
 # counter.
+import atexit
 import json
 import os
 import signal
@@ -28,6 +29,18 @@ from gi.repository import Gio, GLib  # noqa: E402
 build, steps_bin, libdir = sys.argv[1:4]
 here = os.path.dirname(os.path.abspath(__file__))
 fails = 0
+procs = []  # everything started here, stopped at the end whatever happens
+
+
+@atexit.register
+def stop_all():
+    for p in reversed(procs):
+        if p.poll() is None:
+            p.terminate()
+            try:
+                p.wait(5)
+            except subprocess.TimeoutExpired:
+                p.kill()
 
 
 def check(name, ok, detail=""):
@@ -77,6 +90,7 @@ with open(conf, "w") as f:
 </busconfig>
 """ % bus_dir)
 daemon = subprocess.Popen(["dbus-daemon", "--config-file=" + conf, "--nofork", "--nopidfile"])
+procs.append(daemon)
 address = "unix:path=%s/socket" % bus_dir
 for _ in range(100):
     if os.path.exists(bus_dir + "/socket"):
@@ -139,11 +153,13 @@ def start(log_name, *args):
         os.unlink(log_path)
     fake = subprocess.Popen([sys.executable, "-I", os.path.join(here, "fake-ssc.py"),
                              build, ctl_path, log_path] + list(args))
+    procs.append(fake)
     wait_for(lambda: os.path.exists(ctl_path) and os.path.exists(log_path), 5)
     env = dict(os.environ, DBUS_SYSTEM_BUS_ADDRESS=address, LD_LIBRARY_PATH=libdir,
                G_MESSAGES_DEBUG="all")
     out = open(os.path.join(build, log_name + ".steps"), "w")
     steps = subprocess.Popen([steps_bin], env=env, stdout=out, stderr=subprocess.STDOUT)
+    procs.append(steps)
     return fake, steps, log_path
 
 

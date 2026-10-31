@@ -98,7 +98,8 @@ Over Wi-Fi (USB gets disconnected when unplugged), display off:
 Open after that: Wi-Fi WoWLAN (the chip supports magic packet and pattern
 wake-ups; without it mac80211 disconnects at every suspend, hence
 `StayAwake=45`), the Bluetooth UART clock while awake, and sensor batching
-for the step counter during suspend.
+for the step counter during suspend (done 2026-10-31, untested on the
+phone: [sensors.md](sensors.md)).
 
 ## First suspends (2026-10-25)
 
@@ -276,8 +277,9 @@ To try on the phone (with someone there):
 
 Larger, not done: the touchscreen asleep while dt2w is off or the phone is
 in a pocket (needs mce's proximity), the LED patterns in the LPG instead of
-mce's timer, sensor batching in the ADSP requests (libssc asks for every
-sample as a wake-up), the panel's ELVDD/ELVSS enable (gpio65) as a
+mce's timer, sensor batching in the ADSP requests (libssc asked for every
+sample as a wake-up; done 2026-10-31, [sensors.md](sensors.md)), the
+panel's ELVDD/ELVSS enable (gpio65) as a
 regulator. (The Bluetooth UART clock off between transfers: patches 0023
 and 0024, below.)
 
@@ -434,9 +436,10 @@ stop` works as before. pro1x-autosuspend stops hexagonrpcd now only when
 without 0031, or the switch set back), unless `StopServices` says
 otherwise.
 
-Not changed: the sensors keep streaming into a suspended system (the
-ADSP's glink edge is no wake-up source, so their indications wait);
-batching in the libssc requests is still open.
+Not changed here: the sensors keep streaming into a suspended system (the
+ADSP's glink edge is no wake-up source, so their indications wait).
+Batched, non-waking requests and the ADSP told of suspends (kernel
+0038/0039) came on 2026-10-31: [sensors.md](sensors.md).
 
 ### The USB gadget after a suspend (0032)
 
@@ -976,8 +979,10 @@ What FreeBSD 15 does on the Pro1X (`freebsd/`), in the same terms:
     device tree's delay: `hint.iicbus.N.frequency=250000` for its bus
     once the unit number is seen on the phone.
   - Not done, larger: PSCI idle states (above), the I2C of the touchscreen
-    in hardware instead of bit-banged (GPI DMA), sensor batching in the
-    ADSP requests, iphbd (Hildon's shared wake-up heartbeat) as a daemon.
+    in hardware instead of bit-banged (GPI DMA), iphbd (Hildon's shared
+    wake-up heartbeat) as a daemon. (Sensor batching in the ADSP requests:
+    libssc's patch, FreeBSD's too, docs/sensors.md; FreeBSD has no
+    sleepstate, so non-waking requests still reach a suspend.)
 
 So FreeBSD idles like Leste does today without autosuspend (no SoC sleep
 states), minus the deeper CPU idle states Linux uses while awake.
