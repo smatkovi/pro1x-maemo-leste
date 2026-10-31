@@ -1090,14 +1090,18 @@ requests with the display on and after mce's "off".
 
 What needs to be built and installed:
 
-- Leste: `leste-hildon-2026.10.31` has pro1x-events 1.3, pro1x-volume-osd
-  1.1 and meego-clock 0.2 (and the Linux power work's mce and
-  location-daemon). pro1x-standby (`scripts/49-standby.sh`), pro1x-fm and
+- Leste: `leste-hildon-2026.10.31` has pro1x-events 1.3 and
+  pro1x-volume-osd 1.1 (and the Linux power work's mce and
+  location-daemon; `pro1x-latest`'s manifest has them); meego-clock 0.2
+  and gPodder 4.17.2+leste2 (its podcasts as `media.role=music`, so that
+  the deep-buffer music sink takes them) are in their own repositories'
+  releases (smatkovi/meego-clock v0.2, smatkovi/gpodder-leste
+  v4.17.2+leste2). pro1x-standby (`scripts/49-standby.sh`), pro1x-fm and
   pro1x-camera (`scripts/49-apps.sh`) and iphbd
   (`meego/41-leste-helpers.sh`) are installed by their scripts, not as
   packages: run those again on the phone, or the next image has them.
 - FreeBSD: pro1x-standby 1.2, pro1x-events 1.3, pro1x-volume-osd 1.1,
-  pro1x-fm revision 2, meego-clock 0.2 (pin `73af05f`), the root's
-  `.xinitrc`.
+  pro1x-fm revision 2, meego-clock 0.2 (pin `73af05f`), gpodder-leste
+  4.17.2+leste2 (pin `fb3c82f`), the root's `.xinitrc`.
 - Arch: pro1x-events 1.3, pro1x-volume-osd 1.1, pro1x-fm 1.1, meego-clock
-  0.2, with the next Arch build.
+  0.2, gpodder-leste 4.17.2+leste2, with the next Arch build.
