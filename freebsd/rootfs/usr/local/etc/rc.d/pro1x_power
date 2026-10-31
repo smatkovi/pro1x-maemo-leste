@@ -12,7 +12,15 @@
 # only), the USB controller following the cable (pro1x-usbrole, kenv
 # pro1x.usbrole=1, unless set). The rest is rc.conf's and the other
 # scripts' (pro1x_autosleep, pro1x_audiod's jack, Wi-Fi's powersave,
-# powerd). "service pro1x_power status": what is on.
+# powerd). The panel goes off 2 minutes into the stand-by screen with or
+# without the profile (~/.xinitrc, pro1x.standby_off). "service
+# pro1x_power status": what is on.
+#
+# The cable's events come from pro1x_typec.ko (the PMI632's Type-C block,
+# freebsd/pm/README.md stage 4b): loaded here when the kernel environment
+# has hw.pro1x_typec.enable=1 (freebsd/cmdline; the driver attaches only
+# then), with or without the profile. Without it pro1x.usbrole has no
+# events to follow.
 
 . /etc/rc.subr
 
@@ -26,6 +34,11 @@ load_rc_config $name
 
 pro1x_power_start()
 {
+	# before devd: its first events (a cable in at boot) wait in devctl
+	if [ "$(kenv -q hw.pro1x_typec.enable)" = 1 ]; then
+		kldload -n pro1x_typec ||
+		    echo "pro1x_power: pro1x_typec.ko did not load"
+	fi
 	pro1x_power_on || return 0
 	if [ "$(sysctl -n hw.psci_idle.enable 2> /dev/null)" = 0 ]; then
 		sysctl -q hw.psci_idle.enable=1 > /dev/null &&
@@ -53,7 +66,10 @@ pro1x_power_status()
 	v=$(/usr/local/sbin/pro1x-audioctl status 2> /dev/null | tr ' ' '\n' | grep '^jack')
 	echo "audio: ${v:-no pro1x-audiod}" | tr '\n' ' '; echo
 	ifconfig wlan0 2> /dev/null | grep -o 'powersavemode [A-Z]*' || echo "wlan0: none or no powersave"
-	echo "USB role switch: pro1x.usbrole=$(kenv -q pro1x.usbrole)"
+	v=$(sysctl -n dev.pro1x_typec.0.state 2> /dev/null) ||
+	    v="not attached (hw.pro1x_typec.enable=1, kldload pro1x_typec)"
+	echo "USB role switch: pro1x.usbrole=$(kenv -q pro1x.usbrole); pro1x_typec: $v"
+	echo "the panel off after: $(kenv -q pro1x.standby_off || echo 2) min of the stand-by screen"
 	echo "powerd: $(pgrep -lx powerd | tr '\n' ' ')"
 }
 

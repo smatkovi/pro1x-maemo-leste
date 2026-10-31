@@ -402,7 +402,12 @@ what is missing:
    ..., ...; GDSC on|off, master clock on|off, its bus clock on|off,
    reset asserted|released` and either the DWC3's registers (GSNPSID
    0x5533xxxx for a DWC_usb3) or `not read (not clocked)`. That is the
-   input for the next step; nothing is changed.
+   input for the next step; nothing is changed. For the power: `GDSC on`,
+   `master clock on` with no cable and no gadget means Linux left the
+   block running at the kexec and FreeBSD keeps it so (nothing switches
+   it off yet): note it for a power-down at boot (the GDSC collapsed, the
+   clocks off, the QUSB2 PHY powered down, L15A's vote off; never L4A or
+   L12A, the UFS PHY's too).
 
 10. **USB gadget, CDC Ethernet** (`usbnet`), the cable to the PC, about
     6 minutes. First, from Leste, `pm-out/modules/{qcom_dsp,usb,
@@ -661,7 +666,8 @@ limits): 0 failures.
     cable (both orientations), a charger, an OTG adapter with a USB
     stick, a hub. Expected: `pro1x_typec0: at 0x1500, mode 00 (dual
     role), VBUS out at 0x1100 up to 1000 mA (left alone)`, `pro1x_typec0:
-    3 of 3 interrupts`, then per plug
+    3 of 3 interrupts` (fewer: it polls every 250 ms, 4 wake-ups a
+    second for good, so not into the profile then), then per plug
     `role=device orientation=cc1 vbus=1 rp=500 (misc 29 ...)` and with
     the plug turned `orientation=cc2`; the charger `role=device ...
     rp=1500` or `3000`; the OTG adapter `role=host ... vbus=0` (with
@@ -761,7 +767,9 @@ for FreeBSD. It suspends (`pro1x-suspend -k`: the panel as it is, the
 next alarm as the RTC's, none within 70 s of one) when the display has
 been off, or showing the stand-by screen (`-L`: not then), for 30 s
 (`-D`) and nothing holds the phone up: sound (`pro1x-audioctl status`:
-a stream, a voice session, FM), a call (`pro1x-callaudio` runs), a
+a stream, a voice session, FM), a call (`pro1x-callaudio` runs),
+positions (`pro1x-gnss` runs: an app wants them, `../modem/README.md`
+stage 3; the modem's position every second would end each suspend), a
 transfer (the interfaces' bytes, more than 4 KiB a second), the USB
 network (`ue0` up), external power (`hw.acpi.acline`; `-P`: also then),
 the file `/var/run/pro1x-autosleep.inhibit`. A device interrupt ends the
@@ -782,11 +790,12 @@ power, ends the suspend through `hw.pro1x_pm.wake=1`, seen between the
 epochs. Tested: the policy on the
 PC (`cc -I freebsd/pm/tools/pro1x-autosleep -o /tmp/ast
 freebsd/pm/test/autosleep_test.c
-freebsd/pm/tools/pro1x-autosleep/policy.c && /tmp/ast`, 30 checks), the
+freebsd/pm/tools/pro1x-autosleep/policy.c && /tmp/ast`, 31 checks), the
 daemon in the VM (`test/vm-autosleep.sh`, its test mode `-T`: the
-display from files, a stand-in for `pro1x-suspend`: 10 checks: none
-with the display on, the delay, the stays, a call and the inhibit file
-holding it up, the statistics).
+display from files, a stand-in for `pro1x-suspend`: 11 checks: none
+with the display on, the delay, the stays, a call, positions (a process
+named `pro1x-gnss`) and the inhibit file holding it up, the statistics;
+all passed on 2026-10-31 with the positions' check).
 
 **The modem's interrupts and the freeze.** FreeBSD's GLINK edge to the
 modem (SPI 68, INTID 100) and its SMP2P (SPI 70, INTID 102) are real
@@ -826,8 +835,8 @@ comment on some firmware's unstable STA power save applies).
 | `pro1x_audiod_jack` | the jack: `poll`, `irq`, `auto`, `clkstop` | `auto` (profile: `clkstop`) |
 | `ifconfig_wlan0="WPA DHCP powersave"` | Wi-Fi's power save | off (profile: on) |
 | `powerd_flags` | `-p 1000`: the load looked at once a second | `-p 500` (profile: 1000) |
-| `pro1x.usbrole=1` (kenv) | the USB controller follows the cable (`pro1x-usbrole`, stage 4c): the gadget off without one | off (profile: on) |
-| `pro1x.standby_off=N` (kenv) | the panel off after N minutes of the stand-by screen (`pro1x-standby -O`), 0 at once | never (profile: 10) |
+| `pro1x.usbrole=1` (kenv) | the USB controller follows the cable (`pro1x-usbrole`, stage 4c): the gadget only with one; its events need `hw.pro1x_typec.enable=1` too (`freebsd/cmdline`; `rc.d/pro1x_power` then loads `pro1x_typec.ko`), after run 14 | off (profile: on) |
+| `pro1x.standby_off=N` (kenv) | the panel off after N minutes of the stand-by screen (`pro1x-standby -O`, whole minutes: the stand-by screen comes 33 s after the last input), 0 at once, `never` the N9's stand-by screen for good | 2, with or without the profile (2026-10-31: the display off after 2 minutes on every system); `pro1x.standby=off`: the panel off 2 minutes after the last input |
 | `hw.pro1x_pm.mpm_veto`, `mpm_spi` | above | "100 102", 1 |
 | `hw.pro1x_pm.wake=1` | ends a suspend in progress (pro1x-autosleep's devd reader) | |
 | `service pro1x_power status` | what is on, the last suspend, the RPM's counts | |
@@ -836,6 +845,63 @@ Not done: the page daemon's and IGMP/MLD's kernel timers; sensor
 batching (the stand-by screen's proximity sensor is unwatched once the
 panel goes off, `-O`); the display controller's own power-down with the
 panel off (the DPU keeps scanning out; the panel's DCS off only).
+
+**The energy audit of 2026-10-31** (PC only; what it changed, what the
+device runs measure next):
+
+- Changed: the GPS no longer runs on after its last app
+  (`../hildon/patches/location-daemon/0002`, the hook's `stop`: gpsd,
+  `pro1x-gnss` and the modem's GNSS engine ran until the next boot once
+  any app had asked for a position); `pro1x-autosleep` stays up while
+  `pro1x-gnss` runs; `../rootfs.sh` makes the packages' `@sample`
+  configuration files as pkg does (PulseAudio found no `default.pa` and
+  did not start at all, and with it went `module-suspend-on-idle`, which
+  closes `/dev/dsp` 5 s after the last sound); `rc.d/pro1x_power` loads
+  `pro1x_typec.ko` with `hw.pro1x_typec.enable=1` (the profile's role
+  switch had no events); the panel off 2 minutes into the stand-by
+  screen by default (`~/.xinitrc`; before: never, the profile 10
+  minutes), X's screen saver after 2 minutes instead of 3.
+- Checked, nothing to do: the kernel has no debug options (no
+  `std.debug`: no INVARIANTS, WITNESS); idle is tickless
+  (`kern.eventtimer.periodic=0`), so HZ 1000 costs wake-ups only while a
+  CPU runs; no background scans (LinuxKPI 802.11 without
+  `LKPI_80211_BGSCAN`), the keys in the Wi-Fi firmware; no moused, cron or
+  NTP; `/var`, `/tmp` in memory; ZFS lz4, `atime=off`, a transaction group
+  every 30 s; powerd's `dev.cpu.0.freq` sets both clusters (cpufreq sets
+  every CPU's nearest level); the battery every 30 s, the keyboard scanned
+  only while a key is held, UFS Hibern8 after 150 ms.
+- For the device (runs 9, 14, 20, 22, 24): the USB block as Linux leaves
+  it at the kexec (run 9's probe: the GDSC, the 66.67 MHz master clock and
+  the QUSB2 PHY's PLL running with no FreeBSD driver on them would be
+  waste for as long as FreeBSD runs; `dwc3dci`'s detach does not switch
+  the PHY, the clocks, the GDSC or its RPM supplies off either, and of
+  those supplies only L15A is the USB's alone: L4A and L12A also feed the
+  UFS PHY and must stay); the DPU still scanning out with the panel off
+  (it keeps the memory bus up: `vlow +0, vmin +0` in run 20 (c) with the
+  modem off points at it); `pro1x_typec`'s interrupts (without them it
+  polls 4 times a second); the epochs of the suspend (5 s, only for the
+  watchdog: Linux's `qcom_wdt` stops the watchdog for its suspend, which
+  would allow epochs of a minute once runs 6-8 are stable); ZFS's kernel
+  threads that wake once a second while awake (`l2arc_feed` with no
+  L2ARC, `arc_evict`, `arc_reap`, `dbuf_evict`, and `mmp` for a writable
+  pool), frozen while suspended like every callout.
+- Bluetooth: off. Nothing in FreeBSD brings it up (no `ng_ubt`, hcsecd,
+  sdpd or bthidd); `pro1x-fmd` powers the WCN3950's Bluetooth side only
+  while the FM receiver is on (its rails at the RPM, the UART) and off
+  again with it. Not known: what Leste leaves of the chip at the kexec
+  with its Bluetooth on (its rails L16A, L17A, L23A are the Wi-Fi's too,
+  so no blind vote off; the RPM's counts of run 6 show a held resource).
+- Double tap with the panel off: possible only through the touch
+  controller's own gesture (doze) mode, which this port does not have
+  yet. The GT9286's firmware (Goodix's vendor driver: 8 to 0x8046 and to
+  the command register 0x8040, the gesture at 0x814B, 0xCC a double tap)
+  scans slowly and interrupts on the gesture alone; its interrupt, GPIO 80,
+  is MPM pin 21, so `hw.pro1x_pm.mpm_pins` could take it (`21:l`) and the
+  SoC sleep through it. Needs a `goodix` sysctl for the mode, the
+  gesture's read in its interrupt and a devd event for pro1x-standby,
+  first tried on the phone (whether this firmware has the mode). Until
+  then the panel off means the power key only, and the stand-by screen
+  (touch awake, double tap) costs the touch controller's full scanning.
 
 ## Device runs (prepared, for 2026-10-31)
 
@@ -1058,9 +1124,11 @@ the kernel with `patches/0036` and `0037`; unplugged unless said):
 20. **The drain** (needs 19): an hour each, unplugged, the display in the
     stand-by screen, the same Wi-Fi and modem state, `nohup pro1x-drain 60
     10 &` on the console or over ssh, the lines then in `/var/log/messages`:
-    (a) as today (no `pro1x.power`), (b) `pro1x.power=on`, (c) (b) with
-    `pro1x.standby_off=0` (the panel off). Compare `% an hour`, `mV an
-    hour` (OCV) and `asleep N of 3600 s`.
+    (a) as before 2026-10-31 (no `pro1x.power`, `pro1x.standby_off=never`:
+    the stand-by screen the whole hour), (b) `pro1x.power=on
+    pro1x.standby_off=never`, (c) `pro1x.power=on` (the panel off after 2
+    minutes of the stand-by screen, the default now). Compare `% an
+    hour`, `mV an hour` (OCV) and `asleep N of 3600 s`.
 21. **vlow/vmin and the modem** (during 20 (c)): `hw.pro1x_pm.rpm_stats`
     before and after: `vetoed N (last by INTID 100)` while the modem is
     up. Then `sysctl hw.pro1x_pm.mpm_veto=""` and an SMS and a call to the
@@ -1071,7 +1139,13 @@ the kernel with `patches/0036` and `0037`; unplugged unless said):
 22. **What wakes it** (after 20): `service pro1x_autosleep stats`: the
     suspends per interrupt. Frequent ones that are no wake-up source
     (Wi-Fi's copy engines, the ADSP's GLINK 309 for sensors, the battery's
-    ADC) are the next targets.
+    ADC) are the next targets. With `pro1x_steps_enable="YES"` walk a
+    minute with the phone suspended: the ADSP reports every step
+    (`tools/pro1x-steps`), so INTID 309 per step means the pedometer needs
+    the sensor hub's batching (a report period) before it can stay on
+    with autosleep. INTID 100 every few seconds with the phone lying
+    still is the modem's indications (cell changes, the network's time):
+    then fewer of them while the display is off.
 23. **Wi-Fi's power save** (with Wi-Fi up, `pro1x.power=on` or by hand:
     `ifconfig wlan0 powersave` and a reconnect): `ifconfig wlan0` shows
     `powersavemode ON`; from the PC `ping` the phone: answers 100-300 ms
@@ -1080,6 +1154,20 @@ the kernel with `patches/0036` and `0037`; unplugged unless said):
     with `-powersave`. Failure signs: disconnects (`wlan0: link state
     changed to DOWN`): `-powersave` again, a firmware with unstable STA
     power save.
+24. **GPS off after its app** (the full system, `pro1x_modem` and the
+    joint image with location-daemon 0002): an app that asks for a
+    position (GPS Recorder, or liblocation's example as in
+    `../modem/README.md`), then close it. Expected: while it runs
+    `service pro1x_gps status` shows gpsd and pro1x-gnss (and with the
+    display off `/var/log/debug.log` has `pro1x-autosleep: up:
+    positions`); at most 30 s after it closed both are gone
+    (`pro1x-gnss` sent LOC Stop on its SIGTERM; it does not log it) and
+    `pro1x-autosleep` suspends again. With `pro1x_gps_enable="YES"` both
+    stay (wanted). Failure signs: gpsd still there a minute later with
+    location-daemon still running (a client still holds liblocation's
+    lock), or with location-daemon gone (its stop did not run: the old
+    location-daemon package; or the hook's stop failed:
+    `/usr/local/libexec/location-daemon-gpsd stop` by hand says why).
 
 Runs 1-4 (SMP, the CPUs' idle states) and 6-7 (the suspend, now also on
 one CPU without the IPI panic) are the profile's kernel half;

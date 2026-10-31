@@ -6,16 +6,22 @@ export GDK_PIXBUF_MODULE_FILE=/var/db/gdk-pixbuf-loaders.cache
 # freebsd/cmdline; the N9 offered 15, 30, 60, 120, 180) and 3 s more, or
 # at once on a short press of the power key, the time and the
 # notifications on black; a double tap or the power key bring the desktop
-# back. 403 dpi: the Pro1X, for the N9's sizes in mm. pro1x.standby=off,
-# or without pro1x-standby: X's screen saver, black after 3 minutes (scfb
-# has no DPMS). The AMOLED panel shows black with its pixels off.
-# pro1x.standby_off=N: the panel switched off after N minutes of the
-# stand-by screen (0: at once in its place); the power profile
-# (pro1x.power=on, freebsd/pm/README.md stage 6) makes it 10 minutes, and
-# with pro1x.standby=off the panel off in place of X's black screen. With
-# the panel off the SoC can sleep; the power key brings the desktop back.
+# back. 403 dpi: the Pro1X, for the N9's sizes in mm.
+# The display off after 2 minutes (the decision of 2026-10-31, on every
+# system): pro1x.standby_off=N, the panel switched off after N minutes of
+# the stand-by screen, is 2 by default (the panel dark 2 min 33 s after the
+# last input: the stand-by screen comes after 33 s; -O counts whole
+# minutes); 0: at once in its place, never: the N9's stand-by screen for
+# good. With the panel off the touchscreen sleeps (no double tap) and the
+# SoC can sleep; the power key brings the desktop back. pro1x.standby=off:
+# no stand-by screen, the panel off after 2 minutes (pro1x.display_timeout
+# then counts to the panel off); without pro1x-standby (or with
+# pro1x.standby=off pro1x.standby_off=never): X's screen saver, black after
+# 2 minutes (scfb has no DPMS; the AMOLED panel shows black with its pixels
+# off).
 o=$(kenv -q pro1x.standby_off)
-power=$(kenv -q pro1x.power)
+: "${o:=2}"
+[ "$o" != never ] || o=
 if [ -x /usr/local/bin/pro1x-standby ] && [ "$(kenv -q pro1x.standby)" != off ]; then
 	xset s off
 	t=$(kenv -q pro1x.display_timeout)
@@ -24,16 +30,16 @@ if [ -x /usr/local/bin/pro1x-standby ] && [ "$(kenv -q pro1x.standby)" != off ];
 	# pro1x.standby_partial=0 drives all of it
 	r="-R cw"
 	[ "$(kenv -q pro1x.standby_partial)" = 0 ] && r=
-	[ -z "$o" ] && [ "$power" = on ] && o=10
 	# shellcheck disable=SC2086
 	/usr/local/bin/pro1x-standby -d 403 -s "${t:-30}" $r ${o:+-O "$o"} &
-elif [ -x /usr/local/bin/pro1x-standby ] && { [ -n "$o" ] || [ "$power" = on ]; }; then
-	# no stand-by screen, the panel off after 3 minutes (or the time-out)
+elif [ -x /usr/local/bin/pro1x-standby ] && [ -n "$o" ]; then
+	# no stand-by screen, the panel off after 2 minutes (or the time-out;
+	# pro1x-standby blanks 3 s after it)
 	xset s off
 	t=$(kenv -q pro1x.display_timeout)
-	/usr/local/bin/pro1x-standby -d 403 -s "${t:-180}" -O 0 &
+	/usr/local/bin/pro1x-standby -d 403 -s "${t:-117}" -O 0 &
 else
-	xset s 180 0
+	xset s 120 0
 	xset s blank
 fi
 

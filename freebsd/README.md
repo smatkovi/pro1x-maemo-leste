@@ -140,8 +140,10 @@ both off by default until tested), woken
 up by a double tap or the power key; the keyboard light on with key
 presses and off 30 s after the last one, as on the N950
 (`tools/pro1x-standby`, sleeping on X's idle time alarms until something
-happens; with `pro1x.standby=off` black after 3 minutes, since scfb has
-no DPMS), `startx hildon`, `startx harmattan` (the Nokia N9's own user
+happens; the panel off 2 minutes into the stand-by screen,
+`pro1x.standby_off=N` minutes, `never` for the N9's way; with
+`pro1x.standby=off` the panel off 2 minutes after the last input, scfb
+has no DPMS), `startx hildon`, `startx harmattan` (the Nokia N9's own user
 interface, `harmattan-session`) or
 `startx xfce`; without an argument `pro1x.desktop=hildon` (or `harmattan`) in
 `freebsd/cmdline` picks that one. "Hildon" in Xfce's menu and among the
