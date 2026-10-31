@@ -17,12 +17,15 @@
 # A part is built again when its revision or this repository's patches for
 # it change. Parts built before the patches counted (their mark has the
 # revision only) count as built, but for those whose patches changed since
-# (STALE); REBUILD names parts to build again anyway.
+# (STALE); REBUILD names parts to build again anyway. ONLY="part ..."
+# builds just these (the others there already, from a release's packages:
+# 42-meego-look.sh PKGS=).
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 MNT=${MNT:-/mnt/arch}
 JOBS=${JOBS:-$(nproc)}
 REBUILD=${REBUILD:-}
+ONLY=${ONLY:-}
 # the parts whose patches changed after the marks with the revision only
 # (2026-10-28: the MeeGo look's steps 2 to 4)
 STALE="libhildon hildon-status-menu hildon-desktop"
@@ -93,6 +96,7 @@ log "sources"
 mkdir -p "$MNT$B/src"
 for p in "${PARTS[@]}"; do
 	name=${p%%|*}
+	[ -z "$ONLY" ] || case " $ONLY " in *" $name "*) ;; *) continue ;; esac
 	url=${URL[$name]:-https://github.com/maemo-leste/$name.git}
 	d=$MNT$B/src/$name
 	[ -d "$d/.git" ] || git clone -q "$url" "$d"
@@ -108,8 +112,8 @@ done
 # --- build ------------------------------------------------------------------------
 log "build"
 printf '%s\n' "${PARTS[@]}" > "$MNT$B/parts"
-chroot "$MNT" /bin/bash -euo pipefail -s "$JOBS" "$REBUILD" "$STALE" <<'EOF'
-jobs=$1 rebuild=" $2 " stale=" $3 "
+chroot "$MNT" /bin/bash -euo pipefail -s "$JOBS" "$REBUILD" "$STALE" "$ONLY" <<'EOF'
+jobs=$1 rebuild=" $2 " stale=" $3 " only=$4
 B=/usr/src/hildon
 # Today's GCC refuses what Leste's let pass (C23 by default, implicit
 # declarations and pointer types as errors): the code as it was written
@@ -121,6 +125,7 @@ while IFS= read -r p; do
 	name=${p%%|*} rest=${p#*|}
 	args=${rest%%|*}
 	extra=; case $rest in *"|"*) extra=${rest#*|} ;; esac
+	[ -z "$only" ] || case " $only " in *" $name "*) ;; *) continue ;; esac
 	rev=$(git -C $B/src/$name rev-parse HEAD)
 	# this repository's patches for it (HiDPI, the MeeGo look, fixes)
 	ours=
@@ -177,7 +182,11 @@ while IFS= read -r p; do
 		[ ! -f demos/gtk-demo/geninclude.pl ] ||
 		    sed -i -e 's/defined *(\(@[a-z_]*\))/\1/' -e 's/defined *\(@[a-z_]*\)/\1/' demos/gtk-demo/geninclude.pl
 		make -j"$jobs" > make.log 2>&1 || { grep -m20 -E "error:|Error [0-9]|\*\*\*" make.log; exit 1; }
-		make install > install.log 2>&1 || { tail -20 install.log; exit 1; }
+		# libhildonfm's /etc/xdg/user-dirs.defaults is xdg-user-dirs' file
+		# (43-packages.sh leaves it out of the package, which says why)
+		inst=; [ "$name" != libhildonfm ] || inst=xdg_DATA=
+		# shellcheck disable=SC2086
+		make install $inst > install.log 2>&1 || { tail -20 install.log; exit 1; }
 	fi
 	ldconfig
 	echo "$mark" > "$B/$name.done"

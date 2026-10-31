@@ -27,7 +27,11 @@
 # part packaged before at the same build is skipped (FORCE=1: again). A
 # part that fails is listed at the end and does not stop the others.
 # Nokia's theme, fonts and sounds (step 30 copies them from the phone's
-# own Harmattan image) are in no package.
+# own Harmattan image) are in no package. No package has a file that a
+# package of Arch Linux ARM's has, installed or not (pkgbuild.py, against
+# the repositories' file lists that pacman -Fy fetches first), unless it
+# conflicts with that package; T_PKGREL counts a part packaged again at
+# the same version.
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 MNT=${MNT:-/mnt/arch}
@@ -168,7 +172,26 @@ declare -A T_EXCLUDE=(
 	[rtcom-eventlogger]="usr/bin/rtcom-eventlogger-testsuite usr/lib/tests"
 	# the connection manager's test programs, static library and headers
 	[telepathy-ring]="opt usr/lib/libmodem-glib.a usr/include/modem-glib usr/share/man/man8/telepathy-ring.8"
+	# Maemo's MyDocs folders as /etc/xdg/user-dirs.defaults, which is
+	# xdg-user-dirs' file (Phosh has it): written in the format of
+	# ~/.config/user-dirs.dirs, which xdg-user-dirs-update misreads (a
+	# folder named "$HOME in the home directory, XDG_XDG_..._DIR_DIR
+	# lines), and not needed: the file chooser takes MyDocs/.images and
+	# the others by itself where no user folder is set. Leste's packages
+	# leave it out too (debian/*.install).
+	[libhildonfm]="etc/xdg/user-dirs.defaults"
 )
+# the pkgrel of a part packaged again at the same version (pkgbuild.py
+# writes 1 otherwise): 2026-10-31 (arch-hildon-2026.10.31.2) libhildonfm
+# without user-dirs.defaults; the conflicts with Arch Linux ARM's other
+# builds of the same files (pkgbuild.py); harmattan-qt5 d0c32ea (the
+# display's state, fewer wake-ups), whose versions stayed
+declare -A T_PKGREL=([libhildonfm]=2 [hildon-home]=2 [qt-components]=2 [vte-gtk2]=2
+	[harmattan-libdsme]=2 [harmattan-libcontentaction]=2 [harmattan-meego-im-framework]=2
+	[harmattan-qmsystem2]=2 [harmattan-system-ui]=2 [harmattan-statusmenu-plugins]=2
+	[harmattan-mcompositor]=2 [harmattan-meegotouchhome]=2 [harmattan-meego-camera]=2
+	[harmattan-meego-maps]=2 [harmattan-meego-music]=2 [harmattan-meego-phone]=2
+	[harmattan-meego-video]=2)
 
 # --- the parts --------------------------------------------------------------------
 parts30() {
@@ -356,7 +379,7 @@ one() {
 	[ "$name" != qt5-positioning ] || url=https://download.qt.io/archive/qt/5.15/
 	in_root -c "ldconfig && ldconfig -p > $P/ld.cache"
 	rm -rf "${MNT:?}$P/pkg/$pkg"
-	env PKGNAME="$pkg" PART="$name" SRC="$src" VERSION="$v" \
+	env PKGNAME="$pkg" PART="$name" SRC="$src" VERSION="$v" PKGREL="${T_PKGREL[$pkg]:-1}" \
 	    DESC="${T_DESC[$pkg]:-${T_DESC[$name]:-}}" LICENSE="${T_LICENSE[$pkg]:-${T_LICENSE[$name]:-}}" \
 	    URL="$url" DEPENDS="${T_DEPENDS[$pkg]:-}" OPTDEPENDS="${T_OPTDEPENDS[$pkg]:-}" \
 	    PROVIDES="$prov" CONFLICTS="$conf" EXCLUDE="${T_EXCLUDE[$pkg]:-}" \
@@ -391,6 +414,9 @@ EOF
 [ $# -gt 0 ] || set -- extra:gconf 30 40 extra:vte extra:libical3 extra:qt5-positioning \
 	extra:python-pyotherside 41 42 extra:pro1x-sessions
 log "packages into $OUT (pro1x-maemo-leste $COMMIT)"
+# the repositories' file lists, for the files our packages share with theirs
+in_root -c "pacman -Fy > /dev/null" ||
+    echo "   (no file lists of the repositories: the packages are not checked against them)"
 for spec; do
 	case $spec in
 	*:*) one "${spec%%:*}" "${spec#*:}" ;;

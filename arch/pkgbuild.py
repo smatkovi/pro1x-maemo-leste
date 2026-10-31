@@ -10,6 +10,16 @@ Arch Linux ARM first, as 42-meego-look.sh does for its parts:
 - a file another package already owns (an Arch Linux ARM package, or one
   made here before) left out and reported: the other package's stays.
 
+A file that any other package of Arch Linux ARM's repositories has, one
+not installed here too (its file lists, pacman -F: Phosh's xdg-user-dirs
+is on the phone, not in the PC's chroot), makes the package conflict with
+that package, so that pacman never meets two owners of one file: those
+are other builds of the same thing (Nemo's qt-components, GTK 2's VTE,
+dsme's library). Files a part has but does not need are left out by
+EXCLUDE (arch/43-packages.sh says which and why); a package that
+conflicts with ours already (CONFLICTS, or its own conflicts with our
+name or what we provide) is fine as it is.
+
 Version, description and licence come from the part's debian/ directory
 (changelog, control, copyright) unless given; the dependencies are the
 packages that own the libraries its programs and libraries link (the
@@ -23,9 +33,11 @@ ROOT is the image's root as seen from here, STAGE and OUTDIR are paths
 below it (OUTDIR gets PKGBUILD and the install script); STAGE_IN and
 OUTDIR_IN are the same as seen in the image. Environment: PKGNAME, PART,
 SRC (the part's source directory, below ROOT, may be empty), VERSION,
+PKGREL (default 1: higher for a part packaged again at the same version),
 DESC, LICENSE, URL, DEPENDS, OPTDEPENDS, PROVIDES, CONFLICTS, EXCLUDE
 (space-separated globs, relative to the root), LDCACHE (ldconfig -p of
-the image), COMMIT.
+the image), COMMIT. The repositories' file lists are the image's (chroot
+ROOT pacman -F; 43-packages.sh runs pacman -Fy first).
 """
 import fnmatch
 import os
@@ -162,6 +174,48 @@ def tidy(stage, own):
         note('left out: %d more owned by other packages' % (len(owned) - 60))
     if len(excl) > 5:
         note('left out: %d more excluded' % (len(excl) - 5))
+
+
+# --- the repositories' other packages ---------------------------------------------
+def in_image(args):
+    return subprocess.run(['chroot', ROOT] + args, capture_output=True, text=True,
+                          env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LC_ALL': 'C'})
+
+
+def bare(dep):
+    return re.sub(r'[<>=].*', '', dep)
+
+
+def repo_conflicts(stage):
+    """the packages of Arch Linux ARM's repositories, installed or not, that
+    have one of our files, but for those that conflict with ours already"""
+    sync = os.path.join(ROOT, 'var/lib/pacman/sync')
+    if not any(f.endswith('.files') for f in (os.listdir(sync) if os.path.isdir(sync) else [])):
+        note('no file lists of the repositories (pacman -Fy): not checked against them')
+        return []
+    files = ['/' + r for r in relfiles(stage)]
+    ours = {NAME} | {bare(x) for x in (E('PROVIDES') or '').split()}
+    known = set((E('CONFLICTS') or '').split()) | ours
+    shared = {}
+    for i in range(0, len(files), 1000):
+        out = in_image(['pacman', '-F', '--machinereadable', '--'] + files[i:i + 1000]).stdout
+        for line in out.split('\n'):
+            x = line.split('\0')
+            if len(x) == 4 and x[1] not in known:
+                shared.setdefault(x[1], []).append(x[3])
+    if not shared:
+        return []
+    # (those whose own conflicts name us or what we provide)
+    info = in_image(['pacman', '-Si', '--'] + sorted(shared)).stdout
+    for block in info.split('\n\n'):
+        n = re.search(r'^Name\s*: (\S+)', block, re.M)
+        c = re.search(r'^Conflicts With\s*: (.*)$', block, re.M)
+        if n and c and ours & {bare(y) for y in c.group(1).split()}:
+            shared.pop(n.group(1), None)
+    for p, fl in sorted(shared.items()):
+        note('conflicts with %s, which has %d of its files too (/%s%s)'
+             % (p, len(fl), fl[0], ' ...' if len(fl) > 1 else ''))
+    return sorted(shared)
 
 
 # --- version, description, licence ----------------------------------------------
@@ -377,6 +431,9 @@ def main():
     desc = E('DESC') or control_desc() or PART
     lic = E('LICENSE') or license_of()
     deps = depends(stage, own)
+    conflicts = (E('CONFLICTS') or '').split()
+    conflicts += [c for c in repo_conflicts(stage) if c not in conflicts]
+    rel = E('PKGREL') or '1'
     schemas = sorted('/' + r for r in relfiles(stage)
                      if r.endswith('.schemas') and r.startswith(('etc/gconf/schemas/', 'usr/share/gconf/schemas/')))
     if schemas and 'gconf' not in deps and NAME != 'gconf':
@@ -394,19 +451,20 @@ def main():
     with open(os.path.join(out, 'PKGBUILD'), 'w') as f:
         f.write('# Made by arch/43-packages.sh (pro1x-maemo-leste %s) from what the\n'
                 '# Arch steps built and installed into %s\n' % (E('COMMIT', 'unknown'), STAGE_IN))
-        f.write('pkgname=%s\npkgver=%s\npkgrel=1\npkgdesc=%s\narch=(aarch64)\nurl=%s\n'
-                % (NAME, v, q(desc), q(E('URL', ''))))
+        f.write('pkgname=%s\npkgver=%s\npkgrel=%s\npkgdesc=%s\narch=(aarch64)\nurl=%s\n'
+                % (NAME, v, rel, q(desc), q(E('URL', ''))))
         f.write('license=(%s)\n' % q(lic))
         f.write('depends=%s\n' % arr(deps))
         for k in ('OPTDEPENDS', 'PROVIDES', 'CONFLICTS'):
-            xs = (E(k) or '').split()
+            xs = conflicts if k == 'CONFLICTS' else (E(k) or '').split()
             if xs:
                 f.write('%s=%s\n' % (k.lower(), arr(x.replace('%', ' ') for x in xs)))
         f.write('options=(!debug)\n')
         if install:
             f.write('install=%s\n' % install)
         f.write('package() {\n\tcp -a %s/. "$pkgdir/"\n}\n' % q(STAGE_IN))
-    print('     %s %s (depends: %s)' % (NAME, v, ' '.join(deps) or '-'))
+    print('     %s %s-%s (depends: %s%s)' % (NAME, v, rel, ' '.join(deps) or '-',
+                                         '; conflicts: ' + ' '.join(conflicts) if conflicts else ''))
 
 
 main()

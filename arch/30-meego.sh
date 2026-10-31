@@ -9,6 +9,9 @@
 # and 20 mounted on $MNT (Leste has the network the builds need):
 #
 #   bash arch/30-meego.sh                 # HQ5_REV=main
+#   ONLY="system-ui meego-camera" ...     just these parts (the others
+#                                         there already, from a release's
+#                                         packages: 42-meego-look.sh PKGS=)
 #
 # The N9's theme (blanco), its fonts and sounds are Nokia's and are not in
 # the public repositories: N9_ROOT, a mounted N9 or N950 root file system
@@ -22,6 +25,7 @@ HQ5_REV=${HQ5_REV:-main}
 N9_IMG=${N9_IMG:-/host/harmattan.img}
 N9_ROOT=${N9_ROOT:-}
 JOBS=${JOBS:-$(nproc)}
+ONLY=${ONLY:-}
 
 mountpoint -q "$MNT" || { echo "$MNT is not mounted"; exit 1; }
 log() { echo ">> $*"; }
@@ -79,8 +83,8 @@ fi
 
 # --- harmattan-qt5 -------------------------------------------------------------
 log "harmattan-qt5 $HQ5_REV"
-chroot "$MNT" /bin/bash -euo pipefail -s "$HQ5_URL" "$HQ5_REV" "$JOBS" <<'EOF'
-url=$1 rev=$2 jobs=$3
+chroot "$MNT" /bin/bash -euo pipefail -s "$HQ5_URL" "$HQ5_REV" "$JOBS" "$ONLY" <<'EOF'
+url=$1 rev=$2 jobs=$3 only=$4
 S=/usr/src/harmattan-qt5
 [ -d $S/.git ] || git clone -q "$url" $S
 git -C $S fetch -q origin
@@ -97,6 +101,7 @@ mkdir -p $B
 part() {
 	local name=$1 kind=$2 dir=$1; shift 2
 	local stamp=$B/$name.done want
+	[ -z "$only" ] || case " $only " in *" $name "*) ;; *) return 0 ;; esac
 	# (the applications are below apps/)
 	[ -d "$S/$dir" ] || dir=apps/$name
 	want=$(git -C $S log -1 --format=%H -- "$dir")
@@ -141,6 +146,7 @@ part() {
 upstream() {
 	local name=$1 tag=$2; shift 2
 	local stamp=$B/$name.done
+	[ -z "$only" ] || case " $only " in *" $name "*) ;; *) return 0 ;; esac
 	if [ "$(cat $stamp 2> /dev/null)" = "$tag" ]; then
 		echo "   $name: built"
 		return
