@@ -101,7 +101,8 @@ all="cmake qt5-base qt5-svg qt5-declarative \
 	qt5-x11extras qt5-xmlpatterns qt5-location qt5-tools qt5-websockets \
 	poppler-glib libical espeak-ng expat libxkbfile curl libsigc++ \
 	evolution-data-server sdl12-compat sdl_mixer sdl_image gnuchess \
-	python python-pip gettext libevent json-c protobuf-c dpkg check go"
+	python python-pip gettext libevent json-c protobuf-c dpkg check go \
+	libnotify upower qrencode"
 [ -z "$ONLY" ] || all="cmake curl expat python gettext dpkg check"
 chroot "$MNT" /bin/bash -euo pipefail -s "$all" <<'EOF'
 # only those Arch Linux ARM has (qt5-location and qt5-websockets it has

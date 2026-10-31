@@ -272,6 +272,10 @@ LIBDIRS = ('usr/lib/', 'opt/')
 
 
 def resolve(lib, cache, own):
+    # (a library named by its path: Qt's plugins, linked by some apps)
+    if lib.startswith('/'):
+        rel = os.path.relpath(os.path.realpath(os.path.join(ROOT, lib.lstrip('/'))), ROOT)
+        return own.get(lib.lstrip('/')) or own.get(rel)
     path = cache.get(lib)
     if path:
         if path in own:
