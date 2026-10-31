@@ -101,7 +101,12 @@ static gboolean emit_cb(gpointer data)
 	return G_SOURCE_REMOVE;
 }
 
-/* a new count: StepsChanged at most every COALESCE_S seconds */
+/*
+ * A new count: StepsChanged at most every COALESCE_S seconds, and never
+ * before the rest of a report is in: libssc hands over the events of one
+ * report (a batch) in idle callbacks of default idle priority, the signal
+ * comes after them, with the newest count.
+ */
 static void counted(void)
 {
 	gint64 due;
@@ -110,9 +115,10 @@ static void counted(void)
 		return;
 	due = emitted_us + COALESCE_S * G_USEC_PER_SEC - g_get_monotonic_time();
 	if (due <= 0)
-		emit_cb(NULL);
+		emit_id = g_idle_add_full(G_PRIORITY_LOW, emit_cb, NULL, NULL);
 	else
-		emit_id = g_timeout_add((guint)(due / 1000) + 1, emit_cb, NULL);
+		emit_id = g_timeout_add_full(G_PRIORITY_LOW, (guint)(due / 1000) + 1,
+					     emit_cb, NULL, NULL);
 }
 
 static void measurement_cb(SSCSensorPedometer *s, guint steps, gpointer data)
@@ -131,8 +137,9 @@ static void measurement_cb(SSCSensorPedometer *s, guint steps, gpointer data)
  * below it, at least STEP_GAP_S after the last one. The samples come in
  * batches, so time is counted in samples at the sensor's rate.
  */
-#define STEP_RISE 1.2	/* m/s^2 */
+#define STEP_RISE 1.0	/* m/s^2 */
 #define STEP_GAP_S 0.3
+#define STEP_SMOOTH 0.5	/* at 13 Hz about 1.4 Hz: a step's swing (2 Hz) passes */
 
 static double acc_rate = 13;
 static double acc_smooth, acc_mean;
@@ -146,7 +153,7 @@ static void accel_cb(SSCSensorAccelerometer *s, gfloat x, gfloat y, gfloat z, gp
 	(void)s, (void)data;
 	if (acc_samples++ == 0)
 		acc_smooth = acc_mean = m;
-	acc_smooth += (m - acc_smooth) * 0.35;
+	acc_smooth += (m - acc_smooth) * STEP_SMOOTH;
 	acc_mean += (m - acc_mean) * 0.02;
 	if (acc_smooth < acc_mean) {
 		acc_armed = TRUE;
@@ -186,6 +193,14 @@ static void display_state(const char *state)
 		return;
 	display_off = off;
 	g_debug("display %s: batches of up to %d s", state, off ? IDLE_BATCH_S : ACTIVE_BATCH_S);
+	if (!off) {
+		/* what the sensor core held goes to the listeners at once,
+		 * not after the rest of a coalescing pause */
+		if (emit_id)
+			g_source_remove(emit_id);
+		emit_id = 0;
+		emitted_us = 0;
+	}
 	if (!sensor)
 		return;
 	set_delivery();

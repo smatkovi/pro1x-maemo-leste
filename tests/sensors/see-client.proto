@@ -72,3 +72,42 @@ message ClientEventMsg {
   required Suid suid = 1;
   repeated ClientEvent events = 2;
 }
+
+// For fake-ssc.py: the discovery (the SUID sensor's msg_id 512 and 768),
+// attributes (msg_id 1 and 128) and a physical sensor's configuration
+// event (768).
+message SuidRequest {
+  required string data_type = 1;
+  optional bool register_updates = 2;
+  optional bool default_only = 3;
+}
+
+message SuidEvent {
+  required string data_type = 1;
+  repeated Suid suid = 2;
+}
+
+message AttrValue {
+  message Data {
+    optional AttrValue subtype = 1;
+    optional string str = 2;
+    optional float flt = 3;
+    optional sfixed64 sint = 4;
+    optional bool boolean = 5;
+  }
+  repeated Data values = 1;
+}
+
+message Attr {
+  required int32 attr_id = 1;
+  required AttrValue value = 2;
+}
+
+message AttrEvent {
+  repeated Attr attributes = 1;
+}
+
+message PhysicalConfigEvent {
+  optional float sample_rate = 1;
+  optional string operation_mode = 5;
+}

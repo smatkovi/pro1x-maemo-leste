@@ -4,14 +4,21 @@
 # scripts/46-sensor-stack.sh built with meson (as on the phone, against the
 # PC's libqmi), then its requests and report parsing checked against the
 # sensor core's field numbers (see-client.proto, check.py), the FreeBSD
-# copies of the patches against Leste's, and pro1x-steps compiled.
+# copies of the patches against Leste's, pro1x-steps and n9-sensors
+# compiled; then pro1x-steps against a fake sensor core (fake-ssc.py,
+# steps.py) over the PC's QRTR, the real libssc and libqmi in between,
+# with a system bus and an mce of its own.
 #
 #   bash tests/sensors/run.sh
 #   LIBSSC_SRC=dir  a libssc clone to take v0.4.4 from (default: codeberg)
 #   KEEP=dir        build there and keep it (default: a temporary directory)
+#   QRTR=1          load the PC's qrtr module for the fake sensor core
+#                   (sudo -n modprobe qrtr) if it is not loaded; without it
+#                   that part is skipped. Unloaded again afterwards.
 #
 # Needs git, meson, ninja, cc, pkg-config, protoc, protoc-c (protobuf-c),
-# libqmi-glib >= 1.33.4, gio-unix-2.0 and python3 with protobuf.
+# libqmi-glib >= 1.33.4, gio-unix-2.0, python3 with protobuf and PyGObject,
+# dbus-daemon.
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}
 LIBSSC_REV=0cf77b93b55752da34dca2dcecc06fca8665184b	# v0.4.4
@@ -88,5 +95,19 @@ else
 	head -20 "$T/n9.log"
 	fail "n9-sensors compiles without warnings"
 fi
+
+log "pro1x-steps against a fake sensor core"
+qrtr_ok() { python3 -I -c 'import socket; socket.socket(socket.AF_QIPCRTR, socket.SOCK_DGRAM)' 2> /dev/null; }
+loaded=
+if ! qrtr_ok && [ "${QRTR:-0}" = 1 ] && sudo -n modprobe qrtr; then
+	loaded=1
+fi
+if qrtr_ok; then
+	timeout 300 python3 -I "$REPO/tests/sensors/steps.py" "$T" "$T/pro1x-steps" "$src/build/src" ||
+		fails=$((fails + 1))
+else
+	echo "skip (no QRTR sockets: QRTR=1 loads the qrtr module)"
+fi
+[ -z "$loaded" ] || sudo -n modprobe -r qrtr || true
 
 if [ "$fails" = 0 ]; then echo "all passed"; else echo "$fails failed"; exit 1; fi

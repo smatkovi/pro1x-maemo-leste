@@ -185,19 +185,37 @@ new: they already have their sensor on only while needed.
 
 ## PC tests
 
-    bash tests/sensors/run.sh
+    bash tests/sensors/run.sh            # QRTR=1: load the PC's qrtr module for the last part
 
-builds libssc v0.4.4 with the three patches against the PC's libqmi
-(as on the phone), checks the requests and reports against the sensor
-core's field numbers (`tests/sensors/see-client.proto`, written for the
-test from the numbers above, and `check.py`: the old request byte for
-byte, delivery, batch spec, flush period, flush and disable requests,
-`libssc.conf` and its environment overrides, step counts from 1028, 775
-and standard events, a batched report with several events and a flush
-event), FreeBSD's copies of the patches, and compiles pro1x-steps and
-n9-sensors against it. 2026-10-31: all 43 checks pass. Not tested on the
-PC: the sensor core's side (whether it honours the batch spec for the step
-counter, the sleepstate entry), which only the phone can show.
+1. libssc v0.4.4 with the three patches, built against the PC's libqmi
+   (as on the phone), without warnings; FreeBSD's copies of the patches
+   the same as Leste's.
+2. The requests and reports against the sensor core's field numbers
+   (`tests/sensors/see-client.proto`, written for the tests from the
+   numbers above, and `check.py`): the old request byte for byte, the
+   delivery, batch spec, flush period, flush and disable requests,
+   `libssc.conf` and its environment overrides, step counts from 1028,
+   775 and standard events, a batched report with several events and a
+   flush event.
+3. pro1x-steps and n9-sensors compiled against it.
+4. pro1x-steps against a fake sensor core (`fake-ssc.py`: the QMI SSC
+   service on the PC's own QRTR node, discovery, attributes, a step
+   counter and an accelerometer, batch periods, flushes, reconfiguring as
+   the client manager does them), the real libssc and libqmi in between,
+   a system bus and a fake mce of its own (`steps.py`): non-waking 5 s
+   batches with the display on, 10 minutes with it off, a batch as one
+   report, GetSteps with a flush (0.8 s at most, also when the flush
+   answer never comes), the held steps at once when the display comes on,
+   a step counter starting over, the disable at the end, the accelerometer
+   where there is no step counter. It found two faults that are fixed: the
+   first event of a batch went out as StepsChanged on its own (the signal
+   now waits for the rest of the report), and the accelerometer's step
+   detector smoothed a step's swing away.
+
+2026-10-31: all 66 checks pass. Not tested on the PC: the real sensor
+core (whether it honours the batch spec for the step counter, the
+sleepstate entry) and n9-sensors' uinput side; only the phone can show
+those.
 
 ## Device tests (2026-10-31)
 
