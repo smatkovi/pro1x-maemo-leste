@@ -1,0 +1,16 @@
+#!/bin/sh
+# The Pro1X's deep-buffer front end MultiMedia4 (kernel patch 0034) routed to
+# the codec's RX DMA port, as the UCM profile keeps MultiMedia1 routed: a
+# front end without a back end does not open, so PulseAudio's music sink
+# (/etc/pulse/default.pa.d/50-pro1x.pa) needs it before the session starts.
+# Nothing is powered by it until a stream runs. Called by
+# /etc/udev/rules.d/86-pro1x-music-route.rules when the card appears; on a
+# kernel without MultiMedia4 the control is missing and nothing happens.
+for amixer in /usr/bin/amixer /bin/amixer; do
+	if [ -x "$amixer" ]; then
+		"$amixer" -q -c Pro1X cset "name=RX_CODEC_DMA_RX_0 Audio Mixer MultiMedia4" 1 \
+			2> /dev/null || true
+		break
+	fi
+done
+exit 0

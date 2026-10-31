@@ -152,6 +152,14 @@ patch -s -o /usr/bin/pro1x-voice-call "$NIXOS/device/audio/pro1x-voice-call" \
 chmod 755 /usr/bin/pro1x-voice-call
 apt-get install -y -q --no-install-recommends gcc libc6-dev libasound2-dev
 gcc -O2 -Wall -o /usr/bin/pro1x-voicepcm "$NIXOS/device/audio/voicepcm.c" -lasound
+# Music with a deep buffer (docs/audio.md): the session's pro1x-music-sink
+# loads PulseAudio's sink on the MultiMedia4 front end (kernels with patch
+# 0034) and moves the media player there; its Xsession.post hook and the
+# front end's udev route came with the overlay
+apt-get install -y -q --no-install-recommends pkg-config libpulse-dev
+# shellcheck disable=SC2046
+gcc -O2 -Wall -o /usr/local/bin/pro1x-music-sink "$REPO/tools/pro1x-music-sink/pro1x-music-sink.c" \
+	$(pkg-config --cflags --libs libpulse)
 
 # --- Boot menu (initramfs) and pro1x-boot ----------------------------------
 # The initramfs hook copies both into the initramfs; pro1x-boot also serves
