@@ -500,8 +500,11 @@ The versions are in `/root/devday/leste-install-*.log`, the files in
    PHONE="$PHONE" bash scripts/71-power-userspace.sh install
    ```
    It covers 50-pro1x.pa (3 s), pro1x-autosuspend, pro1x-rpmtest, and the
-   Wi-Fi power save, also in the MeeGo copy, Kali and Arch. The way back
-   is `71-power-userspace.sh restore`.
+   Wi-Fi power save, also in the MeeGo copy, Kali and Arch, and since the
+   audit of 2026-10-31 GPS on demand: gpsd in no Leste runlevel, and on
+   Kali and Arch the GNSS engine (`pro1x-gnss.service`) only while gpsd
+   runs, gpsd started by its socket instead of at boot. The way back is
+   `71-power-userspace.sh restore`.
 4. [OK] reboot, then `collect.sh 06-after-packages`.
    - Expected: Hildon up, `DISPLAY=:0 xset -q` "Monitor is Off" after the
      display blanks (mce pro1x3).
@@ -533,7 +536,13 @@ The pro1x.9 against pro1x.10 comparison is [OPT], only if time allows.
 3. The Bluetooth UART between sleeps (`docs/power-management.md`, that
    section): IBS counters, `runtime_status`. [HAND] A Bluetooth device.
 4. [OPT] One hour of standby with `rc-service pro1x-autosuspend start`.
-5. Afterwards: [OK] reboot (USB back), `collect.sh 07-power`, and fill in
+5. The audit's checks (`docs/power-management.md`, "Measurements for
+   2026-10-31", steps 4-9; awake, no suspend, no reboot): gpsd not running
+   in Leste; the pairs dt2w on/off, the "device on" LED on/off (look at the
+   LED [HAND]) and Bluetooth up/down, 15 minutes each [OPT, as time
+   allows]; jbd2 and the UFS gating from step 1's log; the cpuidle
+   baseline. Before one suspend of 2, the LED's `brightness`.
+6. Afterwards: [OK] reboot (USB back), `collect.sh 07-power`, and fill in
    the table in `docs/power-management.md`.
 
 ## Block 8: alarm power-on (should; 20 min) [OK] [HAND]
@@ -626,6 +635,10 @@ Its trial must have ended (block 4, step 6).
    - Kali logs in as `kali` (password `kali`) with sudo.
    - Checks: the clock is right (not 1970) and `systemctl status
      pro1x-rtc` is fine.
+   - GPS on demand (block 6's 71): `systemctl is-enabled gpsd.socket
+     gpsd.service pro1x-gnss.service` = enabled, disabled, enabled, and
+     `pgrep -x pro1x-gnss` empty (`docs/power-management.md`,
+     measurements step 4); the blanking, step 10.
 4. `docs/kali-mobile-data.md` steps 2-7 (PIN by `nmcli --ask` [HAND]).
    Then `SYS=kali bash $D/collect.sh 10-kali /host/kali-mobile-<date>`.
 5. Back: `sudo pro1x-boot next leste && sudo reboot` [OK].
@@ -644,7 +657,7 @@ See `arch/README.md`. Its trial must have ended.
    ```
    Then the first look [HAND]: the screen's rotation, touch, the Phosh home
    bar (known bug: a layer surface of height 0), the clock (rtc offset),
-   the FM radio.
+   the FM radio. GPS on demand and the blanking as in block 10.
 4. `SYS=arch bash $D/collect.sh 11-arch`. Back to Leste [OK].
 
 ## Block 12: FreeBSD (2-4 h; G1 and dsp1/3/4/6/7a must, others should or could)

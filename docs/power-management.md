@@ -398,6 +398,8 @@ new images get it from their builders.
 | Sound card open 300 s after a sound | 3 s with a kernel that has 0026 (PulseAudio), 3 s on PipeWire | `touch /etc/pulse/pro1x-suspend-300`; WirePlumber: the file below |
 | Wi-Fi power save | on at every start of the interface, NetworkManager keeps it | `touch /etc/pro1x-wlan-powersave-off` |
 | hexagonrpcd stopped for every suspend | only on kernels without 0031 | `StopServices=pro1x-hexagonrpcd` in `/etc/pro1x-autosuspend.conf` |
+| Kali and Arch: the modem's GNSS engine from boot on, a fix a second for ever (2026-10-31 audit, below) | `pro1x-gnss.service` only while gpsd runs, gpsd started by `gpsd.socket` for its first client | `systemctl enable gpsd.service` (the engine from boot on again) |
+| Leste and the MeeGo copy: gpsd in a runlevel would do the same | gpsd in no runlevel (location-daemon starts it) | `rc-update add gpsd default` |
 
 ### The sensor process crash (0031)
 
@@ -535,6 +537,123 @@ NetworkManager keeps it on for every connection
   commit every 5 s while something logs: `commit=` for the root,
   `vm.dirty_writeback_centisecs`), dsme-thermal, icd2's scans, haveged.
 
+## Audit of the Linux systems (2026-10-31, from the PC)
+
+Everything the repository builds for the five Linux systems on 7.1.0-pro1x.10,
+looked at again for energy: the kernel's configuration
+(`$WORK/out-pro1x.10/config-7.1.0-pro1x.10`), the device tree, the init
+scripts, units, udev rules and settings of `rootfs-overlay/`, `kali/`,
+`arch/`, `luneos/` and `meego/`, and the defaults of the packages they
+start from (Leste's base image of 2026-04-26, leste-config-common 1.146,
+Devuan's and Debian's gpsd, Arch Linux ARM's gpsd, kali-themes,
+xfce4-power-manager). Classes: **A** changed now (user space, with a way
+back, in `71-power-userspace.sh` and the builders), **B** a measurement or
+decision for today (below, "Measurements for 2026-10-31", steps 4-10),
+**C** not worth a change. Ranked by the expected effect.
+
+**Kali and Arch**
+
+1. **A: the GNSS engine ran from boot on.** `kali/20-pro1x-hardware.sh` and
+   `arch/20-pro1x-hardware.sh` enabled `pro1x-gnss.service` (WantedBy
+   multi-user) and `gpsd.service`, `/etc/default/gpsd` had `-n`, and
+   pro1x-gnss starts a periodic LOC session (one fix a second) as soon as
+   it runs (`tools/pro1x-gnss/pro1x-gnss.c`, `start_session()`): the
+   modem's GNSS receiver on and a position indication waking the phone
+   every second, all the time, for no client at all (Xfce and Phosh have
+   none by default). Now `pro1x-gnss.service` is `WantedBy=gpsd.service`
+   and `BindsTo=gpsd.service`, gpsd is started by `gpsd.socket` for its
+   first client (cgps, gpspipe, kismet...), `-n` is gone. Debian's gpsd
+   enables `gpsd.service` itself, so the builders disable it (which takes
+   the socket along through `Also=`) and enable the socket again. After
+   the first use gpsd and the engine stay up until `systemctl stop
+   gpsd.service` or the next boot: off after boot, not off after use (the
+   next step would be pro1x-gnss stopping its session while gpsd has no
+   client). The images on the phone get it from `71-power-userspace.sh`
+   (the links of what `systemctl enable` and `disable` do, each saved).
+2. **B: the display's blanking.** Kali's own Xfce settings
+   (kali-themes' `xfce4-power-manager.xml`) set only the power button, so
+   xfce4-power-manager's defaults apply: dimmed to 20 % after 300 s on
+   the battery, DPMS sleep after 5 and off after 10 minutes. On a phone
+   that is minutes of the lit panel after each use. Phosh
+   (Arch) blanks after GNOME's `idle-delay` (300 s unless Arch's phosh
+   overrides it). A decision for the owner (step 10).
+3. **C:** journald (synced every 5 min), `RuntimeWatchdogSec=30s` (a
+   watchdog ping every 15 s), snapper without timeline snapshots, Btrfs
+   with `noatime` (Arch), NetworkManager and ModemManager defaults,
+   WirePlumber's 3 s and NetworkManager's Wi-Fi power save (pro1x.10 fixes).
+
+**Leste and the MeeGo copy**
+
+1. **A (insurance): gpsd in no runlevel.** `46-sensor-stack.sh` installs
+   Devuan's gpsd, whose postinst runs `update-rc.d gpsd start 26 2 3 4 5`;
+   with leste-config's OpenRC script in its place (no LSB header) that most
+   likely added nothing, but if gpsd were in `default`, `/etc/conf.d/gpsd`
+   would start pro1x-gnss at boot (the script's `checkconfig` passes while
+   the location gconf keys are unset). 46 and 71 now take it out of
+   `default`; location-daemon starts gpsd on demand, as leste-config's
+   policy-rc.d says ("gpsd is started on-demand by location-daemon").
+   Check on the phone: step 4.
+2. **B: the touchscreen with the display off.** `dt2w=1`
+   (`rootfs-overlay/etc/modprobe.d/pro1x-dt2w.conf`) keeps the Goodix
+   controller scanning and its bit-banged I2C reads running for every
+   touch in a pocket. What it costs: step 5.
+3. **B: the "device on" light.** Leste's mce has
+   `PatternDeviceOn=254;0;0;255;255;255;1000;5000` (`/etc/mce/mce.ini`,
+   led-sw: white, all three channels at 255, 1 s on and 5 s off, from
+   mce's timers) and osso-applet-display's gconf default
+   `/system/osso/dsm/leds/PatternDeviceOn` is true: with the display off
+   the LED blinks and mce wakes twice in 6 s. Worse once pro1x-autosuspend
+   runs: a suspend that falls into the second the LED is on keeps it lit
+   for the whole sleep (mce's timers are frozen, and leds-qcom-lpg has no
+   suspend handling and no `LED_CORE_SUSPENDRESUME`). Step 6.
+4. **B: Bluetooth up from boot** (`45-pro1x-hardware.sh` adds `bluetooth`
+   to `default`; BlueZ's `AutoEnable` powers hci0). With pro1x.10 the
+   UART sleeps between in-band sleeps (0023/0024) and the chip is off at
+   `hci down` (0029); what "up but idle" still costs is in step 7.
+5. **B: the root's journal.** The ext4 root on the loop device is mounted
+   with the defaults (`commit=5`, `relatime`: `pro1x-loop-root` sets no
+   `ROOTFLAGS` for ext4 and Leste's fstab has no root line), on `/host`
+   (`rw,noatime`), which journals the image file's writes once more. Step 8.
+6. **C, deliberate:** the stand-by screen for 60 s at 20 % after each
+   blank (`50-pro1x.ini`, the N9's low power mode), PulseAudio's 300/3 s,
+   USB runtime PM off until 0032 is proven, UFS clock scaling off
+   (`60-pro1x-ufs.rules`: the devfreq hang of 2026-10-28; idle UFS is
+   clock gated and ufs-qcom drops its interconnect votes to the minimum
+   at the gating, so it costs only while there is I/O), Leste's display
+   timeouts (dim after 30 s, blank 3 s later).
+7. **C:** haveged (in Leste's `default`; once the kernel's CRNG is ready
+   its `select()` for writing never returns), cron (a wake-up a minute),
+   rsync, dundee, cellulard, dnsmasq (idle or not started), dsme-thermal
+   (a one-shot at start), bmed's 60 s check (`meego/bme/bmeipc.c`),
+   pro1x-events' feed every 15 and weather every 30 minutes while the
+   look is on, also with the display off (`tools/pro1x-events`; a fetch
+   or two an hour), the own daemons (event-driven, see above).
+
+**LuneOS**
+
+- **C:** no Wi-Fi power-save rule and not in 71: cfg80211 starts the
+  interface with power save on anyway (`CONFIG_CFG80211_DEFAULT_PS=y`);
+  whether connman leaves it on is one `iw dev wlan0 get power_save` the
+  next time LuneOS runs. No GNSS or sensor daemons.
+
+**Kernel and device tree (all systems)**
+
+- **C, right as it is:** `NO_HZ_IDLE`, `HZ=250`, schedutil by default and
+  nothing in user space that changes a governor or a frequency limit,
+  `WQ_POWER_EFFICIENT_DEFAULT`, lazy RCU on offloaded CPUs, no lockup or
+  hung task detectors, no workqueue watchdog, no KFENCE, no
+  `DEBUG_PREEMPT` or lockdep; `PM_DEBUG` and the trace events cost
+  nothing while unused; NUMA balancing is built but inactive with one
+  node. In the device tree only `vph_pwr` is always-on; the RPM's
+  regulators are not, the wake-up sources are the power key, the RTC,
+  the keyboard slide, volume up and the keyboard matrix (GPIO 107,
+  which is not in the MPM map: it wakes from s2idle, not from vmin).
+- **B: the cpuidle governor.** menu only (`CONFIG_CPU_IDLE_GOV_TEO` is not
+  set). With the clusters' deeper state rejected nearly always, TEO is
+  the candidate for the next kernel: both built, switched at run time in
+  `/sys/devices/system/cpu/cpuidle/current_governor` and compared, not
+  assumed better on this big.LITTLE. Today: the baseline (step 9).
+
 ## Measurements for 2026-10-31
 
 What to compare: pro1x.9 with the old user space (the state of the
@@ -574,6 +693,72 @@ proven), the phone lying still, display off.
    `sort -k4 -n -r /sys/kernel/debug/wakeup_sources | head -15` (wakeup
    counts) and `/sys/power/suspend_stats/*`.
 
+The audit's steps (2026-10-31, "Audit of the Linux systems" above), on
+pro1x.10 after block 6 of `docs/device-day-2026-10-31.md`. The pairs in
+5-7 run on the same conditions as step 1 (charger input suspended, display
+off, lying still), 15 minutes each, and compare the means without the
+first 5 minutes; every switch in them is a run-time one and goes back by
+itself at the next boot.
+
+4. **GNSS only on demand.** Leste, a few minutes after the boot and before
+   any location application: `rc-update show default | grep gpsd` and
+   `pidof gpsd pro1x-gnss` both empty (if gpsd was in `default` before 71,
+   note it: then the engine ran in every earlier Leste measurement). Kali
+   (block 10) and Arch (block 11): `systemctl is-enabled gpsd.socket
+   gpsd.service pro1x-gnss.service` gives enabled, disabled, enabled (the
+   last through `gpsd.service.wants`), `pgrep -x pro1x-gnss` is empty;
+   `gpspipe -w -n 5` starts both (`systemctl is-active gpsd pro1x-gnss`),
+   `systemctl stop gpsd.service` stops both. If Kali or Arch has to be
+   measured anyway: one `pro1x-powerlog` there before and after `systemctl
+   stop gpsd.service` on the old setting shows what the engine cost.
+5. **dt2w:** `pro1x-powerlog dt2w-on 15`, then `echo 0 >
+   /sys/module/goodix_ts/parameters/dt2w` and `pro1x-powerlog dt2w-off 15`.
+   More than about 5 mA apart: the touchscreen asleep while the display is
+   off (with dt2w off, or covered) becomes the next item, as "Larger, not
+   done" has it.
+6. **The "device on" light:** with the display off, look whether the LED
+   blinks white every 6 s, and `cat /sys/class/leds/*:status/brightness`.
+   Then `pro1x-powerlog led-on 15`; `dbus-send --system --type=method_call
+   --dest=com.nokia.mce /com/nokia/mce/request
+   com.nokia.mce.request.req_led_pattern_deactivate string:PatternDeviceOn`;
+   `pro1x-powerlog led-off 15` (the persistent switch is the gconf key
+   `/system/osso/dsm/leds/PatternDeviceOn`, Settings, notification light).
+   Before one suspend of step 2 (or with `69-rpm-test.sh` itself), the
+   three `brightness` values: one not 0 means the LED stays lit through the
+   suspend. Decision: the pattern into the LPG's hardware pattern trigger
+   (`CONFIG_LEDS_TRIGGER_PATTERN` is built), lower and shorter (e.g.
+   `24;24;24` for 100 ms), or off by default.
+7. **Bluetooth up but idle:** `pro1x-powerlog bt-up 15`, `hciconfig hci0
+   down`, `pro1x-powerlog bt-down 15`, `hciconfig hci0 up`. The difference
+   is the input for Bluetooth off by default (BlueZ's `AutoEnable=false`,
+   the status menu switches it on); the owner decides.
+8. **Storage:** in step 1's `.wakeups`, the lines of `jbd2/*` and the
+   writeback kworkers. More than about one a second together: `mount -o
+   remount,commit=60 /` and `mount -o remount,commit=60 /host`, then
+   `pro1x-wakeups 60` again (back: `commit=5`, or the next boot). If it
+   halves them, `commit=60` goes into `pro1x-loop-root` for `/host` and
+   into the root's `ROOTFLAGS` with the next boot image (the cost: up to a
+   minute of writes lost when the phone is reset by the power key).
+   Also once: `cat /sys/bus/platform/devices/4804000.ufshc/{clkgate_enable,clkgate_delay_ms,auto_hibern8}`
+   (expected 1, a delay in ms and a non-zero hibern8 timer: idle UFS
+   gated).
+9. **cpuidle baseline for TEO:** `cat
+   /sys/devices/system/cpu/cpuidle/current_governor` (menu), then before and
+   after a 10 minute display-off period
+   `grep . /sys/devices/system/cpu/cpu[04]/cpuidle/state*/{name,usage,above,below}`
+   and `cat /sys/kernel/debug/pm_genpd/power-domain-cpu-cluster*/idle_states`.
+   A deeper state with `above` close to `usage` (it was entered and the
+   next wake-up came sooner than it pays) is the case for building TEO
+   next to menu in the next kernel and comparing step 1 with
+   `echo teo > /sys/devices/system/cpu/cpuidle/current_governor`.
+10. **Blanking on Kali and Arch** (when they run, blocks 10 and 11): Kali
+    `xfconf-query -c xfce4-power-manager -lv` (as `kali`) and the time from
+    the last touch until the panel goes off on the battery; Arch `gsettings
+    get org.gnome.desktop.session idle-delay` (as `alarm`). Decision for
+    the owner: Kali on the battery DPMS sleep after 1 and off after 2
+    minutes (kali-themes owns `/etc/xdg`'s file, so the setting would go
+    into the `kali` user's xfconf), Phosh 60 s.
+
 | Measurement | pro1x.9, old user space | pro1x.10, new user space |
 |---|---|---|
 | Awake, display off: mean mA (without the first 5 min) | | |
@@ -586,6 +771,14 @@ proven), the phone lying still, display off.
 | USB `configured` after a suspend | no | |
 | Standby 1 h with autosuspend: % and mV lost | (not run) | |
 | Standby: sleeps, wake-ups and their sources | | |
+| gpsd / pro1x-gnss after boot: Leste, Kali, Arch | Kali, Arch: running | |
+| dt2w on / off: mA | | |
+| "Device on" LED on / off: mA; lit through a suspend | | |
+| Bluetooth up / down, awake: mA | | |
+| jbd2 + writeback wake-ups/s, commit=5 / 60 | | |
+| UFS clkgate_enable, auto_hibern8 | | |
+| cpuidle: menu; deeper states' usage / above | | |
+| Kali, Arch: seconds until the panel is off | | |
 
 ## The notify_rpm test (2026-10-31, with the owner)
 
