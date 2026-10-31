@@ -68,6 +68,7 @@ same pinned key. For Kali and Arch it is `phone.sh ssh kali`, and so on.
 | `fix-ownership.sh check\|fix\|undo [ROOT]` | phone | The images built before 2026-10-31 (bb39fa8/0f271a9) left `/`, `/etc`, `/usr`, the overlays' files, the modules and the firmware owned by uid 1000 (`user`, `kali`, `alarm`) or group-writable: a way to root. `check` lists them, read only; `fix` gives our paths back to root and writes an undo list first; `undo` puts that back. Our paths: `owned-paths.txt` next to it (`mk-owned-paths.sh` writes it from the repository). `deploy.sh tools` puts both into `/root/devday/` and `/host/devday/`. |
 | `check-initrd.sh INITRD [alarm]` | PC | Checks that the initramfs `prepare` made carries the trial's parts. The watchdog's arming is skipped silently without `qcom-wdt.ko` or `devmem`. Passes on pro1x.5's initramfs. |
 | `kexec-test.sh check\|load\|go\|after K` | PC | Starts the kernel of `$WORK/out-K` once from the running Leste with kexec, boot_b untouched (block 18). `go` and `after`'s dump only with `OK=yes`. |
+| `probe.sh install\|arm\|status\|off\|watch` | PC | A kernel flashed once with a way back that needs no hands (block 18.1): the phone's `pro1x-probe` service (sysinit) puts the saved boot_b back about 15 s into the candidate's start and ends its trial; `watch` takes the dump on 900e and collects. |
 | `crashdump.py DIR...` | PC | Decodes a `qdl ramdump` directory: the PMIC's reset reasons, TZ's interrupt counters and log, the NoC errors (`docs/crash-dumps.md`). Reads files only. |
 | `test/run.sh` | PC | Tests the helpers above kexec-test.sh against a fake phone (fake ssh/scp): 39 checks. |
 | `test/fix-ownership.sh` | PC, sudo | Tests `fix-ownership.sh` on two fake roots made as the old builds made them (check, fix, check, undo): 47 checks; `CLEAN=<a correctly built image, mounted read-only>` adds 2. |
@@ -1397,6 +1398,43 @@ Per run, `K` = the kernel's name, with `D`, `WORK`, `PHONE` as above:
 Stop as soon as a pstore names the cause. A kernel that runs under kexec
 still gets its own trial before it replaces pro1x.5 in boot_b. FreeBSD
 (block 12) waits for that kernel.
+
+### 18.1 Run 0's result and the probe instead (11-01, 00:00-00:30)
+
+Run 0 (pro1x.5 into itself) stopped about 0.41 s into the new kernel, and
+its pstore had 2498 corrected and 158 unrecoverable ECC blocks: something
+(the DSPs, still running) wrote into the RAM under the new kernel. kexec
+from a running Leste is no test here; runs 1-4 go by flash instead, with a
+way back that needs no hands: `tools/devday/probe.sh` and the phone's
+`pro1x-probe` service (`docs/crash-dumps.md`, "Probing a kernel").
+
+1. Once: `bash $D/probe.sh install` (OpenRC sysinit in Leste).
+2. `prepare` as above (not for pro1x.12), then `bash $D/probe.sh arm
+   7.1.0-$K` (boot_b, still pro1x.5, saved as the image to put back).
+3. **[OK]** `PHONE=... WORK=$WORK OUT=$WORK/out-$K bash scripts/65-kernel-update.sh flash`
+   (trial, 3 tries), then reboot.
+4. `DAY=2026-11-01 bash $D/probe.sh watch probe<N>-$K 7.1.0-$K 10`: 900e
+   takes the dump and collects from the pro1x.5 that follows; up: 10
+   minutes, then collects and reboots (into pro1x.5, boot_b is back).
+
+Dry run 00:28 (armed for the running pro1x.5, rebooted): the service
+started 15.5 s into the boot and had boot_b back (same bytes, cmp, trial
+ended) at 19.6 s; pro1x.12's starts lasted about 31 s before the hang.
+The one way it cannot cover: a candidate that hangs before 15 s takes the
+trial's three tries and lands in Sailfish (LUKS code).
+
+Order changed: pro1x.12 itself first (the pstore its earlier starts lost),
+then `no29` before `nobt` (the dumps' NoC error at the modem block and the
+18:56 modem fatal point at the WCN3950's shared power, which 0029 cuts).
+mce +pro1x6 and the full ModulesUser list run from the dry run's boot on:
+nothing else in Leste's user space changes between the runs.
+
+| Run | K | Stays up (10 min) | Goes down |
+|---|---|---|---|
+| 1 | pro1x.12 | not reproduced: run 2 anyway | the pstore: what Linux did before the bite |
+| 2 | pro1x.12no29 | 0029 | run 3 |
+| 3 | pro1x.12nobt | 0023/0024/0030 | run 4 |
+| 4 | pro1x.12nobtslim | SLIMbus (0021) | neither: 0038/0039 next |
 
 ## End of the day (15 min)
 

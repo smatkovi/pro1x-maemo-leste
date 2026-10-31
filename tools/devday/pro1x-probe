@@ -1,0 +1,82 @@
+#!/sbin/openrc-run
+# A kernel tried once, without leaving it in boot_b (tools/devday/probe.sh,
+# docs/crash-dumps.md "Probing a kernel"). When /host/pro1x-probe/arm names
+# the running kernel ("<kernelrelease> <image> <sha256>"), this puts the
+# image back into boot_b at once, early in sysinit (about 10 s into the
+# boot), ends the trial (pro1x-boot trial-stop: slot b successful again)
+# and removes arm; the kernel runs on. A hang or crash after this point
+# ends in the saved kernel, with this start's console in the pstore. Any
+# mismatch (another kernel, a wrong checksum, no boot_b) does nothing.
+#
+# Also keeps every start's pstore as /host/pro1x-probe/boot-<n>-<kernel>
+# (pstore-save keeps one copy per day, the next start of the day replaces
+# it) and notes each start in /host/pro1x-probe/log, and in the kernel log
+# at error level, so the marker is on the console and in the pstore too.
+
+description="Put boot_b back early when the running kernel is on probe"
+
+depend() {
+	after mountkernfs
+	before udev kmod
+}
+
+P=/host/pro1x-probe
+
+say() {
+	echo "$(cut -d' ' -f1 /proc/uptime) s: $*" >> $P/log
+	echo "<3>pro1x-probe: $*" > /dev/kmsg 2> /dev/null || true
+}
+
+boot_b() {
+	for u in /sys/class/block/*/uevent; do
+		grep -qx PARTNAME=boot_b "$u" || continue
+		sed -n 's/^DEVNAME=/\/dev\//p' "$u"
+		return 0
+	done
+	return 1
+}
+
+restore() {
+	read -r want img sum < $P/arm || { say "arm unreadable: nothing done"; return 0; }
+	if [ "$want" != "$k" ]; then
+		say "armed for $want, running $k: nothing done"
+		return 0
+	fi
+	if [ ! -f "$img" ] || [ "$(sha256sum < "$img" | cut -d' ' -f1)" != "$sum" ]; then
+		say "$img missing or not $sum: nothing done"
+		return 0
+	fi
+	dev=$(boot_b) || { say "no boot_b partition: nothing done"; return 0; }
+	size=$(stat -c %s "$img")
+	if [ "$(blockdev --getsize64 "$dev")" != "$size" ]; then
+		say "$dev is not $size bytes: nothing done"
+		return 0
+	fi
+	if dd if="$img" of="$dev" bs=1M conv=fsync status=none &&
+	   cmp -s -n "$size" "$img" "$dev"; then
+		rm -f $P/arm
+		sync
+		/usr/local/sbin/pro1x-boot trial-stop > /dev/null 2>> $P/log ||
+		    say "trial-stop failed"
+		say "running $k: boot_b back to $img ($dev), trial ended"
+	else
+		say "writing $img to $dev FAILED (arm kept)"
+	fi
+}
+
+start() {
+	[ -d $P ] || return 0
+	ebegin "Kernel probe"
+	k=$(uname -r)
+	n=$(( $(cat $P/count 2> /dev/null || echo 0) + 1 ))
+	echo $n > $P/count
+	say "start $n, kernel $k"
+	[ ! -f $P/arm ] || restore
+	if grep -q ' /sys/fs/pstore ' /proc/mounts; then
+		d=$P/boot-$n-$k
+		mkdir -p "$d"
+		cp /sys/fs/pstore/* "$d/" 2> /dev/null || true
+	fi
+	sync
+	eend 0
+}

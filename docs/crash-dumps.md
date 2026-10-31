@@ -282,3 +282,34 @@ initramfs made in Leste; no partition written).
 
 Every run is [OK]: `OK=yes kexec-test.sh go <name>`. Stop at the first run
 whose pstore names the cause.
+
+## Probing a kernel (since 2026-11-01)
+
+Run 0 settled the kexec test: pro1x.5 kexec'd into itself stopped about
+0.41 s into its boot, and its pstore had 158 unrecoverable ECC blocks
+(the running DSPs wrote into the new kernel's RAM). A candidate is now
+flashed instead, with a way back that needs no hands:
+
+- `tools/devday/pro1x-probe`, an OpenRC service in Leste's sysinit
+  (`probe.sh install`). When `/host/pro1x-probe/arm` names the running
+  kernel, it writes the saved image back into boot_b (sha256 checked
+  first, `cmp` after), runs `pro1x-boot trial-stop` and removes `arm`;
+  the candidate runs on. In the dry run it ran 15.5 s into the boot and
+  was done at 19.6 s; pro1x.12 hung about 31 s in. It also keeps every
+  start's pstore (`/host/pro1x-probe/boot-<n>-<kernel>`) and writes its
+  steps at error level into the kernel log, so they are on the console
+  and in the pstore too.
+- `probe.sh arm KVER` saves boot_b (the running kernel) as
+  `/host/pro1x-probe/restore.img`; then `65-kernel-update.sh flash` with
+  its trial and a reboot. `probe.sh watch RUN KVER` takes the dump on 900e
+  (`qdl ramdump`, which resets the phone into the saved kernel) and
+  collects; a candidate that stays up is collected after 10 minutes and
+  rebooted.
+- Not covered: a hang before sysinit. Then the trial's three tries go
+  by and the bootloader starts slot a (Sailfish OS, LUKS code).
+
+The command line stays the crashed starts' (`loglevel=4`, the serial
+console): the console the pstore keeps then has warnings and errors only.
+With `ignore_loglevel` the 115200-baud console would print every line;
+the Bluetooth UART and the debug UART share the QUP wrapper, so that
+could change the very thing under test.
