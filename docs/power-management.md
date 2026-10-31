@@ -721,7 +721,9 @@ itself at the next boot.
    Then `pro1x-powerlog led-on 15`; `dbus-send --system --type=method_call
    --dest=com.nokia.mce /com/nokia/mce/request
    com.nokia.mce.request.req_led_pattern_deactivate string:PatternDeviceOn`;
-   `pro1x-powerlog led-off 15` (the persistent switch is the gconf key
+   `pro1x-powerlog led-off 15`, looking that the LED stays dark through
+   it (mce may switch the pattern on again at the next blank; the
+   persistent switch is the gconf key
    `/system/osso/dsm/leds/PatternDeviceOn`, Settings, notification light).
    Before one suspend of step 2 (or with `69-rpm-test.sh` itself), the
    three `brightness` values: one not 0 means the LED stays lit through the
