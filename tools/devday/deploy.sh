@@ -16,7 +16,9 @@
 # place. The phone must keep 1 GiB free where a block writes.
 #
 # Blocks (SYS=leste unless named):
-#   tools        ramconsole.py, leste-install.sh -> /root/devday/
+#   tools        ramconsole.py, leste-install.sh -> /root/devday/;
+#                fix-ownership.sh with owned-paths.txt -> /root/devday/ and
+#                /host/devday/ (for Kali and Arch: their /root is their own)
 #   audio        the test sounds (1 s silence, 100 ms beep), the UCM check,
 #                the Leste audio trace for FreeBSD, pro1x-fm-test and
 #                pro1x-fm-audio-test
@@ -94,6 +96,10 @@ block() {
 	tools)
 		item "$REPO/tools/devday/ramconsole.py" /root/devday/ramconsole.py 755
 		item "$REPO/tools/devday/leste-install.sh" /root/devday/leste-install.sh 755
+		for d in /root/devday /host/devday; do
+			item "$REPO/tools/devday/fix-ownership.sh" "$d/fix-ownership.sh" 755
+			item "$REPO/tools/devday/owned-paths.txt" "$d/owned-paths.txt"
+		done
 		;;
 	audio)
 		mkdir -p "$STAGE"
