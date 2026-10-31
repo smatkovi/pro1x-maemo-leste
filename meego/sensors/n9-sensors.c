@@ -23,13 +23,17 @@
  * count as user activity nor as its own keyboard slide; X ignores the
  * device (90-pro1x-n9-input.rules), so it gets the keys only once.
  *
- * Axes: corrected with the Pro1X's mount matrix (x and y flipped, as
- * verified by the NixOS port and set for iio-sensor-proxy in
- * 81-pro1x-sensors.rules), the readings are in the frame of the panel in
- * portrait (x right, y up, z out of the screen). In the landscape screen of
- * the MeeGo session that is x up, y left - the N950's own frame.
- * sensord's acc_trans_matrix and orientation_offset of the N950 rootfs then
- * give Screen.TopEdge "top" with the keyboard towards the user.
+ * Axes: libssc's, unchanged. They are in the frame of the panel in
+ * portrait (x right, y up, z out of the screen), as an accelerometer
+ * measures (+1 g on the axis that points up). In the landscape screen of
+ * the MeeGo session that is x up, y left - the N950's own frame, so only
+ * the unit changes. sensord's acc_trans_matrix (-1 on every axis) and
+ * orientation_offset of the N950 rootfs then give Screen.TopEdge "top"
+ * with the keyboard towards the user. iio-sensor-proxy's mount matrix
+ * (81-pro1x-sensors.rules, x and y flipped) is not for this device:
+ * iio-sensor-proxy's orientation.c takes y < 0 as upright and x > 0 as
+ * left side up, libssc's frame turned by 180 degrees on the screen. With
+ * that matrix applied here (3de3559) the MeeGo UI turned by 180 degrees.
  *
  * sensord starts with TopEdge "left" (portrait) and keeps its last value
  * while the device lies flat, so a phone lying on the table would come up
@@ -127,9 +131,6 @@ static void accel_cb(SSCSensorAccelerometer *s, gfloat x, gfloat y, gfloat z, gp
 {
 	(void)s;
 	(void)data;
-	/* mount matrix: -1 0 0; 0 -1 0; 0 0 1 */
-	x = -x;
-	y = -y;
 	if (g_get_monotonic_time() - start_us < LANDSCAPE_START_US &&
 	    fabsf(z) > 0.9f * sqrtf(x * x + y * y + z * z)) {
 		x = 9.80665f;
