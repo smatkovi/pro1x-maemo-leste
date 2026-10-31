@@ -675,6 +675,12 @@ panel's side in `docs/power-management.md`, "The panel's low power modes".
    - While the stand-by screen shows:
      `dbus-send --system --print-reply --dest=com.nokia.mce /com/nokia/mce/request com.nokia.mce.request.get_display_status`
      says `lpm` (+pro1x3/4 said `off`).
+   - New with +pro1x5, as the proximity sensor now takes effect: the
+     sensor covered for 5 s on the stand-by screen makes it black;
+     uncovered, the stand-by screen comes back, but probably black
+     (hildon-desktop draws again only on "on": `patches/lpm/README.md`,
+     "Open"). If the stand-by screen lasts only about 5 s right after
+     the time-out, the sensor reads "near" when claimed.
    - `collect.sh 06b-mce-pro1x5`.
 3. The way back: `mce_1.10.17+pro1x4_arm64.deb` (leste-hildon-2026.10.31)
    the same way, with `--allow-downgrades` added, then a reboot.

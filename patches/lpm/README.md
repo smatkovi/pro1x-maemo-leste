@@ -70,6 +70,14 @@ display on; about 5 s after the last press only the stand-by screen came
   display in it. The touchscreen stayed as it was between `LPM_ON` and
   `LPM_OFF` with the lock screen up.
 
+Open (2026-10-31): hildon-desktop (`src/util/hd-dbus.c` at 1273f9eee252)
+knows only `on` (draw again) and `off` (stop drawing) of
+`display_status_ind`. From on or dimmed to `lpm` it keeps drawing, so
+the stand-by screen shows; but from `LPM_OFF` ("off") back to `LPM_ON`
+(the proximity sensor uncovered) it stays stopped, and the stand-by
+screen would be black until the display is on again. A hildon-desktop
+patch taking `lpm` as `on` would close that.
+
 ## Settings
 
 `mce.ini`, `[Display]`:
