@@ -49,7 +49,7 @@ log() { echo ">> $*"; }
 if [ "$ONLY" = pro1x-alarmboot ]; then
   # alone (49-alarmboot.sh, an image): only its own
   pkgs=(gcc libc6-dev pkg-config binutils dpkg-dev libpulse-dev libalarm-dev
-    libx11-dev libxext-dev)
+    libdbus-1-dev libx11-dev libxext-dev)
   devs=(libgtk2.0-dev)
 else
   pkgs=(gcc g++ libc6-dev pkg-config make gettext binutils dpkg-dev libgconf2-dev
