@@ -11,9 +11,12 @@
  *            wait; char dummy[64]; } u; }      cmd 0 = wait, 1 = statistics
  *
  * and a 32-bit "seconds waited" back when the wait is over. Leste's dsme
- * has no such module, so their clients never woke up. dsme lined up the
- * wakeups of all clients between their min and max time to save power;
- * here each client is woken at its min time.
+ * has no such module, so their clients never woke up. As dsme did, the
+ * wakeups are lined up to save power: a client waits until its max time
+ * at the latest, and when one is woken, every other whose min time has
+ * passed is woken with it (one CPU wakeup for all of them, the status
+ * bar's clock taking the rest along). The daemon itself sleeps in poll()
+ * until the next max time, with a timer slack of 200 ms.
  *
  * min = max = 0 registers the client or cancels its wait.
  */
@@ -23,6 +26,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -46,7 +50,8 @@ struct req {			/* the 32-bit clients' struct _iphb_req_t */
 static struct client {
 	int fd;
 	time_t started;		/* 0 = not waiting */
-	time_t wake_at;
+	time_t wake_at;		/* its max time: woken then at the latest */
+	time_t early_at;	/* its min time: woken from then on with another */
 } clients[MAX_CLIENTS];
 static int nclients;
 
@@ -94,9 +99,12 @@ static int handle(struct client *c)
 		c->started = 0;
 		return 0;
 	}
-	unsigned min = r.u.wait.mintime ? r.u.wait.mintime : r.u.wait.maxtime;
+	/* (min 0: with any other's wakeup, max at the latest) */
+	unsigned min = r.u.wait.mintime;
+	unsigned max = r.u.wait.maxtime > min ? r.u.wait.maxtime : min;
 	c->started = now();
-	c->wake_at = c->started + min;
+	c->early_at = c->started + min;
+	c->wake_at = c->started + max;
 	return 0;
 }
 
@@ -112,6 +120,8 @@ int main(void)
 		return 1;
 	}
 	chmod(SOCKET_PATH, 0666);
+	/* (whole seconds anyway: its wakeups may be grouped with others) */
+	prctl(PR_SET_TIMERSLACK, 200000000UL, 0UL, 0UL, 0UL);
 
 	for (;;) {
 		struct pollfd pfd[MAX_CLIENTS + 1];
@@ -131,12 +141,18 @@ int main(void)
 			return 1;
 
 		t = now();
+		/* a max time reached: it, and all past their min time with it */
+		int due = 0;
+		for (int i = 0; i < nclients; i++)
+			due |= clients[i].started && clients[i].wake_at <= t;
 		for (int i = nclients - 1; i >= 0; i--) {
 			if ((pfd[i + 1].revents & (POLLIN | POLLHUP | POLLERR)) && handle(&clients[i]) < 0) {
 				drop(i);
 				continue;
 			}
-			if (clients[i].started && clients[i].wake_at <= t) {
+			/* (not one that has just asked, but at its max time) */
+			if (due && clients[i].started && clients[i].early_at <= t &&
+			    (clients[i].started < t || clients[i].wake_at <= t)) {
 				wake(&clients[i], t);
 				if (clients[i].wake_at < 0)
 					drop(i);

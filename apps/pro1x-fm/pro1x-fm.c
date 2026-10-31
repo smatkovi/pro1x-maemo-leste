@@ -17,7 +17,9 @@
  *   m           mute
  *
  * All ioctls run in one thread of their own: tuning waits for the chip,
- * a seek takes seconds.
+ * a seek takes seconds. The signal, stereo and RDS are asked for every
+ * 1.5 s only while the window is in front and the display on (mce's
+ * display_status_ind not "off" or "lpm"); the radio plays on meanwhile.
  *
  * On FreeBSD (freebsd/fm/README.md) there is no V4L2 and no radio driver:
  * pro1x-fmd drives the chip from user space, and the same requests go to
@@ -564,6 +566,74 @@ static gboolean poll_cb(gpointer data)
 	return TRUE;
 }
 
+/* the status asked for only while it is seen: the window in front (once
+ * hildon-desktop has said so: without it always) and the display on */
+static guint poll_id;
+static gboolean display_on = TRUE, topmost_known;
+
+static void poll_update(void)
+{
+	gboolean top = !topmost_known || hildon_window_get_is_topmost(HILDON_WINDOW(window));
+	gboolean want = display_on && top;
+
+	if (want && !poll_id) {
+		poll_cb(NULL);	/* what changed meanwhile, at once */
+		poll_id = g_timeout_add(POLL_MS, poll_cb, NULL);
+	} else if (!want && poll_id) {
+		g_source_remove(poll_id);
+		poll_id = 0;
+	}
+}
+
+static void topmost_cb(GObject *o, GParamSpec *ps, gpointer data)
+{
+	(void)ps, (void)data;
+	if (hildon_window_get_is_topmost(HILDON_WINDOW(o)))
+		topmost_known = TRUE;
+	poll_update();
+}
+
+/* mce: "on", "dimmed", "off", "lpm" (the stand-by screen, patches/lpm) */
+static void mce_signal(GDBusConnection *c, const char *sender, const char *path,
+		       const char *iface, const char *signal, GVariant *p, gpointer data)
+{
+	const char *st;
+
+	(void)c, (void)sender, (void)path, (void)iface, (void)signal, (void)data;
+	if (!g_variant_is_of_type(p, G_VARIANT_TYPE("(s)")))
+		return;
+	g_variant_get(p, "(&s)", &st);
+	display_on = strcmp(st, "off") && strcmp(st, "lpm");
+	poll_update();
+}
+
+static void mce_status_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	GVariant *v = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), res, NULL);
+
+	(void)data;
+	if (v) {
+		mce_signal(NULL, NULL, NULL, NULL, NULL, v, NULL);
+		g_variant_unref(v);
+	}
+}
+
+static void watch_display(void)
+{
+	GDBusConnection *sys = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
+
+	if (!sys)
+		return;
+	/* (any sender: where no mce runs, pro1x-standby says it) */
+	g_dbus_connection_signal_subscribe(sys, NULL, "com.nokia.mce.signal",
+					   "display_status_ind", "/com/nokia/mce/signal", NULL,
+					   G_DBUS_SIGNAL_FLAGS_NONE, mce_signal, NULL, NULL);
+	g_dbus_connection_call(sys, "com.nokia.mce", "/com/nokia/mce/request",
+			       "com.nokia.mce.request", "get_display_status", NULL,
+			       G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NO_AUTO_START, 5000, NULL,
+			       mce_status_cb, NULL);
+}
+
 static void request(enum req req, unsigned arg)
 {
 	if (!opened || busy)
@@ -795,7 +865,9 @@ int main(int argc, char **argv)
 	requests = g_async_queue_new();
 	thread = g_thread_new("radio", radio_thread, NULL);
 	push(OPEN, freq);
-	g_timeout_add(POLL_MS, poll_cb, NULL);
+	g_signal_connect(window, "notify::is-topmost", G_CALLBACK(topmost_cb), NULL);
+	watch_display();
+	poll_update();
 
 	gtk_main();
 

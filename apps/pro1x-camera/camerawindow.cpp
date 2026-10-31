@@ -7,12 +7,20 @@
  * at full sensor resolution into an appsink; after a few frames for exposure
  * and white balance to settle, the last one is saved as JPEG.
  *
+ * The viewfinder (the sensor, the ISP and the video sink) runs only while
+ * it is seen: it stops a moment after the application loses the focus (the
+ * task switcher, another application) or the display goes off or to the
+ * stand-by screen (mce's display_status_ind "off", "lpm"), and starts
+ * again when it is back.
+ *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "camerawindow.h"
 
 #include <QApplication>
+#include <QDBusConnection>
 #include <QDateTime>
+#include <QGuiApplication>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -225,6 +233,23 @@ CameraWindow::CameraWindow(QWidget *parent)
               << CameraInfo{ "/base/soc@0/cci@5c1b000/i2c-bus@1/camera@2d", tr("Front camera"),
                              3256, 2448, envInt("PRO1X_CAMERA_ROTATION_FRONT", 0), true, false };
     m_lensFd = openLens();
+
+    /* not seen: the viewfinder stops (after a moment, so that a dialog of
+     * its own does not stop it) */
+    m_pauseTimer = new QTimer(this);
+    m_pauseTimer->setSingleShot(true);
+    m_pauseTimer->setInterval(1000);
+    connect(m_pauseTimer, &QTimer::timeout, this, &CameraWindow::updateRunning);
+    connect(qApp, &QGuiApplication::applicationStateChanged, this,
+            [this](Qt::ApplicationState state) {
+                if (state == Qt::ApplicationActive)
+                    updateRunning();
+                else
+                    m_pauseTimer->start();
+            });
+    QDBusConnection::systemBus().connect(QString(), "/com/nokia/mce/signal",
+                                         "com.nokia.mce.signal", "display_status_ind",
+                                         this, SLOT(displayStatus(QString)));
 
     QPalette pal = palette();
     pal.setColor(QPalette::Window, Qt::black);
@@ -455,6 +480,34 @@ void CameraWindow::autofocusFinished(int position)
     m_focusing = false;
     m_focus = position;
     setBusy(false);
+    updateRunning();
+}
+
+/* mce: "on", "dimmed", "off", "lpm" (the stand-by screen, patches/lpm) */
+void CameraWindow::displayStatus(const QString &state)
+{
+    m_displayOn = state != "off" && state != "lpm";
+    updateRunning();
+}
+
+/* The viewfinder only while it is seen; not in the middle of a picture or
+ * of focusing (they end with this again) */
+void CameraWindow::updateRunning()
+{
+    const bool seen = isVisible() && m_displayOn &&
+                      QGuiApplication::applicationState() == Qt::ApplicationActive;
+
+    if (m_capturing || m_focusing)
+        return;
+    if (!seen && m_pipeline) {
+        stopViewfinder();
+        m_paused = true;
+    } else if (seen && m_paused) {
+        m_paused = false;
+        startViewfinder();
+        if (lensAvailable())
+            setLens(m_lensFd, m_focus);
+    }
 }
 
 void CameraWindow::capture()
@@ -500,9 +553,8 @@ void CameraWindow::captureFinished(const QString &path, const QString &error)
         QMaemo5InformationBox::information(this, error);
     }
     if (isVisible()) {
-        startViewfinder();
-        if (lensAvailable())
-            setLens(m_lensFd, m_focus);
+        m_paused = true;    /* started by updateRunning() if it is seen */
+        updateRunning();
     }
 }
 
@@ -566,6 +618,7 @@ void CameraWindow::showEvent(QShowEvent *event)
 
 void CameraWindow::closeEvent(QCloseEvent *event)
 {
+    m_paused = false;
     stopViewfinder();
     QWidget::closeEvent(event);
 }

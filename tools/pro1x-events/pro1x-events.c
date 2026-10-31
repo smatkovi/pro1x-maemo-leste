@@ -3449,7 +3449,7 @@ int main(int argc, char **argv)
 	gconf_client_notify_add(gconf, KEY_DIR, settings_changed, NULL, NULL, NULL);
 	system_bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
 	if (system_bus) {
-		/* (from any sender: where there is no mce, pro1x-standby -e) */
+		/* (from any sender: where no mce runs, pro1x-standby says it) */
 		g_dbus_connection_signal_subscribe(system_bus, NULL, "com.nokia.mce.signal",
 						   "display_status_ind", "/com/nokia/mce/signal",
 						   NULL, G_DBUS_SIGNAL_FLAGS_NONE, mce_signal, NULL,

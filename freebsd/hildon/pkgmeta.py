@@ -544,8 +544,9 @@ REVISION = {
     # gone (0002): the modem's GNSS engine ran until the next boot
     'location-daemon': 1,
     # 2026-10-30: asks for the headphones (their cable is the antenna) when
-    # pro1x-audiod reports none plugged in
-    'pro1x-fm': 1,
+    # pro1x-audiod reports none plugged in; 2 (2026-10-31): the status asked
+    # for only while the window is in front and the display on
+    'pro1x-fm': 2,
     # 2026-10-31: the sensor core's batched, non-waking delivery and flushes
     # (patches/libssc/libssc-wakeup-batching.patch, docs/sensors.md)
     'libssc': 1,

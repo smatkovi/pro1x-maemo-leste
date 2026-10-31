@@ -9,6 +9,7 @@
 #include <QAbstractButton>
 #include <QImage>
 #include <QString>
+#include <QTimer>
 #include <QWidget>
 
 typedef struct _GstElement GstElement;
@@ -71,6 +72,8 @@ private slots:
     void openLastPicture();
     void captureFinished(const QString &path, const QString &error);
     void autofocusFinished(int position);
+    void displayStatus(const QString &state);
+    void updateRunning();
 
 private:
     void startViewfinder();
@@ -94,6 +97,9 @@ private:
     int m_lensFd = -1;        /* the lens only holds its position while open */
     int m_focus = 100;        /* driver default, roughly 1 m */
     QString m_lastPicture;
+    bool m_displayOn = true;  /* mce's display_status_ind */
+    bool m_paused = false;    /* the viewfinder stopped while not seen */
+    QTimer *m_pauseTimer;
 };
 
 #endif

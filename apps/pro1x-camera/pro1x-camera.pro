@@ -1,6 +1,6 @@
 TEMPLATE = app
 TARGET = pro1x-camera
-QT += widgets maemo5
+QT += widgets dbus maemo5
 CONFIG += c++17 link_pkgconfig
 PKGCONFIG += gstreamer-1.0 gstreamer-video-1.0 gstreamer-app-1.0
 
