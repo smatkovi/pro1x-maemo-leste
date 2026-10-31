@@ -135,7 +135,8 @@ comes back from its release (`apt install --allow-change-held-packages
 `arch.manifest` (format 2) lists the newest package of each name across the
 `arch-hildon-*` releases (pacman's version order), with each package's
 `depend`, `provides` and `conflict` from its `.PKGINFO`. Since
-arch-hildon-2026.10.30.1 these are all 152 parts of the Arch steps, which
+arch-hildon-2026.10.30.1 these are all parts of the Arch steps (153 in
+arch-hildon-2026.10.31.2, the full set again), which
 depend on each other, so the tool picks as on Leste:
 
 | group | packages | installed |
