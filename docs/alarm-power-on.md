@@ -16,7 +16,8 @@ itself is untested on the phone. To be flashed with kernel pro1x.10;
 `pro1x-alarmboot` 1.4 (the N9 look, off again as the N9; 1.4: the power
 key told apart from a display time-out) in the pre-release
 `leste-alarmboot-2026.10.31.2` (1.1 in `leste-alarmboot-2026.10.30.1`
-asked instead); Arch: `arch-hildon-2026.10.31.1`; FreeBSD:
+asked instead); Arch: `arch-hildon-2026.10.31.1`, and with all of
+Arch's packages in `arch-hildon-2026.10.31.2`; FreeBSD:
 `freebsd-hildon-2026.10.31.3`.
 
 ## Is it possible on this hardware?
