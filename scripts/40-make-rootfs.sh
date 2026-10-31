@@ -3,16 +3,32 @@
 #
 # Takes the official arm64-generic image as the base, puts the self-built
 # 7.1 kernel with its modules and the Pro1X firmware into it, wires up the
-# loop-root initramfs and pulls initrd + vmlinuz out into $WORK/out.
+# loop-root initramfs and pulls the initrd out into $KOUT.
+#
+#   KOUT=dir   the kernel: 30-build-kernel.sh's OUT (Image.gz, modules/,
+#              kernelrelease, config-<version>); default $WORK/out
+#   HIDPI_DEBS=dir, MOBILE_DATA_DEBS=dir   the packages of the releases
+#              (leste-hildon-*, leste-mobile-data-*) for 49-hidpi.sh and
+#              49-mobile-data.sh (their DEBS=) instead of building them
+#              under qemu; default: built
+#   UPDATE=0   without pro1x-update at the end (this repository's own
+#              packages that only come from the releases, docs/updating.md)
 set -euo pipefail
 WORK=${WORK:?set WORK=<build-dir>}
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 SRC_IMG=${SRC_IMG:-$WORK/dl/leste.img}
 IMG=${IMG:-$WORK/out/maemo-leste.img}
 IMG_SIZE=${IMG_SIZE:-24G}
-KVER=${KVER:-7.1.0+}
+KOUT=${KOUT:-$WORK/out}
+KVER=${KVER:-$(cat "$KOUT/kernelrelease" 2> /dev/null || echo 7.1.0+)}
+# a kernel built with KLOCAL has its configuration next to it
+KCONFIG=$KOUT/config-$KVER
+[ -f "$KCONFIG" ] || KCONFIG=$WORK/build/linux/.config
 ROOT_PW=${ROOT_PW:-pro1x-leste}
 SSH_PUBKEY=${SSH_PUBKEY:-$HOME/.ssh/id_ed25519.pub}
+HIDPI_DEBS=${HIDPI_DEBS:-}
+MOBILE_DATA_DEBS=${MOBILE_DATA_DEBS:-}
+UPDATE=${UPDATE:-1}
 
 SRC_MNT=/mnt/leste-src
 DST_MNT=/mnt/leste-dst
@@ -46,15 +62,31 @@ binfmt_restore() {
   BINFMT_SWITCHED=0
 }
 
-# Run inside the target; PATH set explicitly because the chroot inherits the host PATH.
+# Run inside the target; PATH set explicitly because the chroot inherits the
+# host PATH. /usr/local/chroot-bin first: its udevadm while guard_on.
 in_target() {
   sudo -n chroot "$DST_MNT" /usr/bin/env \
-    PATH=/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive \
+    PATH=/usr/local/chroot-bin:/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive \
     /bin/bash -c "$1"
+}
+
+# No services started and no udev events triggered by the packages' scripts
+# while the chroot runs: its /dev is the PC's (as scripts/leste-chroot.sh)
+guard_on() {
+  printf '#!/bin/sh\nexit 101\n' | sudo -n tee "$DST_MNT/usr/sbin/policy-rc.d" > /dev/null
+  sudo -n chmod 755 "$DST_MNT/usr/sbin/policy-rc.d"
+  sudo -n mkdir -p "$DST_MNT/usr/local/chroot-bin"
+  printf '#!/bin/sh\nexit 0\n' | sudo -n tee "$DST_MNT/usr/local/chroot-bin/udevadm" > /dev/null
+  sudo -n chmod 755 "$DST_MNT/usr/local/chroot-bin/udevadm"
+}
+guard_off() {
+  sudo -n rm -f "$DST_MNT/usr/sbin/policy-rc.d" "$DST_MNT/usr/local/chroot-bin/udevadm"
+  [ ! -d "$DST_MNT/usr/local/chroot-bin" ] || sudo -n rmdir "$DST_MNT/usr/local/chroot-bin"
 }
 
 cleanup() {
   set +e
+  mountpoint -q "$DST_MNT" && guard_off
   binfmt_restore
   for m in "$DST_MNT/mnt/pro1x-repo" "$DST_MNT/mnt/nixos-pro1x" \
            "$DST_MNT/dev/pts" "$DST_MNT/dev" "$DST_MNT/proc" "$DST_MNT/sys" "$DST_MNT" "$SRC_MNT"; do
@@ -63,8 +95,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ -f "$WORK/out/Image.gz" ] || { echo "kernel missing, run 30-build-kernel.sh first"; exit 1; }
-[ -d "$WORK/out/modules/lib/modules/$KVER" ] || { echo "modules for $KVER missing"; exit 1; }
+[ -f "$KOUT/Image.gz" ] || { echo "kernel missing, run 30-build-kernel.sh first"; exit 1; }
+[ -d "$KOUT/modules/lib/modules/$KVER" ] || { echo "modules for $KVER missing"; exit 1; }
+[ -f "$KCONFIG" ] || { echo "no configuration for $KVER"; exit 1; }
+for d in "$HIDPI_DEBS" "$MOBILE_DATA_DEBS"; do
+  [ -z "$d" ] || ls "$d"/*.deb > /dev/null || { echo "no packages in $d"; exit 1; }
+done
 
 # Firmware blobs (proprietary, from the sm6115-mainline project)
 FW=$WORK/build/firmware-fxtec-qx1050
@@ -85,10 +121,11 @@ echo ">> copying rootfs"
 sudo -n rsync -aHAX --numeric-ids "$SRC_MNT/" "$DST_MNT/"
 
 echo ">> installing kernel, modules, firmware"
-sudo -n cp "$WORK/out/Image.gz" "$DST_MNT/boot/vmlinuz-$KVER"
-sudo -n cp "$WORK/build/linux/.config" "$DST_MNT/boot/config-$KVER"
-sudo -n rsync -a "$WORK/out/modules/lib/modules/$KVER" "$DST_MNT/lib/modules/"
-sudo -n rsync -a "$FW/lib/firmware/" "$DST_MNT/lib/firmware/"
+sudo -n cp "$KOUT/Image.gz" "$DST_MNT/boot/vmlinuz-$KVER"
+sudo -n cp "$KCONFIG" "$DST_MNT/boot/config-$KVER"
+# owned by root, not by the user who built them (uid 1000 is Leste's "user")
+sudo -n rsync -a --chown=0:0 "$KOUT/modules/lib/modules/$KVER" "$DST_MNT/lib/modules/"
+sudo -n rsync -a --chown=0:0 "$FW/lib/firmware/" "$DST_MNT/lib/firmware/"
 
 echo ">> installing initramfs hooks"
 sudo -n install -d "$DST_MNT/etc/initramfs-tools/hooks" \
@@ -133,6 +170,7 @@ sudo -n mount --bind /dev "$DST_MNT/dev"
 # (as a peer of the PC's /dev it took it along)
 sudo -n mount --make-rslave "$DST_MNT/dev"
 sudo -n mount --bind /dev/pts "$DST_MNT/dev/pts"
+guard_on
 
 # Hardware support (45..49): apt, source builds, overlay. Under qemu this
 # takes a long time; WITH_HARDWARE=0 builds the bare rootfs and the same
@@ -146,11 +184,37 @@ if [ "${WITH_HARDWARE:-1}" = 1 ]; then
   sudo -n mount --bind "$REPO" "$DST_MNT/mnt/pro1x-repo"
   sudo -n mount --bind "$NIXOS" "$DST_MNT/mnt/nixos-pro1x"
   sudo -n cp -L /etc/resolv.conf "$DST_MNT/etc/resolv.conf"
-  for s in 45-pro1x-hardware 46-sensor-stack 47-libcal 48-camera-stack 49-apps 49-hidpi 49-alarmboot 49-mobile-data; do
-    in_target "REPO=/mnt/pro1x-repo NIXOS=/mnt/nixos-pro1x SRC=/root/src bash /mnt/pro1x-repo/scripts/$s.sh"
+  # the releases' packages, where given, for the steps that take DEBS=
+  P=/root/pro1x-debs
+  sudo -n rm -rf "$DST_MNT$P"
+  for d in hidpi:"$HIDPI_DEBS" mobile-data:"$MOBILE_DATA_DEBS"; do
+    [ -z "${d#*:}" ] || { sudo -n mkdir -p "$DST_MNT$P/${d%%:*}"; sudo -n cp "${d#*:}"/*.deb "$DST_MNT$P/${d%%:*}/"; }
   done
+  # and in SRC, where 49-hidpi.sh's build leaves them: the later steps
+  # take their -dev packages from there (libgtk2.0-dev for 49-alarmboot.sh)
+  if [ -n "$HIDPI_DEBS" ]; then
+    sudo -n mkdir -p "$DST_MNT/root/src"
+    sudo -n cp "$HIDPI_DEBS"/*.deb "$DST_MNT/root/src/"
+  fi
+  for s in 45-pro1x-hardware 46-sensor-stack 47-libcal 48-camera-stack 49-apps 49-hidpi 49-standby 49-alarmboot 49-mobile-data; do
+    debs=
+    case $s in
+      49-hidpi) [ -z "$HIDPI_DEBS" ] || debs="DEBS=$P/hidpi" ;;
+      49-mobile-data) [ -z "$MOBILE_DATA_DEBS" ] || debs="DEBS=$P/mobile-data" ;;
+    esac
+    in_target "REPO=/mnt/pro1x-repo NIXOS=/mnt/nixos-pro1x SRC=/root/src $debs bash /mnt/pro1x-repo/scripts/$s.sh"
+  done
+  sudo -n rm -rf "$DST_MNT$P"
+  # this repository's packages that no step builds (pro1x-events,
+  # pro1x-volume-osd, the pro1x-look package) and newer releases of the
+  # rest: as on the phone (docs/updating.md); held like 49-hidpi.sh's
+  if [ "$UPDATE" = 1 ]; then
+    echo ">> pro1x-update (the releases' packages)"
+    in_target "/usr/local/sbin/pro1x-update --yes && rm -rf /var/cache/pro1x-update"
+  fi
   sudo -n umount "$DST_MNT/mnt/pro1x-repo" "$DST_MNT/mnt/nixos-pro1x"
 fi
+guard_off
 
 echo ">> building initramfs (chroot via qemu-aarch64/binfmt)"
 # Everything needed to reach the root filesystem (UFS, ext4, loop, USB
@@ -165,13 +229,13 @@ COMPRESS=xz
 EOF
 in_target "depmod $KVER && update-initramfs -c -k $KVER"
 
-sudo -n cp "$DST_MNT/boot/initrd.img-$KVER" "$WORK/out/initrd.img-$KVER"
-sudo -n chown "$(id -u):$(id -g)" "$WORK/out/initrd.img-$KVER"
+sudo -n cp "$DST_MNT/boot/initrd.img-$KVER" "$KOUT/initrd.img-$KVER"
+sudo -n chown "$(id -u):$(id -g)" "$KOUT/initrd.img-$KVER"
 sudo -n sh -c "df -h $DST_MNT | tail -1"
 
 cleanup
 trap - EXIT
 echo "done:"
-ls -la "$IMG" "$WORK/out/initrd.img-$KVER"
+ls -la "$IMG" "$KOUT/initrd.img-$KVER"
 du -h --apparent-size "$IMG" | cut -f1 | sed 's/^/  apparent: /'
 du -h "$IMG" | cut -f1 | sed 's/^/  used:     /'

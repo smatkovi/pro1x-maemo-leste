@@ -17,7 +17,9 @@ set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 MNT=${MNT:-/mnt/kali}
 SSH_PUBKEY=${SSH_PUBKEY:-}
-KVER=$(uname -r)
+# the modules of the kernel that runs, or of KVER (in a chroot of a
+# Leste image on the PC, whose modules are not the running kernel's)
+KVER=${KVER:-$(uname -r)}
 export DEBIAN_FRONTEND=noninteractive
 
 mountpoint -q "$MNT" || { echo "$MNT is not mounted"; exit 1; }
@@ -104,7 +106,7 @@ install -m 644 "$REPO/rootfs-overlay/etc/modprobe.d/pro1x-dt2w.conf" "$MNT/etc/m
 # write-back every 15 s instead of 5 (the root's commit=30 below)
 install -D -m 644 "$REPO/rootfs-overlay/etc/sysctl.d/60-pro1x-writeback.conf" "$MNT/etc/sysctl.d/60-pro1x-writeback.conf"
 # After the packages, whose maintainer scripts write /etc/default/gpsd.
-cp -a "$REPO/kali/rootfs-overlay/." "$MNT/"
+cp -a --no-preserve=ownership "$REPO/kali/rootfs-overlay/." "$MNT/"
 
 # --- configuration -------------------------------------------------------------
 log "configuration"

@@ -40,7 +40,9 @@ Package: *
 Pin: release n=daedalus-backports
 Pin-Priority: 100
 EOF
-apt-get update -q
+# as 49-hidpi.sh: in a chroot under qemu apt sometimes cannot read
+# leste-extras' InRelease (getline: ENOMEM); nothing below comes from there
+apt-get update -q || log "apt-get update had errors: going on with the lists it got"
 
 log "packages: Mesa (GPU), firmware, modem services, Wi-Fi/BT tools"
 apt-get install -y -q \
@@ -102,7 +104,9 @@ EOF
 
 # --- Overlay: init scripts, mce configuration ------------------------------
 log "overlay from $REPO/rootfs-overlay"
-cp -a "$REPO/rootfs-overlay/." /
+# root owns what it puts there, whoever owns the checkout (cp -a kept a
+# PC user's uid 1000, Leste's "user", on /, /etc, /usr and the files)
+cp -a --no-preserve=ownership "$REPO/rootfs-overlay/." /
 chmod 755 /etc/init.d/pro1x-*
 rc-update add pro1x-tqftpserv default
 rc-update add pro1x-rmtfs default

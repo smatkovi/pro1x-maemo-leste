@@ -15,7 +15,9 @@ set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 IMG=${IMG:-/host/luneos.img}
 MNT=${MNT:-/mnt/luneos}
-KVER=$(uname -r)
+# the modules of the kernel that runs, or of KVER (in a chroot of a
+# Leste image on the PC, whose modules are not the running kernel's)
+KVER=${KVER:-$(uname -r)}
 log() { echo ">> $*"; }
 
 mkdir -p "$MNT"
@@ -64,7 +66,7 @@ install -m 755 /usr/local/sbin/pro1x-rtc "$REPO/rootfs-overlay/usr/local/sbin/pr
 	"$MNT/usr/local/sbin/"
 install -m 644 "$REPO/kali/rootfs-overlay/etc/systemd/system/pro1x-rtc.service" \
 	"$MNT/etc/systemd/system/"
-cp -a "$REPO/luneos/rootfs-overlay/." "$MNT/"
+cp -a --no-preserve=ownership "$REPO/luneos/rootfs-overlay/." "$MNT/"
 
 # --- configuration -------------------------------------------------------------
 log "configuration"

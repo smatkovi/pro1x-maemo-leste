@@ -101,9 +101,9 @@ done
 for m in proc sys dev dev/pts; do mount --bind "/$m" "$R/$m"; mount --make-rslave "$R/$m"; done
 mkdir -p "$R/host" && mount --bind /host "$R/host" && mount --make-rslave "$R/host"
 rm -f "$R/etc/resolv.conf" && cp /etc/resolv.conf "$R/etc/resolv.conf"
-cp -a "$REPO/arch/rootfs-overlay/usr/local/sbin/pro1x-snapshot-menu" \
+cp -a --no-preserve=ownership "$REPO/arch/rootfs-overlay/usr/local/sbin/pro1x-snapshot-menu" \
 	"$REPO/arch/rootfs-overlay/usr/local/sbin/pro1x-rollback" "$R/usr/local/sbin/"
-cp -a "$REPO/arch/rootfs-overlay/etc/systemd/system/pro1x-snapshot-menu.service" \
+cp -a --no-preserve=ownership "$REPO/arch/rootfs-overlay/etc/systemd/system/pro1x-snapshot-menu.service" \
 	"$REPO/arch/rootfs-overlay/etc/systemd/system/pro1x-snapshot-menu.path" \
 	"$R/etc/systemd/system/"
 chroot "$R" /bin/bash -euo pipefail <<'EOF'

@@ -21,7 +21,9 @@ MNT=${MNT:-/mnt/arch}
 SSH_PUBKEY=${SSH_PUBKEY:-}
 # the lock screen's keypad has digits only
 PIN=${PIN:-147147}
-KVER=$(uname -r)
+# the modules of the kernel that runs, or of KVER (in a chroot of a
+# Leste image on the PC, whose modules are not the running kernel's)
+KVER=${KVER:-$(uname -r)}
 
 mountpoint -q "$MNT" || { echo "$MNT is not mounted"; exit 1; }
 [ -z "$SSH_PUBKEY" ] || [ -f "$SSH_PUBKEY" ] || { echo "$SSH_PUBKEY missing"; exit 1; }
@@ -140,11 +142,11 @@ install -D -m 644 "$REPO/rootfs-overlay/etc/modprobe.d/pro1x-dt2w.conf" "$MNT/et
 
 # systemd units: Kali's Pro1X units (the same for any systemd system), the
 # modem helpers' units where they came from Leste, then Arch's own files
-cp -a "$REPO/kali/rootfs-overlay/etc/systemd/system/." "$MNT/etc/systemd/system/"
-cp -a "$REPO/kali/rootfs-overlay/usr/lib/pro1x/hexagonrpcd-prepare" "$P/"
+cp -a --no-preserve=ownership "$REPO/kali/rootfs-overlay/etc/systemd/system/." "$MNT/etc/systemd/system/"
+cp -a --no-preserve=ownership "$REPO/kali/rootfs-overlay/usr/lib/pro1x/hexagonrpcd-prepare" "$P/"
 # the rmtfs and ModemManager drop-ins wait with it (docs/kali-mobile-data.md;
 # without qrtr-lookup, which Arch lacks, its ModemManager wait is a no-op)
-cp -a "$REPO/kali/rootfs-overlay/usr/lib/pro1x/pro1x-modem-wait" "$P/"
+cp -a --no-preserve=ownership "$REPO/kali/rootfs-overlay/usr/lib/pro1x/pro1x-modem-wait" "$P/"
 for t in rmtfs tqftpserv qrtr-ns; do
 	[ -f "$P/$t" ] || continue
 	install -m 644 "/lib/systemd/system/$t.service" "$MNT/etc/systemd/system/$t.service"
@@ -155,7 +157,7 @@ for t in rmtfs tqftpserv qrtr-ns; do
 done
 [ ! -f "$P/rmtfs" ] || sed -i 's|^ExecStart=/usr/bin/rmtfs|ExecStart=/usr/lib/pro1x/rmtfs|' \
 	"$MNT/etc/systemd/system/rmtfs.service.d/pro1x.conf"
-cp -a "$REPO/arch/rootfs-overlay/." "$MNT/"
+cp -a --no-preserve=ownership "$REPO/arch/rootfs-overlay/." "$MNT/"
 install -m 644 "$REPO/kali/rootfs-overlay/etc/ssh/sshd_config.d/pro1x.conf" \
 	"$MNT/etc/ssh/sshd_config.d/pro1x.conf"
 install -m 644 "$REPO/kali/rootfs-overlay/etc/default/gpsd" "$MNT/etc/default/gpsd"
