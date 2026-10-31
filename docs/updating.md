@@ -244,7 +244,7 @@ SHA-256 over HTTPS. A signed one needs a key. And `apt upgrade` would then
 pull in this repository's packages on its own, including groups the
 system does not use.
 
-## Tested (2026-10-30, PC only)
+## Tested (2026-10-30/31, PC only)
 
 - **Leste**, in a chroot of the official arm64 image (`scripts/leste-chroot.sh`),
   with the current releases:
@@ -278,11 +278,14 @@ system does not use.
   - a crafted package with `/usr/bin/ls` (stopped: belongs to coreutils);
   - `--yes`: `pacman -U --noconfirm --needed --overwrite '*' --ask 4` with
     the 19 packages, then the session's settings (stand-in `systemctl`).
-- **FreeBSD**: the FreeBSD VM was in use. Tested on the PC with stand-ins for
-  `pkg` and `fetch`: the tag from GitHub's API, the table from
-  freebsd-hildon-2026.10.30.3's real catalogue, the rewrite of
-  `pro1x.conf` (and a new one), the old file back when `pkg update`
-  fails, `freebsd.manifest` when the API does not answer. Not yet run
-  against the real `pkg` on FreeBSD.
+- **FreeBSD**, on the PC with stand-ins for `pkg` and `fetch`: the tag
+  from GitHub's API, the rewrite of `pro1x.conf` (and a new one), the old
+  file back when `pkg update` fails, `freebsd.manifest` when the API does
+  not answer. Then in the FreeBSD 15.1 VM (pkg 2.8.4, 171 packages from a
+  local pro1x repository, 2026-10-31): `sh -n`, the dry run (14 older than
+  freebsd-hildon-2026.10.30.5), `--yes` (`pro1x.conf` rewritten,
+  `enabled: yes` kept; pkg upgraded 14 and installed 8 new dependencies,
+  telepathy-ring, location-daemon, libqmi among them), a second dry run
+  with nothing left. The VM's own `pro1x.conf` was put back afterwards.
 
 Not tried on the phone.
