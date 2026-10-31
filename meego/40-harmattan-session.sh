@@ -112,7 +112,7 @@ h_pids() {
 
 do_stop() {
 	local pids
-	for d in n9-sensors iphbd mainvolumed bmed positioningd leste-apps bluetoothd; do
+	for d in n9-sensors iphbd mainvolumed bmed positioningd icd2-context leste-apps bluetoothd; do
 		start-stop-daemon --stop --quiet --pidfile /run/pro1x-$d.pid --remove-pidfile || true
 	done
 	if [ -e /run/pro1x-meego-leste-bt ]; then
@@ -260,6 +260,11 @@ do_start() {
 	start-stop-daemon --start --quiet --background --make-pidfile \
 		--pidfile /run/pro1x-positioningd.pid --exec /usr/bin/python3 -- \
 		/usr/lib/pro1x-meego/positioningd "$H" || true
+	# The status bar's internet connection (contextkit's Internet.*), which
+	# Harmattan's icd2 offered, from Leste's icd2 (icd2-context/).
+	start-stop-daemon --start --quiet --background --make-pidfile \
+		--pidfile /run/pro1x-icd2-context.pid --exec /usr/bin/python3 -- \
+		/usr/lib/pro1x-meego/icd2-context || true
 	# Leste's own applications (camera, Firefox...) in the application grid;
 	# the service keeps the grid in step with installed packages
 	/usr/lib/pro1x-meego/leste-apps sync "$H" || true

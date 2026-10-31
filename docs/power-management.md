@@ -517,7 +517,10 @@ that it stays on. `85-pro1x-wlan-powersave.rules` runs
 when the interface appears, on all four systems; on Kali and Arch
 NetworkManager keeps it on for every connection
 (`50-pro1x-wifi-powersave.conf`, `wifi.powersave = 3`). Off for good:
-`touch /etc/pro1x-wlan-powersave-off`.
+`touch /etc/pro1x-wlan-powersave-off`; the rule then switches it off at
+every start of the interface (until 2026-10-31 it only left the kernel's
+default, which is on). On Kali and Arch NetworkManager's file has to go
+too.
 
 ### Checked, nothing to change (from the code, 2026-10-30)
 

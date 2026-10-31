@@ -7,10 +7,12 @@
 # on through /etc/NetworkManager/conf.d/50-pro1x-wifi-powersave.conf.
 # Called by /etc/udev/rules.d/85-pro1x-wlan-powersave.rules with the
 # interface name. Off for good: touch /etc/pro1x-wlan-powersave-off (then
-# "iw dev wlan0 set power_save off" for the running interface).
+# "iw dev wlan0 set power_save off" for the running interface); this then
+# switches it off at every start, as cfg80211's own default is on.
 IFACE=${1:?interface}
-[ -e /etc/pro1x-wlan-powersave-off ] && exit 0
+ps=on
+[ -e /etc/pro1x-wlan-powersave-off ] && ps=off
 for iw in /usr/sbin/iw /sbin/iw /usr/bin/iw; do
-	[ -x "$iw" ] && exec "$iw" dev "$IFACE" set power_save on
+	[ -x "$iw" ] && exec "$iw" dev "$IFACE" set power_save $ps
 done
 exit 0

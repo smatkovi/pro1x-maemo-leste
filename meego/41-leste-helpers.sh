@@ -10,7 +10,10 @@
 #   positioningd  Nokia's positioning daemon for QtLocation, on Leste's
 #               gpsd (positioning/)
 #   leste-apps  Leste applications (camera, Firefox...) in Harmattan's
-#               application grid (leste-apps/, /etc/pro1x-meego/leste-apps)
+#               application grid (leste-apps/, /etc/pro1x-meego/leste-apps),
+#               Firefox without its own offline mode (/etc/firefox-esr)
+#   icd2-context  contextkit's Internet.* (the status bar's WLAN icon) from
+#               Leste's icd2, as Harmattan's icd2 offered them (icd2-context/)
 # and the system bus's policy for Harmattan's bluetoothd (bluez4/).
 #
 # Runs as root on Leste, after scripts/46-sensor-stack.sh (libssc).
@@ -40,11 +43,14 @@ apt-get install -y -q --no-install-recommends python3-dbus python3-gi \
 install -m 755 "$SRC/positioning/positioningd.py" /usr/lib/pro1x-meego/positioningd
 install -m 755 "$SRC/leste-apps/leste-apps.py" /usr/lib/pro1x-meego/leste-apps
 install -m 644 "$SRC/leste-apps/org.pro1x.LesteLauncher.conf" /etc/dbus-1/system.d/
+install -m 755 "$SRC/icd2-context/icd2-context.py" /usr/lib/pro1x-meego/icd2-context
+install -m 644 "$SRC/icd2-context/pro1x-meego-icd2-context.conf" /etc/dbus-1/system.d/
 install -m 644 "$SRC/bluez4/pro1x-meego-bluez4.conf" /etc/dbus-1/system.d/
 install -d /etc/pro1x-meego
 [ -e /etc/pro1x-meego/leste-apps ] || install -m 644 "$SRC/leste-apps/leste-apps.list" /etc/pro1x-meego/leste-apps
+[ ! -d /etc/firefox-esr ] || install -m 644 "$SRC/leste-apps/pro1x-meego-firefox.js" /etc/firefox-esr/
 
 install -m 644 "$SRC/sensors/95-pro1x.conf" "$H/etc/sensorfw/sensord.conf.d/95-pro1x.conf"
 P=/etc/sensorfw/sensord.conf.d/95-pro1x.conf
 grep -qxF "$P" "$STATE/added" || echo "$P" >> "$STATE/added"
-echo "n9-sensors, iphbd, mainvolumed, bmed, positioningd and leste-apps installed"
+echo "n9-sensors, iphbd, mainvolumed, bmed, positioningd, leste-apps and icd2-context installed"
