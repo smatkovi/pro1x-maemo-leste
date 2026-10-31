@@ -16,7 +16,8 @@ itself is untested on the phone. To be flashed with kernel pro1x.10;
 `pro1x-alarmboot` 1.4 (the N9 look, off again as the N9; 1.4: the power
 key told apart from a display time-out) in the pre-release
 `leste-alarmboot-2026.10.31.2` (1.1 in `leste-alarmboot-2026.10.30.1`
-asked instead); Arch: `arch-hildon-2026.10.31.1`.
+asked instead); Arch: `arch-hildon-2026.10.31.1`; FreeBSD:
+`freebsd-hildon-2026.10.31.3`.
 
 ## Is it possible on this hardware?
 
@@ -459,8 +460,8 @@ package. **Writing boot_b needs the owner's OK on the day.**
    # in Leste, as root (1.0's Xsession.post/48pro1x-alarmboot goes)
    apt install /root/pro1x-alarmboot_1.4_arm64.deb
    ```
-   then log out of Hildon or reboot. FreeBSD gets `pro1x-alarmboot` 1.4
-   and the new `hildon-session` with the next FreeBSD Hildon release.
+   then log out of Hildon or reboot. FreeBSD: `pro1x-alarmboot` 1.4 is in
+   `freebsd-hildon-2026.10.31.3` (`pkg upgrade -r pro1x pro1x-alarmboot`).
    MeeGo's copy (`/host/meego-leste.img`, from Leste with the copy
    mounted, e.g. on `/mnt/ml`): the same package (`chroot /mnt/ml apt
    install /root/pro1x-alarmboot_1.4_arm64.deb` after copying it there)
