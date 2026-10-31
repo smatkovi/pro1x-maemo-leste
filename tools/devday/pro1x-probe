@@ -12,6 +12,10 @@
 # (pstore-save keeps one copy per day, the next start of the day replaces
 # it) and notes each start in /host/pro1x-probe/log, and in the kernel log
 # at error level, so the marker is on the console and in the pstore too.
+# With /host/pro1x-probe/heartbeat (seconds, probe.sh arm KVER SECONDS) it
+# starts pro1x-probe-heartbeat for that long: a line every 2 s in the
+# kernel log, which tells a hung system from a live one in the pstore
+# ("<seconds> stopwd": it also stops the trial's watchdog).
 
 description="Put boot_b back early when the running kernel is on probe"
 
@@ -72,6 +76,12 @@ start() {
 	echo $n > $P/count
 	say "start $n, kernel $k"
 	[ ! -f $P/arm ] || restore
+	if [ -f $P/heartbeat ] && [ -x /usr/local/sbin/pro1x-probe-heartbeat ]; then
+		start-stop-daemon --start --background \
+		    --exec /usr/local/sbin/pro1x-probe-heartbeat -- $(cat $P/heartbeat)
+		rm -f $P/heartbeat
+		say "heartbeat started"
+	fi
 	if grep -q ' /sys/fs/pstore ' /proc/mounts; then
 		d=$P/boot-$n-$k
 		mkdir -p "$d"

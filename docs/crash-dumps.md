@@ -313,3 +313,75 @@ console): the console the pstore keeps then has warnings and errors only.
 With `ignore_loglevel` the 115200-baud console would print every line;
 the Bluetooth UART and the debug UART share the QUP wrapper, so that
 could change the very thing under test.
+
+### Run 1: pro1x.12 (11-01 00:30, `~/ps/pro1x-runs/2026-11-01/probe1-pro1x.12*`)
+
+Reproduced: gadget up 00:32:06, 900e 00:32:33; the dump as before (DSP
+image loads at 25.4-25.8 s from power-on, TZ's crash handling at 46.8 s,
+the APSS watchdog's bite, TZ's bark, the RPM's bite, both NoCs at
+0x06080040). The probe had put pro1x.5 back at 19.7 s; after the dump the
+phone came up in pro1x.5 by itself, and the pstore held pro1x.12's console
+(`loglevel=4`, so errors and warnings only; ECC: 46 corrected bytes, 3
+unrecoverable blocks: single flipped bits in the text, the 18:56 pstore
+had none):
+
+    22.21  qcom_q6v5_pas a400000.remoteproc: Handover signaled, but it already happened
+    23.26  qcom,slim-ngd-ctrl a5c0000.slim-ngd: capability exchange timed-out
+    23.26  qcom,slim-ngd-ctrl a5c0000.slim-ngd: HW wakeup attempt during SSR
+    24.06  Bluetooth: hci0: command 0xfc00 tx timeout
+    24.07  Bluetooth: hci0: Reading QCA version information failed (-110)
+    24.29  qcom,slim-ngd-ctrl a5c0000.slim-ngd: QMI wait timeout
+    26.24, 28.45, 30.66  (the same two Bluetooth lines: hci_qca's retries)
+    32.90  Bluetooth: hci0: command tx timeout
+    40.93  Bluetooth: hci0: Reading QCA version information failed (-110)
+    (end)
+
+So two things fail before the end, both new in pro1x.12: the SLIMbus NGD
+(0021) never completes its capability exchange with the ADSP, and the
+WCN3950 never answers its first vendor command (0xfc00, the version
+read), at the first power-on, not at an hci down. On pro1x.5 the same
+command answers at 17.87 s. 0029 changes only the power-off path; 0023/
+0024/0030 change how the UART is kept up while open, which the setup
+uses. Next: `pro1x.12nobt` (all four out): it splits the Bluetooth set
+from SLIMbus and the rest in one run.
+
+### Runs 2 and 3: nobt and nobtslim crash the same way
+
+| Run | Kernel | 900e | Its pstore (errors only) |
+|---|---|---|---|
+| 2 (00:37) | pro1x.12nobt | 00:38:57 | no Bluetooth error any more; the same SLIMbus NGD lines (23.1 s capability exchange, 24.1 s QMI wait timeout); `watchdog0: pretimeout event` at 41.29 s |
+| 3 (00:42) | pro1x.12nobtslim | 00:44:16 | neither Bluetooth nor SLIMbus errors; the soundwire port warnings; `watchdog0: pretimeout event` at 42.21 s |
+
+The dumps are run 1's again (DSP loads at 26.0-26.3 s from power-on,
+crash handling at 46.1 s, the same NoC errors, now with route 0xe120).
+
+What this says:
+
+- The Bluetooth set (0023/0024/0029/0030) breaks the WCN3950's setup (the
+  first vendor command never answers), and 0021's SLIMbus NGD never
+  finishes its capability exchange with the ADSP. Both are real bugs of
+  pro1x.12, but neither is the crash.
+- The end comes at the same time in every run (bark 41-42 s after the
+  kernel's start) with an otherwise quiet console, and the kernel still
+  takes the bark's interrupt and prints it: no sign of a bus stall that
+  stops every CPU. The NoC errors, TZ's bark and the RPM's bite are
+  logged after TZ's "DEAD END", i.e. during TZ's own dump: probably its
+  look at the modem, not the cause.
+- So either Linux stops feeding the trial's watchdog (armed by the
+  initramfs at about 8.5 s; qcom_wdt's core pings it until dsme opens
+  `/dev/watchdog`, which on pro1x.5 happens at about 38 s), or something
+  else stalls the system in the window 23-42 s without a message.
+  On pro1x.5 without a trial, dsme holds `/dev/watchdog` and feeds it for
+  hours.
+- Left in the kernel after nobtslim: 0018-0020 (SLIMbus code without its
+  device-tree nodes), 0022, 0025-0028, 0031-0035, 0038-0040, and in the
+  config FTRACE/tracing, the TEO cpuidle governor (as an option; menu
+  stays the default), QCOM_SMP2P_SLEEPSTATE and SND_SOC_WCN399X. In the
+  initramfs since pro1x.5's image (10-29 18:49): the alarm check's PMIC
+  reads through debugfs and the direct-I/O loop (off with
+  `/host/pro1x-fs-defaults`); the trial's watchdog code is unchanged.
+
+Run 4 (nobtslim again, with `probe.sh arm KVER 150`): `pro1x-probe-
+heartbeat` writes a line every 2 s at error level (and who holds the
+watchdog open, every 6 s), so the pstore tells whether user space still
+ran up to the bark.

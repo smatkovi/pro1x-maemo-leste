@@ -6,10 +6,15 @@
 # candidate does later, the next start is the saved kernel again, with the
 # candidate's console in the pstore. From the PC, SYS=leste:
 #
-#   probe.sh install        the service into Leste (sysinit), /host/pro1x-probe
-#   probe.sh arm KVER       boot_b now (the running kernel's image) saved as
+#   probe.sh install        the service into Leste (sysinit), /host/pro1x-probe,
+#                           pro1x-probe-heartbeat into /usr/local/sbin
+#   probe.sh arm KVER [S [stopwd]]
+#                           boot_b now (the running kernel's image) saved as
 #                           /host/pro1x-probe/restore.img; the service puts it
-#                           back when KVER runs. Then flash KVER (65-kernel-
+#                           back when KVER runs. With S: a heartbeat in the
+#                           kernel log for S seconds at the next start; with
+#                           stopwd it also stops the trial's watchdog once
+#                           /dev/watchdog is there. Then flash KVER (65-kernel-
 #                           update.sh flash, with its trial) and reboot. KVER =
 #                           the running kernel is the dry run: the same bytes
 #                           go back at the next start.
@@ -42,9 +47,15 @@ install)
 		mv /etc/init.d/pro1x-probe.new /etc/init.d/pro1x-probe
 		rc-update add pro1x-probe sysinit > /dev/null; rc-update show sysinit | grep pro1x-probe" \
 	    < "$(dirname "$0")/pro1x-probe"
+	ph "cat > /usr/local/sbin/pro1x-probe-heartbeat.new && chmod 755 /usr/local/sbin/pro1x-probe-heartbeat.new &&
+		mv /usr/local/sbin/pro1x-probe-heartbeat.new /usr/local/sbin/pro1x-probe-heartbeat" \
+	    < "$(dirname "$0")/pro1x-probe-heartbeat"
 	;;
 arm)
-	k=${2:?usage: probe.sh arm KVER}
+	k=${2:?usage: probe.sh arm KVER [SECONDS [stopwd]]}
+	hb=${3:-}
+	case $hb in ''|*[!0-9]*) [ -z "$hb" ] || die "SECONDS: a number" ;; esac
+	case ${4:-} in '') ;; stopwd) [ -n "$hb" ] || die "stopwd needs SECONDS"; hb="$hb stopwd" ;; *) die "4th argument: stopwd" ;; esac
 	ph "set -e; [ -x /etc/init.d/pro1x-probe ] || { echo 'not installed: probe.sh install'; exit 1; }
 		rc-update show sysinit | grep -q pro1x-probe || { echo 'not in sysinit'; exit 1; }
 		[ ! -f /host/pro1x-boot/trial ] || { echo 'a trial runs: not arming'; exit 1; }
@@ -52,8 +63,9 @@ arm)
 		dd if=\$dev of=$P/restore.img.new bs=1M status=none; sync
 		cmp -s $P/restore.img.new \$dev || { echo 'boot_b copy differs'; exit 1; }
 		mv $P/restore.img.new $P/restore.img
-		echo '$k $P/restore.img '\$(sha256sum < $P/restore.img | cut -d' ' -f1) > $P/arm; sync
-		echo \"armed: \$(cat $P/arm) (running \$(uname -r))\""
+		echo '$k $P/restore.img '\$(sha256sum < $P/restore.img | cut -d' ' -f1) > $P/arm
+		rm -f $P/heartbeat; [ -z '$hb' ] || echo '$hb' > $P/heartbeat; sync
+		echo \"armed: \$(cat $P/arm) (running \$(uname -r))${hb:+, heartbeat $hb s}\""
 	;;
 status)
 	ph "cat $P/arm 2> /dev/null || echo 'not armed'; rc-update show sysinit | grep pro1x-probe || echo 'service not in sysinit'
