@@ -75,10 +75,11 @@ QtWebKit would build for hours) and so Jib and Dorian.
 
 Steps 40 and 41 build a part again when its revision or this repository's
 patches for it change (`patches/hidpi`, `meego`, `fixes`, the FreeBSD ones
-41 takes); `REBUILD="part ..."` builds parts again anyway, and 41 takes
-`ONLY="part ..."` for just these. Bringing an image built before the MeeGo
-look's steps 2 to 4 (2026-10-28) up to date, in Leste with the image on
-`/mnt/arch`:
+41 takes); `REBUILD="part ..."` builds parts again anyway, and 30, 40, 41
+and 42 take `ONLY="part ..."` for just these (on top of a release's
+packages, `PKGS=` below: what was built since). Bringing an image built
+before the MeeGo look's steps 2 to 4 (2026-10-28) up to date, in Leste
+with the image on `/mnt/arch`:
 
     bash arch/40-hildon.sh        # libhildon, hildon-status-menu, hildon-desktop
     ONLY="calendar-backend rtcom-eventlogger rtcom-eventlogger-plugins" \
@@ -106,11 +107,18 @@ sessions' scripts and units). `arch/pkgbuild.py` writes each PKGBUILD:
 the files as Arch has them (merged `/usr`, no libtool archives or
 generated caches, nothing another package owns), the version, description
 and licence from the part's `debian/`, the dependencies from the
-libraries it links. Each package is installed into the image as it is
-made, so the later ones name it; installed together they need nothing
-but Arch Linux ARM's. arch-hildon-2026.10.30.1 has all of them, built on
-the PC; its notes say how to install them (one `pacman -U` of the lot,
-`--overwrite '*'` over an image the steps built).
+libraries it links. A file that another package of Arch Linux ARM has,
+installed or not (its repositories' file lists, `pacman -F`), makes the
+package conflict with that one, so that pacman never meets two owners of
+a file; files a part does not need are left out instead (libhildonfm's
+`/etc/xdg/user-dirs.defaults`, which is xdg-user-dirs' file, as on
+Leste). Each package is installed into the image as it is made, so the
+later ones name it; installed together they need nothing but Arch Linux
+ARM's. arch-hildon-2026.10.30.1 was the first release with all of them,
+arch-hildon-2026.10.31.2 is the current full set (153), built on the PC;
+the notes say how to install them (one `pacman -U` of the lot,
+`--overwrite '*'` over an image the steps built), and `pro1x-update`
+(docs/updating.md) installs and updates them from the newest releases.
 
 ## Btrfs and snapshots
 
