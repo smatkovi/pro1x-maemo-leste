@@ -44,6 +44,7 @@ unchanged until the device runs below pass.
 | `test/qemu/` | PRO1XQ, its device tree (`mkdtb.py`: QEMU's virt with the SM6115's idle topology), its rc (`pm.wake=N`: the wake-ups idle and suspended), `run.sh` |
 | `tools/pro1x-autosleep/` | the suspend while nobody uses the phone (stage 6): `policy.c` decides, `pro1x-autosleep.c` looks and runs `pro1x-suspend -k`; `test/autosleep_test.c` the policy's host test, `test/vm-autosleep.sh` the daemon in the VM |
 | `tools/pro1x-drain` | the battery's drain over an hour with the RPM's and autosleep's counts (stage 6's device runs) |
+| `tools/pro1x-led/` | the status LED as Maemo 5's notification light (stage 6); `test/vm-led.sh` its test in the VM |
 | `test/vm-wakeups.sh` | a Hildon session's idle wake-ups in the VM (DTrace: per process, the kernel's timers, interrupts) |
 | `../patches/0036-*`, `0037-*` | `pro1x.power=on`: the profile's kernel settings; LinuxKPI 802.11: the driver's power save (`ifconfig wlan0 powersave`) |
 | `../rootfs/usr/local/etc/rc.d/pro1x_autosleep`, `pro1x_power`, `../rootfs/usr/local/share/pro1x/power.subr` | the profile in the full system |
@@ -816,6 +817,39 @@ modem is up (Linux's mainline MPM driver has no such check; Leste's
 notify_rpm test asks the same). The MPM pins of the map now follow their
 SPIs (`hw.pro1x_pm.mpm_spi=1`): the SoundWire lines are pins while armed.
 
+**The notification light** (`tools/pro1x-led`, `rc.d/pro1x_led` in the
+package pro1x-led, on by default; the decision of 2026-10-31): the RGB
+status LED as Maemo 5's, through `qcom_lpg` (`patches/0020`: a duty cycle
+per colour, led(4) on and off). Maemo's notifications ask MCE for a
+pattern: hildon-home calls `com.nokia.mce.request.req_led_pattern_activate`
+on the system bus for a missed call, an SMS, a chat or mail message, a
+reminder (`notification-groups.conf`'s `LED-Pattern`) and
+`req_led_pattern_deactivate` once they are seen. FreeBSD has no MCE, and
+many programs ask it for other things and handle its absence (liblocation
+takes ServiceUnknown as "normal mode"), so pro1x-led does not take its
+name: it watches the bus as a monitor (`BecomeMonitor`, root) for those
+four calls only; the callers get ServiceUnknown as before. The most
+important pattern still waiting shows (Leste's `mce.ini` priorities and
+colours): a call, SMS, mail, chat, reminder blue, then the battery low red
+(at 10 % and below, not on a charger, `-L`), full green, charging orange
+(from pro1x_battery's devd events; `pro1x-statusled` only does this while
+pro1x-led does not run). Nothing waiting: off. No "device on" pattern and
+no blinking: led(4)'s blinking is a kernel timer ten times a second, so
+the colour is steady and the daemon sleeps until a call or an event comes.
+`pro1x-suspend` switches the LED off before the freeze and tells pro1x-led
+(SIGUSR1; SIGUSR2 after: the patterns come back). Tested in the VM
+(`test/vm-led.sh`, its test mode `-T`, the requests sent as hildon-home
+sends them): 14 checks passed, off at the start, an SMS blue over
+charging, charging after it, off around a suspend and the missed call
+after it, the battery low, `req_led_disable`/`_enable`, PatternDeviceOn
+ignored, the callers still answered ServiceUnknown. Not done: blinking
+without the CPU (the LPG's PWM from its 1 kHz clock with a 9-bit period
+gives about 2.5 s with a fifth on, Leste's 500/2000 ms, as Linux's
+`leds-qcom-lpg` computes it; a `qcom_lpg` sysctl, kernel side, device
+only; it would also go on while suspended, at about a fifth of the LED's
+current), MCE's display policy (Leste shows charging only with the display
+off), the notification light applet's per-pattern switches.
+
 **Wi-Fi's power save** (`patches/0037`): LinuxKPI's 802.11 never gave a
 driver power save (`vif->cfg.ps` hard off, `IEEE80211_C_PMGT` not
 offered), so ath10k switched the WCN3990's off as soon as its vdev
@@ -839,6 +873,7 @@ comment on some firmware's unstable STA power save applies).
 | `pro1x.standby_off=N` (kenv) | the panel off after N minutes of the stand-by screen (`pro1x-standby -O`, whole minutes: the stand-by screen comes 33 s after the last input), 0 at once, `never` the N9's stand-by screen for good | 2, with or without the profile (2026-10-31: the display off after 2 minutes on every system); `pro1x.standby=off`: the panel off 2 minutes after the last input |
 | `hw.pro1x_pm.mpm_veto`, `mpm_spi` | above | "100 102", 1 |
 | `hw.pro1x_pm.wake=1` | ends a suspend in progress (pro1x-autosleep's devd reader) | |
+| `pro1x_led_enable`, `pro1x_led_flags` (`rc.conf`) | the notification light; `-B percent` its brightness, `-L percent` the battery low | YES |
 | `service pro1x_power status` | what is on, the last suspend, the RPM's counts | |
 
 Not done: the page daemon's and IGMP/MLD's kernel timers; sensor
@@ -885,6 +920,8 @@ device runs measure next):
   threads that wake once a second while awake (`l2arc_feed` with no
   L2ARC, `arc_evict`, `arc_reap`, `dbuf_evict`, and `mmp` for a writable
   pool), frozen while suspended like every callout.
+- The notification light (above): new, `pro1x-led`; steady colours,
+  no timer, off while suspended.
 - Bluetooth: off. Nothing in FreeBSD brings it up (no `ng_ubt`, hcsecd,
   sdpd or bthidd); `pro1x-fmd` powers the WCN3950's Bluetooth side only
   while the FM receiver is on (its rails at the RPM, the UART) and off
@@ -899,7 +936,9 @@ device runs measure next):
   is MPM pin 21, so `hw.pro1x_pm.mpm_pins` could take it (`21:l`) and the
   SoC sleep through it. Needs a `goodix` sysctl for the mode, the
   gesture's read in its interrupt and a devd event for pro1x-standby,
-  first tried on the phone (whether this firmware has the mode). Until
+  first tried on the phone (whether this firmware has the mode: Leste's
+  `device/kernel/patches/0033` does the same in Linux's goodix and shows
+  it today; if it works there, FreeBSD's `goodix` follows it). Until
   then the panel off means the power key only, and the stand-by screen
   (touch awake, double tap) costs the touch controller's full scanning.
 
@@ -1168,6 +1207,20 @@ the kernel with `patches/0036` and `0037`; unplugged unless said):
     lock), or with location-daemon gone (its stop did not run: the old
     location-daemon package; or the hook's stop failed:
     `/usr/local/libexec/location-daemon-gpsd stop` by hand says why).
+
+25. **The notification light** (the full system, the joint image with
+    pro1x-led, Hildon): `service pro1x_led status` running,
+    `/var/log/daemon.log` `pro1x-led: on: ...`. On the charger: orange;
+    unplugged at 50 %: off. An SMS or a missed call from the second phone
+    with the display off: blue (`showing PatternCommunicationSMS`); the
+    notification opened in Hildon: off again (`off`). With autosleep on:
+    off while suspended, blue again after the power key. Battery low
+    (`sysctl dev.pro1x_battery.0.capacity` 10 or less, unplugged): red
+    with its next change (`pkill -HUP -x pro1x-led` reads it at once). Failure signs: no `showing` line at the SMS (hildon-home
+    sent nothing: no `LED-Pattern` for its group; or pro1x-led is no
+    monitor: `BecomeMonitor` in the log); the colour shown but the LED
+    dark (`sysctl dev.qcom_lpg.0` and `/dev/led/status_*` by hand, as
+    `pro1x-statusled` sets them).
 
 Runs 1-4 (SMP, the CPUs' idle states) and 6-7 (the suspend, now also on
 one CPU without the IPI panic) are the profile's kernel half;

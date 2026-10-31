@@ -658,6 +658,25 @@ volume_keys_part() {
 	cp -a "$PR/." "$STAGE/"
 }
 
+# The status LED as Maemo 5's notification light (freebsd/pm/tools/pro1x-led:
+# hildon-home's LED requests to MCE watched on the system bus, the battery's
+# colours), with its rc.d script (extra/pro1x-led)
+led_part() {
+	local b=$BUILD/pro1x-led
+	log "pro1x-led"
+	mkdir -p "$b"
+	# shellcheck disable=SC2046
+	$CC $CPPFLAGS $CFLAGS $LDFLAGS -Wall -o "$b/pro1x-led" \
+	    "$REPO/freebsd/pm/tools/pro1x-led/pro1x-led.c" \
+	    $(pkg-config --cflags --libs dbus-1) > "$b/make.out" 2>&1 ||
+	    { grep -m20 error "$b/make.out"; return 1; }
+	PR=$H/pkgroot/pro1x-led
+	rm -rf "$PR"
+	install -D -m 755 "$b/pro1x-led" "$PR/usr/local/sbin/pro1x-led"
+	cp -a "$REPO/freebsd/hildon/extra/pro1x-led/." "$PR/"
+	cp -a "$PR/." "$STAGE/"
+}
+
 # pkg-config puts the sysroot in front of path variables, which some
 # parts install to: those files back where they belong
 unsysroot() {
@@ -852,6 +871,10 @@ fi
 # the volume keys on PulseAudio's default sink (freebsd/audio, stage 4)
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-volume-keys "* ]]; then
 	volume_keys_part || failed+=(pro1x-volume-keys)
+fi
+# the status LED as the notification light (pro1x-led)
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-led "* ]]; then
+	led_part || failed+=(pro1x-led)
 fi
 # the N9's volume bar for the MeeGo-like look, on PulseAudio's default sink
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-volume-osd "* ]]; then

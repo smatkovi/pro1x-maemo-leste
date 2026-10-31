@@ -1,6 +1,7 @@
 #!/bin/sh
 # pro1x-statusled [STATUS]: the RGB status LED shows the battery as on Leste
-# (mce's PatternBatteryCharging 255;10;0 and PatternBatteryFull 0;255;0):
+# (mce's PatternBatteryCharging 255;10;0 and PatternBatteryFull 0;255;0),
+# when pro1x-led (the notification light, freebsd/pm/tools) does not run:
 # orange while charging, green when full, off on battery. Run by devd when
 # pro1x_battery tells it of a change (etc/devd/pro1x.conf), so nothing
 # polls, as the N9's mce got BME's events; without STATUS it reads the
@@ -15,6 +16,9 @@ led() {
 	done
 }
 [ -c /dev/led/status_red ] || exit 0
+# pro1x-led (Maemo's notification light) has the LED and the battery's
+# colours itself when it runs
+pgrep -q -F /var/run/pro1x-led.pid -x pro1x-led 2> /dev/null && exit 0
 st=${1:-$(sysctl -n dev.pro1x_battery.0.status 2> /dev/null)}
 case $st in
 charging)	led 511 20 0 ;;

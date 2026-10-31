@@ -663,7 +663,7 @@ See `arch/README.md`. Its trial must have ended.
 ## Block 12: FreeBSD (2-4 h; G1 and dsp1/3/4/6/7a must, others should or could)
 
 Sources:
-- `freebsd/README.md`, `freebsd/pm/README.md` (runs 1-17),
+- `freebsd/README.md`, `freebsd/pm/README.md` (runs 1-25),
   `freebsd/dsp/README.md`, `freebsd/data/README.md`,
   `freebsd/modem/README.md` (incl. stage 5), `freebsd/audio/README.md`,
   `freebsd/fm/README.md`, `freebsd/camera/README.md`
@@ -742,6 +742,7 @@ Each run below is a `cmdline` line, or a file in `/host/freebsd/cmdlines/`:
 | cam | id, raw, app, jpeg | `cmdline.cam-*` | kernel.bin | should: id, raw | light in front | 4 x 6-11 min |
 | stage 5 | SMS in Conversations | by hand in Hildon (`freebsd/modem/README.md` stage 5) | kernel.bin | could | SIM, second phone | 20 min |
 | pm14-17 | USB-C, host, USB 3, role switch | `freebsd/pm/README.md` runs 14-17 | needs the rebuild | could | cables, OTG, stick | 30 min |
+| pm18-25 | energy: jack by interrupt, autosleep, drain, vlow/vmin, what wakes it, Wi-Fi power save, GPS off after its app, the notification light | `freebsd/pm/README.md` runs 18-25 | needs the rebuild (image + hildon stage) | could; pm24, pm25 short | second phone for pm19/25; an hour each for pm20 | 15 min-3 h |
 | dsp6a | adopt Leste's modem (pro1x-kexec-freebsd.sh, never run) | `cmdline.dsp-adopt` | dsp | could, last | - | 8 min |
 | pool | `pro1x-freebsd-pool remove` / `create --size 8G` | - | - | could, last | - | 15 min |
 
@@ -759,6 +760,18 @@ Notes:
   gone from there on, and the modem's EFS writes held in rmtfs memory are
   lost. Its `-n` only loads and unloads. [OK] for each.
 - **The pool** writes 8 GB to userdata [OK]. No prepared run needs it.
+- **Energy (the audit of 2026-10-31, `freebsd/pm/README.md` "The energy
+  audit")**, in the joint image once rebuilt: the panel goes off 2 minutes
+  into the stand-by screen (`pro1x.standby_off=never` keeps the N9's way;
+  pm20 (a)/(b) set it), gpsd and the modem's GNSS stop when the last app
+  is gone (pm24), the status LED is Maemo's notification light (pm25,
+  `pro1x_led_enable="NO"` for the old battery colours), PulseAudio
+  starts (it had no `default.pa`: no Hildon sounds before). To note in
+  the runs already planned: pm9's probe with no cable (`GDSC on`,
+  `master clock on` = Linux left the USB block running, waste for as long
+  as FreeBSD runs); pm14's `3 of 3 interrupts` (else `pro1x_typec` polls
+  4 times a second); pm6/pm20 (c) `vlow +0, vmin +0` with the modem off
+  (the DPU still scanning out with the panel off is the first suspect).
 
 ## Block 13: KolibriOS (should; 60-90 min)
 

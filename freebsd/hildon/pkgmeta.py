@@ -103,6 +103,14 @@ LOCAL = {
                           "of PulseAudio's default sink by 5 % up to 100 % "
                           '(freebsd/audio/tools/pro1x-volume-keys).',
                           ['BSD2CLAUSE']),
+    'pro1x-led': ('1.0', "The Pro1X's status LED as Maemo 5's notification light",
+                  'pro1x-led watches the system bus for the LED patterns Maemo asks '
+                  'MCE for (hildon-home: missed calls, SMS, chat, mail, reminders) '
+                  'and shows the most important one still waiting in the status '
+                  "LED's colour, and the battery charging, full or low "
+                  '(pro1x_battery); off otherwise and while suspended, steady, '
+                  'without a timer (freebsd/pm/tools/pro1x-led), with its rc.d '
+                  'script.', ['BSD2CLAUSE']),
     'pro1x-volume-osd': ('1.0', "The Nokia N9's volume bar for Hildon's MeeGo-like look",
                          'pro1x-volume-osd shows the volume of PulseAudio\'s default sink '
                          "as the N9's system UI does when it changes, while Hildon's "
@@ -260,6 +268,8 @@ RUNTIME = {
     'pro1x-alarmboot': ['pulseaudio', 'alarmd', 'osso-systemui-alarm', 'hildon-desktop'],
     # pactl is PulseAudio's
     'pro1x-volume-keys': ['pulseaudio'],
+    # the requests come over the system bus
+    'pro1x-led': ['dbus'],
     # the modem asks for its files and domains before its file systems
     'rmtfs': ['tqftpserv', 'pd-mapper'],
     # QtSql's SQLite driver, a package of its own on FreeBSD
@@ -913,7 +923,7 @@ apps = sorted(x['name'] for x in meta.values()
 apps = sorted(set(apps) | {x['name'] for x in meta.values() if x['name'] in (
     'hildon-input-method-plugins', 'headphoned', 'wifi-assistant', 'hildon-status-menu',
     'osso-systemui-alarm', 'maemo-input-sounds', 'maemo-ringtones-mr0', 'osso-sounds-rtc',
-    'pro1x-volume-osd', 'pro1x-volume-keys', 'pro1x-alarmboot')})
+    'pro1x-volume-osd', 'pro1x-volume-keys', 'pro1x-alarmboot', 'pro1x-led')})
 # the N9's own user interface (harmattan.sh), where it is built: all of
 # it but the headers
 harmattan = sorted(x['name'] for x in meta.values()

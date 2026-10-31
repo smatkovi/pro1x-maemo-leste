@@ -16,6 +16,10 @@
 # RTC not. An event closer than the lead and 10 s: no suspend (exit 3),
 # so that the alarm rings (alarmd's own timeout does not run while frozen).
 # No file (no alarmd): the RTC's alarm as it is.
+#
+# The status LED is off while suspended (the decision of 2026-10-31):
+# pro1x-led shows nothing between SIGUSR1 and SIGUSR2 (its patterns come
+# back after), without it pro1x-statusled sets the battery's colour again.
 keep=
 if [ "${1:-}" = -k ]; then
 	keep=1
@@ -69,9 +73,16 @@ if [ -z "$keep" ]; then
 		[ -c "$l" ] && echo 0 > "$l"
 	done
 fi
+ledpid=/var/run/pro1x-led.pid
+pkill -USR1 -F $ledpid -x pro1x-led 2> /dev/null
+for c in red green blue; do
+	[ -c /dev/led/status_$c ] && echo 0 > /dev/led/status_$c
+done
 sync
 sysctl -q hw.pro1x_pm.suspend="$secs" > /dev/null
 r=$?
+pkill -USR2 -F $ledpid -x pro1x-led 2> /dev/null ||
+    /usr/local/libexec/pro1x-statusled 2> /dev/null
 if [ -z "$keep" ]; then
 	sysctl -q dev.goodix.0.sleep=0 dev.qcom_dpu.0.display=1 > /dev/null 2>&1
 	[ -z "$bl" ] || backlight -f /dev/backlight/backlight0 "$bl" 2>/dev/null

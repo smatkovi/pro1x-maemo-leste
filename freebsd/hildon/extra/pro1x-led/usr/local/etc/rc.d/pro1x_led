@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# PROVIDE: pro1x_led
+# REQUIRE: dbus devd
+# BEFORE: LOGIN
+# KEYWORD: nojail shutdown
+#
+# The Pro1X's status LED as Maemo 5's notification light (pro1x-led,
+# freebsd/pm/README.md stage 6): missed calls, SMS, chat, mail and
+# reminders in blue while they wait (hildon-home's LED requests to MCE,
+# watched on the system bus), the battery charging orange, full green, low
+# red; off otherwise and while suspended. It takes over the battery's
+# colours from pro1x-statusled. On by default;
+#
+#   pro1x_led_enable="NO"        the battery's colours only (pro1x-statusled)
+#   pro1x_led_flags="-B 50"      half the brightness; -L 15: low at 15 %
+
+. /etc/rc.subr
+
+name=pro1x_led
+desc="The status LED as Maemo's notification light"
+rcvar=pro1x_led_enable
+load_rc_config $name
+: ${pro1x_led_enable:=YES}
+: ${pro1x_led_flags:=}
+
+pidfile=/var/run/pro1x-led.pid
+command=/usr/local/sbin/pro1x-led
+stop_postcmd=pro1x_led_poststop
+
+# the battery's colours back to pro1x-statusled
+pro1x_led_poststop()
+{
+	[ -x /usr/local/libexec/pro1x-statusled ] &&
+	    /usr/local/libexec/pro1x-statusled
+	return 0
+}
+
+run_rc_command "$1"
