@@ -240,9 +240,10 @@ with rmtfs going away and coming back (Leste's `rmtfs -r` kept the modem's
 EFS writes in its memory, which the kexec loses; FreeBSD's rmtfs serves the
 partitions as they are on disk: the modem may find its EFS older than it
 left it; KolibriOS has the same gap), and that the Leste side works: the
-kexec from a running system must rebind UFS (the controller of Leste's
-own root) with an identity mapping before the jump, which the boot menu
-only does from its initramfs. Other channels Linux had open (the ADSP's
+kexec from a running system hands UFS (the controller of Leste's own
+root) over the way the boot menu does: `arm_smmu.kexec_bypass` (kernel
+patch 0040, 7.1.0-pro1x.12 and later) switches translation off for its
+stream at the kexec, with no rebind under the running root. Other channels Linux had open (the ADSP's
 APR and FastRPC, the modem's DATA and voice channels) are not adopted: a
 user opening one sends an OPEN the DSP may not expect. The Wi-Fi does not
 come back this way (ath10k waits for a firmware ready the running

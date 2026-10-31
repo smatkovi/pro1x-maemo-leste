@@ -864,12 +864,24 @@ Sources:
 - `tools/pro1x-freebsd-pool/README.md`
 
 Rules for the block:
-- FreeBSD only after block 4. Its start from the menu needs the UFS PHY
-  fix 0016 (pro1x.5 and later), and the trial must have ended.
+- FreeBSD only after block 4, and the trial must have ended. **Its start
+  from the menu needs kernel 7.1.0-pro1x.12 or later** (patch 0040: the
+  kexec hands UFS over, no rebind; 12.2) in a boot image prepared from
+  the repository as of 2026-10-31 evening. A boot image of pro1x.10 or
+  .11 prepared now refuses FreeBSD and starts Leste (`last-boot`:
+  `not starting freebsd: no arm_smmu.kexec_bypass`). pro1x.5's boot_b of
+  10-29 still rebinds UFS and hangs (G1 of 2026-10-31): no FreeBSD on it.
 - **Each run = set the cmdline, [OK] `pro1x-boot reboot freebsd`, wait,
-  Leste comes back by itself, `collect.sh fbsd-<run>`.** A hang ends in
-  the watchdog's reset into the menu's default (Leste). The RAM console
-  shows how far it got.
+  Leste comes back by itself, `collect.sh fbsd-<run>`.** The menu arms
+  the APSS watchdog (about 32 s) right after FreeBSD's kernel is loaded,
+  before `/host`'s umount, and reloads it just before `kexec -e`; a hang
+  from there on (umount, Linux's shutdown, the jump, FreeBSD before its
+  `qcom_wdt` runs) ends in the watchdog's reset into the menu's default
+  (Leste: the one-shot choice is used up). The RAM console shows how far
+  FreeBSD got; the menu's own steps are in the pstore (`<3>`
+  `pro1x-loop-root:` lines) and in `/host/pro1x-boot/last-boot`.
+  No bite of the APSS watchdog is on record for this phone yet: if one
+  lands in the crash-dump mode (`05c6:900e`), ways back 4.
 - Run `CLEAR=1 collect.sh ...` (clears after saving) so the next run
   starts clean.
 - **Every cmdline gets `pro1x.pool=off`.** The 8 GB `pool.zfs` of 10-29
@@ -952,7 +964,9 @@ Notes:
   own copies only where `out/modules` has none.
 - **dsp6a** stops ofono and kexecs from the running Leste. Leste's root is
   gone from there on, and the modem's EFS writes held in rmtfs memory are
-  lost. Its `-n` only loads and unloads. [OK] for each.
+  lost. Its `-n` only loads and unloads. [OK] for each. It needs
+  pro1x.12 too (12.2), and the copy in `/root/devday` from 2026-10-31's
+  deploy is the old one (it rebinds UFS): copy the script again.
 - **The pool** writes 8 GB to userdata [OK]. No prepared run needs it.
 - **Energy (the audit of 2026-10-31, `freebsd/pm/README.md` "The energy
   audit")**, in the joint image once rebuilt: the panel goes off 2 minutes
@@ -974,6 +988,100 @@ Notes:
   navigator costs about 23 CPU seconds per entry against 1 s for an app
   opening, nothing while idle; pm26 measures the transitions, the blur and
   `LP_NUM_THREADS` on the phone.
+
+### 12.2 The menu's FreeBSD start since G1 of 2026-10-31
+
+**What happened (G1, 21:32, pro1x.5, logs in
+`~/ps/pro1x-runs/2026-10-31/fbsd-G1-2/`):** the phone hung for over ten
+minutes without USB and without a reset, until the power key. The menu
+then still rebound UFS before the jump: unbind, its IOMMU group to
+`identity`, bind, wait for the partition. The pstore of that start ends
+at 11.1 s with UFS's register dump and `ufshcd_abort: cmd was completed,
+but without a notifying intr, tag = 0`.
+
+**The cause, from the dump and the 7.1 sources:**
+- Confirmed:
+  - The identity domain took effect. The dumped DMA addresses are
+    physical: the command descriptor at 0xfde20000 lies in the CMA area
+    (0xfdc00000, 32 MiB), the request list at 0x1_02dde000. Under the
+    SMMU they would be 36-bit IOVAs near 0xf_ffff_ffff.
+  - The rebound host brought the link up. Link startup completed, and
+    UIC commands complete by interrupt, so the interrupt line works.
+  - The aborted command is the first NOP OUT, a device-management
+    command on the reserved tag 0. Its request UPIU is all zeros. The
+    host finished it: the doorbell is clear and UTRLCNR bit 0 is set.
+    But nothing came back into the memory Linux allocated: the OCS is
+    still 0xf, the response is all zeros, and IS has no completion. So
+    the host never saw the descriptor's interrupt bit. The interrupt was
+    not lost: the host's DMA after the rebind went somewhere else.
+- Not known: whether the identity domain (the SMMU bypass for this
+  stream) or the second probe of the host makes its DMA go astray. The
+  rebind has never worked on the phone. On 10-29 it failed earlier, at
+  the PHY (`-19`, fixed by 0016). Before that, the menu did not rebind.
+- Likely, for the hang: nothing at error level follows the abort (no
+  device or host reset, no `NOP OUT failed`). So the probe never
+  finished: the async scan holds UFS, the 30 s `find_backing` gave up,
+  and the `reboot -f` that followed waited for the probe in the kernel's
+  shutdown (`wait_for_device_probe`). The watchdog was armed only after
+  all this, just before `kexec -e`, so nothing reset the phone.
+
+**What changed:**
+- `device/kernel/patches/0040`, kernel 7.1.0-pro1x.12 (= pro1x.11 +
+  0040). Built 2026-10-31 in `$WORK/out-pro1x.12`, not flashed. A new
+  parameter, `/sys/module/arm_smmu/parameters/kexec_bypass` (device
+  names). At a kexec, after the devices' own shutdown, the SMMU's
+  shutdown switches translation off in the context bank of each named
+  device's stream (SCTLR.M = 0, the way arm-smmu-qcom emulates bypass).
+  FreeBSD's `ufshci` reports exactly that: `MMU off: identity`.
+- `initramfs/local-top/pro1x-loop-root`:
+  - UFS is no longer unbound. It stays bound and translated, and the
+    menu writes `4804000.ufshc` into that parameter before `kexec -e`.
+    FreeBSD gets UFS with the link of the first probe (kept by 0004).
+  - A kernel without the parameter does not start FreeBSD; Leste starts
+    instead.
+  - The watchdog is armed right after `kexec -s -l`, before `/host`'s
+    umount, and reloaded to its full time just before `kexec -e`.
+  - If `kexec -e` comes back, the parameter is cleared and the watchdog
+    stopped; a one-shot start then gets Leste's watchdog as usual.
+  - KolibriOS gets the same watchdog steps; UFS is untouched there.
+- `freebsd/dsp/tools/pro1x-kexec-freebsd.sh` (dsp6a): the same hand-over,
+  with no rebind of Leste's own root. Copy it to the phone again.
+- PC tests:
+  - `bash tests/boot-menu-kexec/run.sh`: the script's FreeBSD, KolibriOS
+    and Leste paths in a sandbox, the order of the watchdog, the umount,
+    the parameter and `kexec -e`, and the way back.
+  - `bash tests/pro1x-boot-trial/run.sh`: still passes.
+
+**Before the first FreeBSD run:**
+1. Flash pro1x.12 like block 4, with `K=pro1x.12` (OUT=$WORK/out-pro1x.12)
+   and its own trial. It also carries 0033-0039, which no phone has run
+   yet. Or flash pro1x.12 instead of pro1x.10 in block 4.
+2. After prepare, check the boot image. The first must end in "the
+   trial's parts are there"; the second must print 1 or more:
+   ```sh
+   bash $D/check-initrd.sh $OUT/initrd.img-$KVER alarm freebsd
+   zcat $OUT/Image.gz | grep -ac arm_smmu.kexec_bypass
+   ```
+3. On the phone, after the start: `ls -l /sys/module/arm_smmu/parameters/kexec_bypass`
+   (it must exist, mode 644; `cat` shows `(null)`).
+
+**What G1 shows next:**
+- FreeBSD's RAM console has the `ufshci` attach. Look for
+  `stream 0x100: SMR... S2CR ... (translate)`, then `context bank N: ...
+  SCTLR 0 (MMU off: identity)`, `keeping the link that is up`, and the
+  root on ZFS.
+- If `ufshci`'s first commands time out there the same way (no
+  completion, descriptors untouched), the bypass itself is what breaks
+  UFS's DMA. Then FreeBSD must translate UFS's stream with page tables of
+  its own; no Linux-side change helps then.
+- If FreeBSD never starts, the pstore's last `pro1x-loop-root:` line and
+  `last-boot`'s `starting freebsd: ... loaded` show whether the menu got
+  to the jump.
+
+Untested: all of it on the phone. That covers patch 0040 on real
+hardware (the context bank write, the hypervisor), the bypass for UFS,
+FreeBSD's `ufshci` on a link the menu did not touch, and a watchdog bite
+on this phone.
 
 ## Block 13: KolibriOS (should; 60-90 min)
 

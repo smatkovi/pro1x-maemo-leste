@@ -301,7 +301,8 @@ what is missing:
   clocks, interrupts `pwr_event` SPI 302, `qusb2_phy` 260, `hs_phy_irq`
   254, `ss_phy_irq` 422), the DWC3 core at 0x4e00000 (SPI 255) behind the
   apps SMMU (stream 0x120: FreeBSD gives physical addresses, so the stream
-  needs an identity mapping, as the boot menu does it for UFS), the QUSB2
+  needs translation off, as the kexec does it for UFS: one more name in
+  `arm_smmu.kexec_bypass`, kernel patch 0040), the QUSB2
   PHY at 0x1613000 (`phy-qcom-qusb2.c`'s `sm6115_init_tbl`, its HSTX trim
   from the fuse `qusb2_hstx_trim`; supplies L4A, L12A, L15A through the
   RPM, which `freebsd/dsp`'s `qcom_rpm` can vote), the GCC (no FreeBSD
@@ -316,7 +317,7 @@ what is missing:
   Linux takes the controller down; how far (the GDSC, the clocks, the
   PHY) is what the first run shows. If the boot menu could leave it
   powered (as `device/kernel/patches/0004` does for UFS and 0005 for the
-  display) with the SMMU stream on an identity mapping, FreeBSD would
+  display) with the SMMU stream untranslated (0040), FreeBSD would
   only need the core driver; otherwise the GCC, GDSC and PHY bring-up
   comes first.
 

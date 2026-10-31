@@ -187,7 +187,7 @@ after boot (`patches/0013`), so that unattended tests always end.
 | CPU frequency | `qcom_cpufreq_hw` (`0010`): the firmware's frequency table per cluster for cpufreq(4) and powerd |
 | vibration | `aw86224` (`0019`): the AW86224 haptics on the keyboard's I2C bus as `/dev/led/vibrator` (led(4): on/off and blink patterns), continuous drive with the Leste driver's register values; drive levels `dev.aw86224.0.*` |
 | status LED | `qcom_lpg` (`0020`): the PMI632's light pulse generator, `/dev/led/status_red`, `_green`, `_blue` (led(4)), duty cycle `dev.qcom_lpg.0.<colour>` |
-| UFS | `ufshci` (`0005`), on the link Linux left up: the controller's PHY, clocks and regulators need Qualcomm drivers FreeBSD lacks. Linux keeps UFS powered across kexec (`device/kernel/patches/0004`), and the boot menu rebinds it with an identity mapping first, since FreeBSD does not drive the SMMU in front of it and hands the controller physical addresses. The attach reports the SMMU's view of the stream |
+| UFS | `ufshci` (`0005`), on the link Linux left up: the controller's PHY, clocks and regulators need Qualcomm drivers FreeBSD lacks. Linux keeps UFS powered across kexec (`device/kernel/patches/0004`). FreeBSD does not drive the SMMU in front of UFS and hands the controller physical addresses, so the kexec switches translation off for UFS's stream after its last command: the boot menu names it in `arm_smmu.kexec_bypass` (`device/kernel/patches/0040`, kernel 7.1.0-pro1x.12 and later; the menu refuses FreeBSD on older kernels). Until 2026-10-31 the menu rebound UFS with an identity domain instead, which hung the phone (`docs/device-day-2026-10-31.md` 12.2). The attach reports the SMMU's view of the stream |
 
 ## Compared with Leste
 

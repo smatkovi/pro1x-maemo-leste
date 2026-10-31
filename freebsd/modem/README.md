@@ -308,10 +308,11 @@ a running Leste left: the ADSP with its AFE ports started and the codec
 powered by two streams held open across the kexec, Linux's APR channel
 adopted. FreeBSD is kexec'd from the boot menu's initramfs, where no sound
 card exists (no ADSP driver, no UCM, no PulseAudio: nothing to leave
-running); and it is not kexec'd from a running Leste instead, since the
-menu rebinds UFS with an identity mapping before the jump
-(`initramfs/local-top/pro1x-loop-root`), which a Leste running from UFS
-could not do under itself. And FreeBSD starts the ADSP itself (PAS, `pro1x-dsp start
+running); and it is not kexec'd from a running Leste instead. (The old
+reason, the menu's UFS rebind with an identity domain before the jump,
+which a Leste running from UFS could not do under itself, is gone since
+2026-10-31: the kexec hands UFS over, `arm_smmu.kexec_bypass`, kernel
+patch 0040.) And FreeBSD starts the ADSP itself (PAS, `pro1x-dsp start
 adsp`, dsp3), which begins with no ports, clocks or codec set up. So on
 FreeBSD the whole path is set up from scratch: the AFE's votes, clocks and
 codec DMA ports, the codec (RX macro, SoundWire, WCD9370's EAR; VA macro
