@@ -2,10 +2,10 @@ FreeBSD: libpython preloaded (Qt loads PyOtherSide with local symbols, Python's 
 
 --- a/gpodder-leste.in
 +++ b/gpodder-leste.in
-@@ -5,4 +5,13 @@
- 	mkdir -p "$d/gpodder"
- done
- export PYTHONPATH=@APP@/lib${PYTHONPATH:+:$PYTHONPATH}
+@@ -10,4 +10,13 @@
+ # with fewer wake-ups than the default output (pro1x-maemo-leste's
+ # pro1x-music-sink); QtMultimedia's player sets no role of its own
+ export PULSE_PROP="media.role=music${PULSE_PROP:+ $PULSE_PROP}"
 +# FreeBSD: Qt loads PyOtherSide's plugin, and with it libpython, with its
 +# symbols local, which Python's own extension modules (math, ...) then do
 +# not see; preloaded, they are global
