@@ -9,6 +9,9 @@ loudspeakers. The UCM profile is the NixOS port's (`Speaker` switches
 `Spk0 OUT Switch`/`Spk1 OUT Switch` on, `Headphones` off) with this
 repository's headset jack patch (below); PulseAudio runs
 at 48 kHz, S16 (`rootfs-overlay/etc/pulse/daemon.conf.d/50-pro1x.conf`).
+With kernel patches 0034/0035 music takes a second front end,
+MultiMedia4 (`hw:Pro1X,8`), with periods of 640 ms instead of 20 ms
+("Music with a deep buffer", at the end).
 
 The kernel for the flash on 2026-10-31 is 7.1.0-pro1x.9 (`$WORK/out-pro1x.9`,
 patches 0001-0027): pro1x.8 (0001-0026, the loudspeaker pop below) plus the
@@ -366,3 +369,214 @@ button, ideally three (play, volume up, volume down).
 5. **Back:** `PHONE=... bash scripts/64-ucm-install.sh restore` and a
    reboot gives the old profile; the kernel as in "The way back" of
    `docs/kernel-update.md`.
+
+## Music with a deep buffer (patches 0034/0035, pro1x-music-sink; 2026-10-31, untested on the phone)
+
+Music and podcasts kept the CPU busy for nothing: while anything plays, the
+CPU wakes 50 times a second. Now music goes to a second sink whose
+periods last 640 ms, so the CPU sleeps most of the time; everything else
+stays as it was.
+
+**Why it was 50 a second.** q6asm-dai marks its PCMs `SNDRV_PCM_INFO_BATCH`
+(the position moves a whole period at a time, when the DSP returns a
+buffer), and PulseAudio 16 turns timer-based scheduling off for every
+batch device except USB ones (`alsa-util.c`: "Disabling tsched mode since
+BATCH flag is set"). So `tsched_buffer_size` does nothing on this card:
+PulseAudio runs in interrupt mode with fixed latency, one wake-up per
+period, and module-alsa-card opens the UCM sink with the daemon's
+defaults, 4 x 25 ms, which the driver's 480-frame step turns into
+5 x 20 ms (100 ms). Each period is one ASM write to the DSP and one
+WRITE_DONE back over GLINK, and PulseAudio and the player refill it, for a
+notification as for an hour of music. One sink with long periods would
+delay every sound and every volume change by its whole buffer: q6asm-dai
+also has `SNDRV_PCM_INFO_NO_REWINDS`, so nothing written can be taken back.
+
+**What the DSP path offers** (sound/soc/qcom/qdsp6, 7.1):
+
+- Playback periods of 128 bytes to 64 KiB, 2 to 8 of them, in steps of 480
+  frames: at most 16320 frames (340 ms) at 48 kHz stereo S16, 2.7 s of
+  buffer. Capture: periods of at most 4 KiB. The vendor kernel's driver for
+  this ADSP family (`msm-pcm-q6-v2.h`, msm-4.19 "bengal") allows 122880
+  bytes per period.
+- A front end (MultiMedia1-8) is one ASM session; the ADSP mixes all the
+  sessions routed to a port (q6routing: one COPP per port, each session
+  in its matrix map). MultiMedia2 (the microphones) and MultiMedia3 (the
+  FM receiver) are taken by capture, and a front end's playback and
+  capture share its session (`q6asm_audio_client_alloc` returns the one
+  that is there), so a second playback stream needs a fourth front end.
+- There is no "deep buffer" front end in mainline, nor a DSP-side volume
+  (q6asm opens its streams with the null post-processing topology): the
+  volume stays PulseAudio's, in software, before the buffer.
+- Compress offload: q6asm-dai has it (`is-compress-dai` on a front end;
+  MP3, FLAC, WMA, ALAC, APE; fragments of 8-128 KiB, up to 64). The
+  ADSP firmware (`adsp.mbn`, QX1050) has decoder modules for FLAC, ALAC,
+  APE, Vorbis, WMA, WMA Pro and HE-AAC, and the MP3 format id in 11
+  places but no MP3 module of its own (it may be built into the core;
+  only the phone can tell). No player on Leste, Kali or Arch writes to a
+  compress device (tinycompress's `cplay` plays MP3 files, nothing else
+  of the desktop does), so this was not pursued.
+
+**The kernel** (test build `7.1.0-pro1x.11-audio` in `$WORK/out-pro1x.11-audio`,
+patches 0001-0035, built 2026-10-31, not flashed):
+
+- `0034-arm64-dts-qcom-sm6115-pro1x-deep-buffer-front-end-multimedia4.patch`:
+  MultiMedia4 as a playback-only front end (`dai@3`, `direction` RX) and
+  its DAI link, the last one: the card numbers its PCMs by link order,
+  back ends included, so the others keep their numbers and MultiMedia4 is
+  `hw:Pro1X,8` (`/proc/asound/pcm`: `00-08: MultiMedia4 ...`). Like
+  MultiMedia1 it opens only with a route, `RX_CODEC_DMA_RX_0 Audio Mixer
+  MultiMedia4`.
+- `0035-asoc-qcom-q6asm-dai-playback-periods-up-to-122880-bytes.patch`:
+  periods of up to 122880 bytes, the vendor driver's value (30720 frames,
+  640 ms, a multiple of 480). The buffer each MultiMedia substream gets
+  preallocated grows from 512 to 960 KiB (seven substreams now: about
+  6.6 MiB instead of 3 MiB).
+
+**User space** (Leste and the MeeGo copy, PulseAudio 16.1):
+
+- `tools/pro1x-music-sink` (`/usr/local/bin/pro1x-music-sink`, started by
+  `Xsession.post/48pro1x-music-sink`), a PulseAudio client of the session:
+  - loads `module-alsa-sink device=hw:Pro1X,8 sink_name=pro1x_music
+    fragments=2 fragment_size=122880` (2 x 640 ms; on a kernel with 0034
+    but not 0035 PulseAudio gets 4 x 320 ms) with
+    `device.intended_roles='x-maemo music'`, so that module-intended-roles
+    (in Leste's `default.pa`) creates such streams on it: the media player
+    (mafw-gst-renderer sets `media.role` x-maemo, `buffer-time` 600 ms)
+    and players that say music;
+  - gives pro1x_music the default sink's volume and mute at every change:
+    the volume keys, the status menu and `pro1x-volume-osd` set the
+    default sink's volume, and pro1x_music has no hardware volume either;
+  - keeps the output the user chose: a new stream of those roles moves to
+    pro1x_music only from the default sink while that is the phone's own
+    (the same `alsa.card`), and from pro1x_music to the default sink while
+    that is another one (Bluetooth headphones);
+  - stopped (SIGTERM), unloads the sink; PulseAudio moves its streams to
+    the default sink.
+  Without it there is no such sink and everything plays as before; that is
+  why the sink is not in `50-pro1x.pa`: music on it without the volume
+  follower would not hear the volume keys, and module-intended-roles alone
+  would take music away from Bluetooth headphones. Nothing is loaded on a
+  kernel without MultiMedia4 (`/proc/asound/Pro1X/pcm8p`), or with
+  `/etc/pulse/pro1x-deep-buffer-off`. `-p BYTES` sets another period
+  (a multiple of 1920; 61440 is 320 ms), `-v` logs what it does.
+- `/etc/udev/rules.d/86-pro1x-music-route.rules` runs
+  `/usr/local/sbin/pro1x-music-route` when the card appears: the route
+  above, which the UCM profile does not know (as `BootSequence` keeps
+  MultiMedia1's). Nothing is powered by it until a stream runs.
+- Kali and Arch (PipeWire) are unchanged. PipeWire runs one graph clock
+  for all streams and does lower its quantum while only a stream with a
+  large `node.latency` runs, but on a batch device its ALSA node keeps a
+  headroom of a period, and the period is fixed when the PCM opens; the
+  same split (a node on `hw:Pro1X,8` for music, WirePlumber's role-based
+  linking) would be its way, not tried. FreeBSD's `pro1x-audiod` is
+  unchanged as well.
+
+**What it costs.** Pause, seek and volume changes on the music sink take
+effect after what is already in the DSP: up to 1.28 s, 0.64 s on average
+(the player's own volume, a role volume of PulseAudio, the same). A track
+starts as before (PulseAudio fills the 1.28 s at once). Notifications,
+the keyboard and the other sounds stay on the UCM sink with its 20 ms
+periods; a call's audio does not go through PulseAudio at all (q6voice).
+If the delay is too long: `-p 61440` in the session hook (320 ms periods,
+about 3 wake-ups a second).
+
+**Measured on the PC (2026-10-31).** `tests/audio-deep-buffer`: Leste's own
+PulseAudio 16.1 and GStreamer in the Leste chroot (qemu) against
+`pcm_q6sim`, an ALSA PCM with q6asm-dai's limits (480-frame steps, 2-8
+periods, at most 64 KiB or 120 KiB, the position in whole periods, a
+period taken only once written completely, no rewinds; PulseAudio sees
+it as the phone's: interrupt mode, 5 x 20 ms for the UCM sink), and perf
+on the PC for when PulseAudio's and the player's threads ran. Players:
+`mafw` as mafw-gst-renderer (pulsesink 600/300 ms, role x-maemo), `qt` as
+a QtMultimedia player (pulsesink's defaults 200/10 ms, role music).
+20 s each, after 5 s:
+
+    BASE_IMG=<image> CHROOT=<dir> bash tests/audio-deep-buffer/pc-measure.sh
+
+| | player | periods/s MM1 | MM4 | thread switches/s | wake-ups/s | median sleep |
+|---|---|---|---|---|---|---|
+| before (UCM sink) | mafw | 50.0 | - | 291 | 50.5 | 20 ms |
+| before (UCM sink) | qt | 50.0 | - | 401 | 50.2 | 19 ms |
+| after (0034+0035) | mafw | 0 | 1.6 | 179 | 2.2 | 432 ms |
+| after (0034+0035) | qt | 0 | 1.6 | 168 | 2.2 | 457 ms |
+| after, 0034 alone | mafw | 0 | 3.2 | 173 | 3.8 | 314 ms |
+| after, 0034 alone | qt | 0 | 3.2 | 170 | 4.0 | 312 ms |
+
+"Wake-ups" counts runs of those threads more than 2 ms after the previous
+one: how often the CPU leaves idle for the sound. The thread switches
+fall less, because the decoder still hands its buffers (1024 frames) one
+by one, but they come in a burst once a period. In each "after" run the
+stream was on pro1x_music and the UCM sink stayed suspended, and
+pro1x_music followed the default sink's volume (37 %). With another
+default sink (a null sink as a Bluetooth headset, `target.sh start
+after-bt mafw`) the stream played there; with pro1x-music-sink stopped the
+sink was gone and the stream back on the UCM sink.
+
+### Test on the phone (with 7.1.0-pro1x.11-audio)
+
+From the build host, `pa()` as in the loudspeaker test. The current needs
+the battery (`pro1x-powerlog` suspends the charger's input itself).
+
+1. **Kernel and files:**
+
+       PHONE="ssh root@172.16.42.1" OUT=$WORK/out-pro1x.11-audio WORK=$WORK \
+           bash scripts/65-kernel-update.sh prepare
+       ... 65-kernel-update.sh flash            (with the phone's owner there)
+       PHONE="ssh root@172.16.42.1" bash scripts/72-audio-deep-buffer.sh
+
+   then a reboot (a cold start: after a kexec the ADSP keeps the first
+   kernel's state).
+2. **Kernel side:** `uname -r` is 7.1.0-pro1x.11-audio; `grep MultiMedia4
+   /proc/asound/pcm` shows `00-08: MultiMedia4 ... : playback 1`;
+   `amixer -c Pro1X cget name='RX_CODEC_DMA_RX_0 Audio Mixer MultiMedia4'`
+   is on (the udev rule); `dmesg | grep -i -E 'q6asm|multimedia'` has no
+   errors. By hand, without PulseAudio:
+   `aplay -D hw:Pro1X,8 --period-size=30720 --buffer-size=61440 /tmp/pro1x-beep.wav`
+   (the beep of the loudspeaker test; aplay pads the last period with
+   silence) plays while PulseAudio's sinks are suspended, and `aplay
+   --dump-hw-params -D hw:Pro1X,8 /tmp/pro1x-beep.wav` ends the
+   `PERIOD_BYTES` range at 122880 (65536 without 0035).
+3. **The sink:** `pa pactl list short sinks` lists `pro1x_music` (and the
+   UCM sink); `pa pactl list sinks | grep -A3 pro1x_music` has
+   `device.intended_roles = "x-maemo music"`. Without it:
+   `pa /usr/local/bin/pro1x-music-sink -v` in a shell says why (Ctrl-C ends
+   it; it unloads only a sink it loaded itself).
+4. **Music on it:** an MP3 in the media player; `pa pactl list sink-inputs |
+   grep -E 'Sink:|media.role'`: `media.role = "x-maemo"` on pro1x_music's
+   index. Listen: no gap at the start, at the end of a track, between
+   tracks; a notification (an SMS, `pa paplay /tmp/pro1x-beep.wav`) during
+   the music comes at once; the volume keys change the music within about
+   a second; pause stops it within about a second; the volume bar shows
+   the volume as before. Headphones in and out: the music follows (the UCM
+   sink's port switches the codec path both front ends share).
+5. **Before and after, display off,** the same MP3 looping in the media
+   player at the same volume, 10 minutes each, from the phone's shell
+   (as root):
+   - before: `kill $(pidof pro1x-music-sink)` (the sink goes, the music
+     moves to the UCM sink), then
+     `pro1x-powerlog music-ucm 10 10 &` and halfway `pro1x-wakeups 60`;
+   - after: `su user -c "XDG_RUNTIME_DIR=/run/user/$(id -u user) /usr/local/bin/pro1x-music-sink -v > /tmp/music-sink.log 2>&1 &"`
+     (module-intended-roles moves the playing stream to the new sink;
+     `pa pactl list sink-inputs | grep Sink:` to check), then
+     `pro1x-powerlog music-deep 10 10 &` and halfway `pro1x-wakeups 60`.
+
+   | 2026-10-31, display off, MP3 | before (UCM sink) | after (pro1x_music) |
+   |---|---|---|
+   | mean current (powerlog, last line) | | |
+   | irq/s (powerlog mean) | | |
+   | ctxt/s | | |
+   | idle % | | |
+   | CPU idle exits/s (pro1x-wakeups) | | |
+   | the ADSP's glink interrupts/s (pro1x-wakeups, interrupts) | | |
+   | pulseaudio and player wake-ups/s (pro1x-wakeups, tasks) | | |
+6. **Back:** `touch /etc/pulse/pro1x-deep-buffer-off` (the next session
+   loads no sink) or `PHONE=... bash scripts/72-audio-deep-buffer.sh
+   restore`; the kernel as in "The way back" of `docs/kernel-update.md`.
+
+Not done here: gPodder (`gpodder-leste`) plays through QtMultimedia
+without a role, so it stays on the UCM sink; `audioRole:
+MediaPlayer.MusicRole` in its `GPodderPlayback.qml`, or
+`PULSE_PROP='media.role=music'` in its launcher, would put it on
+pro1x_music (that package's repository). Video in the media player (also
+x-maemo) plays on pro1x_music too; its A/V sync rests on PulseAudio's
+latency, which moves in whole periods there (not tried).
