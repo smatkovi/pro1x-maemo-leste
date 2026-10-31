@@ -47,7 +47,7 @@ COMMIT=${COMMIT:-$(git -C "$REPO" rev-parse --short HEAD 2> /dev/null || echo un
 B=/usr/src/hildon
 # the versions of this repository's tools (Leste's packages have the same:
 # scripts/mkdeb-tools.sh)
-declare -A VERSIONS=([pro1x-fm]=1.0)
+declare -A VERSIONS=([pro1x-fm]=1.1)
 eval "$(sed -n 's/^declare -A VERSIONS=(\(.*\))$/VERSIONS+=(\1)/p' "$REPO/scripts/mkdeb-tools.sh")"
 # The parts above packaged with OUT: built by 40 (in $B/build), by 41 (in
 # $B/root); the +pro1xN of Leste's packages of them (scripts/49-hidpi.sh)
