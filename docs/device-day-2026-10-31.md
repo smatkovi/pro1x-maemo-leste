@@ -586,7 +586,7 @@ See `docs/alarm-power-on.md`, "The test on the phone". It needs pro1x.10
   once the package is in a `leste-*` pre-release (`fetch.sh` again)
 - or `dpkg -i` of the deb
 
-Use `pro1x-alarmboot` 1.2 (pre-release `leste-alarmboot-2026.10.31`: the
+Use `pro1x-alarmboot` 1.3 (pre-release `leste-alarmboot-2026.10.31.1`: the
 N9's alarm screen, then off again as the N9); after installing it, log
 out of Hildon or reboot. The charger off (it keeps the phone on).
 
@@ -609,7 +609,8 @@ Steps:
    snooze. Optional: the power key during "Switching off" (stays on),
    portrait with the keyboard closed, MeeGo (its copy with the 1.2
    package and the new `01pro1x-meego`, see the document: the N9's own
-   alarm screen, then off).
+   alarm screen, then off). Arch (packages of `arch-hildon-2026.10.31`,
+   `pro1x-desktop meego`): the same steps as Leste.
 5. Counter-check: a start by the power key shows the menu
    (`last-boot`: `alarm-check: none not-by-the-rtc`).
 6. `collect.sh 08-alarm /host/pro1x-boot/last-boot /tmp/pro1x-alarmboot.log`
@@ -696,7 +697,7 @@ See `arch/README.md`. Its trial must have ended.
 ## Block 12: FreeBSD (2-4 h; G1 and dsp1/3/4/6/7a must, others should or could)
 
 Sources:
-- `freebsd/README.md`, `freebsd/pm/README.md` (runs 1-25),
+- `freebsd/README.md`, `freebsd/pm/README.md` (runs 1-26),
   `freebsd/dsp/README.md`, `freebsd/data/README.md`,
   `freebsd/modem/README.md` (incl. stage 5), `freebsd/audio/README.md`,
   `freebsd/fm/README.md`, `freebsd/camera/README.md`
@@ -775,7 +776,7 @@ Each run below is a `cmdline` line, or a file in `/host/freebsd/cmdlines/`:
 | cam | id, raw, app, jpeg | `cmdline.cam-*` | kernel.bin | should: id, raw | light in front | 4 x 6-11 min |
 | stage 5 | SMS in Conversations | by hand in Hildon (`freebsd/modem/README.md` stage 5) | kernel.bin | could | SIM, second phone | 20 min |
 | pm14-17 | USB-C, host, USB 3, role switch | `freebsd/pm/README.md` runs 14-17 | needs the rebuild | could | cables, OTG, stick | 30 min |
-| pm18-25 | energy: jack by interrupt, autosleep, drain, vlow/vmin, what wakes it, Wi-Fi power save, GPS off after its app, the notification light | `freebsd/pm/README.md` runs 18-25 | needs the rebuild (image + hildon stage) | could; pm24, pm25 short | second phone for pm19/25; an hour each for pm20 | 15 min-3 h |
+| pm18-26 | energy: jack by interrupt, autosleep, drain, vlow/vmin, what wakes it (and Wi-Fi's interrupts associated, idle), Wi-Fi power save, GPS off after its app, the notification light, drawing on the CPU (transitions, blur, llvmpipe's threads) | `freebsd/pm/README.md` runs 18-26 | needs the rebuild (image + hildon stage) | could; pm24-26 short | second phone for pm19/25; an hour each for pm20 | 15 min-3 h |
 | dsp6a | adopt Leste's modem (pro1x-kexec-freebsd.sh, never run) | `cmdline.dsp-adopt` | dsp | could, last | - | 8 min |
 | pool | `pro1x-freebsd-pool remove` / `create --size 8G` | - | - | could, last | - | 15 min |
 
@@ -804,7 +805,15 @@ Notes:
   `master clock on` = Linux left the USB block running, waste for as long
   as FreeBSD runs); pm14's `3 of 3 interrupts` (else `pro1x_typec` polls
   4 times a second); pm6/pm20 (c) `vlow +0, vmin +0` with the modem off
-  (the DPU still scanning out with the panel off is the first suspect).
+  (the DPU still scanning out with the panel off is the first suspect);
+  pm22 with Wi-Fi associated and idle: `vmstat -i` twice a minute apart,
+  about ten a second from the copy engines = the beacons reach the host
+  (no beacon filter or ARP/NS offload in ath10k's code: README).
+  Hildon on FreeBSD now runs Clutter at 30 frames a second and Qt Quick's
+  basic render loop (llvmpipe draws on the CPU); in the VM the task
+  navigator costs about 23 CPU seconds per entry against 1 s for an app
+  opening, nothing while idle; pm26 measures the transitions, the blur and
+  `LP_NUM_THREADS` on the phone.
 
 ## Block 13: KolibriOS (should; 60-90 min)
 

@@ -13,9 +13,9 @@ keeps it on; a call, the charger or the phone being used keep it on too.
 
 Status (2026-10-31): built and tested on the PC (below); the power-on
 itself is untested on the phone. To be flashed with kernel pro1x.10;
-`pro1x-alarmboot` 1.2 (the N9 look, off again as the N9) in the
-pre-release `leste-alarmboot-2026.10.31` (1.1 in `leste-alarmboot-2026.10.30.1`
-asked instead).
+`pro1x-alarmboot` 1.3 (the N9 look, off again as the N9) in the
+pre-release `leste-alarmboot-2026.10.31.1` (1.1 in `leste-alarmboot-2026.10.30.1`
+asked instead); Arch: `arch-hildon-2026.10.31`.
 
 ## Is it possible on this hardware?
 
@@ -438,21 +438,21 @@ package. **Writing boot_b needs the owner's OK on the day.**
    ends in Sailfish after three tries; back with
    `TARGET=b IMG=/host/boot_b-before-7.1.0-pro1x.10.img VBMETA= sh scripts/60-flash-slot-b.sh flash`
    or `fastboot flash boot_b $OUT/boot_b-before-7.1.0-pro1x.10.img`.
-3. The package, from the pre-release `leste-alarmboot-2026.10.31`
-   (1.2, the N9 look and off again as the N9; built by `scripts/mkdeb-tools.sh`,
+3. The package, from the pre-release `leste-alarmboot-2026.10.31.1`
+   (1.3, the N9 look and off again as the N9; built by `scripts/mkdeb-tools.sh`,
    `ONLY=pro1x-alarmboot`; `pro1x-update` sees it too):
    ```sh
-   gh release download leste-alarmboot-2026.10.31 -R smatkovi/pro1x-maemo-leste -D /tmp/alarmboot
+   gh release download leste-alarmboot-2026.10.31.1 -R smatkovi/pro1x-maemo-leste -D /tmp/alarmboot
    (cd /tmp/alarmboot && sha256sum -c SHA256SUMS)
-   scp /tmp/alarmboot/pro1x-alarmboot_1.2_arm64.deb root@172.16.42.1:/root/
+   scp /tmp/alarmboot/pro1x-alarmboot_1.3_arm64.deb root@172.16.42.1:/root/
    # in Leste, as root (1.0's Xsession.post/48pro1x-alarmboot goes)
-   apt install /root/pro1x-alarmboot_1.2_arm64.deb
+   apt install /root/pro1x-alarmboot_1.3_arm64.deb
    ```
-   then log out of Hildon or reboot. FreeBSD gets `pro1x-alarmboot` 1.2
+   then log out of Hildon or reboot. FreeBSD gets `pro1x-alarmboot` 1.3
    and the new `hildon-session` with the next FreeBSD Hildon release.
    MeeGo's copy (`/host/meego-leste.img`, from Leste with the copy
    mounted, e.g. on `/mnt/ml`): the same package (`chroot /mnt/ml apt
-   install /root/pro1x-alarmboot_1.2_arm64.deb` after copying it there)
+   install /root/pro1x-alarmboot_1.3_arm64.deb` after copying it there)
    and the new `rootfs-overlay/etc/X11/Xsession.d/01pro1x-meego` into its
    `/etc/X11/Xsession.d/`; a newly made copy (`meego/45-meego-image.sh`)
    has both from Leste.
