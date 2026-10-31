@@ -1083,12 +1083,14 @@ What changed in each:
   (`87s`; minutes as before), a timer slack of 100 ms on Linux. FreeBSD's
   `.xinitrc` passes `pro1x.standby_off` minus the stand-by screen's delay
   as seconds. Untested on FreeBSD's hildon-desktop (its stop on "off" is
-  upstream's code, not tried in the VM). To look at: pro1x-alarmboot takes
-  a display "off" during its 10 s "switching off" countdown for the power
-  key (Leste's mce sends "off" for it) and stays on; on FreeBSD the panel's
-  time-out now sends "off" too, which can fall into that countdown only
-  after about two minutes without input. On FreeBSD the power key gives
-  "lpm" (the stand-by screen), not "off".
+  upstream's code, not tried in the VM). pro1x-alarmboot takes a display
+  "off" during its 10 s "switching off" countdown for the power key
+  (Leste's mce sends "off" for it) and stays on; with this signal a
+  time-out could have looked the same, and on FreeBSD the power key gives
+  "lpm" (the stand-by screen), not "off". Since pro1x-alarmboot 1.4 its
+  screens keep the display on (mce's blanking pause, X's idle time reset
+  every 10 s), so no time-out falls into the countdown, and "lpm" counts
+  as the power key too ([alarm-power-on.md](alarm-power-on.md)).
 
 Checked, nothing to change:
 

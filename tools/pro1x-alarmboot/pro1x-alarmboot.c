@@ -41,7 +41,10 @@
  *     RTC for a snoozed or the next alarm), it switches the phone off
  *     again, as the N9 did: "Switching off" for 10 s, then dsme's shutdown
  *     (FreeBSD: shutdown -p). The phone stays on with a tap on that screen,
- *     a key, the power key (the display going off or locking), during a
+ *     a key, the power key (the display going off, to the stand-by screen
+ *     or locking: while these screens show they keep the display from
+ *     timing out, mce's blanking paused and X's idle time reset for
+ *     pro1x-standby, so only the key does that), during a
  *     call, with the charger connected (the N9 stayed in its charging
  *     state then), when it was used meanwhile (any input but on these
  *     screens, XInput's raw events), and when an alarm is still to come but the
@@ -661,6 +664,34 @@ static gboolean check_size(gpointer unused)
 	return FALSE;
 }
 
+/* While our screens show, nothing times the display out: mce's blanking
+ * paused (Leste, MeeGo), X's idle time reset (pro1x-standby's time-outs:
+ * FreeBSD's, every 10 s, under its shortest). So a display that goes off
+ * or to the stand-by screen meanwhile is the power key (mce_display) */
+static void mce_call(const char *method, GVariant *args);
+static guint awake_timer;
+
+static gboolean keep_awake_tick(gpointer unused)
+{
+	(void)unused;
+	mce_call("req_display_blanking_pause", NULL);
+	XResetScreenSaver(GDK_DISPLAY_XDISPLAY(gdk_display_get_default()));
+	XFlush(GDK_DISPLAY_XDISPLAY(gdk_display_get_default()));
+	return TRUE;
+}
+
+static void keep_awake(gboolean on)
+{
+	if (on && !awake_timer) {
+		say("keeping the display on");
+		keep_awake_tick(NULL);
+		awake_timer = g_timeout_add_seconds(10, keep_awake_tick, NULL);
+	} else if (!on && awake_timer) {
+		g_source_remove(awake_timer);
+		awake_timer = 0;
+	}
+}
+
 static void screen_show(enum screen_kind kind, void (*clicked)(int))
 {
 	if (!have_display)
@@ -680,12 +711,14 @@ static void screen_show(enum screen_kind kind, void (*clicked)(int))
 	else
 		gtk_window_present(GTK_WINDOW(scr.win));
 	gtk_widget_queue_draw(scr.area);
+	keep_awake(TRUE);
 	if (!scr.popup && !scr.width && !size_check)
 		size_check = g_timeout_add_seconds(2, check_size, NULL);
 }
 
 static void screen_hide(void)
 {
+	keep_awake(FALSE);
 	if (scr.win)
 		gtk_widget_hide(scr.win);
 	scr.busy = FALSE;
@@ -1088,7 +1121,11 @@ static void mce_display(GDBusConnection *c, const gchar *sender, const gchar *pa
 	if (!switching_soon || !g_variant_is_of_type(params, G_VARIANT_TYPE("(s)")))
 		return;
 	g_variant_get(params, "(&s)", &v);
-	if ((!strcmp(signal, "display_status_ind") && !strcmp(v, "off")) ||
+	/* no time-out can blank it while our screens keep it awake (below):
+	 * the display going off (Leste's mce), to the stand-by screen
+	 * (pro1x-standby's "lpm": FreeBSD's power key, Leste's with mce's
+	 * low power mode) or locking is the power key */
+	if ((!strcmp(signal, "display_status_ind") && (!strcmp(v, "off") || !strcmp(v, "lpm"))) ||
 	    (!strcmp(signal, "tklock_mode_ind") && !strcmp(v, "locked"))) {
 		say("%s %s: the power key", signal, v);
 		power_key = TRUE;

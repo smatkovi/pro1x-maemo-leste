@@ -49,6 +49,30 @@ gcc -O2 -Wall -Wno-deprecated-declarations -I "$REPO/tests/alarm-boot/stub" \
   "$REPO/tests/alarm-boot/stub/libalarm-stub.c" \
   $(pkg-config --cflags --libs gtk+-2.0 gio-2.0 gio-unix-2.0 libpulse-simple x11 xi) -lm
 
+# X's idle time (SYNC's IDLETIME), in ms: what pro1x-standby times out by
+cat > "$T/idle.c" <<'EOF'
+#include <X11/Xlib.h>
+#include <X11/extensions/sync.h>
+#include <stdio.h>
+#include <string.h>
+int main(void)
+{
+	Display *d = XOpenDisplay(NULL);
+	int ev, er, ma, mi, n;
+	XSyncSystemCounter *l;
+	XSyncValue v;
+
+	if (!d || !XSyncQueryExtension(d, &ev, &er) || !XSyncInitialize(d, &ma, &mi))
+		return 1;
+	l = XSyncListSystemCounters(d, &n);
+	for (int i = 0; i < n; i++)
+		if (!strcmp(l[i].name, "IDLETIME") && XSyncQueryCounter(d, l[i].counter, &v))
+			printf("%lld\n", ((long long)XSyncValueHigh32(v) << 32) | (unsigned)XSyncValueLow32(v));
+	return 0;
+}
+EOF
+gcc -O -o "$T/idle" "$T/idle.c" -lX11 -lXext
+
 if [ -n "${FONTS:-}" ]; then
   {
     echo '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig>'
@@ -205,10 +229,16 @@ EOF
   sleep 1
   status 7
   sleep 3
+  # dimmed is no power key; the stand-by screen (pro1x-standby's "lpm",
+  # FreeBSD's power key) is, as "off" (Leste's mce)
   gdbus emit --system --object-path /com/nokia/mce/signal \
-    --signal com.nokia.mce.signal.display_status_ind "'off'" > /dev/null
+    --signal com.nokia.mce.signal.display_status_ind "'dimmed'" > /dev/null
+  sleep 1
+  if grep -q "staying on" "$T/run5.log"; then echo "FAIL dimmed taken for the power key"; fails=$((fails + 1)); else echo "ok   dimmed: still switching off"; fi
+  gdbus emit --system --object-path /com/nokia/mce/signal \
+    --signal com.nokia.mce.signal.display_status_ind "'lpm'" > /dev/null
   sleep 2
-  check "the power key while switching off: stays on" "staying on: the power key" "$T/run5.log"
+  check "the power key (lpm) while switching off: stays on" "staying on: the power key" "$T/run5.log"
   kill "$p" 2> /dev/null || true
   wait "$p" 2> /dev/null || true
 
@@ -228,7 +258,12 @@ EOF
     --signal com.nokia.time.next_bootup_event "int32 $(($(date +%s) + 600))" > /dev/null
   sleep 3
   check "MeeGo: its end, switching off" "switching off in 10 s" "$T/run6.log"
-  sleep 26
+  # no input for 15 s, the screens up: X's idle time kept under 10 s (no
+  # stand-by time-out while they show)
+  sleep 15
+  idle=$("$T/idle" || echo 99999)
+  if [ "${idle:-99999}" -lt 10500 ]; then echo "ok   the screens keep X's idle time low ($idle ms)"; else echo "FAIL X's idle time $idle ms with the screens up"; fails=$((fails + 1)); fi
+  sleep 11
   check "MeeGo: an alarm to come without its RTC wake-up: stays on" "wake-up for the next alarm is not set" "$T/run6.log"
   kill "$p" 2> /dev/null || true
   wait "$p" 2> /dev/null || true

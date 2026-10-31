@@ -13,9 +13,10 @@ keeps it on; a call, the charger or the phone being used keep it on too.
 
 Status (2026-10-31): built and tested on the PC (below); the power-on
 itself is untested on the phone. To be flashed with kernel pro1x.10;
-`pro1x-alarmboot` 1.3 (the N9 look, off again as the N9) in the
-pre-release `leste-alarmboot-2026.10.31.1` (1.1 in `leste-alarmboot-2026.10.30.1`
-asked instead); Arch: `arch-hildon-2026.10.31`.
+`pro1x-alarmboot` 1.4 (the N9 look, off again as the N9; 1.4: the power
+key told apart from a display time-out) in the pre-release
+`leste-alarmboot-2026.10.31.2` (1.1 in `leste-alarmboot-2026.10.30.1`
+asked instead); Arch: `arch-hildon-2026.10.31.1`.
 
 ## Is it possible on this hardware?
 
@@ -176,7 +177,12 @@ with the N9's font and button pictures installed); make them with
   its power key (held, it switched on fully) and in its charging state;
   here the phone stays on with a tap or a key on "Switching off", the
   power key (Linux's input devices with `KEY_POWER` where readable, and
-  everywhere mce's display going off or locking, which a press does),
+  everywhere the display going off, to the stand-by screen or locking,
+  which a press does: Leste's mce says "off", FreeBSD's `pro1x-standby`
+  "lpm"; while these screens show no time-out can do that, since 1.4
+  they keep the display on as a video player would, every 10 s mce's
+  `req_display_blanking_pause` and X's idle time reset, which
+  `pro1x-standby` times out by; "dimmed" is no power key),
   during a call (mce's `get_call_state`, oFono's calls), with the charger
   connected, and when the phone was used: input before the alarm rang or
   after its end that was not on these screens (XInput 2's raw key, button
@@ -438,21 +444,21 @@ package. **Writing boot_b needs the owner's OK on the day.**
    ends in Sailfish after three tries; back with
    `TARGET=b IMG=/host/boot_b-before-7.1.0-pro1x.10.img VBMETA= sh scripts/60-flash-slot-b.sh flash`
    or `fastboot flash boot_b $OUT/boot_b-before-7.1.0-pro1x.10.img`.
-3. The package, from the pre-release `leste-alarmboot-2026.10.31.1`
-   (1.3, the N9 look and off again as the N9; built by `scripts/mkdeb-tools.sh`,
+3. The package, from the pre-release `leste-alarmboot-2026.10.31.2`
+   (1.4, the N9 look and off again as the N9; built by `scripts/mkdeb-tools.sh`,
    `ONLY=pro1x-alarmboot`; `pro1x-update` sees it too):
    ```sh
-   gh release download leste-alarmboot-2026.10.31.1 -R smatkovi/pro1x-maemo-leste -D /tmp/alarmboot
+   gh release download leste-alarmboot-2026.10.31.2 -R smatkovi/pro1x-maemo-leste -D /tmp/alarmboot
    (cd /tmp/alarmboot && sha256sum -c SHA256SUMS)
-   scp /tmp/alarmboot/pro1x-alarmboot_1.3_arm64.deb root@172.16.42.1:/root/
+   scp /tmp/alarmboot/pro1x-alarmboot_1.4_arm64.deb root@172.16.42.1:/root/
    # in Leste, as root (1.0's Xsession.post/48pro1x-alarmboot goes)
-   apt install /root/pro1x-alarmboot_1.3_arm64.deb
+   apt install /root/pro1x-alarmboot_1.4_arm64.deb
    ```
-   then log out of Hildon or reboot. FreeBSD gets `pro1x-alarmboot` 1.3
+   then log out of Hildon or reboot. FreeBSD gets `pro1x-alarmboot` 1.4
    and the new `hildon-session` with the next FreeBSD Hildon release.
    MeeGo's copy (`/host/meego-leste.img`, from Leste with the copy
    mounted, e.g. on `/mnt/ml`): the same package (`chroot /mnt/ml apt
-   install /root/pro1x-alarmboot_1.3_arm64.deb` after copying it there)
+   install /root/pro1x-alarmboot_1.4_arm64.deb` after copying it there)
    and the new `rootfs-overlay/etc/X11/Xsession.d/01pro1x-meego` into its
    `/etc/X11/Xsession.d/`; a newly made copy (`meego/45-meego-image.sh`)
    has both from Leste.
@@ -554,7 +560,8 @@ INITRD=$WORK/out-pro1x.5/initrd.img-7.1.0-pro1x.5 LINUX=$WORK/build/linux \
 the PC against a stub of alarmd's libalarm (`tests/alarm-boot/stub`), in
 an Xvfb and with a D-Bus daemon of its own as the system bus: `shots`
 makes the screens' pictures (both languages, landscape and portrait);
-`test` checks the answers, 26 checks, 0 failures with `OWN=1`: status 5
+`test` checks the answers, 28 checks, 0 failures with `OWN=1` (1.4,
+2026-10-31): status 5
 puts the N9 screen over the dialog with the alarm's text; a tap on Stop
 sends `face_up` and `face_down`; status 7 gives alarmd the Stop button
 (`ack 77 1`) and "Switching off" follows 2 s later; a tap keeps the
@@ -562,8 +569,10 @@ phone on; status 6 takes the screen away, status 5 brings it back; a tap
 without a status after it steps aside after 3 s and leaves alarmd to the
 system UI; with no alarm to come it switches off after 10 s (asks dsme);
 the same alarm a second time does nothing; a click elsewhere after the
-alarm ("the phone was used") and mce's `display_status_ind` "off" (the
-power key) keep it on; in MeeGo's mode (`-s meego`) timed's
+alarm ("the phone was used") keeps it on; while switching off
+`display_status_ind` "dimmed" does not, "lpm" (`pro1x-standby`'s
+stand-by screen, FreeBSD's power key) does; 15 s without input while the
+screens show, X's idle time stays under 10 s (no stand-by time-out); in MeeGo's mode (`-s meego`) timed's
 `next_bootup_event` 1 puts nothing over timed's screen, its end with the
 next alarm's time switches off only with that alarm's RTC wake-up set
 (on the PC it is not: stays on after 15 s); `-Q` asks as 1.1 did; without
