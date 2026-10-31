@@ -161,14 +161,22 @@ target_include_directories(radiostates PRIVATE ${COMMON_INCLUDE_DIRS} ${MODULE_I
 install(TARGETS radiostates DESTINATION ${MCE_MODULE_DIR})
 CMAKE
   fi
-  # conversations in the chroot of Leste's image (qemu): CMake 3.25's
-  # first find_library(), the one in pkg_check_modules(glib-2.0), found
-  # nothing, nor did any find_library() after it (GLIB "not found"); one
-  # before it, included after project(), avoids that. Harmless elsewhere.
+  # conversations and mce in the chroot of Leste's image (qemu): CMake
+  # 3.25's first find_library(), the one in pkg_check_modules(glib-2.0),
+  # found nothing, nor did any find_library() after it (GLIB "not found");
+  # mce's first, find_package(X11)'s, failed the same way (5 of 5 tries on
+  # 2026-10-31: mce without x11-ctrl). One before it, included after
+  # project(), avoids that (5 of 5). Harmless elsewhere.
+  case $name in conversations | mce)
+    echo 'find_library(PRO1X_FIRST_LIBRARY NAMES c)' > "$d/debian/pro1x-find-first.cmake" ;;
+  esac
   if [ "$name" = conversations ]; then
-    echo 'find_library(PRO1X_FIRST_LIBRARY NAMES c)' > "$d/debian/pro1x-find-first.cmake"
     sed -i 's|-DCMAKE_BUILD_TYPE=Release|& -DCMAKE_PROJECT_INCLUDE=$(CURDIR)/debian/pro1x-find-first.cmake|' \
       "$d/debian/rules"
+  fi
+  if [ "$name" = mce ]; then
+    printf '\noverride_dh_auto_configure:\n\tdh_auto_configure -- %s\n' \
+      '-DCMAKE_PROJECT_INCLUDE=$(CURDIR)/debian/pro1x-find-first.cmake' >> "$d/debian/rules"
   fi
   (cd "$d" && DEBEMAIL="pro1x-maemo-leste" dch -v "$(dpkg-parsechangelog -S Version)+pro1x$n" \
     -D unstable "F(x)tec Pro1X: HiDPI, MeeGo-like home, low power mode, fixes (pro1x-maemo-leste patches/).")
