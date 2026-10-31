@@ -1150,9 +1150,10 @@ What needs to be built and installed:
 - Harmattan (all three systems): qmsystem2, system-ui, statusmenu-plugins,
   meegotouchhome, mcompositor and apps/meego-camera, -maps, -music, -phone,
   -video. Leste's packages are built on the phone
-  (`PKGREV=2 ONLY="qmsystem2 system-ui statusmenu-plugins meegotouchhome
+  (`PKGREV=3 ONLY="qmsystem2 system-ui statusmenu-plugins meegotouchhome
   mcompositor meego-camera meego-maps meego-music meego-phone meego-video"
-  bash meego/50-harmattan-qt5-debs.sh`; PKGREV above the installed +pro1xN,
+  bash meego/50-harmattan-qt5-debs.sh`; PKGREV above every installed
+  +pro1xN of them, system-ui's being +pro1x2 in leste-harmattan-2026.10.29.2,
   or apt keeps the old ones). FreeBSD: the pin `d0c32ea` and the revisions in
   `pkgmeta.py`. Before mcompositor goes on a phone, try lock, blank and
   unblank there: on "on" with tklock "locked" it now waits for the lock
