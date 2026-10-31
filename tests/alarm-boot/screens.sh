@@ -15,15 +15,20 @@
 #   THEME=dir     a blanco theme (the N9's button pictures), as -t
 #   TAG=name      added to the PNGs' names
 #
-# The test: the alarm dialog's status 5 (rings) puts the N9 alarm screen
-# over it with the alarm's text; a tap on Stop sends mce's face_up and
-# face_down; status 7 (gone) then gives alarmd the Stop button (stub: "ack
-# <cookie> 1") and the question comes 5 s later; "Keep on" ends it. A tap
-# on Snooze with no status after it: the screen steps aside after 3 s.
-# Status 6 (silent) takes the screen away; status 5 brings it back. With
-# MeeGo (-s meego): timed's next_bootup_event 1 and then another value
-# give the question, with nothing over timed's own screen. With OWN=1 also
-# its own ringing (1.5 min). KEEP=dir keeps the logs and PNGs.
+# The test (the N9's way after the alarm, the default): the alarm
+# dialog's status 5 (rings) puts the N9 alarm screen over it with the
+# alarm's text; a tap on Stop sends mce's face_up and face_down; status 7
+# (gone) then gives alarmd the Stop button (stub: "ack <cookie> 1") and
+# "Switching off" comes 2 s later; a tap keeps the phone on. A tap on
+# Snooze with no status after it: the screen steps aside after 3 s; status
+# 6 (silent) takes the screen away, 5 brings it back; with no alarm to come
+# it then switches off (dsme is not there: an error). Input elsewhere after
+# the alarm, or mce's display going off (the power key), keeps it on.
+# MeeGo (-s meego): timed's next_bootup_event 1, then the next alarm's
+# time: nothing over timed's own screen, and without that alarm's RTC
+# wake-up (the PC's is not set) it stays on after 15 s. Asking (-Q): the
+# question, Keep on. With OWN=1 also its own ringing and the automatic
+# snooze after 50 s (3 min more). KEEP=dir keeps the logs and PNGs.
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}
 OUT=${OUT:-$HOME/ps/pro1x-screens}
@@ -42,7 +47,7 @@ trap cleanup EXIT
 gcc -O2 -Wall -Wno-deprecated-declarations -I "$REPO/tests/alarm-boot/stub" \
   -o "$T/pro1x-alarmboot" "$REPO/tools/pro1x-alarmboot/pro1x-alarmboot.c" \
   "$REPO/tests/alarm-boot/stub/libalarm-stub.c" \
-  $(pkg-config --cflags --libs gtk+-2.0 gio-2.0 libpulse-simple) -lm
+  $(pkg-config --cflags --libs gtk+-2.0 gio-2.0 libpulse-simple x11 xext) -lm
 
 if [ -n "${FONTS:-}" ]; then
   {
@@ -115,7 +120,7 @@ EOF
   dbus-monitor --system "type='signal',interface='com.nokia.mce.signal'" > "$T/mce.log" 2>&1 &
   local mon=$! p
 
-  # 1: the dialog rings, Stop tapped, the dialog goes, the question, Keep on
+  # 1: the dialog rings, Stop tapped, the dialog goes, "Switching off", a tap
   printf 'system=test\nrtc_alarm=1001\ndue=%s\n' "$(($(date +%s) - 20))" > "$T/note"
   STUB_ALARMD="77,-10,Wake up" "$T/pro1x-alarmboot" -f "$T/note" -s test -v -g 2160x1080 \
     "${args[@]}" 2> "$T/run1.log" &
@@ -132,19 +137,18 @@ EOF
   status 7
   sleep 1
   check "status 7: alarmd gets Stop (button 1)" "ack 77 1" "$T/run1.log"
-  sleep 5
-  check "the question after 5 s" "asking whether to switch off" "$T/run1.log"
-  snap 2160x1080 "$T/ask.png"
-  tap "${ask_y[1]}"
+  sleep 2
+  check "then switching off, 10 s to keep it on" "switching off in 10 s" "$T/run1.log"
+  snap 2160x1080 "$T/off.png"
+  tap 300
   sleep 1
-  check "Keep on: stays on" "staying on" "$T/run1.log"
+  check "a tap keeps it on" "staying on: kept on" "$T/run1.log"
   kill -0 "$p" 2> /dev/null && { echo "FAIL still running"; fails=$((fails + 1)); kill "$p"; }
   wait "$p" 2> /dev/null || true
 
   # 2: Snooze tapped, the dialog does not go: the screen steps aside;
-  # status 6 and 5 before that
+  # status 6 and 5 before that; then gone: no alarm to come, off
   printf 'system=test\nrtc_alarm=1002\ndue=%s\n' "$(($(date +%s) - 20))" > "$T/note"
-  : > "$T/mce.log.2"
   STUB_ALARMD="78,-10," "$T/pro1x-alarmboot" -f "$T/note" -s test -v -g 2160x1080 \
     "${args[@]}" 2> "$T/run2.log" &
   p=$!
@@ -161,63 +165,124 @@ EOF
   check "no status after a tap: steps aside" "its own buttons from now on" "$T/run2.log"
   if grep -q "^ack" "$T/run2.log"; then echo "FAIL snooze answered alarmd itself"; fails=$((fails + 1)); else echo "ok   snooze leaves alarmd to the system UI"; fi
   status 7
-  sleep 6
-  check "status 7 after that: the question" "asking whether to switch off" "$T/run2.log"
-  tap "${ask_y[0]}"
-  sleep 1
-  check "Switch off" "switching off" "$T/run2.log"
+  sleep 14
+  check "status 7, no alarm to come: off after 10 s" "switching off$" "$T/run2.log"
   kill "$p" 2> /dev/null || true
   wait "$p" 2> /dev/null || true
-  kill "$mon" 2> /dev/null || true
 
   # 3: the same alarm a second time: nothing
   printf 'system=test\nrtc_alarm=1002\ndue=%s\n' "$(date +%s)" > "$T/note"
   "$T/pro1x-alarmboot" -f "$T/note" -s test -v 2> "$T/run3.log" || true
   check "the same alarm again: nothing" "handled already" "$T/run3.log"
-  # 5: the MeeGo system: timed's next_bootup_event 1 (its dialog rings,
-  # nothing over it), then the next alarm's time: the question
-  printf 'system=meego\nrtc_alarm=1005\ndue=%s\n' "$(($(date +%s) - 20))" > "$T/note"
-  "$T/pro1x-alarmboot" -f "$T/note" -s meego -v -g 2160x1080 "${args[@]}" 2> "$T/run5.log" &
+
+  # 4: input elsewhere after the alarm (our screen away): stays on
+  printf 'system=test\nrtc_alarm=1004\ndue=%s\n' "$(($(date +%s) - 20))" > "$T/note"
+  STUB_ALARMD="80,-10,Used" "$T/pro1x-alarmboot" -f "$T/note" -s test -v -g 2160x1080 \
+    "${args[@]}" 2> "$T/run4.log" &
+  p=$!
+  sleep 1.5
+  status 5
+  sleep 1
+  tap "${ring_y[1]}"
+  sleep 1
+  status 7
+  sleep 1
+  xdotool mousemove 50 50 click 1
+  sleep 2.5
+  check "input after the alarm, not on its screens: stays on" "staying on: the phone was used" "$T/run4.log"
+  kill "$p" 2> /dev/null || true
+  wait "$p" 2> /dev/null || true
+
+  # 5: the power key (mce: the display goes off) while switching off
+  printf 'system=test\nrtc_alarm=1005\ndue=%s\n' "$(($(date +%s) - 20))" > "$T/note"
+  STUB_ALARMD="81,-10,Power" "$T/pro1x-alarmboot" -f "$T/note" -s test -v -g 2160x1080 \
+    "${args[@]}" 2> "$T/run5.log" &
+  p=$!
+  sleep 1.5
+  status 5
+  sleep 1
+  tap "${ring_y[1]}"
+  sleep 1
+  status 7
+  sleep 3
+  gdbus emit --system --object-path /com/nokia/mce/signal \
+    --signal com.nokia.mce.signal.display_status_ind "'off'" > /dev/null
+  sleep 2
+  check "the power key while switching off: stays on" "staying on: the power key" "$T/run5.log"
+  kill "$p" 2> /dev/null || true
+  wait "$p" 2> /dev/null || true
+
+  # 6: the MeeGo system: timed's next_bootup_event 1 (its dialog rings,
+  # nothing over it), then the next alarm's time: switching off, but that
+  # alarm's RTC wake-up is not set (the PC's): stays on after 15 s
+  printf 'system=meego\nrtc_alarm=1006\ndue=%s\n' "$(($(date +%s) - 20))" > "$T/note"
+  "$T/pro1x-alarmboot" -f "$T/note" -s meego -v -g 2160x1080 "${args[@]}" 2> "$T/run6.log" &
   p=$!
   sleep 1.5
   gdbus emit --system --object-path /com/nokia/time \
     --signal com.nokia.time.next_bootup_event "int32 1" > /dev/null
   sleep 1
-  check "MeeGo: timed's dialog seen" "boot-up event 1" "$T/run5.log"
-  if grep -q "N9 screen over" "$T/run5.log"; then echo "FAIL MeeGo: covered timed's own screen"; fails=$((fails + 1)); else echo "ok   MeeGo: timed's own screen not covered"; fi
+  check "MeeGo: timed's dialog seen" "boot-up event 1" "$T/run6.log"
+  if grep -q "N9 screen over" "$T/run6.log"; then echo "FAIL MeeGo: covered timed's own screen"; fails=$((fails + 1)); else echo "ok   MeeGo: timed's own screen not covered"; fi
   gdbus emit --system --object-path /com/nokia/time \
     --signal com.nokia.time.next_bootup_event "int32 $(($(date +%s) + 600))" > /dev/null
-  sleep 6
-  check "MeeGo: its end, the question" "asking whether to switch off" "$T/run5.log"
-  tap "${ask_y[1]}"
-  sleep 1
-  check "MeeGo: Keep on" "staying on" "$T/run5.log"
+  sleep 3
+  check "MeeGo: its end, switching off" "switching off in 10 s" "$T/run6.log"
+  sleep 26
+  check "MeeGo: an alarm to come without its RTC wake-up: stays on" "wake-up for the next alarm is not set" "$T/run6.log"
   kill "$p" 2> /dev/null || true
   wait "$p" 2> /dev/null || true
 
-  # 4 (OWN=1, 1.5 min): no dialog: it rings itself after 90 s with the
-  # alarm's text, Snooze, the system UI's dialog after all (its own ringing
-  # gives way), gone: the question
+  # 7: asking (-Q): the question, Keep on
+  printf 'system=test\nrtc_alarm=1007\ndue=%s\n' "$(($(date +%s) - 20))" > "$T/note"
+  STUB_ALARMD="82,-10,Ask" "$T/pro1x-alarmboot" -Q -f "$T/note" -s test -v -g 2160x1080 \
+    "${args[@]}" 2> "$T/run7.log" &
+  p=$!
+  sleep 1.5
+  status 5
+  sleep 1
+  tap "${ring_y[1]}"
+  sleep 1
+  status 7
+  sleep 6
+  check "asking: the question after 5 s" "asking whether to switch off" "$T/run7.log"
+  snap 2160x1080 "$T/ask.png"
+  tap "${ask_y[1]}"
+  sleep 1
+  check "asking: Keep on" "staying on" "$T/run7.log"
+  kill "$p" 2> /dev/null || true
+  wait "$p" 2> /dev/null || true
+
+  # 8 (OWN=1, 1.5 min): no dialog: it rings itself after 90 s with the
+  # alarm's text; Snooze goes to alarmd (it has the alarm), then switching
+  # off; the system UI's dialog after all takes over; gone: switching off
   if [ -n "${OWN:-}" ]; then
-    printf 'system=test\nrtc_alarm=1004\ndue=%s\n' "$(($(date +%s) - 200))" > "$T/note"
+    printf 'system=test\nrtc_alarm=1008\ndue=%s\n' "$(($(date +%s) - 200))" > "$T/note"
     STUB_ALARMD="79,-150,Own ring" "$T/pro1x-alarmboot" -f "$T/note" -s test -v -g 2160x1080 \
-      "${args[@]}" 2> "$T/run4.log" &
+      "${args[@]}" 2> "$T/run8.log" &
     p=$!
     sleep 93
-    check "no dialog: rings itself" "ringing" "$T/run4.log"
+    check "no dialog: rings itself" "ringing" "$T/run8.log"
     snap 2160x1080 "$T/own.png"
     tap "${ring_y[0]}"
     sleep 1
-    check "own Snooze" "snoozed for 600 s" "$T/run4.log"
+    check "own Snooze: to alarmd" "ack 79 0" "$T/run8.log"
+    sleep 2
+    check "own Snooze: then switching off" "switching off in 10 s" "$T/run8.log"
     status 5
     sleep 1
-    check "the dialog after all: the N9 screen over it" "the N9 screen over alarm 79" "$T/run4.log"
+    check "the dialog after all: switching off waits" "another alarm rings" "$T/run8.log"
+    check "the dialog after all: the N9 screen over it" "the N9 screen over alarm 79" "$T/run8.log"
+    # unanswered: the automatic snooze after 50 s
+    sleep 52
+    check "unanswered 50 s: snoozed by itself" "no answer: snoozing" "$T/run8.log"
     status 7
-    sleep 6
-    check "gone: the question" "asking whether to switch off" "$T/run4.log"
+    sleep 3
+    check "gone: switching off again" "switching off in 10 s" "$T/run8.log"
     kill "$p" 2> /dev/null || true
     wait "$p" 2> /dev/null || true
   fi
+  kill "$mon" 2> /dev/null || true
   [ -z "${KEEP:-}" ] || cp "$T"/*.log "$T"/*.png "$KEEP/"
   echo ">> $fails failed"
   [ "$fails" = 0 ]

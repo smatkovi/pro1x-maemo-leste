@@ -75,7 +75,7 @@ respawn() {
 }
 # After a start by the RTC alarm (rc.d/pro1x_alarmboot): the N9's alarm
 # screen over the system UI's alarm dialog, its own ringing should no
-# dialog come, then the question to switch off again
+# dialog come, then off again as the N9 did
 # (docs/alarm-power-on.md); ends at once after any other start. Before the
 # system UI, so that it sees the dialog of an alarm already due come up.
 # What it did: /tmp/pro1x-alarmboot.log

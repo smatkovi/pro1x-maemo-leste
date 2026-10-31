@@ -107,17 +107,19 @@ LOCAL = {
                          'MeeGo-like look is on; a tap or a drag sets it '
                          "(tools/pro1x-volume-osd). Nokia's graphics are not included.",
                          ['UNKNOWN']),
-    'pro1x-alarmboot': ('1.1', "After the RTC alarm switched the Pro1X on: the N9's alarm screen",
+    'pro1x-alarmboot': ('1.2', "After the RTC alarm switched the Pro1X on: the N9's alarm, then off",
                         'When the boot menu started FreeBSD for the RTC alarm that FreeBSD '
                         'had set (kenv pro1x.alarmboot), rc.d/pro1x_alarmboot starts the '
-                        'Hildon session; pro1x-alarmboot there shows what the Nokia N9 '
-                        "showed when an alarm switched it on: over the system UI's ringing "
-                        'alarm dialog the time, the alarm and Snooze and Stop in the N9\'s '
-                        'look, answered through the system UI; it rings by itself (the same '
-                        "screen) should no alarm dialog of alarmd's come (its queue lost with "
-                        'a memory /var), and once the alarm is over asks, as the N9\'s query '
-                        'dialogs look, whether to switch the phone off again (no answer keeps '
-                        "it on). The N9's font and button pictures where installed, none "
+                        'Hildon session; pro1x-alarmboot there does what the Nokia N9 did when '
+                        "an alarm switched it on: over the system UI's ringing alarm dialog "
+                        'the time, the alarm and Snooze and Stop in the N9\'s look, answered '
+                        'through the system UI and snoozed by itself when unanswered; it rings '
+                        "by itself (the same screen) should no alarm dialog of alarmd's come "
+                        '(its queue lost with a memory /var); once the alarm is over the phone '
+                        'switches itself off again ("Switching off", 10 s; a tap, a key, the '
+                        'power key, a call, the charger or other input keep it on; an alarm '
+                        "still to come needs its RTC wake-up set first); after-alarm=ask asks "
+                        "instead. The N9's font and button pictures where installed, none "
                         'included (tools/pro1x-alarmboot, docs/alarm-power-on.md).',
                         ['GPLv2+']),
 }

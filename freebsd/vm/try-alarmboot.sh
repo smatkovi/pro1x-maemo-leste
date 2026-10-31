@@ -7,9 +7,10 @@
 # alarm as clock-ui sets one, due in 30 s, answered on the N9 screen with
 # Stop (xdotool); then a second run, its alarm answered with Snooze. Each
 # time screenshots (/root/shots/alarmboot-*.xwd: the N9 screen over the
-# dialog, after the tap, the question, which is answered "Keep on"), the
-# program's log and alarmd's queue. Then everything ends and the alarms
-# are deleted. RUNS="snooze stop" (default "stop snooze"): which, in order.
+# dialog, then "Switching off", which a tap keeps from switching the VM
+# off), the program's log and alarmd's queue. Then everything ends and the
+# alarms are deleted. RUNS="snooze stop" (default "stop snooze"): which, in
+# order.
 set -u
 SRC=${1:-/tmp/pro1x-alarmboot.c}
 SHOTS=/root/shots
@@ -20,7 +21,7 @@ cc -O2 -o /tmp/pro1x-alarmboot "$SRC" -I$I/gtk-2.0 -I$L/gtk-2.0/include \
     -I$I/atk-1.0 -I$I/gdk-pixbuf-2.0 -I$I/harfbuzz -I$I/freetype2 \
     -I$I/alarmd -I$I -L$L -Wl,-rpath,$L -lgtk-x11-2.0 -lgdk-x11-2.0 \
     -lpangocairo-1.0 -lpango-1.0 -lcairo -lgio-2.0 -lgobject-2.0 \
-    -lglib-2.0 -lintl -lalarm -lpulse-simple -lpulse -lm || exit 1
+    -lglib-2.0 -lintl -lalarm -lpulse-simple -lpulse -lX11 -lXext -lm || exit 1
 
 service dbus onestatus > /dev/null 2>&1 || service dbus onestart
 export DISPLAY=:1 PRO1X_TRY=1 XDG_RUNTIME_DIR=/tmp/alarmboot-run
@@ -88,7 +89,8 @@ cc -O -o /tmp/alarmboot-test /tmp/alarmboot-test.c -I$I/alarmd -L$L \
     -Wl,-rpath,$L -lalarm || exit 1
 
 # One run: the note, the program, the alarm; at 2160x1080 and 403 dpi the
-# N9 screen's Snooze is at y 590, Stop at 750, the question's Keep on at 712
+# N9 screen's Snooze is at y 590, Stop at 750; "Switching off" comes 2 s
+# after the dialog went and switches off 10 s later: tapped at once
 run() {
 	name=$1 y=$2
 	now=$(date +%s)
@@ -101,14 +103,13 @@ run() {
 	sleep $((30 + ${RINGWAIT:-12}))
 	xwd -root -silent > "$SHOTS/alarmboot-$name-ring.xwd"
 	xdotool mousemove 1080 "$y" click 1
-	sleep ${TAPWAIT:-8}
-	xwd -root -silent > "$SHOTS/alarmboot-$name-after.xwd"
+	sleep ${TAPWAIT:-6}
+	xwd -root -silent > "$SHOTS/alarmboot-$name-off.xwd"
+	xdotool mousemove 1080 300 click 1
+	sleep 2
 	echo "== $name: after the tap"
 	/tmp/alarmboot-test list
-	sleep 8
-	xwd -root -silent > "$SHOTS/alarmboot-$name-ask.xwd"
-	xdotool mousemove 1080 712 click 1
-	sleep 4
+	sleep 2
 	echo "== $name: its log"
 	cat /tmp/alarmboot-$name.log
 }

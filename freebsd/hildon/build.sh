@@ -863,7 +863,7 @@ fi
 # not come, then the question to switch off again; with
 # rc.d/pro1x_alarmboot (extra/pro1x-alarmboot)
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-alarmboot "* ]]; then
-	dsp_tool pro1x-alarmboot bin "gtk+-2.0 gio-2.0 alarm libpulse-simple" -lm ||
+	dsp_tool pro1x-alarmboot bin "gtk+-2.0 gio-2.0 alarm libpulse-simple x11 xext" -lm ||
 	    failed+=(pro1x-alarmboot)
 fi
 # the N9's user interface (harmattan.sh): in order, each on the ones before

@@ -17,8 +17,7 @@
  *     alarm's text, Snooze and Stop (sized as the N9 clock's style sheet
  *     sizes its alarm notification, in the N9's pixels of 0.1 mm, drawn
  *     with cairo; the N9's own font and button pictures where the owner
- *     installed them, -t, else free ones). A tap
- *     answers through the system UI itself: the "turned face down" signal
+ *     installed them, -t, else free ones). A tap answers through the system UI itself: the "turned face down" signal
  *     it listens for while it rings (mce's sig_device_orientation_ind)
  *     snoozes, as turning the phone over does; for Stop, once that dialog
  *     is gone, alarmd gets the Stop button as the answer (it takes the
@@ -27,37 +26,50 @@
  *     is used; while that dialog is silent (status 6: its sound stopped
  *     after a minute, the face-down signal no longer heard) the window
  *     stays away as well;
+ *     stays away as well. Unanswered, it snoozes the alarm itself after
+ *     50 s (the N9's dialog snoozed after a minute), as a tap would;
  *   - should no alarm dialog have come 2 minutes after the alarm's time
  *     (alarmd or the system UI missing, the queue lost with FreeBSD's
  *     memory /var), it rings itself: the same N9 alarm screen and a tone
- *     through PulseAudio, 5 minutes at most; Snooze rings again after the
- *     alarm's snooze time (10 minutes where alarmd does not say); not when
- *     alarmd answers that it has no such alarm any more (one deleted after
- *     the RTC was set: Leste's alarmd leaves the RTC alarm then);
- *   - once the alarm is over (stopped or snoozed: a snoozed alarm sets the
- *     RTC again and switches the phone on again), it asks, as the N9's
- *     query dialogs look, whether to switch the phone off again; no answer
- *     in 60 s keeps it on. The N9 itself asked nothing: it switched itself
- *     off after the alarm unless its power key switched it on. With -N (or
- *     after-alarm=switch-off in the configuration file) this does that:
- *     "Switching off", 10 s to keep it on.
+ *     through PulseAudio; Snooze and Stop go to alarmd where it has the
+ *     alarm (so that it sets the RTC for the snooze), else Snooze rings
+ *     again after 10 minutes; unanswered it snoozes after a minute (3
+ *     times, then it stops); not when alarmd answers that it has no such
+ *     alarm any more (one deleted after the RTC was set: Leste's alarmd
+ *     leaves the RTC alarm then);
+ *   - once the alarm is over (stopped or snoozed: alarmd or timed set the
+ *     RTC for a snoozed or the next alarm), it switches the phone off
+ *     again, as the N9 did: "Switching off" for 10 s, then dsme's shutdown
+ *     (FreeBSD: shutdown -p). The phone stays on with a tap on that screen,
+ *     a key, the power key (the display going off or locking), during a
+ *     call, with the charger connected (the N9 stayed in its charging
+ *     state then), when it was used meanwhile (any input but on these
+ *     screens, X's idle time), and when an alarm is still to come but the
+ *     RTC's wake-up for it is not set within 15 s. A new alarm ringing
+ *     meanwhile takes over. With after-alarm=ask in the configuration
+ *     file (or -Q) it asks instead, as the N9's query dialogs look,
+ *     whether to switch off ("Switch the phone off again?"; no answer in
+ *     60 s keeps it on; its own ringing then rings 5 minutes, no
+ *     automatic snoozes).
  *
  * In the MeeGo system (Leste's copy under the N9's own user interface,
- * system key meego, or -T) the N9's own timed and alarm screen ring:
- * there is nothing to cover. What tells the alarm's dialog there is timed's
- * next_bootup_event signal (com.nokia.time; 1 while a boot-up alarm is in
- * its dialog): once that ends, the question; its own ringing as above
- * should none come in 2 minutes (alarmd is not asked: Leste's alarmd is
- * not that system's).
+ * system key meego, or -T) the N9's own timed and alarm screen ring (and
+ * snooze themselves): there is nothing to cover. What tells the alarm's
+ * dialog there is timed's next_bootup_event signal (com.nokia.time; 1
+ * while a boot-up alarm is in its dialog, after it the next one's time or
+ * 0): once that ends, the switch-off (or the question); its own ringing as
+ * above should none come in 2 minutes (alarmd is not asked: Leste's
+ * alarmd is not that system's).
  *
  * Without a note for this system it ends at once. Once per alarm (a note
  * in the user's runtime directory). Without a display it still rings (the
  * tone alone) and keeps the phone on.
  *
- *   pro1x-alarmboot [-f NOTE] [-s SYSTEM] [-N] [-T] [-t THEME] [-d DPI] [-v]
+ *   pro1x-alarmboot [-f NOTE] [-s SYSTEM] [-N|-Q] [-T] [-t THEME] [-d DPI] [-v]
  *       -f  the note (default as above), -s  this system's key
  *       (default: /host/pro1x-boot/current; FreeBSD: freebsd),
- *       -N  switch off after the alarm as the N9 did (10 s to keep it on),
+ *       -N  switch off after the alarm as the N9 did (the default),
+ *       -Q  ask instead (after-alarm=ask),
  *       -T  timed's alarms, as in the MeeGo system (its default),
  *       -t  a "blanco" theme directory (default: /usr/local/share/themes/
  *       blanco or /usr/share/themes/blanco, where installed),
@@ -71,10 +83,15 @@
  * /usr/local/etc/pro1x-alarmboot.conf:
  *
  *   [pro1x-alarmboot]
- *   after-alarm=ask          # or switch-off (as -N)
+ *   after-alarm=switch-off   # the default; or ask (as -Q)
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
+#include <X11/Xlib.h>
+#include <X11/extensions/sync.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <gdk/gdkx.h>
 #include <gio/gio.h>
 #include <gtk/gtk.h>
 #include <langinfo.h>
@@ -89,6 +106,13 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <linux/input.h>
+#include <sys/ioctl.h>
+#else
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#endif
 
 #ifdef __linux__
 #define NOTE_PATH "/host/pro1x-boot/alarmboot"
@@ -107,9 +131,13 @@
 
 #define RING_AFTER_DUE 120	/* s after the alarm's time without its dialog */
 #define RING_AFTER_START 90	/* and at least this long after our start */
-#define RING_FOR 300		/* the own ringing at most this long */
+#define RING_FOR 300		/* the own ringing at most this long (asking) */
+#define RING_N9 60		/* switching off: then it snoozes itself */
+#define AUTO_SNOOZES 3		/* that many times, then it stops */
+#define AUTO_SNOOZE 50		/* s of the system UI's dialog: then snoozed */
 #define ASK_FOR 60		/* the question at most this long */
-#define OFF_IN 10		/* -N: switched off after this long */
+#define OFF_IN 10		/* switched off after this long */
+#define RTC_WAIT 15		/* s for the RTC's wake-up of an alarm to come */
 #define LIFETIME (30 * 60)	/* then give up */
 #define STEP_ASIDE 3		/* s for the system UI's dialog to go after a tap */
 #define OWN_SNOOZE 600		/* the own ringing's snooze without alarmd's */
@@ -118,12 +146,14 @@
  * dialog button), Stop (its positive one) */
 enum { BTN_SNOOZE, BTN_STOP };
 
-static gboolean verbose, n9_off, use_timed;
+static gboolean verbose, ask_mode, use_timed;
 static GDBusConnection *sysbus;
 static time_t due;		/* the alarm's real time */
 static gboolean have_display, dialog_seen, asked, ringing, own_snoozed;
 static guint ask_timer, ring_timer, own_snooze_timer;
-static int own_snooze_secs = OWN_SNOOZE;
+static int own_snooze_secs = OWN_SNOOZE, own_autos;
+static gint64 t_start, t_own;	/* ms (monotonic): our start, our screens' last input */
+static gboolean power_key;	/* pressed (or the display went off) while switching off */
 static volatile gint ring_stop;
 static GThread *tone;
 
@@ -141,13 +171,15 @@ static const struct texts {
 	"Switch the phone off again?",
 	"It was switched on for the alarm. Without an answer it stays on.",
 	"Switch off", "Keep on",
-	"Switching off", "The phone switches itself off again in %d s.",
+	"Switching off",
+	"The phone switches itself off again in %d s. A tap or the power key keeps it on.",
 }, text_de = {
 	"Später erinnern", "Stoppen", "Weckzeit",
 	"Telefon wieder ausschalten?",
 	"Es wurde für den Wecker eingeschaltet. Ohne Antwort bleibt es an.",
 	"Ausschalten", "Eingeschaltet lassen",
-	"Wird ausgeschaltet", "Das Telefon schaltet sich in %d s wieder aus.",
+	"Wird ausgeschaltet",
+	"Das Telefon schaltet sich in %d s wieder aus. Ein Tippen oder die Ein/Aus-Taste lässt es an.",
 }, *tx = &text_en;
 
 static void pick_language(const char *lang)
@@ -491,9 +523,15 @@ static int hit(double x, double y)
 	return -1;
 }
 
+static gint64 now_ms(void)
+{
+	return g_get_monotonic_time() / 1000;
+}
+
 static gboolean on_press(GtkWidget *w, GdkEventButton *ev, gpointer unused)
 {
 	(void)unused;
+	t_own = now_ms();
 	if (scr.busy || ev->type != GDK_BUTTON_PRESS)
 		return TRUE;
 	scr.pressed = hit(ev->x, ev->y);
@@ -506,8 +544,15 @@ static gboolean on_release(GtkWidget *w, GdkEventButton *ev, gpointer unused)
 	int i = scr.pressed;
 
 	(void)unused;
+	t_own = now_ms();
 	if (scr.busy)
 		return TRUE;
+	/* "Switching off": a tap anywhere keeps the phone on */
+	if (scr.kind == SCR_OFF_SOON && scr.clicked) {
+		scr.busy = TRUE;
+		scr.clicked(0);
+		return TRUE;
+	}
 	if (i >= 0 && hit(ev->x, ev->y) == i && scr.clicked) {
 		scr.busy = TRUE;	/* the button stays pressed meanwhile */
 		scr.clicked(i);
@@ -515,6 +560,19 @@ static gboolean on_release(GtkWidget *w, GdkEventButton *ev, gpointer unused)
 	}
 	scr.pressed = -1;
 	gtk_widget_queue_draw(w);
+	return TRUE;
+}
+
+/* A key on our window: on "Switching off" it keeps the phone on (the
+ * power key too where X sees it) */
+static gboolean on_key(GtkWidget *w, GdkEventKey *ev, gpointer unused)
+{
+	(void)w; (void)ev; (void)unused;
+	t_own = now_ms();
+	if (scr.kind == SCR_OFF_SOON && scr.clicked && !scr.busy) {
+		scr.busy = TRUE;
+		scr.clicked(0);
+	}
 	return TRUE;
 }
 
@@ -559,6 +617,7 @@ static void screen_create(void)
 	gtk_window_move(GTK_WINDOW(scr.win), 0, 0);
 	gtk_window_set_default_size(GTK_WINDOW(scr.win), w, h);
 	g_signal_connect(scr.win, "delete-event", G_CALLBACK(gtk_true), NULL);
+	g_signal_connect(scr.win, "key-press-event", G_CALLBACK(on_key), NULL);
 	scr.area = gtk_drawing_area_new();
 	if (scr.popup)
 		gtk_widget_set_size_request(scr.area, w, h);
@@ -684,6 +743,278 @@ static void wake_screen(void)
 	mce_call("req_display_state_on", NULL);
 }
 
+/* --- before switching off: what keeps the phone on ---------------------------- */
+
+/* X's idle time (the SYNC extension's IDLETIME counter): when the last
+ * input of any kind came, -1 where X does not say */
+static Display *xdpy;
+static XSyncCounter idle_counter;
+static gboolean have_idle;
+
+static void idle_init(void)
+{
+	int ev, er, maj, min, n;
+	XSyncSystemCounter *c;
+
+	xdpy = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
+	if (!XSyncQueryExtension(xdpy, &ev, &er) || !XSyncInitialize(xdpy, &maj, &min))
+		return;
+	c = XSyncListSystemCounters(xdpy, &n);
+	for (int i = 0; c && i < n; i++)
+		if (!strcmp(c[i].name, "IDLETIME")) {
+			idle_counter = c[i].counter;
+			have_idle = TRUE;
+		}
+	if (c)
+		XSyncFreeSystemCounterList(c);
+}
+
+static gint64 last_input_ms(void)
+{
+	XSyncValue v;
+	gint64 idle;
+
+	if (!have_idle || !XSyncQueryCounter(xdpy, idle_counter, &v))
+		return -1;
+	idle = ((gint64)XSyncValueHigh32(v) << 32) | (guint32)XSyncValueLow32(v);
+	return now_ms() - idle;
+}
+
+/* Input that was on no alarm screen: before the first alarm rang (noted
+ * then), or after the alarm's end (when t_own moves up to) other than on
+ * our screens: the phone in use */
+static gboolean used_before, alarm_began;
+
+static void alarm_begins(void)
+{
+	if (alarm_began)
+		return;
+	alarm_began = TRUE;
+	used_before = last_input_ms() > t_start + 1000;
+	if (used_before)
+		say("the phone was used before the alarm rang");
+}
+
+/* the alarm is over: input until now was the alarm's (any of its screens) */
+static void alarm_ends(void)
+{
+	t_own = now_ms();
+}
+
+static gboolean used_meanwhile(void)
+{
+	gint64 last = last_input_ms();
+
+	return used_before || (last > t_start + 1000 && last > t_own + 400);
+}
+
+/* mce: a call ("none" when there is none) */
+static gboolean in_call(void)
+{
+	GVariant *r;
+	gboolean call = FALSE;
+
+	r = g_dbus_connection_call_sync(sysbus, "com.nokia.mce", "/com/nokia/mce/request",
+					"com.nokia.mce.request", "get_call_state", NULL,
+					G_VARIANT_TYPE("(ss)"), G_DBUS_CALL_FLAGS_NONE, 1000, NULL, NULL);
+	if (r) {
+		const gchar *st = NULL;
+
+		g_variant_get(r, "(&s&s)", &st, NULL);
+		call = st && strcmp(st, "none");
+		g_variant_unref(r);
+	}
+	if (call)
+		return TRUE;
+	/* oFono's (Leste's, FreeBSD's pro1x-modemd): any modem's calls */
+	r = g_dbus_connection_call_sync(sysbus, "org.ofono", "/", "org.ofono.Manager",
+					"GetModems", NULL, G_VARIANT_TYPE("(a(oa{sv}))"),
+					G_DBUS_CALL_FLAGS_NO_AUTO_START, 1000, NULL, NULL);
+	if (r) {
+		GVariantIter *it;
+		const gchar *modem;
+
+		g_variant_get(r, "(a(oa{sv}))", &it);
+		while (!call && g_variant_iter_next(it, "(&o@a{sv})", &modem, NULL)) {
+			GVariant *c = g_dbus_connection_call_sync(sysbus, "org.ofono", modem,
+								  "org.ofono.VoiceCallManager",
+								  "GetCalls", NULL,
+								  G_VARIANT_TYPE("(a(oa{sv}))"),
+								  G_DBUS_CALL_FLAGS_NO_AUTO_START,
+								  1000, NULL, NULL);
+			if (c) {
+				GVariant *a = g_variant_get_child_value(c, 0);
+
+				call = g_variant_n_children(a) > 0;
+				g_variant_unref(a);
+				g_variant_unref(c);
+			}
+		}
+		g_variant_iter_free(it);
+		g_variant_unref(r);
+	}
+	return call;
+}
+
+/* The charger connected (the N9 stayed in its charging state then) */
+static gboolean on_charger(void)
+{
+#ifdef __linux__
+	DIR *d = opendir("/sys/class/power_supply");
+	struct dirent *e;
+	gboolean on = FALSE;
+
+	while (d && !on && (e = readdir(d))) {
+		gchar *p, *type = NULL, *val = NULL;
+
+		if (e->d_name[0] == '.')
+			continue;
+		p = g_strdup_printf("/sys/class/power_supply/%s/type", e->d_name);
+		g_file_get_contents(p, &type, NULL, NULL);
+		g_free(p);
+		if (type && (!strncmp(type, "USB", 3) || !strncmp(type, "Mains", 5))) {
+			p = g_strdup_printf("/sys/class/power_supply/%s/online", e->d_name);
+			on = g_file_get_contents(p, &val, NULL, NULL) && atoi(val) == 1;
+		} else if (type && !strncmp(type, "Battery", 7)) {
+			p = g_strdup_printf("/sys/class/power_supply/%s/status", e->d_name);
+			on = g_file_get_contents(p, &val, NULL, NULL) &&
+			     (!strncmp(val, "Charging", 8) || !strncmp(val, "Full", 4));
+		} else {
+			p = NULL;
+		}
+		g_free(p);
+		g_free(type);
+		g_free(val);
+	}
+	if (d)
+		closedir(d);
+	return on;
+#else
+	int v = 0;
+	size_t len = sizeof(v);
+
+	return !sysctlbyname("hw.acpi.acline", &v, &len, NULL, 0) && v == 1;
+#endif
+}
+
+/* s until the RTC's wake-up alarm, <= 0 when it is off or past */
+static long rtc_alarm_ahead(void)
+{
+#ifdef __linux__
+	gchar *w = NULL, *n = NULL;
+	long ahead = 0;
+
+	/* in the RTC's own time (on the Pro1X not the real time) */
+	if (g_file_get_contents("/sys/class/rtc/rtc0/wakealarm", &w, NULL, NULL) &&
+	    g_file_get_contents("/sys/class/rtc/rtc0/since_epoch", &n, NULL, NULL) &&
+	    *g_strstrip(w))
+		ahead = (long)(g_ascii_strtoll(w, NULL, 10) - g_ascii_strtoll(n, NULL, 10));
+	g_free(w);
+	g_free(n);
+	return ahead;
+#else
+	/* qcom_rtc: the real time, 0 off */
+	int64_t v = 0;
+	size_t len = sizeof(v);
+
+	if (sysctlbyname("dev.qcom_rtc.0.wakealarm", &v, &len, NULL, 0))
+		return 0;
+	if (len == sizeof(int32_t))
+		v = *(int32_t *)&v;
+	return v > 0 ? (long)(v - time(NULL)) : 0;
+#endif
+}
+
+/* The power key: Linux's input devices that have it (where they can be
+ * read); everywhere mce's display going off or locking while switching
+ * off, which a press does */
+static gboolean switching_soon;
+
+static gboolean power_key_input(GIOChannel *ch, GIOCondition cond, gpointer unused)
+{
+#ifdef __linux__
+	struct input_event ev[16];
+	ssize_t n = read(g_io_channel_unix_get_fd(ch), ev, sizeof(ev));
+
+	(void)cond; (void)unused;
+	if (n <= 0)
+		return FALSE;
+	for (int i = 0; i < (int)(n / sizeof(ev[0])); i++)
+		if (ev[i].type == EV_KEY && ev[i].code == KEY_POWER && ev[i].value == 1 &&
+		    switching_soon) {
+			say("the power key");
+			power_key = TRUE;
+		}
+#else
+	(void)ch; (void)cond; (void)unused;
+#endif
+	return TRUE;
+}
+
+static void power_key_init(void)
+{
+#ifdef __linux__
+	DIR *d = opendir("/dev/input");
+	struct dirent *e;
+
+	while (d && (e = readdir(d))) {
+		unsigned long bits[(KEY_MAX + 1) / (8 * sizeof(long)) + 1] = { 0 };
+		gchar *p;
+		int fd;
+
+		if (strncmp(e->d_name, "event", 5))
+			continue;
+		p = g_strdup_printf("/dev/input/%s", e->d_name);
+		fd = open(p, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+		g_free(p);
+		if (fd < 0)
+			continue;
+		if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(bits)), bits) >= 0 &&
+		    (bits[KEY_POWER / (8 * sizeof(long))] >> (KEY_POWER % (8 * sizeof(long)))) & 1) {
+			GIOChannel *ch = g_io_channel_unix_new(fd);
+
+			g_io_add_watch(ch, G_IO_IN, power_key_input, NULL);
+			say("the power key from /dev/input/%s", e->d_name);
+		} else {
+			close(fd);
+		}
+	}
+	if (d)
+		closedir(d);
+#endif
+}
+
+static void mce_display(GDBusConnection *c, const gchar *sender, const gchar *path,
+			const gchar *iface, const gchar *signal, GVariant *params,
+			gpointer unused)
+{
+	const gchar *v = NULL;
+
+	(void)c; (void)sender; (void)path; (void)iface; (void)unused;
+	if (!switching_soon || !g_variant_is_of_type(params, G_VARIANT_TYPE("(s)")))
+		return;
+	g_variant_get(params, "(&s)", &v);
+	if ((!strcmp(signal, "display_status_ind") && !strcmp(v, "off")) ||
+	    (!strcmp(signal, "tklock_mode_ind") && !strcmp(v, "locked"))) {
+		say("%s %s: the power key", signal, v);
+		power_key = TRUE;
+	}
+}
+
+/* Why the phone stays on, or NULL */
+static const char *stay_on_why(void)
+{
+	if (power_key)
+		return "the power key";
+	if (in_call())
+		return "a call";
+	if (on_charger())
+		return "the charger";
+	if (used_meanwhile())
+		return "the phone was used";
+	return NULL;
+}
+
 static void power_off(void)
 {
 	GError *err = NULL;
@@ -728,13 +1059,18 @@ static gboolean quit_later(gpointer unused)
 
 /* --- after the alarm ------------------------------------------------------- */
 
-static guint answer_timer;
-static int off_in;
+static guint answer_timer, rtc_timer;
+static int off_in, rtc_tries;
+static gboolean off_requested;
+static time_t timed_next;		/* MeeGo: timed's next boot-up alarm, 0 none */
+static gboolean boot_alarm_pending(void);
 
-/* "Switching off" (the N9's shutdown screen's words) while dsme or
+/* "Switching off" (as the N9's shutdown screen said) while dsme or
  * shutdown(8) end the session */
 static void switching_off(void)
 {
+	off_requested = TRUE;
+	switching_soon = FALSE;
 	scr.nbtn = 0;
 	g_strlcpy(scr.title, tx->switching, sizeof(scr.title));
 	screen_show(SCR_SWITCHING, NULL);
@@ -742,6 +1078,25 @@ static void switching_off(void)
 	gdk_flush();
 	power_off();
 	g_timeout_add_seconds(20, quit_later, NULL);
+}
+
+/* The phone stays on: the screen away, and the end (unless its own
+ * ringing still has a snooze to ring) */
+static void stay_on(const char *why)
+{
+	say("staying on: %s", why);
+	switching_soon = FALSE;
+	if (answer_timer)
+		g_source_remove(answer_timer);
+	if (rtc_timer)
+		g_source_remove(rtc_timer);
+	answer_timer = rtc_timer = 0;
+	screen_hide();
+	if (own_snooze_timer) {
+		asked = FALSE;
+		return;
+	}
+	quit();
 }
 
 static void answered(int button)
@@ -753,40 +1108,79 @@ static void answered(int button)
 		switching_off();
 		return;
 	}
-	say("staying on");
-	screen_hide();
-	quit();
+	stay_on("kept on");
 }
 
 static gboolean ask_timeout(gpointer unused)
 {
 	(void)unused;
 	answer_timer = 0;
-	say("no answer: staying on");
-	screen_hide();
-	quit();
+	stay_on("no answer");
+	return FALSE;
+}
+
+static gboolean rtc_tick(gpointer unused);
+
+/* Off now, unless something keeps it on; an alarm still to come must have
+ * its RTC wake-up set first (alarmd and timed set it at once when their
+ * queue changes, a snooze too) */
+static void try_off(void)
+{
+	const char *why = stay_on_why();
+
+	if (why) {
+		stay_on(why);
+		return;
+	}
+	if (boot_alarm_pending() && rtc_alarm_ahead() <= 0) {
+		if (rtc_tries++ < RTC_WAIT) {
+			if (rtc_tries == 1)
+				say("an alarm is still to come: waiting for its RTC wake-up");
+			rtc_timer = g_timeout_add_seconds(1, rtc_tick, NULL);
+			return;
+		}
+		stay_on("the RTC's wake-up for the next alarm is not set");
+		return;
+	}
+	say("the RTC's wake-up: in %ld s", rtc_alarm_ahead());
+	switching_off();
+}
+
+static gboolean rtc_tick(gpointer unused)
+{
+	(void)unused;
+	rtc_timer = 0;
+	try_off();
 	return FALSE;
 }
 
 static gboolean off_countdown(gpointer unused)
 {
+	const char *why = stay_on_why();
+
 	(void)unused;
+	if (why) {
+		answer_timer = 0;
+		stay_on(why);
+		return FALSE;
+	}
 	if (--off_in > 0) {
 		g_snprintf(scr.text, sizeof(scr.text), tx->off_in, off_in);
 		gtk_widget_queue_draw(scr.area);
 		return TRUE;
 	}
 	answer_timer = 0;
-	switching_off();
+	try_off();
 	return FALSE;
 }
 
-/* "Switch the phone off again?"; no answer keeps it on. With -N as the
- * N9: off in 10 s unless kept on */
+/* After the alarm, as the N9: "Switching off", 10 s to keep the phone on,
+ * then off. Asking (-Q): "Switch the phone off again?"; no answer keeps it
+ * on */
 static gboolean ask(gpointer unused)
 {
 	(void)unused;
-	if (asked || ringing || own_snoozed)
+	if (asked || ringing || off_requested || (ask_mode && own_snoozed))
 		return FALSE;
 	asked = TRUE;
 	if (!have_display) {
@@ -794,9 +1188,18 @@ static gboolean ask(gpointer unused)
 		quit();
 		return FALSE;
 	}
-	wake_screen();
-	if (n9_off) {
+	if (!ask_mode) {
+		const char *why = scr.demo ? NULL : stay_on_why();
+
+		if (why) {
+			stay_on(why);
+			return FALSE;
+		}
+		wake_screen();
 		say("switching off in %d s unless kept on", OFF_IN);
+		power_key = FALSE;
+		switching_soon = TRUE;
+		rtc_tries = 0;
 		off_in = OFF_IN;
 		g_strlcpy(scr.title, tx->switching, sizeof(scr.title));
 		g_snprintf(scr.text, sizeof(scr.text), tx->off_in, off_in);
@@ -806,6 +1209,7 @@ static gboolean ask(gpointer unused)
 		answer_timer = g_timeout_add_seconds(1, off_countdown, NULL);
 		return FALSE;
 	}
+	wake_screen();
 	say("asking whether to switch off");
 	g_strlcpy(scr.title, tx->ask_title, sizeof(scr.title));
 	g_strlcpy(scr.text, tx->ask_text, sizeof(scr.text));
@@ -823,6 +1227,22 @@ static gboolean ask_later(gpointer unused)
 	ask_timer = 0;
 	ask(NULL);
 	return FALSE;
+}
+
+/* Another alarm rings while switching off (or asking): it takes over */
+static void after_cancel(void)
+{
+	if (!asked || off_requested)
+		return;
+	say("another alarm rings: not switching off now");
+	if (answer_timer)
+		g_source_remove(answer_timer);
+	if (rtc_timer)
+		g_source_remove(rtc_timer);
+	answer_timer = rtc_timer = 0;
+	switching_soon = FALSE;
+	asked = FALSE;
+	screen_hide();
 }
 
 /* --- the own ringing ------------------------------------------------------ */
@@ -871,16 +1291,29 @@ static void ring_end(gboolean snoozed)
 		g_source_remove(ring_timer);
 	ring_timer = 0;
 	screen_hide();
+	alarm_ends();
 	if (!snoozed)
 		ask(NULL);
 }
 
+static void own_ring_clicked(int button);
+
+/* Unanswered: asking, it ends after 5 minutes; as the N9, it snoozes after
+ * a minute, and after the third time it stops */
 static gboolean ring_timeout(gpointer unused)
 {
 	(void)unused;
 	ring_timer = 0;
-	say("rang for %d s", RING_FOR);
-	ring_end(FALSE);
+	if (ask_mode) {
+		say("rang for %d s", RING_FOR);
+		ring_end(FALSE);
+	} else if (own_autos++ < AUTO_SNOOZES) {
+		say("no answer: snoozing");
+		own_ring_clicked(BTN_SNOOZE);
+	} else {
+		say("no answer %d times: stopped", AUTO_SNOOZES);
+		own_ring_clicked(BTN_STOP);
+	}
 	return FALSE;
 }
 
@@ -891,20 +1324,32 @@ static gboolean own_snooze_over(gpointer unused)
 	(void)unused;
 	own_snooze_timer = 0;
 	own_snoozed = FALSE;
-	if (!dialog_seen && !asked && !ringing) {
+	if (!dialog_seen && !asked && !ringing && !off_requested) {
 		say("ringing again");
 		ring_now();
 	}
 	return FALSE;
 }
 
+struct alarm_info;
+static gboolean find_alarm(time_t now, gboolean ringing_only, struct alarm_info *ai);
+static gboolean own_answer_alarmd(int button);
+
+/* Its own ringing answered. Where alarmd has the alarm it gets the answer
+ * as from its dialog (a snooze then sets the RTC); switching off, a snooze
+ * switches off too (and its own ringing comes again after the snooze
+ * should the phone stay on) */
 static void own_ring_clicked(int button)
 {
+	gboolean alarmd = own_answer_alarmd(button);
+
 	if (button == BTN_SNOOZE) {
 		say("snoozed for %d s", own_snooze_secs);
 		own_snoozed = TRUE;
-		ring_end(TRUE);
 		own_snooze_timer = g_timeout_add_seconds(own_snooze_secs, own_snooze_over, NULL);
+		ring_end(TRUE);
+		if (!ask_mode && alarmd)
+			ask(NULL);
 	} else {
 		say("stopped");
 		ring_end(FALSE);
@@ -1005,6 +1450,43 @@ static gboolean find_alarm(time_t now, gboolean ringing_only, struct alarm_info 
 	return found;
 }
 
+/* alarmd's answer for its own ringing's alarm, TRUE where it took it */
+static gboolean own_answer_alarmd(int button)
+{
+	struct alarm_info ai;
+
+	if (!find_alarm(time(NULL), TRUE, &ai) || ai.snooze < 0 || ai.stop < 0)
+		return FALSE;
+	say("%s for alarm %d through alarmd", button == BTN_SNOOZE ? "snooze" : "stop",
+	    (int)ai.cookie);
+	return alarmd_ack_dialog(ai.cookie, button == BTN_SNOOZE ? ai.snooze : ai.stop) != -1;
+}
+
+/* An alarm still to come that switches the phone on (alarmd's; MeeGo:
+ * timed's next boot-up event) */
+static gboolean boot_alarm_pending(void)
+{
+	time_t now = time(NULL);
+	cookie_t *c;
+	gboolean pending = FALSE;
+
+	if (use_timed)
+		return timed_next > now;
+	if (!(c = alarmd_event_query(0, 0, 0, 0, NULL)))
+		return FALSE;
+	for (int i = 0; c[i]; i++) {
+		alarm_event_t *e = alarmd_event_get(c[i]);
+
+		if (e && (e->flags & (ALARM_EVENT_ACTDEAD | ALARM_EVENT_BOOT)) &&
+		    !(e->flags & ALARM_EVENT_DISABLED) && alarm_event_get_trigger(e) > now)
+			pending = TRUE;
+		if (e)
+			alarm_event_delete(e);
+	}
+	free(c);
+	return pending;
+}
+
 /* --- the N9 screen over the system UI's alarm dialog ---------------------- */
 
 enum { NONE, SNOOZING, STOPPING };
@@ -1013,7 +1495,7 @@ static struct {
 	gboolean shown, stepped_aside;
 	struct alarm_info alarm;
 	int pending;			/* the tap being answered */
-	guint step_aside;
+	guint step_aside, auto_snooze;
 } ov;
 
 /* What mce says when the phone is turned over: the system UI's ringing
@@ -1049,7 +1531,9 @@ static void overlay_hide(void)
 {
 	if (ov.step_aside)
 		g_source_remove(ov.step_aside);
-	ov.step_aside = 0;
+	if (ov.auto_snooze)
+		g_source_remove(ov.auto_snooze);
+	ov.step_aside = ov.auto_snooze = 0;
 	if (ov.shown && !ringing)
 		screen_hide();
 	ov.shown = FALSE;
@@ -1081,9 +1565,27 @@ static gboolean step_aside(gpointer unused)
 static void overlay_clicked(int button)
 {
 	say("%s tapped", button == BTN_SNOOZE ? "snooze" : "stop");
+	if (ov.auto_snooze)
+		g_source_remove(ov.auto_snooze);
+	ov.auto_snooze = 0;
 	ov.pending = button == BTN_SNOOZE ? SNOOZING : STOPPING;
 	turned_face_down();
 	ov.step_aside = g_timeout_add_seconds(STEP_ASIDE, step_aside, NULL);
+}
+
+/* As the N9's dialog after a minute: unanswered, snoozed */
+static gboolean overlay_auto_snooze(gpointer unused)
+{
+	(void)unused;
+	ov.auto_snooze = 0;
+	if (!ov.shown || ov.pending != NONE || scr.busy)
+		return FALSE;
+	say("no answer: snoozing");
+	scr.busy = TRUE;
+	scr.pressed = BTN_SNOOZE;
+	gtk_widget_queue_draw(scr.area);
+	overlay_clicked(BTN_SNOOZE);
+	return FALSE;
 }
 
 static void overlay_show(void)
@@ -1104,8 +1606,12 @@ static void overlay_show(void)
 		g_source_remove(ov.step_aside);
 	ov.step_aside = 0;
 	ov.shown = TRUE;
+	alarm_begins();
 	wake_screen();
 	ring_screen(when, ov.alarm.text, overlay_clicked);
+	if (ov.auto_snooze)
+		g_source_remove(ov.auto_snooze);
+	ov.auto_snooze = ask_mode ? 0 : g_timeout_add_seconds(AUTO_SNOOZE, overlay_auto_snooze, NULL);
 }
 
 /* --- when to ring ------------------------------------------------------------ */
@@ -1117,10 +1623,11 @@ static void ring_now(void)
 	struct alarm_info ai;
 	char when[32];
 
+	alarm_begins();
 	ringing = TRUE;
 	g_atomic_int_set(&ring_stop, 0);
 	tone = g_thread_new("tone", tone_thread, NULL);
-	ring_timer = g_timeout_add_seconds(RING_FOR, ring_timeout, NULL);
+	ring_timer = g_timeout_add_seconds(ask_mode ? RING_FOR : RING_N9, ring_timeout, NULL);
 	wake_screen();
 	format_time(due, when, sizeof(when));
 	ring_screen(when, NULL, own_ring_clicked);
@@ -1166,6 +1673,7 @@ static void dialog_status(GDBusConnection *c, const gchar *sender, const gchar *
 	if (st == DIALOG_ON_SCREEN) {
 		/* (the next alarm, after a tap's) */
 		overlay_settle();
+		after_cancel();
 		dialog_seen = TRUE;
 		/* our own ringing gives way to the real alarm */
 		if (own_snooze_timer)
@@ -1190,9 +1698,10 @@ static void dialog_status(GDBusConnection *c, const gchar *sender, const gchar *
 	} else if (st == DIALOG_NOT_ON_SCREEN) {
 		overlay_settle();
 		overlay_hide();
-		/* stopped or snoozed: ask once it stays gone a moment */
+		alarm_ends();
+		/* stopped or snoozed: once it stays gone a moment */
 		if (dialog_seen && !asked && !ask_timer)
-			ask_timer = g_timeout_add_seconds(5, ask_later, NULL);
+			ask_timer = g_timeout_add_seconds(ask_mode ? 5 : 2, ask_later, NULL);
 	}
 }
 
@@ -1211,7 +1720,10 @@ static void timed_bootup(GDBusConnection *c, const gchar *sender, const gchar *p
 		return;
 	g_variant_get(params, "(i)", &v);
 	say("timed's next boot-up event %d", v);
+	if (v == 1)
+		after_cancel();
 	if (v == 1 && !timed_rings) {
+		alarm_begins();
 		timed_rings = TRUE;
 		dialog_seen = TRUE;
 		/* our own ringing gives way to timed's */
@@ -1228,17 +1740,19 @@ static void timed_bootup(GDBusConnection *c, const gchar *sender, const gchar *p
 			g_source_remove(ask_timer);
 		ask_timer = 0;
 	} else if (v != 1 && timed_rings) {
-		/* stopped or snoozed */
+		/* stopped or snoozed; v: the next boot-up alarm, 0 none */
 		timed_rings = FALSE;
+		timed_next = v;
+		alarm_ends();
 		if (!asked && !ask_timer)
-			ask_timer = g_timeout_add_seconds(5, ask_later, NULL);
+			ask_timer = g_timeout_add_seconds(ask_mode ? 5 : 2, ask_later, NULL);
 	}
 }
 
 static gboolean give_up(gpointer unused)
 {
 	(void)unused;
-	if (ringing || asked || own_snoozed || ov.shown || timed_rings)
+	if (ringing || asked || own_snoozed || ov.shown || timed_rings || off_requested)
 		return FALSE;
 	say("no alarm dialog in %d min: done", LIFETIME / 60);
 	quit();
@@ -1262,7 +1776,7 @@ static int demo(const char *what)
 	if (!strcmp(what, "ring")) {
 		ring_screen(when, NULL, demo_clicked);
 	} else if (!strcmp(what, "ask") || !strcmp(what, "off")) {
-		n9_off = !strcmp(what, "off");
+		ask_mode = !strcmp(what, "ask");
 		ask(NULL);
 		if (answer_timer)
 			g_source_remove(answer_timer);
@@ -1287,8 +1801,8 @@ static void read_conf(void)
 
 	if (g_key_file_load_from_file(kf, CONF_PATH, G_KEY_FILE_NONE, NULL)) {
 		v = g_key_file_get_string(kf, "pro1x-alarmboot", "after-alarm", NULL);
-		if (v && !strcmp(g_strstrip(v), "switch-off"))
-			n9_off = TRUE;
+		if (v && !strcmp(g_strstrip(v), "ask"))
+			ask_mode = TRUE;
 		g_free(v);
 	}
 	g_key_file_free(kf);
@@ -1297,7 +1811,7 @@ static void read_conf(void)
 static void usage(void)
 {
 	fprintf(stderr,
-		"usage: pro1x-alarmboot [-f note] [-s system] [-N] [-T] [-t theme] [-d dpi] [-v]\n"
+		"usage: pro1x-alarmboot [-f note] [-s system] [-N|-Q] [-T] [-t theme] [-d dpi] [-v]\n"
 		"       pro1x-alarmboot -D ring|ask|off|switching [-L en|de] [-g WxH] [-t theme] [-d dpi]\n");
 }
 
@@ -1324,12 +1838,13 @@ int main(int argc, char **argv)
 
 	setlocale(LC_ALL, "");
 	read_conf();
-	while ((opt = getopt(argc, argv, "f:s:vNTD:L:g:t:d:")) != -1) {
+	while ((opt = getopt(argc, argv, "f:s:vNQTD:L:g:t:d:")) != -1) {
 		switch (opt) {
 		case 'f': note_path = optarg; break;
 		case 's': self = optarg; break;
 		case 'v': verbose = TRUE; break;
-		case 'N': n9_off = TRUE; break;
+		case 'N': ask_mode = FALSE; break;
+		case 'Q': ask_mode = TRUE; break;
 		case 'T': use_timed = TRUE; break;
 		case 'D': demo_what = optarg; break;
 		case 'L': lang = optarg; break;
@@ -1408,11 +1923,20 @@ int main(int argc, char **argv)
 		g_dbus_connection_signal_subscribe(sysbus, NULL, "com.nokia.system_ui.signal",
 						   "alarm_dialog_status", "/com/nokia/system_ui/signal",
 						   NULL, G_DBUS_SIGNAL_FLAGS_NONE, dialog_status, NULL, NULL);
+	/* the power key while switching off: mce's display going off or
+	 * locking (what a press does), Linux's input devices with it */
+	g_dbus_connection_signal_subscribe(sysbus, NULL, "com.nokia.mce.signal", NULL,
+					   "/com/nokia/mce/signal", NULL, G_DBUS_SIGNAL_FLAGS_NONE,
+					   mce_display, NULL, NULL);
+	power_key_init();
+	t_start = now_ms();
 	have_display = gtk_init_check(&argc, &argv);
-	if (have_display)
+	if (have_display) {
 		display_ready(theme);
-	else
+		idle_init();
+	} else {
 		fprintf(stderr, "pro1x-alarmboot: no display: the tone alone\n");
+	}
 	late = (long)(now - due);
 	say("started by %s's alarm at %ld (%+ld s)", sys, (long)due, late);
 	{
