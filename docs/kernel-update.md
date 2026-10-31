@@ -64,6 +64,16 @@ off at its shutdown) stops the next kernel. FreeBSD and KolibriOS start
 from the boot menu's initramfs instead, before any of that runs. The
 script stays for a probe from there.
 
+`tools/devday/kexec-test.sh` (2026-11-01) is the same start in steps
+(`check`, `load`, `OK=yes ... go`, `after`), for the bisect of pro1x.12's
+crash: it arms the watchdog the way a trial start does (a one-shot
+"leste" for the candidate's menu), keeps the pstore's region and starts
+with a calibration run, the running kernel into itself with
+`initcall_debug`, to see whether the 0.23 s stop still happens and where.
+`docs/crash-dumps.md` has the crash, the dumps' decoding and the run
+order. The ABL has no `fastboot boot`, so there is no other way to start
+a kernel without writing boot_b.
+
 Then, with the phone's owner there:
 
 ```sh

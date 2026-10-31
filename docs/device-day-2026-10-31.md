@@ -67,7 +67,9 @@ same pinned key. For Kali and Arch it is `phone.sh ssh kali`, and so on.
 | `leste-install.sh plan\|install` | phone | Installs the fetched packages group by group. By default it only upgrades packages that are installed already, and holds them. It restarts no service. |
 | `fix-ownership.sh check\|fix\|undo [ROOT]` | phone | The images built before 2026-10-31 (bb39fa8/0f271a9) left `/`, `/etc`, `/usr`, the overlays' files, the modules and the firmware owned by uid 1000 (`user`, `kali`, `alarm`) or group-writable: a way to root. `check` lists them, read only; `fix` gives our paths back to root and writes an undo list first; `undo` puts that back. Our paths: `owned-paths.txt` next to it (`mk-owned-paths.sh` writes it from the repository). `deploy.sh tools` puts both into `/root/devday/` and `/host/devday/`. |
 | `check-initrd.sh INITRD [alarm]` | PC | Checks that the initramfs `prepare` made carries the trial's parts. The watchdog's arming is skipped silently without `qcom-wdt.ko` or `devmem`. Passes on pro1x.5's initramfs. |
-| `test/run.sh` | PC | Tests all of the above against a fake phone (fake ssh/scp): 39 checks. |
+| `kexec-test.sh check\|load\|go\|after K` | PC | Starts the kernel of `$WORK/out-K` once from the running Leste with kexec, boot_b untouched (block 18). `go` and `after`'s dump only with `OK=yes`. |
+| `crashdump.py DIR...` | PC | Decodes a `qdl ramdump` directory: the PMIC's reset reasons, TZ's interrupt counters and log, the NoC errors (`docs/crash-dumps.md`). Reads files only. |
+| `test/run.sh` | PC | Tests the helpers above kexec-test.sh against a fake phone (fake ssh/scp): 39 checks. |
 | `test/fix-ownership.sh` | PC, sudo | Tests `fix-ownership.sh` on two fake roots made as the old builds made them (check, fix, check, undo): 47 checks; `CLEAN=<a correctly built image, mounted read-only>` adds 2. |
 
 `DRY=1` in front of deploy.sh, collect.sh or backup.sh prints the phone
@@ -241,7 +243,9 @@ any armed state on the phone before block 1.
    without the dd: slot b back, and the next start ends the trial.
 4. **The bootloader's crash-dump mode** (USB `05c6:900e`, seen with
    FreeBSD on 10-29):
-   `sudo -n qdl ramdump -o ~/ps/pro1x-runs/2026-10-31/ramdump-<time> 'OCIMEM*,CODERAM*,PMIC*,RST*,*.cmm,MSGRAM*'`.
+   `sudo -n qdl ramdump -o ~/ps/pro1x-runs/2026-10-31/ramdump-<time> 'OCIMEM*,CODERAM*,DATARAM*,MSGRAM*,PMIC*,PMON*,RST*,FSM*,*.cmm'`
+   (since 11-01 with the RPM's data RAM and the PMIC's history), then
+   `python3 -I tools/devday/crashdump.py <that directory>` (docs/crash-dumps.md).
    The phone resets itself afterwards and starts the menu's default
    (Leste). Then `phone.sh usbnet`.
 5. **The bootloader itself.** `fastboot --set-active=a|b` and
@@ -1054,6 +1058,8 @@ but without a notifying intr, tag = 0`.
   - `bash tests/pro1x-boot-trial/run.sh`: still passes.
 
 **Before the first FreeBSD run:**
+0. **pro1x.12 crashed in all three trial starts (22:56-23:05): block 18.**
+   Do not flash it again; the bisect there decides which kernel follows.
 1. Flash pro1x.12 like block 4, with `K=pro1x.12` (OUT=$WORK/out-pro1x.12)
    and its own trial. It also carries 0033-0039, which no phone has run
    yet. Or flash pro1x.12 instead of pro1x.10 in block 4.
@@ -1341,6 +1347,54 @@ changes in Leste's image except where step 8 says so.
    again; the other parts by running steps 1 and 4 with
    `git archive 4a1ed33^` instead of HEAD (before these fixes),
    then a reboot. `/host/MyDocs` is used only while it exists.
+
+## Block 18: pro1x.12's crash, the bisect by kexec (must; 15-20 min per run) [OK]
+
+**What happened (22:56-23:05):** 7.1.0-pro1x.12 on trial; all three starts
+the same: Leste came up (USB gadget), `Bluetooth: ... command tx timeout`
+on the screen, red LED, no ssh, about 31 s later the crash-dump mode. The
+dumps (`ramdump-2300`, `-2303`, `-2305`), decoded in `docs/crash-dumps.md`:
+the trial's APSS watchdog bit (TZ's `NSWDogBite`), TZ's own watchdog
+barked, the RPM's bit, and both NoCs logged an error at 0x06080040 (the
+modem's register block); TZ started its crash handling 46.3-47.0 s after
+power-on, 25 s after Linux had started the DSPs. The pstore was lost
+(Sailfish in between). Ranked suspects there: the Bluetooth UART set
+(0023, 0024, 0029, 0030), then SLIMbus (0018-0021), then 0038/0039.
+
+**State:** boot_b = pro1x.5 (`fe9798b9...`), slot b, no trial, Leste.
+
+**The test:** `tools/devday/kexec-test.sh` starts a kernel once from the
+running Leste: no flash, no trial, boot_b untouched. A hang ends in the
+watchdog's reset (into boot_b's pro1x.5) or in 900e, which `after` OK=yes
+leaves with the dump; the next Leste has the candidate's console in the
+pstore. Candidates (built 11-01): `pro1x.12nobt` (without 0023/0024/0029/
+0030), `pro1x.12no29` (without 0029), `pro1x.12nobtslim` (nobt and without
+0021). Never boot Sailfish in between (it clears the pstore).
+
+Per run, `K` = the kernel's name, with `D`, `WORK`, `PHONE` as above:
+
+1. `PHONE="$PHONE" WORK=$WORK OUT=$WORK/out-$K bash scripts/65-kernel-update.sh prepare`
+   (modules, initramfs; writes no partition; not for pro1x.5 or pro1x.12,
+   they are prepared).
+2. `bash $D/kexec-test.sh check $K`: no FAIL.
+3. `bash $D/kexec-test.sh load $K` (nothing restarts; `unload` takes it back).
+4. **[OK]** `OK=yes bash $D/kexec-test.sh go $K`
+5. **[OK] for its way back** `OK=yes bash $D/kexec-test.sh after $K`:
+   waits; up: watches it for 5 minutes, then collects (`kexec-$K-up`);
+   900e: takes the dump (resets the phone); back on pro1x.5: collects
+   (`kexec-$K`). Then `grep -n 'pretimeout\|stall\|Bluetooth\|remoteproc\|Call trace' ~/ps/pro1x-runs/2026-10-31/kexec-$K*/pstore.txt`.
+
+| Run | K | EXTRA | Stays up | Goes down |
+|---|---|---|---|---|
+| 0 | pro1x.5 | `ignore_loglevel initcall_debug` | kexec works: run 1 | as on 10-28 (0.23 s): the pstore names the initcall; stop here |
+| 1 | pro1x.12 | (default) | not reproduced under kexec: run 2 anyway | its pstore: what Linux did before the bite |
+| 2 | pro1x.12nobt | | the Bluetooth set: run 3 | not that set alone: run 4 |
+| 3 | pro1x.12no29 | | 0029 | 0023/0024/0030 |
+| 4 | pro1x.12nobtslim | | SLIMbus (0021) | neither: 0038/0039 next |
+
+Stop as soon as a pstore names the cause. A kernel that runs under kexec
+still gets its own trial before it replaces pro1x.5 in boot_b. FreeBSD
+(block 12) waits for that kernel.
 
 ## End of the day (15 min)
 
