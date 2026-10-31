@@ -639,9 +639,8 @@ RUNS="stop power" STANDBY=/tmp/pro1x-standby.c sh freebsd/vm/try-alarmboot.sh
 ```
 
 Not tested: anything on the phone (the PMIC registers through debugfs,
-the power-on itself, ABL's behaviour after it, the ringing and the
-switch-off question in a real session), and FreeBSD's side in the VM
-(the VM was in use).
+the power-on itself, ABL's behaviour after it, the ringing, switching off
+and the power key in a real session).
 
 ## Limits
 

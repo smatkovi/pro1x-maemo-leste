@@ -586,9 +586,10 @@ See `docs/alarm-power-on.md`, "The test on the phone". It needs pro1x.10
   once the package is in a `leste-*` pre-release (`fetch.sh` again)
 - or `dpkg -i` of the deb
 
-Use `pro1x-alarmboot` 1.3 (pre-release `leste-alarmboot-2026.10.31.1`: the
-N9's alarm screen, then off again as the N9); after installing it, log
-out of Hildon or reboot. The charger off (it keeps the phone on).
+Use `pro1x-alarmboot` 1.4 (pre-release `leste-alarmboot-2026.10.31.2`: the
+N9's alarm screen, then off again as the N9; 1.4 tells the power key apart
+from a display time-out); after installing it, log out of Hildon or
+reboot. The charger off (it keeps the phone on).
 
 Steps:
 1. `pro1x-boot pmic`: "power-on sources" must name "RTC alarm".
@@ -606,11 +607,16 @@ Steps:
 4. Again, Stop and then nothing: off after 10 s. Again, Snooze and
    nothing: off, on again a minute before the snoozed time, the N9
    screen. Again, unanswered: snoozed after 50 s, off, back for the
-   snooze. Optional: the power key during "Switching off" (stays on),
+   snooze. The power key during "Switching off": stays on (`staying on:
+   the power key` in the log, before it `the power key` or
+   `display_status_ind off: the power key`); left alone
+   for more than the display time-out while the screens show, the display
+   stays on. Optional:
    portrait with the keyboard closed, MeeGo (its copy with the 1.2
    package and the new `01pro1x-meego`, see the document: the N9's own
-   alarm screen, then off). Arch (packages of `arch-hildon-2026.10.31`,
-   `pro1x-desktop meego`): the same steps as Leste.
+   alarm screen, then off). Arch (packages of `arch-hildon-2026.10.31` and
+   `pro1x-alarmboot` 1.4 of `arch-hildon-2026.10.31.1`, `pro1x-desktop
+   meego`): the same steps as Leste.
 5. Counter-check: a start by the power key shows the menu
    (`last-boot`: `alarm-check: none not-by-the-rtc`).
 6. `collect.sh 08-alarm /host/pro1x-boot/last-boot /tmp/pro1x-alarmboot.log`
