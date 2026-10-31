@@ -235,6 +235,14 @@ do_start() {
 		sleep 0.25
 		i=$((i + 1))
 	done
+	# bluez 5 switches the adapter off when it ends; bluez 4 then switched
+	# it on itself and read it while the controller still loaded its
+	# firmware ("Unable to read extended local features: Network is
+	# down"), which may leave its initialisation unfinished. Switched on
+	# first (hciconfig returns once the firmware is in), it finds the
+	# adapter ready; its maemo6 plugin then switches it as mce's Bluetooth
+	# radio bit says (off at the start).
+	hciconfig hci0 up 2>/dev/null || true
 	chroot "$H" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
 		/usr/sbin/bluetoothd -n > "$LOG/bluetoothd.log" 2>&1 &
 	echo $! > /run/pro1x-bluetoothd.pid

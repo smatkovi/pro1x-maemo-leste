@@ -1269,8 +1269,12 @@ changes in Leste's image except where step 8 says so.
    cat /etc/hostname                     # must say meego
    BUILD=0 bash meego/39-leste-mce.sh    # 60-pro1x.ini: 50's list;radiostates;harmattan-lpm
    ```
-4. The helpers and Harmattan's libraries (38 needs the network once, for
-   the Debian tree's `libgles-dev`):
+4. First, for item 8: `stat -c %y /usr/lib/pro1x-meego/n9-sensors`. The
+   fix removes the axis flip of 3de3559 (2026-10-31 09:19); a binary
+   older than that never had the flip, and then the 180 degrees have
+   another cause: skip `41` (or put the flip back in n9-sensors.c) and
+   tell the agents. Then the helpers and Harmattan's libraries (38 needs
+   the network once, for the Debian tree's `libgles-dev`):
    ```sh
    H=/mnt/harmattan; mountpoint -q $H || mount -o loop /host/harmattan.img $H
    H=$H bash meego/41-leste-helpers.sh      # n9-sensors (rotation), icd2-context,
@@ -1294,7 +1298,9 @@ changes in Leste's image except where step 8 says so.
 7. Tests [HAND], then `collect.sh 17-meego-fixes`:
    - Item 8: landscape with the keyboard towards you upright, both
      portraits the right way round.
-   - Item 1: Bluetooth off after the start (`hciconfig hci0`: DOWN);
+   - Item 1: Bluetooth off after the start (`hciconfig hci0`: DOWN;
+     `bluetoothd.log` without "Network is down", since the session
+     switches the adapter on before bluez 4 starts);
      Settings > Bluetooth on, then off: `hciconfig` follows,
      `dbus-send --system --print-reply --dest=com.nokia.mce /com/nokia/mce/request com.nokia.mce.request.get_radio_states`
      has bit 8 set while on (63 instead of 55). If the switch still

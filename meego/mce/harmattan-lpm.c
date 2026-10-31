@@ -45,7 +45,9 @@ static const gchar *const provides[] = { MODULE_NAME, NULL };
 G_MODULE_EXPORT module_info_struct module_info = {
 	.name = MODULE_NAME,
 	.provides = provides,
-	/* after lock-tklock (250), which locks on the way into low power mode */
+	/* not used for the order: ModulesUser loads after Modules, so this
+	 * trigger runs after lock-tklock's, which locks on the way into low
+	 * power mode */
 	.priority = 300
 };
 
