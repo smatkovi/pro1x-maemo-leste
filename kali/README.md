@@ -19,6 +19,12 @@ Both run as root on the phone in Maemo Leste:
 The boot menu entry needs an initramfs with the current
 `tools/pro1x-boot` (scripts/50-build-bootimg.sh, then flash slot b).
 
+An image made before 2026-10-31 (bb39fa8/0f271a9) has Leste's modules and
+firmware owned by uid 1000 (`kali`), or the overlay's files and their
+directories (`/`, `/etc`, `/usr`, `/etc/systemd/system`) group-writable:
+`tools/devday/fix-ownership.sh check`, then `fix` (README.md, "Images built
+before 2026-10-31").
+
 ## Setup
 
 - User `kali`, password `kali` (Kali's default; change it with `passwd`).

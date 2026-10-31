@@ -21,6 +21,12 @@ The boot menu entry needs an initramfs with the current
 then on, further systems on Leste's kernel can be added without a new boot
 image: one line `key|Label|/image.img|` each in `/host/pro1x-boot/extra`.
 
+An image made before 2026-10-31 (bb39fa8/0f271a9) has Leste's modules and
+firmware owned by uid 1000 (`alarm`), or the overlay's files and their
+directories group-writable: `tools/devday/fix-ownership.sh check`, then
+`fix` (README.md, "Images built before 2026-10-31"). Snapshots taken
+before the fix keep the old owners.
+
 ## Setup
 
 - User `alarm` (Arch Linux ARM's), password `147147` (digits, for Phosh's

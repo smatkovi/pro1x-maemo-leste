@@ -65,8 +65,10 @@ same pinned key. For Kali and Arch it is `phone.sh ssh kali`, and so on.
 | `collect.sh RUN [FILE...]` | PC | Collects logs, the RAM console, the screenshot and FILEs into `~/ps/pro1x-runs/2026-10-31/RUN/`, with `summary.txt`. |
 | `ramconsole.py` | phone | Reads FreeBSD's and KolibriOS's RAM console and screenshot at 0x5ca00000, read only. `--clear` clears it afterwards. collect.sh uses it. |
 | `leste-install.sh plan\|install` | phone | Installs the fetched packages group by group. By default it only upgrades packages that are installed already, and holds them. It restarts no service. |
+| `fix-ownership.sh check\|fix\|undo [ROOT]` | phone | The images built before 2026-10-31 (bb39fa8/0f271a9) left `/`, `/etc`, `/usr`, the overlays' files, the modules and the firmware owned by uid 1000 (`user`, `kali`, `alarm`) or group-writable: a way to root. `check` lists them, read only; `fix` gives our paths back to root and writes an undo list first; `undo` puts that back. Our paths: `owned-paths.txt` next to it (`mk-owned-paths.sh` writes it from the repository). `deploy.sh tools` puts both into `/root/devday/` and `/host/devday/`. |
 | `check-initrd.sh INITRD [alarm]` | PC | Checks that the initramfs `prepare` made carries the trial's parts. The watchdog's arming is skipped silently without `qcom-wdt.ko` or `devmem`. Passes on pro1x.5's initramfs. |
 | `test/run.sh` | PC | Tests all of the above against a fake phone (fake ssh/scp): 39 checks. |
+| `test/fix-ownership.sh` | PC, sudo | Tests `fix-ownership.sh` on two fake roots made as the old builds made them (check, fix, check, undo): 46 checks; `CLEAN=<a correctly built image, mounted read-only>` adds 2. |
 
 `DRY=1` in front of deploy.sh, collect.sh or backup.sh prints the phone
 commands without running them.
@@ -81,6 +83,7 @@ commands without running them.
 | 0 | PC preparation (evening before or morning) | must | 45 min | - | - |
 | 1 | The phone's state: power on, first look | must | 15-30 min | - | power key, SIM |
 | 2 | Backup | must | 10 min | - | - |
+| 2b | Ownership fix (the old images' uid 1000 owners) | should | 10 min | fix | - |
 | 3 | Reference on the old kernel | should | 10 min | - | listen |
 | 4 | Kernel 7.1.0-pro1x.10: prepare, flash, trial | must | 40 min | flash, 2 reboots | maybe power key |
 | 5 | Audio and FM on pro1x.10 | must | 75-90 min | 2 reboots | headphones, headset, listen |
@@ -290,7 +293,7 @@ any armed state on the phone before block 1.
      `pro1x-usbrole` in the image (`freebsd/pm/README.md`). Without it
      they are left out.
 8. **The helpers' own tests:** `bash $D/test/run.sh` must end in "all
-   checks passed".
+   checks passed", and so must `bash $D/test/fix-ownership.sh` (sudo).
 
 ## Block 1: the phone's state (must; 15-30 min) [HAND]
 
@@ -330,6 +333,45 @@ Rollback: Rollback, ways back 2-4.
    - the last-boot `entries:` line listing `kolibri` and `freebsd`
 7. Check the Wi-Fi address (`ip -4 addr show wlan0`). It is needed in
    block 7.
+8. **Ownership, read only.** Every system image on the phone was built
+   before bb39fa8/0f271a9 (Leste of 2026-10-24, its MeeGo copy, Kali,
+   Arch, LuneOS). Their `/`, `/etc`, `/usr`, `/etc/init.d`, the overlays'
+   files, the modules and the firmware probably belong to uid 1000
+   (`user` in Leste), or are group-writable: a way to root. Step 6's
+   `deploy.sh tools` put `fix-ownership.sh` into `/root/devday/`.
+   ```sh
+   bash $D/phone.sh ssh leste "stat -c '%U %n' / /etc /usr /etc/init.d"
+   bash $D/phone.sh ssh leste 'sh /root/devday/fix-ownership.sh check' \
+       > ~/ps/pro1x-runs/2026-10-31/01-ownership-leste.txt
+   tail -3 ~/ps/pro1x-runs/2026-10-31/01-ownership-leste.txt
+   ```
+   - Expected from the old image: `user /`, `user /etc`, and so on. The
+     check lists our paths as `owner ... -> 0(root):0(root)` or
+     `mode 0775 -> 0755`, each with the step it came from, and ends in
+     `== N of our paths to fix`. Block 2b fixes them.
+   - `root` everywhere and `== 0 of our paths to fix ..., 0 by hand` means
+     the image is fine.
+   - "owned by a user ..., not ours" lists the rest that belongs to a
+     uid >= 1000 outside the homes, with its package. The fix leaves these
+     alone. Look at them by hand.
+
+   The other systems' images, from Leste (as root, read only, never the
+   image of a system that runs). Their reports go to `/root/devday/`:
+   ```sh
+   own() {   # own IMAGE [MOUNT OPTIONS]
+       mkdir -p /mnt/own && mount -o loop,ro,${2:-noload} "$1" /mnt/own || return
+       n=/root/devday/ownership-$(basename "$1" .img).txt
+       sh /root/devday/fix-ownership.sh check /mnt/own > "$n"; tail -1 "$n"
+       umount /mnt/own
+   }
+   own /host/meego-leste.img; own /host/kali.img; own /host/luneos.img
+   own /host/arch.img subvol=@     # Btrfs: the root subvolume (still ext4: without)
+   ```
+   Then on the PC: `bash $D/collect.sh 01-ownership
+   /root/devday/ownership-meego-leste.txt /root/devday/ownership-kali.txt
+   /root/devday/ownership-luneos.txt /root/devday/ownership-arch.txt`.
+   `/host/harmattan.img` is not one of ours: it is Nokia's tree, and its
+   user has uid 1000 on purpose (`meego/37-harmattan-user.sh`).
 
 ## Block 2: backup (must; 10 min) — before anything is written
 
@@ -358,6 +400,50 @@ What it reads:
 
 The total is about 245 MB. Look at `slots-decoded.txt`: boot_b should be
 active, with 2 tries, not successful, and not unbootable.
+
+## Block 2b: the ownership fix (should; 10 min) [OK]
+
+Only if block 1, step 8 listed our paths. It changes owners and modes, no
+contents. It needs no reboot. Afterwards a system's paths are as in a
+correctly built image: the images of 2026-10-31 give nothing in `check`.
+Before changing anything, `fix` writes every path's owner and mode to
+`/root/devday/fix-ownership-undo-<time>.txt`. It changes only the paths
+in `owned-paths.txt` (the overlays' files, the copies' destinations, the
+directories above them). It never changes the homes, `/root`'s contents,
+`/var/lib`, `/tmp`, or what is "not ours".
+
+1. [OK] Leste, on the phone as root:
+   ```sh
+   sh /root/devday/fix-ownership.sh fix | tee /root/devday/ownership-fix-leste.txt
+   ```
+   It prints the check, the undo list's name, every change, and the
+   check after it. That check must end in `== 0 of our paths to fix`.
+2. [OK] The other images, from Leste (read-write, never while that
+   system runs):
+   ```sh
+   fixown() {   # fixown IMAGE [MOUNT OPTIONS]
+       mkdir -p /mnt/own && mount -o loop${2:+,$2} "$1" /mnt/own || return
+       sh /root/devday/fix-ownership.sh fix /mnt/own |
+           tee "/root/devday/ownership-fix-$(basename "$1" .img).txt"
+       umount /mnt/own
+   }
+   fixown /host/meego-leste.img; fixown /host/kali.img; fixown /host/luneos.img
+   fixown /host/arch.img subvol=@
+   ```
+   Arch's snapper snapshots (`/.snapshots`) keep the old owners. After a
+   rollback to a snapshot taken before today, run the fix again (in Arch:
+   `sudo sh /host/devday/fix-ownership.sh fix`).
+3. On the PC: `bash $D/collect.sh 02b-ownership
+   /root/devday/ownership-fix-leste.txt
+   /root/devday/ownership-fix-meego-leste.txt` (and the others).
+
+**The way back:** each fix's undo list.
+```sh
+sh /root/devday/fix-ownership.sh undo /root/devday/fix-ownership-undo-<time>.txt
+```
+A list holds its root (`/`, or `/mnt/own`) and the image that was
+mounted there. For an image, mount it read-write on `/mnt/own` first,
+then umount it after the undo. `undo` refuses a list of another image.
 
 ## Block 3: reference on the old kernel (should; 10 min) [HAND]
 
@@ -675,6 +761,9 @@ Its trial must have ended (block 4, step 6).
    - Kali logs in as `kali` (password `kali`) with sudo.
    - Checks: the clock is right (not 1970) and `systemctl status
      pro1x-rtc` is fine.
+   - Ownership (block 2b): `stat -c '%U %n' / /etc /usr` shows `root`,
+     and `sudo sh /host/devday/fix-ownership.sh check` ends in
+     `== 0 of our paths to fix`. If not: `fix` [OK], as in block 2b.
    - GPS on demand (block 6's 71): `systemctl is-enabled gpsd.socket
      gpsd.service pro1x-gnss.service` = enabled, disabled, enabled, and
      `pgrep -x pro1x-gnss` empty (`docs/power-management.md`,
@@ -695,6 +784,8 @@ See `arch/README.md`. Its trial must have ended.
    mkdir -p ~/pro1x-arch && tar -C ~/pro1x-arch -xf /host/devday/arch.tar
    sudo PKGS=/host/devday/arch-pkgs MNT=/ bash ~/pro1x-arch/arch/42-meego-look.sh
    ```
+   Ownership (block 2b): `sudo sh /host/devday/fix-ownership.sh check`
+   ends in `== 0 of our paths to fix`. If not: `fix` [OK], as in block 2b.
    Then the first look [HAND]: the screen's rotation, touch, the Phosh home
    bar (known bug: a layer surface of height 0), the clock (rtc offset),
    the FM radio. GPS on demand and the blanking as in block 10.

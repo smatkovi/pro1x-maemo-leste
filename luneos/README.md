@@ -23,6 +23,12 @@ Both run as root on the phone in Maemo Leste:
 The boot menu entry needs an initramfs with the current `tools/pro1x-boot`
 (then a new boot image for slot b).
 
+An image made before 2026-10-31 (bb39fa8/0f271a9) has Leste's modules and
+firmware owned by uid 1000, or the overlay's files and their directories
+group-writable. LuneOS's busybox `find` cannot run
+`tools/devday/fix-ownership.sh`: check and fix the image from Leste
+(README.md, "Images built before 2026-10-31").
+
 ## Device adaptation
 
 LuneOS's `luneos-device-config` reads

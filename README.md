@@ -258,7 +258,7 @@ would otherwise lose its slot after seven starts.
 | `scripts/10-backup-slot-a.sh` | device, root | back up boot/dtbo/vbmeta/GPT (read-only) |
 | `scripts/20-fetch-sources.sh` | build host | clone the kernel branch, fetch the Leste image |
 | `scripts/30-build-kernel.sh` | build host | apply patches, build kernel + modules |
-| `scripts/40-make-rootfs.sh` | build host, sudo | build the rootfs image, generate the initramfs |
+| `scripts/40-make-rootfs.sh` | build host, sudo | build the rootfs image, generate the initramfs (images built before 2026-10-31: see "Images built before 2026-10-31") |
 | `scripts/45-pro1x-hardware.sh` | inside the rootfs, root | Mesa, firmware, modem services, mce/audio configuration, boot menu tools |
 | `scripts/46-sensor-stack.sh` | inside the rootfs, root | hexagonrpcd, libqmi 1.34, libssc, iio-sensor-proxy 3.9, pro1x-gnss, pro1x-steps, pro1x-rtc |
 | `scripts/47-libcal.sh` | inside the rootfs, root | libcal that accepts the block2mtd CAL (lock code) |
@@ -303,6 +303,27 @@ libraries are missing inside the chroot (child processes fail with "required
 file not found"). `40-make-rootfs.sh` therefore registers
 `qemu-aarch64-static` for the duration of the build and restores the original
 state afterwards.
+
+### Images built before 2026-10-31: owners
+
+Until bb39fa8 and 0f271a9 (2026-10-31) the image steps copied with `cp -a`
+and `rsync -a`, which keep the source's owner and modes. 45's copy of
+`rootfs-overlay/` and 40's rsync of the kernel's modules and the firmware
+gave a PC user's uid 1000 (Leste's `user`) to `/`, `/etc`, `/usr`,
+`/etc/init.d`, the overlay's files, `/lib/modules/<version>` and
+`/lib/firmware`. kali/20, arch/20 and luneos/20 copied Leste's modules and
+firmware with `cp -a`, owner and all (uid 1000 is `kali`, `alarm` there).
+Overlays copied from leste-chroot.sh's `repo` copy (a git archive, umask
+0002) were group-writable. Either way, that user can become root. Every
+image on the phone was built so: Leste of 2026-10-24, its MeeGo copy
+(meego/45 copies Leste's root as it is), Kali, Arch, LuneOS.
+`tools/devday/fix-ownership.sh check [ROOT]` lists such paths (read only).
+`fix` gives this repository's paths back to root and writes an undo list
+first (`docs/device-day-2026-10-31.md`, blocks 1 and 2b). Its list of
+paths, `tools/devday/owned-paths.txt`, is written by
+`tools/devday/mk-owned-paths.sh` from the overlays and the copy steps:
+run it again when a step copies somewhere new. Images built since then
+give nothing in `check`.
 
 ## Sources
 
