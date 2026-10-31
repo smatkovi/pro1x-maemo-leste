@@ -987,3 +987,117 @@ What FreeBSD 15 does on the Pro1X (`freebsd/`), in the same terms:
 So FreeBSD idles like Leste does today without autosuspend (no SoC sleep
 states), minus the deeper CPU idle states Linux uses while awake.
 
+
+## Code-level power fixes (2026-10-31, from the PC)
+
+Our own programs, looked at for what they do while nobody looks at them:
+(1) pause while the display is off or the window is not seen, (2) timers
+grouped, (3) network updates grouped, (4) fewer writes. Leste and the MeeGo
+copy learn the display's state from mce's `display_status_ind` ("on",
+"dimmed", "off", and "lpm" for the stand-by screen, `patches/lpm`); FreeBSD
+has no mce, so `pro1x-standby` (without `-M`, and only when nothing owns
+`com.nokia.mce`) now sends the same signal: "on", "dimmed", "lpm" and "off"
+when the panel goes off (`4aed93a`). Upstream hildon-desktop then stops
+drawing on "off" and deletes `_HILDON_APPLET_ON_CURRENT_DESKTOP` of its
+Home widgets, libosso tells the applications, and our clients pause. All
+our clients treat "off" and "lpm" as not seen, "dimmed" as seen, and stay
+"on" when nobody sends the signal (Arch's Hildon session today).
+
+| Program (systems) | Scenario | Before | After | How |
+|---|---|---|---|---|
+| pro1x-events (Leste, FreeBSD, Arch) | page seen, display on, idle | 60 wake-ups an hour from two 60 s ticks (GLib groups them into one) | none between updates | measured, Xvfb, 300 s: 5 wake-ups before, 0 after |
+| pro1x-events | display off (mce "off") | the same ticks, and the feed every 16 and the weather every 31 minutes: 5.5 requests in 5.5 radio bursts an hour | nothing at all | measured with the intervals / 15, 480 s = 2 h: 11 requests, 11 bursts, 226 wake-ups before; 0, 0, 0 after |
+| pro1x-events | display on, 2 h | 11 requests in 9 bursts, the 30 posts sent and parsed each time | 12 requests in 8 bursts (feed and weather in the same second), 8 of them `304 Not Modified` without a body | measured, intervals / 15 |
+| pro1x-events | a feed update with pictures shown | up to 90 `utime()` (one inode write per shown picture) every 15 min | at most once a day per picture, none on a 304 | code |
+| pro1x-events | the page shown, the screen turned | 3 GConf writes each time (gconfd's file on the flash, hildon-desktop lays the widgets out again) | none when unchanged | code |
+| pro1x-events | a new session with a weather cache under 30 min old | Open-Meteo asked at once | when the cache is 30 min old | code |
+| Settings, Events (apps/pro1x-events) | Save without a change | 10 GConf writes; the page took them as a new place and account: a weather update, the feed cleared and fetched again | no write, nothing fetched | code |
+| pro1x-volume-osd | a volume key with the display off | the window mapped and faded at 40 frames/s for 2 s, composited | nothing shown | code |
+| pro1x-fm (Leste, FreeBSD, Arch) | radio on, window behind others or display off | the status asked for every 1.5 s: 2400 wake-ups an hour (FreeBSD: two socket requests each, waking pro1x-fmd and pro1x-audiod too) | none; at once when seen again | computed |
+| pro1x-camera (Leste) | camera app behind others or display off | the viewfinder ran: the sensor at 1280x960, the ISP, two conversions, the flip and the video sink | stopped 1 s after the focus or the display went | code (the camera is not on the PC) |
+| meego-clock (all) | the clock behind others or display off | its seconds hand: 3600 wake-ups and redraws an hour | none | computed (`73af05f` in smatkovi/meego-clock) |
+| iphbd (the MeeGo session on Leste) | three clients for 120 s (every 10 s; 3..30 s; 0..20 s) | each woken at its min time: wake-ups in 48 different seconds, 99 context switches of the daemon | lined up as dsme did (until the max time, then all past their min time): 11 seconds, 34 | measured, `tests/power-code/iphb-test.py` |
+| pro1x-standby (FreeBSD) | the panel off | hildon-desktop and the clients drew on | display_status_ind "off": they stop | tested under Xvfb: "on", "dimmed" after `-s`, "lpm" 3 s later, "off" after `-O` |
+| pro1x-standby (FreeBSD) | `pro1x.standby_off=2` | the panel dark 2 min 33 s after the last input (`-O` counted whole minutes of the stand-by screen) | 2 min (`-O 87s`, the seconds after the stand-by screen) | code |
+
+What changed in each:
+
+- **pro1x-events 1.3** (`b284756`): nothing while it is not seen (the look
+  off, `_HILDON_APPLET_ON_CURRENT_DESKTOP` deleted, mce's "off" or "lpm"):
+  no timer, update, redraw or animation frame; notifications that change
+  meanwhile are read once it is seen again; a timer slack of 200 ms while
+  unseen. One timer for what is due next (an update, midnight, the next
+  appointment's start or end). Both updates together: one due within
+  5 minutes comes along with the other; none without a network (GLib's
+  network monitor: netlink on Leste's GLib 2.74, always "available" on
+  FreeBSD; a pull still updates); after a failure again after 5, 10, 20,
+  40 and 60 minutes, after a rejected token not until the settings change.
+  The home timeline is asked with its ETag (`If-None-Match`; Mastodon's
+  Rails answers 304, checked on mastodon.social); Open-Meteo sends no
+  validator, so the weather is asked for every 30 minutes as before.
+  Cache files without fsync (`g_file_set_contents_full` without
+  `DURABLE`), GConf only where a value differs.
+- **pro1x-volume-osd 1.1**, **pro1x-fm** (FreeBSD revision 2, Arch 1.1),
+  **pro1x-camera**, **meego-clock 0.2**: as in the table; pro1x-fm follows
+  HildonWindow's `is-topmost` once hildon-desktop has set it, the camera
+  Qt's application state (QtDBus for mce's signal).
+- **iphbd** (`meego/iphb`, `7c8e709`): Harmattan's heartbeat as dsme had
+  it: a client waits until its max time at the latest, and every client
+  past its min time is woken with it; timer slack 200 ms.
+- **pro1x-standby 1.2** (`4aed93a`): the signal above, `-O` in seconds
+  (`87s`; minutes as before), a timer slack of 100 ms on Linux. FreeBSD's
+  `.xinitrc` passes `pro1x.standby_off` minus the stand-by screen's delay
+  as seconds.
+
+Checked, nothing to change:
+
+- **rtcom-eventlogger**: it opens the database with `synchronous = OFF`
+  and `journal_mode = TRUNCATE` (`src/db.c`), so nothing is ever fsynced.
+  WAL with `synchronous = NORMAL` would add fsyncs at its checkpoints; WAL
+  with OFF would save only the journal's create and truncate per
+  transaction, but `eventlogger.c` switches the journal OFF and back to
+  TRUNCATE around its bulk deletes, which fails or undoes WAL while other
+  processes have the database open. It writes only when an event comes.
+  (`rtcom_el_set_read_events` runs one transaction per event; Clear on the
+  Events page marks a handful at a time. A transaction around the loop
+  would be the one patch worth making.)
+- **calendar-backend**: `synchronous=off`, `journal_mode=memory`, no
+  timers, writes only on changes (our patch is the 64-bit recurrence fix).
+- **patches/meego**: no periodic timers (one-shot idle callbacks only); the
+  page ring's and the launcher's animations are finite timelines, and
+  upstream hildon-desktop stops all drawing on "off" (`hd-dbus.c`).
+- **pro1x-standby**: already event-driven (minute-aligned ticks only while
+  the stand-by screen is lit, nothing while covered or off).
+- **pro1x-look** (writes its key only on a change), **pro1x-rtc-sync** (one
+  rename-atomic write at shutdown), **pro1x-theme-scale** (once per theme).
+- **leste-apps**: pedometerhomewidget (listens only on the visible desktop,
+  saves 60 s after a change), headphoned (event-driven), yappari-leste (no
+  polling of ours; whatsmeow's keep-alive is the library's), wifi-assistant.
+- **meego/bme** (bmed's 60 s check): the battery's uevents (every 30 s on
+  the battery, kernel patch 0025) restart its `poll()`, so it rarely fires.
+- Not looked at here: FreeBSD's own daemons (`freebsd/`), the sensor tools
+  (`docs/sensors.md`), audio, the kernel.
+
+To repeat the measurements (Xvfb, gtk2, gconf, json-glib and libcurl on
+the PC): `tests/power-code/build-events.sh <old> <new>` builds the page at
+two revisions (and `-x15` with the intervals / 15) against a stand-in of
+rtcom-eventlogger, `tests/power-code/run-events.sh BIN DISPLAY PORT ON OFF
+LABEL` runs one with a private session and "system" bus, a stand-in
+server (an ETag for the feed, `weather.json`, Open-Meteo's answer, CC BY
+4.0) and its own HOME and GConf, and counts its context switches and
+requests with the display on and after mce's "off".
+`tests/power-code/iphb-test.py SECONDS PID` drives a running iphbd.
+
+What needs to be built and installed:
+
+- Leste: `leste-hildon-2026.10.31` has pro1x-events 1.3, pro1x-volume-osd
+  1.1 and meego-clock 0.2 (and the Linux power work's mce and
+  location-daemon). pro1x-standby (`scripts/49-standby.sh`), pro1x-fm and
+  pro1x-camera (`scripts/49-apps.sh`) and iphbd
+  (`meego/41-leste-helpers.sh`) are installed by their scripts, not as
+  packages: run those again on the phone, or the next image has them.
+- FreeBSD: pro1x-standby 1.2, pro1x-events 1.3, pro1x-volume-osd 1.1,
+  pro1x-fm revision 2, meego-clock 0.2 (pin `73af05f`), the root's
+  `.xinitrc`.
+- Arch: pro1x-events 1.3, pro1x-volume-osd 1.1, pro1x-fm 1.1, meego-clock
+  0.2, with the next Arch build.
