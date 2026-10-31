@@ -507,7 +507,20 @@ REVISION = {
     # its dead notification sinks dropped (harmattan-qt5 278a4b8); sphone
     # 3 (2026-10-30): DTMF through oFono's SendTones (0001), the Speaker
     # button to pro1x-callaudio (route-pro1x, 0002)
-    'qt6-qpa-maemo': 1, 'qt6-style-maemo': 1, 'sphone': 3, 'harmattan-system-ui': 1,
+    'qt6-qpa-maemo': 1, 'qt6-style-maemo': 1, 'sphone': 3,
+    # 2 (2026-10-31, harmattan-qt5 d0c32ea): the status bar's widgets off
+    # display while the display is off or the bar hidden; the others below:
+    # QmDisplayState's signal on Qt 5, aligned heartbeats, QmBattery and
+    # QmTime without needless wake-ups; the status menu's rows follow their
+    # services only while shown; mce heard by mcompositor in GLX builds;
+    # thumbnails at most twice a second, pages built once when seen; the
+    # apps' polls only while playing or active, the camera stopped when
+    # minimized, maps' writes only on a change
+    'harmattan-system-ui': 2, 'harmattan-qmsystem2': 1,
+    'harmattan-statusmenu-plugins': 1, 'harmattan-mcompositor': 1,
+    'harmattan-meegotouchhome': 1, 'harmattan-meego-camera': 1,
+    'harmattan-meego-maps': 1, 'harmattan-meego-music': 1,
+    'harmattan-meego-phone': 1, 'harmattan-meego-video': 1,
     # 2026-10-29: libmeegotouch's style sheet cache read every attribute 4
     # bytes early in clang builds (nothing drew, harmattan-qt5 0bbefb4),
     # the Pro1X's 960x480 target; the pro1x theme's black wallpaper

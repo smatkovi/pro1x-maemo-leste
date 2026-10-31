@@ -1019,6 +1019,17 @@ our clients treat "off" and "lpm" as not seen, "dimmed" as seen, and stay
 | iphbd (the MeeGo session on Leste) | three clients for 120 s (every 10 s; 3..30 s; 0..20 s) | each woken at its min time: wake-ups in 48 different seconds, 99 context switches of the daemon | lined up as dsme did (until the max time, then all past their min time): 11 seconds, 34 | measured, `tests/power-code/iphb-test.py` |
 | pro1x-standby (FreeBSD) | the panel off | hildon-desktop and the clients drew on | display_status_ind "off": they stop | tested under Xvfb: "on", "dimmed" after `-s`, "lpm" 3 s later, "off" after `-O` |
 | pro1x-standby (FreeBSD) | `pro1x.standby_off=2` | the panel dark 2 min 33 s after the last input (`-O` counted whole minutes of the stand-by screen) | 2 min (`-O 87s`, the seconds after the stand-by screen) | code |
+| harmattan sysuid (the N9's system UI, Qt 5) | idle, display on, 180 s | 21 wake-ups | 14 | measured, Xvfb, stand-in mce/UPower/BlueZ |
+| harmattan sysuid | display off, 180 s | 16 (QmDisplayState never told anyone on Qt 5) | 4 | measured |
+| harmattan sysuid, the Bluetooth row | menu closed, BlueZ RSSI changes 10/s, 60 s | 2993 wake-ups, 600 GetManagedObjects calls | 5, none | measured |
+| a MeeGo Touch application (a spinner) | display off, 30 s | 2200 wake-ups (mcompositor never heard mce in GLX builds) | 4, again on "on" | measured |
+| harmattan mcompositor | display off, 30 s | 18 | 0 | measured |
+| harmattan meegotouchhome | switcher page, a window drawing at 30 frames/s, 30 s | 24702 wake-ups (a whole-window XGetImage per damage) | 1252 (at most twice a second) | measured |
+| meego-music | idle, 30 s | 133 | 12 | measured |
+| meego-camera | minimized, 20 s | 4404 wake-ups, 1.09 s CPU | 0 | measured |
+| meego-maps | idle, 40 s | 8 rewrites of its settings | 0 | measured |
+| QmBattery on UPower | 10 UPower refreshes | 22 D-Bus calls | 2 | measured |
+| sysuid's clock, the volume row, meego-video, meego-phone | display off; PulseAudio missing; paused; idle | 60/h; 1200 reconnects/h; 14400/h; 120/h and ModemManager's | 0; 0 while the menu is closed; 0 after 2 s; 0 | computed |
 
 What changed in each:
 
@@ -1043,6 +1054,28 @@ What changed in each:
   **pro1x-camera**, **meego-clock 0.2**: as in the table; pro1x-fm follows
   HildonWindow's `is-topmost` once hildon-desktop has set it, the camera
   Qt's application state (QtDBus for mce's signal).
+- **The Harmattan Qt 5 port** (smatkovi/harmattan-qt5 `f9e97dd`..`d0c32ea`,
+  pinned in `freebsd/hildon/harmattan.sh`): two port bugs were most of it.
+  On Qt 5 QmDisplayState never emitted `displayStateChanged` (only the
+  `connectNotify(const QMetaMethod &)` overload is called; "lpm" now maps
+  to Off), and mcompositor listened to mce only in GLES2 builds while the
+  port builds GLX, so it never obscured the windows and every MeeGo Touch
+  application kept animating with the display off ("lpm" stays on for
+  mcompositor: the stand-by screen's client draws then). Besides:
+  QmHeartbeat without iphbd lines its waits up on wall-clock steps and
+  ends them together, `IWokeUp()` cancels; QmBattery's kernel fallback
+  once a minute through the heartbeat, UPower's values taken from its
+  signal; QmTime only for `/etc/localtime`; the status bar's widgets off
+  display while the display is off or the bar hidden; the status menu's
+  rows (volume, internet, Bluetooth) follow their services only while
+  shown; switcher thumbnails at most twice a second, the home pages built
+  once per burst and only when seen; meego-music and -video poll only
+  while playing, meego-camera stops when minimized, meego-maps writes only
+  a changed position, meego-phone's 30 s modem poll is gone (ModemManager
+  signals). Left: QmLocks, QmDeviceMode, QmSystemState, QmUSBMode and
+  others have the same dead `connectNotify` (fixing them changes sysuid's
+  behaviour: its own decision); the thumbnails still copy whole windows
+  (XRender scaling would cut that 16 times).
 - **iphbd** (`meego/iphb`, `7c8e709`): Harmattan's heartbeat as dsme had
   it: a client waits until its max time at the latest, and every client
   past its min time is woken with it; timer slack 200 ms.
@@ -1112,4 +1145,18 @@ What needs to be built and installed:
   pro1x-fm revision 2, meego-clock 0.2 (pin `73af05f`), gpodder-leste
   4.17.2+leste2 (pin `fb3c82f`), the root's `.xinitrc`.
 - Arch: pro1x-events 1.3, pro1x-volume-osd 1.1, pro1x-fm 1.1, meego-clock
-  0.2, gpodder-leste 4.17.2+leste2, with the next Arch build.
+  0.2, gpodder-leste 4.17.2+leste2, with the next Arch build; Harmattan's
+  parts from `arch/30-meego.sh` (it builds harmattan-qt5's main).
+- Harmattan (all three systems): qmsystem2, system-ui, statusmenu-plugins,
+  meegotouchhome, mcompositor and apps/meego-camera, -maps, -music, -phone,
+  -video. Leste's packages are built on the phone
+  (`PKGREV=2 ONLY="qmsystem2 system-ui statusmenu-plugins meegotouchhome
+  mcompositor meego-camera meego-maps meego-music meego-phone meego-video"
+  bash meego/50-harmattan-qt5-debs.sh`; PKGREV above the installed +pro1xN,
+  or apt keeps the old ones). FreeBSD: the pin `d0c32ea` and the revisions in
+  `pkgmeta.py`. Before mcompositor goes on a phone, try lock, blank and
+  unblank there: on "on" with tklock "locked" it now waits for the lock
+  screen to paint (Nokia's logic), which on the PC never ended for a lock
+  window whose stacking layer was set after it was mapped (sysuid's own
+  lock screen could not be tried on the PC). Its commit (`ff4519c`) can be
+  held back on Leste by leaving it out of `ONLY`.
