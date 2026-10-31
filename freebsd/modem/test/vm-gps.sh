@@ -7,7 +7,10 @@
 # /usr/local/libexec/location-daemon-gpsd start; that starts gpsd on
 # udp://127.0.0.1:29470 and pro1x-gnss on the simulated modem's QMI LOC
 # (fakemodem.py on a pty instead of the modem's QRTR node), which sends the
-# positions as NMEA to gpsd.
+# positions as NMEA to gpsd. When the example has stopped, location-daemon
+# ends (15-30 s later, its lock free) and stops gpsd and pro1x-gnss again
+# through the hook (location-daemon's patch 0002): pro1x-gnss sends LOC
+# Stop.
 #
 # Its files are in /root/gpstest (copied there by the PC: gpsd, gpspipe,
 # pro1x-gnss, location-daemon, basic, lib/ with libgps, libqmi-glib,
@@ -22,17 +25,25 @@ SVC=/usr/local/share/dbus-1/system-services/org.maemo.LocationDaemon.service
 POL=/usr/local/etc/dbus-1/system.d/org.maemo.LocationDaemon.conf
 rm -rf "$G"
 mkdir -p "$G"
+# The packages' own files (location-daemon's service file and policy,
+# pro1x-modem's hook) aside for the run and back after it: the cleanup
+# once deleted an installed package's files
+for f in "$HOOK" "$SVC" "$POL"; do
+	if [ -e "$f" ]; then mv "$f" "$G/saved.${f##*/}"; fi
+done
 cleanup() {
 	for p in gnss gpsd fake; do
 		[ -f "$G/$p.pid" ] && kill "$(cat "$G/$p.pid")" 2> /dev/null
 	done
 	pkill -f "$T/location-daemon" 2> /dev/null
 	rm -f "$HOOK" "$SVC" "$POL"
+	for f in "$HOOK" "$SVC" "$POL"; do
+		if [ -e "$G/saved.${f##*/}" ]; then mv "$G/saved.${f##*/}" "$f"; fi
+	done
 	dbus-send --system --type=method_call --dest=org.freedesktop.DBus / \
 	    org.freedesktop.DBus.ReloadConfig
 }
 trap cleanup EXIT
-[ ! -e "$HOOK" ] && [ ! -e "$SVC" ] || { echo "a hook or service file is installed already"; exit 1; }
 
 daemon -f -o "$G/fake.log" -p "$G/fake.pid" python3.11 "$T/fakemodem.py" \
     --pty-link "$G/modem" --ctl "$G/ctl" --log "$G/req.log" --online
@@ -40,11 +51,19 @@ sleep 3
 # the phone's rc.d/pro1x_gps, with the VM's paths
 cat > "$HOOK" <<EOF
 #!/bin/sh
-[ "\$1" = start ] || exit 0
 export LD_LIBRARY_PATH=$T/lib
-$T/gpsd -n -P $G/gpsd.pid udp://127.0.0.1:29470 || exit 1
-/usr/sbin/daemon -f -P $G/gnss.pid -o $G/gnss.log $T/pro1x-gnss -v -d $G/modem -p 29470
-echo "hook: gpsd and pro1x-gnss started" >> $G/hook.log
+case "\$1" in
+start)
+	$T/gpsd -n -P $G/gpsd.pid udp://127.0.0.1:29470 || exit 1
+	/usr/sbin/daemon -f -P $G/gnss.pid -o $G/gnss.log $T/pro1x-gnss -v -d $G/modem -p 29470
+	echo "hook: gpsd and pro1x-gnss started" >> $G/hook.log
+	;;
+stop)
+	# as rc.d/pro1x_gps's stop: daemon(8) passes SIGTERM on (LOC Stop)
+	kill "\$(cat $G/gnss.pid)" "\$(cat $G/gpsd.pid)" 2> /dev/null
+	echo "hook: gpsd and pro1x-gnss stopped" >> $G/hook.log
+	;;
+esac
 EOF
 chmod 755 "$HOOK"
 printf '#!/bin/sh\nexport LD_LIBRARY_PATH=%s/lib G_MESSAGES_DEBUG=all\nexec %s/location-daemon > %s/location-daemon.log 2>&1\n' \
@@ -78,3 +97,24 @@ echo "--- pro1x-gnss"
 head -8 "$G/gnss.log"
 echo "--- the simulated modem's LOC requests"
 grep "LOC" "$G/req.log"
+echo "--- after the client: location-daemon ends and stops gpsd"
+i=0
+while [ $i -lt 45 ] && pgrep -qx location-daemon; do
+	sleep 1
+	i=$((i + 1))
+done
+if pgrep -qx location-daemon; then
+	echo "location-daemon: still running after $i s"
+else
+	echo "location-daemon: ended within $i s"
+fi
+sleep 2
+cat "$G/hook.log"
+for p in gnss gpsd; do
+	if kill -0 "$(cat "$G/$p.pid" 2> /dev/null)" 2> /dev/null; then
+		echo "$p: still running"
+	else
+		echo "$p: stopped"
+	fi
+done
+grep "LOC" "$G/req.log" | tail -2

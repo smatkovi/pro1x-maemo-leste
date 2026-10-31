@@ -58,8 +58,10 @@ LOCAL = {
     # 1.1: message paths unique across restarts (telepathy-ring's tokens),
     # sphone for calls only (the SMS are Conversations', as on Leste);
     # 1.2: no signal poll of the modem while nobody looks at the display,
-    # the SMS parts' timer only while parts wait (wake-ups)
-    'pro1x-modem': ('1.2', "The Pro1X modem's calls and SMS as oFono's D-Bus API",
+    # the SMS parts' timer only while parts wait (wake-ups); 1.3: the GPS
+    # hook stops gpsd and pro1x-gnss again when location-daemon's clients
+    # are gone (with location-daemon 0002), unless pro1x_gps_enable
+    'pro1x-modem': ('1.3', "The Pro1X modem's calls and SMS as oFono's D-Bus API",
                     "pro1x-modemd talks QMI over QRTR to the modem (DMS, UIM, NAS, WMS, "
                     "VOICE) and offers the calls, SMS, SIM and network registration as "
                     "oFono's D-Bus API, for sphone and the other apps written for oFono; "
@@ -521,6 +523,9 @@ REVISION = {
     # control no longer starts positioning (0008); 3 (2026-10-30): start
     # after stop (0009), the lock held only while started (0010)
     'liblocation': 3,
+    # 2026-10-31: the gpsd it started stops again when its clients are
+    # gone (0002): the modem's GNSS engine ran until the next boot
+    'location-daemon': 1,
     # 2026-10-30: asks for the headphones (their cable is the antenna) when
     # pro1x-audiod reports none plugged in
     'pro1x-fm': 1,

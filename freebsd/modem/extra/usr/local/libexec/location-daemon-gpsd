@@ -1,8 +1,15 @@
 #!/bin/sh
-# location-daemon-gpsd start|stop: how location-daemon (its FreeBSD patch,
+# location-daemon-gpsd start|stop: how location-daemon (its FreeBSD patches,
 # freebsd/hildon/patches/location-daemon) starts gpsd on the Pro1X: with
-# the modem's GNSS behind it (rc.d/pro1x_gps, freebsd/modem/README.md)
+# the modem's GNSS behind it (rc.d/pro1x_gps, freebsd/modem/README.md),
+# and stops it again once its clients are gone (patch 0002), so that the
+# modem's GNSS engine runs only while an app wants positions. A gpsd the
+# system runs from its start (pro1x_gps_enable="YES") is kept.
 case "$1" in
-start|stop) exec /usr/sbin/service pro1x_gps "one$1" ;;
+start) exec /usr/sbin/service pro1x_gps onestart ;;
+stop)
+	/usr/sbin/service pro1x_gps enabled && exit 0
+	exec /usr/sbin/service pro1x_gps onestop
+	;;
 *) echo "usage: $0 start|stop" >&2; exit 2 ;;
 esac

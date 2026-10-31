@@ -378,15 +378,25 @@ FreeBSD:
 | --- | --- | --- |
 | the engine to NMEA | `pro1x-gnss` (libqmi over QRTR) | the same, built for FreeBSD (`hildon/build.sh pro1x-gnss`); `-d` takes a QMUX file for the tests |
 | gpsd | Debian's, `/etc/conf.d/gpsd`: `udp://127.0.0.1:29470`, pro1x-gnss started and stopped with it | FreeBSD's package (3.25); `rc.d/pro1x_gps` (package pro1x-modem): gpsd on `udp://127.0.0.1:29470` and pro1x-gnss under daemon(8), stopped together (SIGTERM: LOC Stop) |
-| on demand | location-daemon runs `sudo /etc/init.d/gpsd start` | location-daemon runs `/usr/local/libexec/location-daemon-gpsd start` (→ `service pro1x_gps onestart`), as root through D-Bus activation |
-| location-daemon | Leste's | Leste's at its 0.8 commit, new part `location-daemon` (patch 0001: the lock in `/var/run`, the start hook, the service file below /usr/local as root; D-Bus policy in `hildon/extra/location-daemon`) |
+| on demand | location-daemon runs `sudo /etc/init.d/gpsd start` (and never stops it) | location-daemon runs `/usr/local/libexec/location-daemon-gpsd start` (→ `service pro1x_gps onestart`), as root through D-Bus activation, and `... stop` (→ `onestop`, not with `pro1x_gps_enable`) when its clients are gone (patch 0002) |
+| location-daemon | Leste's | Leste's at its 0.8 commit, new part `location-daemon` (patch 0001: the lock in `/var/run`, the start hook, the service file below /usr/local as root; 0002: the gpsd it started stopped again; D-Bus policy in `hildon/extra/location-daemon`) |
 | the dialogs | location-ui, activated on the system bus through maemo-invoker as the user | location-ui (new part), run by `hildon-session` for the session's life (`--stay`, patch 0002: a system bus activation would start it without the session's display, so no service file); Leste's fixes (`patches/fixes/location-ui.patch`, as 0001): its unanswered dialogs, and the answer to "close", which passed the response by value and aborted location-ui (libdbus' NULL check) whenever a dialog was answered with OK (found here, fixed for both) |
 | the settings | location-control, the control panel's Location applet | the same (new part): GPS and network positioning on or off; its GConf schema (the defaults: GPS on, network off, the device `(com.nokia.Location, las)`, the disclaimer not accepted) loaded at boot by `rc.d/hildon_setup` |
 | liblocation | Leste's | 0003: the lock in `/var/run`; 0004: when no location-ui runs at all (no session, an unattended run) the dialog's yes is taken, with a message; without location-control's schema the internal receiver; without MCE the device mode normal; 0005: the calls of location-ui's "display" and "close" lacked dbus-glib's terminator of the output arguments, so every dialog request failed on FreeBSD ("Too few arguments in reply"); 0006: `get_selected_method()` had its test the wrong way round, so the "enable positioning" dialog's yes ended in "User didn't enable requested methods" (0005 and 0006 are in Leste's code too, which has them in `patches/fixes/liblocation.patch` since 2026-10-30) |
 
 The positions only start when an app asks (liblocation's start): the
-engine runs only while a client holds liblocation's lock, as on Leste.
-`pro1x_gps_enable="YES"` starts it at boot instead.
+engine runs only while a client holds liblocation's lock. location-daemon
+ends 15 s after the last client let go of it; Leste's never stopped the
+gpsd it had started, so gpsd, pro1x-gnss and the modem's GNSS engine ran
+until the next boot after the first app that asked (found in the energy
+audit of 2026-10-31; Leste's `/etc/conf.d/gpsd` says "starts and stops",
+but location-daemon has no stop). Patch 0002 stops it again through the
+hook's `stop` (`service pro1x_gps onestop`: SIGTERM, pro1x-gnss sends LOC
+Stop); a gpsd that ran before location-daemon came is left alone.
+`pro1x_gps_enable="YES"` starts it at boot instead and keeps it running
+(the hook's `stop` does nothing then). While pro1x-gnss runs,
+`pro1x-autosleep` does not suspend (the positions would wake it every
+second; `freebsd/pm/README.md`, stage 6).
 
 **Tested in the VM** (`test/vm-gps.sh`): liblocation's own example
 (`examples/basic.c`: start, the first fix, stop) under a session bus for
@@ -399,7 +409,10 @@ DOP, five satellites, the UTC time, written from libqmi's
 `qmi-service-loc.json`); gpsd's TPV has mode 3 with that position;
 location-daemon sends `Running`, `FixStatusChanged 3` and
 `PositionChanged 48.2082 16.3738 171`; the example prints `lat: 48.208200`,
-`lon: 16.373800` and stops, and pro1x-gnss stops its session.
+`lon: 16.373800` and stops. With patch 0002 (2026-10-31, the VM's run
+of the test as it is now): location-daemon ended 11 s after the example,
+ran the hook's `stop`, pro1x-gnss sent `LOC Stop session=1` and released
+its client, gpsd and pro1x-gnss were gone; before, both ran on.
 
 **The dialogs and the applet in the VM** (`test/vm-location.sh`, the
 same chain in a Hildon session, location-ui run as hildon-session runs

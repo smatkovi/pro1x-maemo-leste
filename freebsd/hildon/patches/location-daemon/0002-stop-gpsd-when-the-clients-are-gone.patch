@@ -1,0 +1,48 @@
+location-daemon on FreeBSD: the gpsd it started for its clients stops
+again when they are gone. location-daemon ends 15 s after the last
+client has let go of liblocation's lock, but it never stopped the gpsd
+it had started: on the Pro1X gpsd, pro1x-gnss and the modem's GNSS
+engine behind them then ran until the next boot after the first app
+that asked for a position (rc.d/pro1x_gps, freebsd/modem/README.md
+stage 3). Stopped the way it was started: the start hook's "stop"
+(location-daemon-gpsd, which keeps a gpsd started at boot by
+pro1x_gps_enable="YES"), else gpsd's rc.d script. A gpsd that ran
+before location-daemon came is left alone.
+
+--- a/location-daemon.c
++++ b/location-daemon.c
+@@ -60,6 +60,8 @@
+ static DBusConnection *dbus;
+ static struct gps_data_t gpsdata;
+ static int running = 0;
++/* gpsd was started here (the hook): stopped again when the clients are gone */
++static int started_gpsd = 0;
+ 
+ int sighandler(gpointer sig)
+ {
+@@ -316,6 +318,7 @@
+ 		switch (system(access(GPSD_START_HOOK, X_OK) == 0 ?
+ 		    GPSD_START_HOOK " start" : "/usr/sbin/service gpsd onestart")) {
+ 		case 0:
++			started_gpsd = 1;
+ 			/* Give time to settle */
+ 			sleep(1);
+ 			break;
+@@ -363,6 +366,17 @@
+ 	(void)gps_stream(&gpsdata, WATCH_DISABLE, NULL);
+ 	(void)gps_close(&gpsdata);
+ 
++	/*
++	 * FreeBSD: the clients are gone (or a signal): the gpsd started for
++	 * them stops the way it was started, else it and the receiver
++	 * behind it (the Pro1X: the modem's GNSS engine through pro1x-gnss)
++	 * would run until the next boot. The hook keeps a gpsd the system
++	 * runs from its start (pro1x_gps_enable).
++	 */
++	if (started_gpsd && system(access(GPSD_START_HOOK, X_OK) == 0 ?
++	    GPSD_START_HOOK " stop" : "/usr/sbin/service gpsd onestop") != 0)
++		g_warning("unable to stop gpsd");
++
+ 	g_main_loop_unref(mainloop);
+ 
+ 	return 0;
