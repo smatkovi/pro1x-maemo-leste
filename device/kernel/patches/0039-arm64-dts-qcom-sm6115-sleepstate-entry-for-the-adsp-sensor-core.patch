@@ -1,0 +1,40 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sat, 31 Oct 2026 10:29:05 +0100
+Subject: [PATCH] arm64: dts: qcom: sm6115: the sleep state entry for the
+ ADSP's sensor core
+
+The ADSP of SM6115 runs Qualcomm's sensor core (SEE), which reads the
+application processor's sleep state from bit 12 of the SMP2P entry
+"sleepstate" (smp2p-sleepstate driver). Give the ADSP's smp2p node that
+outbound entry, as the vendor device tree does (bengal.dtsi), and the
+node that sets it. The vendor tree's inbound entry "sleepstate_see",
+through which the sensor core asks for a wakeup, is left out: no event
+here is to wake the system that way.
+
+Signed-off-by: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+---
+ arch/arm64/boot/dts/qcom/sm6115.dtsi | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6115.dtsi b/arch/arm64/boot/dts/qcom/sm6115.dtsi
+index 7f24982f5b..108a9e1085 100644
+--- a/arch/arm64/boot/dts/qcom/sm6115.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm6115.dtsi
+@@ -574,6 +574,17 @@ adsp_smp2p_in: slave-kernel {
+ 			interrupt-controller;
+ 			#interrupt-cells = <2>;
+ 		};
++
++		/* the system's sleep state for the ADSP's sensor core */
++		sleepstate_smp2p_out: sleepstate-out {
++			qcom,entry-name = "sleepstate";
++			#qcom,smem-state-cells = <1>;
++		};
++	};
++
++	smp2p-sleepstate {
++		compatible = "qcom,smp2p-sleepstate";
++		qcom,smem-states = <&sleepstate_smp2p_out 0>;
+ 	};
+ 
+ 	smp2p-cdsp {

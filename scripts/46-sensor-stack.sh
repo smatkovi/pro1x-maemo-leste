@@ -29,9 +29,18 @@
 #
 # Everything goes to /usr/local; the sensor data files go to
 # /usr/share/pro1x/hexagonfs and are used by /etc/init.d/pro1x-hexagonrpcd.
+#
+# PARTS="libssc tools" rebuilds only libssc (with /etc/libssc.conf where
+# there is none) and the tools that use it (pro1x-steps, ...) on a system
+# that has the rest already, without NIXOS (docs/sensors.md); the new
+# versions run after a restart of their clients or a reboot. Default: all.
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
-NIXOS=${NIXOS:?set NIXOS=<checkout of fxtec-pro1x-nixos>}
+PARTS=${PARTS:-all}
+want() { [ "$PARTS" = all ] || [[ " $PARTS " == *" $1 "* ]]; }
+if want hexagonrpc || want data; then
+  NIXOS=${NIXOS:?set NIXOS=<checkout of fxtec-pro1x-nixos>}
+fi
 SRC=${SRC:-/root/src}
 export DEBIAN_FRONTEND=noninteractive
 export PKG_CONFIG_PATH=/usr/local/lib/aarch64-linux-gnu/pkgconfig
@@ -66,16 +75,21 @@ build() {  # build <dir> [meson options...]
   ldconfig
 }
 
+if want hexagonrpc; then
 log "hexagonrpcd"
 fetch hexagonrpc https://github.com/linux-msm/hexagonrpc.git pull/27/head "$HEXAGONRPC_REV"
 git -C "$SRC/hexagonrpc" apply "$NIXOS/packages/hexagonrpc-sns-registry.patch"
 build hexagonrpc
+fi
 
+if want libqmi; then
 log "libqmi $LIBQMI_TAG"
 fetch libqmi https://gitlab.freedesktop.org/mobile-broadband/libqmi.git "$LIBQMI_TAG" "$LIBQMI_TAG"
 build libqmi -Dmbim_qmux=false -Dqrtr=true -Dgtk_doc=false -Dintrospection=false \
   -Dbash_completion=false -Dman=false
+fi
 
+if want libssc; then
 log "libssc $LIBSSC_TAG"
 fetch libssc https://codeberg.org/DylanVanAssche/libssc.git "$LIBSSC_TAG" "$LIBSSC_TAG"
 git -C "$SRC/libssc" apply "$REPO/patches/libssc-pedometer.patch"
@@ -88,7 +102,9 @@ build libssc
 # the delivery's defaults for every libssc client (iio-sensor-proxy, ...);
 # an edited one stays
 [ -e /etc/libssc.conf ] || install -m 644 "$REPO/rootfs-overlay/etc/libssc.conf" /etc/
+fi
 
+if want iio-sensor-proxy; then
 log "iio-sensor-proxy $IIO_SENSOR_PROXY_TAG"
 fetch iio-sensor-proxy https://gitlab.freedesktop.org/hadess/iio-sensor-proxy.git "$IIO_SENSOR_PROXY_TAG" "$IIO_SENSOR_PROXY_TAG"
 git -C "$SRC/iio-sensor-proxy" apply "$REPO/patches/iio-sensor-proxy-3.9-glib-2.74.patch"
@@ -101,15 +117,22 @@ if ! dpkg-divert --list /usr/sbin/iio-sensor-proxy | grep -q .; then
   dpkg-divert --local --rename --divert /usr/sbin/iio-sensor-proxy.leste --add /usr/sbin/iio-sensor-proxy
 fi
 ln -sfn /usr/local/libexec/iio-sensor-proxy /usr/sbin/iio-sensor-proxy
+fi
 
+if want gnss; then
 log "pro1x-gnss (modem GNSS -> NMEA -> gpsd)"
 gcc -O2 -Wall -o /usr/local/bin/pro1x-gnss "$REPO/tools/pro1x-gnss/pro1x-gnss.c" \
   $(pkg-config --cflags --libs qmi-glib qrtr-glib)
+fi
+if want tools; then
 log "pro1x-steps (the ADSP's step counter on D-Bus)"
 gcc -O2 -Wall -o /usr/local/sbin/pro1x-steps "$REPO/tools/pro1x-steps/pro1x-steps.c" \
   $(PKG_CONFIG_PATH=/usr/local/lib/aarch64-linux-gnu/pkgconfig pkg-config --cflags --libs libssc gio-unix-2.0) -lm
 install -m 644 "$REPO/rootfs-overlay/etc/dbus-1/system.d/org.pro1x.Steps.conf" /etc/dbus-1/system.d/
 install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-steps" /etc/init.d/
+fi
+[ "$PARTS" = all ] || { log "done ($PARTS)"; exit 0; }
+
 log "pro1x-rtc (real time across power off, wake alarms from power off)"
 gcc -O2 -Wall -o /usr/local/sbin/pro1x-rtc "$REPO/tools/pro1x-rtc/pro1x-rtc.c"
 gcc -O2 -Wall -fPIC -shared -fvisibility=hidden -o /usr/local/lib/aarch64-linux-gnu/librtc-realtime.so \
