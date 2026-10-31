@@ -17,9 +17,9 @@ itself is untested on the phone. To be flashed with kernel pro1x.10;
 screens are an alarm's to mce and to `pro1x-standby`, as the system UI's
 dialog is) in the pre-release `leste-alarmboot-2026.10.31.3` (1.1 in
 `leste-alarmboot-2026.10.30.1` asked instead); FreeBSD:
-`freebsd-hildon-2026.10.31.4` with `pro1x-standby` 1.3; Arch: 1.4 in
-`arch-hildon-2026.10.31.1` and with all of Arch's packages in
-`arch-hildon-2026.10.31.2`, 1.5 with the next Arch build.
+`freebsd-hildon-2026.10.31.4` with `pro1x-standby` 1.3; Arch: 1.5 with
+all of Arch's packages in `arch-hildon-2026.10.31.3` (1.4 in
+`arch-hildon-2026.10.31.1` and `.31.2`; Arch has no `pro1x-standby`).
 
 ## Is it possible on this hardware?
 
@@ -627,8 +627,9 @@ Leste package built by `49-alarmboot.sh` in the chroot of the official
 image (`gcc -Wall`, no warnings) and installed there with apt over the
 previous version.
 
-`tests/alarm-boot/arch-chroot.sh` (2026-10-31, 1.3 and again with 1.4, 7
-checks, 0 failures):
+`tests/alarm-boot/arch-chroot.sh` (2026-10-31, 1.3, again with 1.4 and
+with 1.5 on all of arch-hildon-2026.10.31.3's packages, 7 checks, 0
+failures; 1.5's log has the dialog's states 5 and 7 and its own 6 and 7):
 Arch's side in `arch/pc-chroot.sh`'s chroot of Arch Linux ARM (qemu) with
 the packages of arch-hildon-2026.10.30.1 and the new `pro1x-alarmboot`
 and `pro1x-sessions` installed, on an Xvfb of the PC: a system bus of its

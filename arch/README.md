@@ -115,7 +115,7 @@ a file; files a part does not need are left out instead (libhildonfm's
 Leste). Each package is installed into the image as it is made, so the
 later ones name it; installed together they need nothing but Arch Linux
 ARM's. arch-hildon-2026.10.30.1 was the first release with all of them,
-arch-hildon-2026.10.31.2 is the current full set (153), built on the PC;
+arch-hildon-2026.10.31.3 is the current full set (153), built on the PC;
 the notes say how to install them (one `pacman -U` of the lot,
 `--overwrite '*'` over an image the steps built), and `pro1x-update`
 (docs/updating.md) installs and updates them from the newest releases.
