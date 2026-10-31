@@ -23,6 +23,7 @@ struct as_state {
 	int		acline;		/* external power: 1, 0, -1 unknown */
 	bool		audio;		/* a stream, a voice session, FM */
 	bool		call;		/* a call (pro1x-callaudio runs) */
+	bool		gnss;		/* positions wanted (pro1x-gnss runs) */
 	bool		usbnet;		/* the USB gadget's ue0 up */
 	bool		inhibit;	/* someone asked (the inhibit file) */
 	uint64_t	net_bytes;	/* all interfaces but lo0, in and out */

@@ -8,7 +8,8 @@
  * It looks at the phone (policy.c decides): the panel (qcom_dpu's
  * dev.qcom_dpu.0.display and .lpm: off, or the stand-by screen), sound
  * (pro1x-audiod's status: a stream, a voice session, FM), a call
- * (pro1x-callaudio runs), the USB network (ue0 up), external power
+ * (pro1x-callaudio runs), positions (pro1x-gnss runs: the modem's GNSS
+ * engine, while an app wants them), the USB network (ue0 up), external power
  * (hw.acpi.acline), the network's byte counters (a transfer), the inhibit
  * file /var/run/pro1x-autosleep.inhibit. When nothing holds it up it runs
  * pro1x-suspend -k (the panel left as it is; the next alarm as the RTC's
@@ -247,6 +248,7 @@ look(struct as_state *s)
 	if (s->display == 1 && (s->lpm != 1 || !conf.in_standby))
 		return;
 	s->call = running("pro1x-callaudio");
+	s->gnss = running("pro1x-gnss");
 	s->audio = audio_busy();
 	s->inhibit = access(INHIBIT, F_OK) == 0;
 }

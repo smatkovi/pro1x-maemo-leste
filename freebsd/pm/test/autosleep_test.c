@@ -79,6 +79,10 @@ main(void)
 	CHECK(as_decide(&t, &s, &c, why, sizeof(why)) == 5000 &&
 	    strcmp(why, "a call") == 0);
 	s.call = false;
+	s.gnss = true;
+	CHECK(as_decide(&t, &s, &c, why, sizeof(why)) == 10000 &&
+	    strcmp(why, "positions") == 0);
+	s.gnss = false;
 	s.audio = true;
 	CHECK(as_decide(&t, &s, &c, why, sizeof(why)) > 0 &&
 	    strcmp(why, "sound") == 0);

@@ -4,8 +4,9 @@
 # from files, a stand-in for pro1x-suspend -k that "sleeps" 3 s and says
 # what ended it. Checks: no suspend with the display on, the delay after
 # it goes off, the stay after a wake-up source (the power key) and after
-# another interrupt, a call (a process named pro1x-callaudio) and the
-# inhibit file holding it up, the statistics on SIGUSR1.
+# another interrupt, a call (a process named pro1x-callaudio), positions
+# (a process named pro1x-gnss) and the inhibit file holding it up, the
+# statistics on SIGUSR1.
 set -u
 BIN=${1:-/root/pro1x-autosleep}
 T=/tmp/autosleep-test
@@ -30,8 +31,10 @@ check "display on 8 s: no suspend" '[ "$(n)" -eq 0 ]'
 echo 0 > "$T/display"
 sleep 3
 check "display off 3 s: not yet (delay 5 s)" '[ "$(n)" -eq 0 ]'
-sleep 4
-check "display off 7 s: suspended" '[ "$(n)" -eq 1 ]'
+# it looks every 10 s while the display is on: the off seen at 10 s, the
+# suspend at 15 s; checked at 16 s (at 15 s it raced the suspend's start)
+sleep 5
+check "display off 8 s: suspended" '[ "$(n)" -eq 1 ]'
 # ended by the power key at about 10 s: up 8 s, so none before about 18 s
 sleep 6
 check "the power key's stay (8 s): no second suspend yet" '[ "$(n)" -eq 1 ]'
@@ -49,6 +52,14 @@ a=$(n)
 sleep 8
 check "a call: no suspend" '[ "$(n)" -eq "$a" ]'
 kill $call
+cp /bin/sleep "$T/pro1x-gnss"
+"$T/pro1x-gnss" 60 &
+gnss=$!
+sleep 5
+a=$(n)
+sleep 8
+check "positions (pro1x-gnss): no suspend" '[ "$(n)" -eq "$a" ]'
+kill $gnss
 touch /var/run/pro1x-autosleep.inhibit
 sleep 6
 a=$(n)

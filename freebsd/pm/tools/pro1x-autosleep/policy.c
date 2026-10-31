@@ -4,8 +4,9 @@
  * pro1x-autosleep's policy, as Android's autosleep and Maemo's mce and
  * dsme decide it: the phone suspends when nobody looks at it (the display
  * off, or showing only the stand-by screen) and nothing needs the CPUs:
- * no sound being played or recorded, no call, no transfer, no USB
- * network, not on external power, nobody inhibiting it. After a suspend
+ * no sound being played or recorded, no call, no positions wanted (the
+ * modem's GNSS engine running: an app records a track), no transfer, no
+ * USB network, not on external power, nobody inhibiting it. After a suspend
  * that a wake-up source ended (the power key, the RTC alarm, the modem: a
  * call or a message, a cable) it stays up stay_s seconds so that what
  * woke it can be handled; after any other interrupt settle_s.
@@ -103,6 +104,12 @@ as_decide(struct as_track *t, const struct as_state *s,
 		return (busy(why, len, "a call", 5000));
 	if (s->audio)
 		return (busy(why, len, "sound", 5000));
+	/*
+	 * the positions come every second (QMI LOC over GLINK): each would
+	 * end a suspend, which then only churns; the N9 stayed up too
+	 */
+	if (s->gnss)
+		return (busy(why, len, "positions", 10000));
 	if (s->inhibit)
 		return (busy(why, len, "inhibited", 5000));
 	if (s->usbnet)
