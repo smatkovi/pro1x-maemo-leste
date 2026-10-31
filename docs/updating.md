@@ -178,6 +178,16 @@ page looks for them, `systemctl daemon-reload`. The sessions' scripts and
 units come with `pro1x-sessions`. snap-pac takes a Btrfs snapshot before
 and after (`pro1x-boot next arch@<number>` boots the one before).
 
+xdg-user-dirs' `/etc/xdg/user-dirs.defaults` (Phosh has it) is put back
+where libhildonfm before 2.28.27-2 (arch-hildon-2026.10.31.2) left it
+wrong: steps 40/41 and `--overwrite` had put Maemo's MyDocs lines there,
+which `xdg-user-dirs-update` misreads, and that version's upgrade removes
+the file, which both packages had. Where the file is missing or has those
+lines, `--yes` reinstalls xdg-user-dirs (`pacman -S`); the dry run says
+so. A user's `~/.config/user-dirs.dirs` written meanwhile may have
+`XDG_XDG_..._DIR_DIR` lines and the home a folder named `"$HOME`: those
+are the user's to remove.
+
 The packages are built against Arch Linux ARM of their date. If pacman
 cannot find a dependency, or a program misses a library, run
 `pacman -Syu` first: `--sysupgrade` does that before installing. Arch has
