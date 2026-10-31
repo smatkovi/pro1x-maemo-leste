@@ -27,6 +27,12 @@ done
 [ -n "$BACKING" ] || panic "pro1x-loop-root: pro1x.backing= missing from the cmdline"
 [ -n "$IMAGE" ] || IMAGE=/maemo-leste.img
 
+# The file systems' options for energy (docs/power-management.md, "File
+# systems"): the journals commit every 30 s instead of 5, timestamps are
+# written lazily (lazytime), the images' loop devices use direct I/O. All
+# back to the old ones with a file /host/pro1x-fs-defaults (the next start).
+HOST_OPTS=rw,noatime,lazytime,commit=30
+
 # Resolve the backing device into $dev; UFS takes a moment to appear.
 find_backing() {
   dev=""
@@ -47,8 +53,14 @@ find_backing() {
 find_backing || panic "pro1x-loop-root: backing device $BACKING not found"
 
 mkdir -p /host
-mount -t ext4 -o rw,noatime "$dev" /host \
+mount -t ext4 -o "$HOST_OPTS" "$dev" /host \
   || panic "pro1x-loop-root: could not mount $dev on /host"
+FS_DEFAULTS=
+if [ -e /host/pro1x-fs-defaults ]; then
+  FS_DEFAULTS=1
+  HOST_OPTS=rw,noatime
+  mount -o remount,rw,noatime,nolazytime,commit=5 /host
+fi
 
 # Boot menu: pick the system image (or switch to Sailfish in slot a).
 # A one-shot "next" choice (pro1x-boot next ...) is preselected, else the
@@ -238,7 +250,7 @@ SNAPS
       fi
       kexec -e
       command -v devmem > /dev/null && devmem 0x0f017008 32 0
-      find_backing && mount -t ext4 -o rw,noatime "$dev" /host
+      find_backing && mount -t ext4 -o "$HOST_OPTS" "$dev" /host
     fi
     log_failure_msg "kexec failed, booting $IMAGE"
     key=leste
@@ -274,9 +286,20 @@ fi
 [ -f "/host$IMAGE" ] || panic "pro1x-loop-root: /host$IMAGE does not exist"
 
 # Loop device deterministically on loop0, so that root=/dev/loop0 matches.
+# With direct I/O the image's pages are not cached a second time as the
+# backing file's, and not written back a second time from there; the loop
+# device then takes the disk's 4 KiB sectors, so only an image whose file
+# system has 4 KiB blocks (or larger) gets it (blkid's BLOCK_SIZE), else,
+# or when losetup cannot, the plain loop device as before.
 [ -b /dev/loop0 ] || mknod /dev/loop0 b 7 0
-losetup /dev/loop0 "/host$IMAGE" \
-  || panic "pro1x-loop-root: losetup on /host$IMAGE failed"
+bs=$(blkid -o value -s BLOCK_SIZE "/host$IMAGE" 2>/dev/null)
+if [ -z "$FS_DEFAULTS" ] && [ "${bs:-0}" -ge 4096 ] 2>/dev/null &&
+   losetup --direct-io=on /dev/loop0 "/host$IMAGE" 2>/dev/null; then
+  echo "pro1x-loop-root: /dev/loop0 with direct I/O" > /dev/kmsg 2>/dev/null
+else
+  losetup /dev/loop0 "/host$IMAGE" \
+    || panic "pro1x-loop-root: losetup on /host$IMAGE failed"
+fi
 
 # A Btrfs image (Arch): the root is its subvolume @, or a snapshot of it,
 # mounted read-only below a RAM overlay (init-bottom/pro1x-overlay-root);
@@ -284,8 +307,13 @@ losetup /dev/loop0 "/host$IMAGE" \
 if [ "$(blkid -o value -s TYPE /dev/loop0 2>/dev/null)" = btrfs ]; then
   modprobe btrfs 2>/dev/null
   echo "ROOTFSTYPE=btrfs" >> /conf/param.conf
-  echo "ROOTFLAGS='-o subvol=${SUBVOL:-@},noatime,compress=zstd:1'" >> /conf/param.conf
+  echo "ROOTFLAGS='-o subvol=${SUBVOL:-@},noatime${FS_DEFAULTS:-,lazytime},compress=zstd:1'" >> /conf/param.conf
   [ -z "${SUBVOL:-}" ] || : > /conf/pro1x-overlay
+elif [ -z "$FS_DEFAULTS" ]; then
+  # ext4 (Leste, the MeeGo copy, Kali, LuneOS); each system's fstab has
+  # the same options for its root, or its boot-time remount would drop
+  # lazytime again
+  echo "ROOTFLAGS='-o lazytime,commit=30'" >> /conf/param.conf
 fi
 
 exit 0
