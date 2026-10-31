@@ -549,7 +549,10 @@ Devuan's and Debian's gpsd, Arch Linux ARM's gpsd, kali-themes,
 xfce4-power-manager). Classes: **A** changed now (user space, with a way
 back, in `71-power-userspace.sh` and the builders), **B** a measurement or
 decision for today (below, "Measurements for 2026-10-31", steps 4-10),
-**C** not worth a change. Ranked by the expected effect.
+**C** not worth a change. Ranked by the expected effect. The owner
+decided the B items the same day (Bluetooth off, no "device on" light,
+dt2w in the controller's gesture mode, display off after 2 minutes, the
+file systems' options): "The owner's decisions" below.
 
 **Kali and Arch**
 
@@ -654,6 +657,72 @@ decision for today (below, "Measurements for 2026-10-31", steps 4-10),
   `/sys/devices/system/cpu/cpuidle/current_governor` and compared, not
   assumed better on this big.LITTLE. Today: the baseline (step 9).
 
+## The owner's decisions (2026-10-31, built, untested)
+
+The owner decided the audit's B items the same day; all of it is the
+default in the image builders and goes into the systems on the phone with
+`scripts/71-power-userspace.sh install` (`restore` puts the old back), the
+initramfs part with the next `65-kernel-update.sh prepare` (it installs
+the repository's `initramfs/` into Leste before it makes the initramfs,
+lines 90-95), the kernel part with 7.1.0-pro1x.11.
+
+| What | Now | Way back |
+|---|---|---|
+| GNSS after use | pro1x-gnss stops the LOC session (and the engine) 30 s after gpsd stopped reading (gpsd closes its UDP source a minute after its last client; pro1x-gnss sends on a connected socket and sees ECONNREFUSED), and starts it again within 10 s when gpsd reads again (a TXT probe every 5 s). Kali/Arch: `-x 60` exits 60 s later and the unit then stops gpsd (gpsd 3.25+ wakes every 2 s even idle); its socket starts both for the next client. Leste: location-daemon stops the gpsd it started once its clients are gone (`patches/fixes/location-daemon.patch`, built by 49-hidpi.sh) | `pro1x-gnss -g 0` (never stop); the old location-daemon package |
+| Bluetooth | off until switched on: `AutoEnable=false` in `/etc/bluetooth/main.conf` (Leste, MeeGo copy, Kali, Arch; LuneOS's own Bluetooth service decides there). Switched on with `bluetoothctl power on`, Phosh's quick setting or blueman; the FM radio brings hci0 up by itself (0014) | `AutoEnable=true` |
+| Status LED | the N900's notification light: no "device on" pattern; missed call, SMS, e-mail, chat and other notifications a short blue flash every 3 s while unread (hildon-home's notification groups activate and deactivate them; Harmattan's `PatternCommunication` too); battery low a red flash with the display off (`patches/fixes/mce.patch`, mce +pro1x4); charging and full as Leste's (amber, green). Calendar and alarm reminders light nothing (hildon-home's `alarm-event` has no LED pattern, as in Maemo 5). pro1x-autosuspend switches the LED off for each suspend and back after it (`LedsOff`). Arch: Phosh's feedbackd drives LEDs only through its own device files (not set up for the Pro1X); Kali's Xfce has nothing that drives a notification LED | `LEDPatterns` out of `mce.ini.d/50-pro1x.ini`; `LedsOff=` (empty) in `/etc/pro1x-autosuspend.conf` |
+| Double tap to wake | kept; with 0033 (pro1x.11) the GT9286 waits in its own gesture mode while the display is off and interrupts only for a gesture, instead of scanning at full rate with a bit-banged I2C read for every touch. A controller without gesture firmware falls back by itself to 0002's detection | `echo N > /sys/module/goodix_ts/parameters/dt2w_gesture` (from the next blank on) |
+| Display off | after 2 minutes: Leste and the MeeGo copy the backlight time-out 120 s as a gconf default in `/etc/gconf/gconf.xml.defaults` (a user's own value wins; the stand-by screen follows for `LowPowerModeBlankTimeout`), Kali xfce4-power-manager's DPMS sleep and off after 2 min (`/etc/xdg/.../xfce4-power-manager.xml`), Arch Phosh's `idle-delay` 120 (`90-pro1x.gschema.override`). LuneOS keeps it in its own settings service (its Settings app) | 71 `restore`; Settings |
+| Root file systems | ext4 roots with `lazytime,commit=30` (journal commits every 30 s instead of 5, timestamps written lazily): the initramfs's `ROOTFLAGS` and each system's fstab line for `/` (Leste and the MeeGo copy get one: `checkroot.sh` remounts `/` with the fstab's options, "defaults" without a line, which drops lazytime; Kali's and LuneOS's lines get the options, systemd remounts `/` with them). Arch's Btrfs: `lazytime` (it commits every 30 s by itself) | `touch /host/pro1x-fs-defaults` (the initramfs's part, next start); 71 `restore` (fstab) |
+| /host (userdata) | `rw,noatime,lazytime,commit=30` from the initramfs (both mounts in `pro1x-loop-root`; no system's fstab has `/host`, the initramfs moves it in) | `touch /host/pro1x-fs-defaults` |
+| Loop images | direct I/O (`losetup --direct-io=on`, util-linux's losetup in the initramfs): no second copy of the image's pages in the backing file's page cache, no second write-back. The loop device then takes the UFS disk's 4 KiB sectors, so only an image whose file system has 4 KiB blocks gets it (blkid's `BLOCK_SIZE`), else the plain loop device | `touch /host/pro1x-fs-defaults` |
+| Write-back | `vm.dirty_writeback_centisecs=1500`, `vm.dirty_expire_centisecs=3000` (`/etc/sysctl.d/60-pro1x-writeback.conf`, every system): the flusher every 15 s while there are dirty pages, a page expired after 30 s as the journals. Up to about 45 s of writes are lost by a power-key reset | the file removed |
+| cpuidle | TEO built next to menu (pro1x.11), menu stays the default | (none needed) |
+
+Logs stay on the flash until today's tests are done (no logs in RAM).
+
+### Wi-Fi offloads (ath10k on the WCN3950, checked in 7.1)
+
+- **Beacons and beacon loss:** the firmware handles them. ath10k sets
+  `SUPPORTS_PS`, `SUPPORTS_DYNAMIC_PS` and `CONNECTION_MONITOR` (`mac.c`),
+  the firmware reports a beacon miss itself (`ath10k_mac_handle_beacon_miss`),
+  and beacons do not reach the host in power save: Wi-Fi was 0.7 interrupts
+  a second on 2026-10-25, against 10 beacons a second.
+- **ARP and NS offload:** not implemented in mainline ath10k (wmi-tlv has
+  the command id and TLV tags, nothing sends it); what it could save is
+  part of those 0.7 interrupts a second. No patch: not clearly worth it.
+- **WoWLAN:** wmi-tlv implements it, but `ath10k_snoc` never makes the
+  device wakeup-capable (`device_may_wakeup()` fails, the suspend then
+  disconnects; hence pro1x-autosuspend's `StayAwake=45` for the reconnect).
+  It matters only once pro1x-autosuspend runs. Step 11 below shows whether
+  the firmware offers it at all (`iw phy phy0 info`); only then a patch
+  (0036: wakeup-capable SNOC device, the WoW wake interrupt as a wake-up
+  source), measured with a suspend that keeps the association.
+- **From user space:** power save (on, 85-pro1x-wlan-powersave), and
+  NetworkManager's `wifi.powersave` (3) on Kali and Arch; nothing else.
+
+### dt2w in gesture mode: the device test (pro1x.11, not flashed)
+
+`$WORK/out-pro1x.11` is 7.1.0-pro1x.10 plus 0033 and TEO. After it is on
+the phone (`65-kernel-update.sh prepare/flash`, a day after pro1x.10 was
+confirmed), display off:
+
+1. `dmesg | grep -i goodix`: no "no gesture mode" line yet.
+2. Double tap the dark screen: the display comes on (KEY_POWER on
+   "Goodix double-tap wake"). `cat /sys/module/goodix_ts/parameters/dt2w_gesture`
+   Y. Several taps that are not a double tap: nothing.
+3. If "no gesture mode: double tap to wake from the touch reports" is in
+   `dmesg` after the first touch: the firmware has none; dt2w still works
+   (0002), as before.
+4. Touches while dark: `grep goodix /proc/interrupts` before and after a
+   minute of single touches and swipes on the dark screen: a gesture mode
+   that works counts (nearly) nothing.
+5. The cost: `pro1x-powerlog dt2w-gesture 15`, then
+   `echo N > /sys/module/goodix_ts/parameters/dt2w_gesture`, display on and
+   off again, `pro1x-powerlog dt2w-reports 15`; compare with step 5 below.
+6. A suspend and resume (`69-rpm-test.sh 60 rpm bt-down`): the double tap
+   works afterwards (the resume arms the gesture mode again).
+
 ## Measurements for 2026-10-31
 
 What to compare: pro1x.9 with the old user space (the state of the
@@ -700,24 +769,31 @@ off, lying still), 15 minutes each, and compare the means without the
 first 5 minutes; every switch in them is a run-time one and goes back by
 itself at the next boot.
 
-4. **GNSS only on demand.** Leste, a few minutes after the boot and before
-   any location application: `rc-update show default | grep gpsd` and
+4. **GNSS only on demand, and off after use.** Leste, a few minutes after
+   the boot and before any location application: `rc-update show default | grep gpsd` and
    `pidof gpsd pro1x-gnss` both empty (if gpsd was in `default` before 71,
    note it: then the engine ran in every earlier Leste measurement). Kali
    (block 10) and Arch (block 11): `systemctl is-enabled gpsd.socket
    gpsd.service pro1x-gnss.service` gives enabled, disabled, enabled (the
    last through `gpsd.service.wants`), `pgrep -x pro1x-gnss` is empty;
    `gpspipe -w -n 5` starts both (`systemctl is-active gpsd pro1x-gnss`),
-   `systemctl stop gpsd.service` stops both. If Kali or Arch has to be
+   `systemctl stop gpsd.service` stops both; without it, about 2.5 minutes
+   after the last client both are gone by themselves (`journalctl -u
+   pro1x-gnss`: "session 1 stopped", "exit"). Leste with the new
+   location-daemon: an application's positions, then closed, and about
+   15 s later `pidof gpsd pro1x-gnss` empty. If Kali or Arch has to be
    measured anyway: one `pro1x-powerlog` there before and after `systemctl
    stop gpsd.service` on the old setting shows what the engine cost.
-5. **dt2w:** `pro1x-powerlog dt2w-on 15`, then `echo 0 >
-   /sys/module/goodix_ts/parameters/dt2w` and `pro1x-powerlog dt2w-off 15`.
-   More than about 5 mA apart: the touchscreen asleep while the display is
-   off (with dt2w off, or covered) becomes the next item, as "Larger, not
-   done" has it.
-6. **The "device on" light:** with the display off, look whether the LED
-   blinks white every 6 s, and `cat /sys/class/leds/*:status/brightness`.
+5. **dt2w** (decided: it stays; pro1x.11's gesture mode, above):
+   `pro1x-powerlog dt2w-on 15`, then `echo 0 >
+   /sys/module/goodix_ts/parameters/dt2w` and `pro1x-powerlog dt2w-off 15`,
+   on pro1x.10: what the touch reports' dt2w costs, the baseline for the
+   gesture mode's test.
+6. **The "device on" light** (decided: gone, notifications only): on the
+   old user space first, with the display off, look whether the LED
+   blinks white every 6 s, and `cat /sys/class/leds/*:status/brightness`;
+   after 71 and mce's restart (a reboot) it stays dark, a missed call or
+   an SMS makes it flash blue until read.
    Then `pro1x-powerlog led-on 15`; `dbus-send --system --type=method_call
    --dest=com.nokia.mce /com/nokia/mce/request
    com.nokia.mce.request.req_led_pattern_deactivate string:PatternDeviceOn`;
@@ -730,17 +806,17 @@ itself at the next boot.
    suspend. Decision: the pattern into the LPG's hardware pattern trigger
    (`CONFIG_LEDS_TRIGGER_PATTERN` is built), lower and shorter (e.g.
    `24;24;24` for 100 ms), or off by default.
-7. **Bluetooth up but idle:** `pro1x-powerlog bt-up 15`, `hciconfig hci0
-   down`, `pro1x-powerlog bt-down 15`, `hciconfig hci0 up`. The difference
-   is the input for Bluetooth off by default (BlueZ's `AutoEnable=false`,
-   the status menu switches it on); the owner decides.
-8. **Storage:** in step 1's `.wakeups`, the lines of `jbd2/*` and the
-   writeback kworkers. More than about one a second together: `mount -o
-   remount,commit=60 /` and `mount -o remount,commit=60 /host`, then
-   `pro1x-wakeups 60` again (back: `commit=5`, or the next boot). If it
-   halves them, `commit=60` goes into `pro1x-loop-root` for `/host` and
-   into the root's `ROOTFLAGS` with the next boot image (the cost: up to a
-   minute of writes lost when the phone is reset by the power key).
+7. **Bluetooth up but idle** (decided: off by default): after 71 and a
+   reboot `hciconfig hci0` shows DOWN; `pro1x-powerlog bt-down 15`,
+   `bluetoothctl power on`, `pro1x-powerlog bt-up 15`: what an unused but
+   switched-on Bluetooth costs. The FM radio plays with Bluetooth off.
+8. **Storage** (decided: `lazytime,commit=30` and the rest, above). After
+   the boot with the new initramfs: `findmnt -n -o OPTIONS / /host` (both
+   with `lazytime` and `commit=30`), `losetup -l -O NAME,DIO,LOG-SEC`
+   (loop0 DIO 1, 4096), `sysctl vm.dirty_writeback_centisecs` (1500). In
+   step 1's `.wakeups`, the lines of `jbd2/*` and the writeback kworkers,
+   against the old values (the run on the old boot image, or one with
+   `/host/pro1x-fs-defaults`).
    Also once: `cat /sys/bus/platform/devices/4804000.ufshc/{clkgate_enable,clkgate_delay_ms,auto_hibern8}`
    (expected 1, a delay in ms and a non-zero hibern8 timer: idle UFS
    gated).
@@ -753,13 +829,16 @@ itself at the next boot.
    next wake-up came sooner than it pays) is the case for building TEO
    next to menu in the next kernel and comparing step 1 with
    `echo teo > /sys/devices/system/cpu/cpuidle/current_governor`.
-10. **Blanking on Kali and Arch** (when they run, blocks 10 and 11): Kali
-    `xfconf-query -c xfce4-power-manager -lv` (as `kali`) and the time from
-    the last touch until the panel goes off on the battery; Arch `gsettings
-    get org.gnome.desktop.session idle-delay` (as `alarm`). Decision for
-    the owner: Kali on the battery DPMS sleep after 1 and off after 2
-    minutes (kali-themes owns `/etc/xdg`'s file, so the setting would go
-    into the `kali` user's xfconf), Phosh 60 s.
+10. **Blanking** (decided: 2 minutes everywhere): Leste `gconftool-2 -g
+    /system/osso/dsm/display/display_dim_timeout` as `user` (120 unless
+    set otherwise), Kali `xfconf-query -c xfce4-power-manager -lv` (as
+    `kali`), Arch `gsettings get org.gnome.desktop.session idle-delay` (as
+    `alarm`, 120), and the time from the last touch until the panel goes
+    off.
+11. **Wi-Fi:** `iw phy phy0 info | sed -n '/WoWLAN/,/^\t[A-Z]/p'` (does the
+    firmware offer WoWLAN at all, for patch 0036), `iw dev wlan0 get
+    power_save` (on), and in step 1's log the Wi-Fi interrupts a second
+    (`ath10k`/`wlan` lines) while associated and idle.
 
 | Measurement | pro1x.9, old user space | pro1x.10, new user space |
 |---|---|---|
@@ -781,6 +860,9 @@ itself at the next boot.
 | UFS clkgate_enable, auto_hibern8 | | |
 | cpuidle: menu; deeper states' usage / above | | |
 | Kali, Arch: seconds until the panel is off | | |
+| /, /host with lazytime,commit=30; loop0 DIO | no | |
+| Wi-Fi: WoWLAN offered by the firmware; interrupts/s associated | (0.7/s, 10-25) | |
+| pro1x.11: double tap in gesture mode; touch interrupts while dark | (every touch) | |
 
 ## The notify_rpm test (2026-10-31, with the owner)
 

@@ -401,6 +401,19 @@ Preconditions: blocks 1-2 done, Rollback points 1-3 checked.
    Also run the phone-side checks of "Verdict and proposal" point 4
    (`pro1x-boot-trial` in Leste's runlevel and in the images). If any of
    them fails, do not flash.
+
+   prepare installs the repository's `initramfs/` into Leste before it
+   makes the initramfs (`65-kernel-update.sh`, lines 90-95), so the boot
+   image carries what is committed then. Since 2026-10-31 that includes
+   the file systems' options (`docs/power-management.md`, "The owner's
+   decisions"): `/host` with `lazytime,commit=30`, the ext4 roots'
+   `ROOTFLAGS` `lazytime,commit=30`, Arch's `lazytime`, and the loop
+   device with direct I/O for images with 4 KiB blocks. After the first
+   start: `findmnt -n -o OPTIONS / /host` and `losetup -l -O NAME,DIO,LOG-SEC`.
+   If a system does not come up because of it (a root that does not
+   mount), the way back without reflashing is a file on userdata, from
+   any system that runs: `touch /host/pro1x-fs-defaults` (old options,
+   plain loop, from the next start).
 3. **[OK] flash.** It saves boot_b as
    `/host/boot_b-before-$KVER.img` and copies it to `$OUT`, writes boot_b,
    and starts the trial with 3 tries:
@@ -503,8 +516,17 @@ The versions are in `/root/devday/leste-install-*.log`, the files in
    Wi-Fi power save, also in the MeeGo copy, Kali and Arch, and since the
    audit of 2026-10-31 GPS on demand: gpsd in no Leste runlevel, and on
    Kali and Arch the GNSS engine (`pro1x-gnss.service`) only while gpsd
-   runs, gpsd started by its socket instead of at boot. The way back is
-   `71-power-userspace.sh restore`.
+   runs, gpsd started by its socket instead of at boot. With the owner's
+   decisions of the same day also: pro1x-gnss stopping the engine when
+   nobody reads (compiled in Leste, against 46's libqmi), Bluetooth off
+   until switched on (`bluetoothctl power on`), mce's LED patterns
+   without the "device on" light, the display's time-out 2 minutes (Leste
+   gconf default, Kali's Xfce, Arch's Phosh), `lazytime,commit=30` in the
+   fstab's line for `/` (Leste and the MeeGo copy get one, Kali's and
+   LuneOS's get the options), the write-back sysctl, also in luneos.img.
+   The way back is `71-power-userspace.sh restore`. The patched
+   location-daemon and mce (+pro1x4) come with the next Leste package
+   release (49-hidpi.sh).
 4. [OK] reboot, then `collect.sh 06-after-packages`.
    - Expected: Hildon up, `DISPLAY=:0 xset -q` "Monitor is Off" after the
      display blanks (mce pro1x3).
