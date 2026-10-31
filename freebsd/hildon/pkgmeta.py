@@ -543,7 +543,8 @@ REVISION = {
     'liblocation': 3,
     # 2026-10-31: the gpsd it started stops again when its clients are
     # gone (0002): the modem's GNSS engine ran until the next boot
-    'location-daemon': 1,
+    # 2: the stop before the D-Bus name's release, as upstream's #1
+    'location-daemon': 2,
     # 2026-10-30: asks for the headphones (their cable is the antenna) when
     # pro1x-audiod reports none plugged in; 2 (2026-10-31): the status asked
     # for only while the window is in front and the display on

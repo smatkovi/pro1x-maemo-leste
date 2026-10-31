@@ -9,18 +9,24 @@ stage 3). Stopped the way it was started: the start hook's "stop"
 pro1x_gps_enable="YES"), else gpsd's rc.d script. A gpsd that ran
 before location-daemon came is left alone.
 
+As in the upstream fix (maemo-leste/location-daemon#1): gps_close()
+first, then the stop, and both before the D-Bus name is released, so a
+client starting right then can't activate a new instance onto the gpsd
+being stopped.
+
+diff --git a/location-daemon.c b/location-daemon.c
+index 2d7bc08..3e97292 100644
 --- a/location-daemon.c
 +++ b/location-daemon.c
-@@ -60,6 +60,8 @@
+@@ -60,6 +60,7 @@ static GThread *poll_thread;
  static DBusConnection *dbus;
  static struct gps_data_t gpsdata;
  static int running = 0;
-+/* gpsd was started here (the hook): stopped again when the clients are gone */
 +static int started_gpsd = 0;
  
  int sighandler(gpointer sig)
  {
-@@ -316,6 +318,7 @@
+@@ -316,6 +317,7 @@ int main(int argc, char *argv[])
  		switch (system(access(GPSD_START_HOOK, X_OK) == 0 ?
  		    GPSD_START_HOOK " start" : "/usr/sbin/service gpsd onestart")) {
  		case 0:
@@ -28,21 +34,26 @@ before location-daemon came is left alone.
  			/* Give time to settle */
  			sleep(1);
  			break;
-@@ -363,6 +366,17 @@
- 	(void)gps_stream(&gpsdata, WATCH_DISABLE, NULL);
- 	(void)gps_close(&gpsdata);
+@@ -354,15 +356,19 @@ int main(int argc, char *argv[])
  
-+	/*
-+	 * FreeBSD: the clients are gone (or a signal): the gpsd started for
-+	 * them stops the way it was started, else it and the receiver
-+	 * behind it (the Pro1X: the modem's GNSS engine through pro1x-gnss)
-+	 * would run until the next boot. The hook keeps a gpsd the system
-+	 * runs from its start (pro1x_gps_enable).
-+	 */
+ 	dbus_send_va(RUNNING_INTERFACE, "Running", DBUS_TYPE_BYTE, &running, DBUS_TYPE_INVALID);
+ 
++	(void)gps_stream(&gpsdata, WATCH_DISABLE, NULL);
++	(void)gps_close(&gpsdata);
++
 +	if (started_gpsd && system(access(GPSD_START_HOOK, X_OK) == 0 ?
 +	    GPSD_START_HOOK " stop" : "/usr/sbin/service gpsd onestop") != 0)
 +		g_warning("unable to stop gpsd");
 +
+ 	if (dbus_bus_release_name(dbus, DAEMON_DBUS_NAME, NULL) == -1) {
+ 		g_critical("Cannot release DBUS name");
+ 	}
+ 	dbus_connection_close(dbus);
+ 	dbus_connection_unref(dbus);
+ 
+-	(void)gps_stream(&gpsdata, WATCH_DISABLE, NULL);
+-	(void)gps_close(&gpsdata);
+-
  	g_main_loop_unref(mainloop);
  
  	return 0;
