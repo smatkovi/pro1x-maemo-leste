@@ -175,7 +175,10 @@ repo)
     log "note: uncommitted changes are not in it (git archive HEAD)"
   in_target rm -rf /root/pro1x-repo
   in_target mkdir -p /root/pro1x-repo
-  git -C "$REPO" archive HEAD | sudo -n tar -x -C "$R/root/pro1x-repo"
+  # umask 022: git archive's default (0002) gives 0775 directories and
+  # 0664 files, which tar as root keeps; the steps' cp -a of the overlays
+  # then made /etc, /usr and their files group-writable in the images
+  git -C "$REPO" -c tar.umask=0022 archive HEAD | sudo -n tar -x -C "$R/root/pro1x-repo"
   ;;
 run) in_target "$@" ;;
 shell) in_target /bin/bash -l ;;
