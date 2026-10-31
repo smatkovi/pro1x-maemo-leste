@@ -45,14 +45,20 @@
  * (Linux), the profile from profiled on the session bus.
  *
  *   pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout]
- *                 [-O minutes] [-R none|cw|ccw|inverted] [-P pidfile]
+ *                 [-O minutes|SECONDSs] [-R none|cw|ccw|inverted] [-P pidfile]
  *                 [-t themedir] [-d dpi] [-f font] [-2]
  *       runs in the X session (with X's own screen saver off, xset s off);
  *       -O: the panel off (and the touchscreen asleep, the proximity
- *       sensor unwatched) after that many minutes of the stand-by screen,
- *       0: at once in its place (the power key brings the desktop back);
- *       default never, as on the N9. With the panel off the SoC can
- *       sleep (pro1x-autosleep, freebsd/pm/README.md stage 6).
+ *       sensor unwatched) after that many minutes of the stand-by screen
+ *       (-O 87s: seconds; the stand-by screen comes -s + 3 s after the
+ *       last input), 0: at once in its place (the power key brings the
+ *       desktop back); default never, as on the N9. With the panel off
+ *       the SoC can sleep (pro1x-autosleep, freebsd/pm/README.md stage 6).
+ *       Where no mce runs (FreeBSD), it says what the display does as
+ *       mce would, so that hildon-desktop and the clients stop drawing
+ *       while it is off: com.nokia.mce.signal display_status_ind on the
+ *       system bus, "on", "dimmed", "lpm" (the stand-by screen, as
+ *       patches/lpm's mce) and "off" (the panel off).
  *   pro1x-standby -M [-R ...] [-t themedir] [-d dpi] [-f font] [-2]
  *       on Leste, with mce's low power mode (patches/lpm): mce decides
  *       (time-outs, proximity, the power key, the panel's lpm and
@@ -74,6 +80,9 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 #include <X11/Xlib.h>
 #include <X11/Xresource.h>
@@ -121,12 +130,14 @@ static int twelve_hour;
 static int dim_timeout = DIM_TIMEOUT_S;
 static int standby_bl = STANDBY_BL;
 static int kbd_timeout = KBD_TIMEOUT_S;
-/* -O: minutes of the stand-by screen before the panel goes off; -1 never */
+/* -O: seconds of the stand-by screen before the panel goes off; -1 never */
 static int off_after = -1;
 /* how X's screen lies on the panel's rows, for partial mode; NULL: off */
 static const char *rotation;
 /* -M: follow mce's low power mode instead of timing it here */
 static int follow_mce;
+/* without -M and without mce: display_status_ind sent from here */
+static int announce_display;
 static const char *pidfile = DEFAULT_PIDFILE;
 
 enum charge { CHARGE_NONE, CHARGE_CHARGING, CHARGE_FULL, CHARGE_FAILED };
@@ -818,12 +829,38 @@ static XSyncAlarm new_alarm(struct standby *sb)
  * power key woke it up without input, X's idle time is old); input before
  * then counts from zero again
  */
+/*
+ * What the display does, as mce's display_status_ind says it (where no mce
+ * runs): hildon-desktop stops drawing while it is "off", libosso tells the
+ * applications, pro1x-events and pro1x-volume-osd wait; once per change
+ */
+static void announce(struct standby *sb, const char *state)
+{
+	static const char *said;
+	DBusMessage *m;
+
+	if (!announce_display || !sb->sys || (said && !strcmp(said, state)))
+		return;
+	m = dbus_message_new_signal("/com/nokia/mce/signal", "com.nokia.mce.signal",
+	    "display_status_ind");
+	if (!m)
+		return;
+	if (dbus_message_append_args(m, DBUS_TYPE_STRING, &state, DBUS_TYPE_INVALID)) {
+		dbus_connection_send(sb->sys, m, NULL);
+		dbus_connection_flush(sb->sys);
+		said = state;
+		debug(state);
+	}
+	dbus_message_unref(m);
+}
+
 static void go_active(struct standby *sb)
 {
 	long long base;
 
 	sb->mode = ACTIVE;
 	debug("active");
+	announce(sb, "on");
 	if (follow_mce) {
 		arm(sb, 0, 0);
 		return;
@@ -957,6 +994,7 @@ static void dim(struct standby *sb)
 
 	sb->mode = DIMMED;
 	debug("dimmed");
+	announce(sb, "dimmed");
 	sb->saved_bl = cur;
 	if (cur > 0)
 		bl_set(cur / 5 > 0 ? cur / 5 : 1);
@@ -981,6 +1019,7 @@ static void panel_sleep(struct standby *sb)
 	if (sb->panel_off || follow_mce)
 		return;
 	debug("panel off");
+	announce(sb, "off");
 	proximity_watch(sb, 0);
 	if (!sb->near) {
 		panel_set("display", 0);
@@ -1018,6 +1057,7 @@ static void sb_show(struct standby *sb)
 	sb_draw(sb, 1);
 	if (follow_mce)
 		return;
+	announce(sb, "lpm");
 	panel_set("lpm", 1);
 	bl_set(standby_bl);
 	proximity_watch(sb, 1);
@@ -1241,7 +1281,15 @@ static int run_x(void)
 			dbus_bus_add_match(sb.sys, "type='signal',"
 			    "interface='com.nokia.mce.signal',"
 			    "member='display_status_ind'", NULL);
+		/* (an mce of its own says it, Leste's with -M) */
+		announce_display = !follow_mce &&
+		    !dbus_bus_name_has_owner(sb.sys, "com.nokia.mce", NULL);
 	}
+#ifdef __linux__
+	/* minute ticks and the keyboard light's 30 s: a tenth of a second
+	 * late is fine, the kernel may group the wake-ups */
+	prctl(PR_SET_TIMERSLACK, 100000000UL, 0UL, 0UL, 0UL);
+#endif
 	srandom(time(NULL));
 	go_active(&sb);
 
@@ -1347,7 +1395,7 @@ static int run_x(void)
 		/* sleep until the next event; timers only while needed */
 		now = time(NULL);
 		if (sb.mode == STANDBY && !sb.panel_off && off_after > 0 &&
-		    now - sb.shown_at >= off_after * 60LL)
+		    now - sb.shown_at >= off_after)
 			panel_sleep(&sb);
 		if (sb.mode == STANDBY && !sb.near && !sb.panel_off) {
 			if (now - sb.moved >= MOVE_S) {
@@ -1359,7 +1407,7 @@ static int run_x(void)
 			}
 			wait = (60 - now % 60) * 1000LL;
 			if (off_after > 0) {
-				t = (sb.shown_at + off_after * 60LL - now) * 1000LL;
+				t = (sb.shown_at + off_after - now) * 1000LL;
 				if (t < wait)
 					wait = t > 0 ? t : 0;
 			}
@@ -1445,10 +1493,25 @@ static int run_preview(const char *out, const char *size)
 	return 0;
 }
 
+/* -O: minutes (as before), or seconds with an s ("87s"), or minutes with an m */
+static int off_seconds(const char *a)
+{
+	char *end;
+	long v = strtol(a, &end, 10);
+
+	if (end == a || v < 0 || v > 100000)
+		return -2;
+	if (!*end || !strcmp(end, "m"))
+		return (int)v * 60;
+	if (!strcmp(end, "s"))
+		return (int)v;
+	return -2;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
-	    "usage: pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout] [-O minutes]\n"
+	    "usage: pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout] [-O minutes|SECONDSs]\n"
 	    "                     [-R none|cw|ccw|inverted] [-P pidfile]\n"
 	    "                     [-t themedir] [-d dpi] [-f font] [-2]\n"
 	    "       pro1x-standby -M [-R ...] [-t themedir] [-d dpi] [-f font] [-2]\n"
@@ -1472,7 +1535,10 @@ int main(int argc, char **argv)
 		case 's': dim_timeout = atoi(optarg); break;
 		case 'b': standby_bl = atoi(optarg); break;
 		case 'k': kbd_timeout = atoi(optarg); break;
-		case 'O': off_after = atoi(optarg); break;
+		case 'O':
+			if ((off_after = off_seconds(optarg)) < -1)
+				usage();
+			break;
 		case 'P': pidfile = optarg; break;
 		case 't': theme = optarg; break;
 		case 'd': dpi = atof(optarg); break;

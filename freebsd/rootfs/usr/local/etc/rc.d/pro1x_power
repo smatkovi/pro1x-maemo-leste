@@ -69,7 +69,7 @@ pro1x_power_status()
 	v=$(sysctl -n dev.pro1x_typec.0.state 2> /dev/null) ||
 	    v="not attached (hw.pro1x_typec.enable=1, kldload pro1x_typec)"
 	echo "USB role switch: pro1x.usbrole=$(kenv -q pro1x.usbrole); pro1x_typec: $v"
-	echo "the panel off after: $(kenv -q pro1x.standby_off || echo 2) min of the stand-by screen"
+	echo "the panel off: $(kenv -q pro1x.standby_off || echo 2) min after the last input"
 	echo "powerd: $(pgrep -lx powerd | tr '\n' ' ')"
 }
 

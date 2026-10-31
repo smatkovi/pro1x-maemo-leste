@@ -870,7 +870,7 @@ comment on some firmware's unstable STA power save applies).
 | `ifconfig_wlan0="WPA DHCP powersave"` | Wi-Fi's power save | off (profile: on) |
 | `powerd_flags` | `-p 1000`: the load looked at once a second | `-p 500` (profile: 1000) |
 | `pro1x.usbrole=1` (kenv) | the USB controller follows the cable (`pro1x-usbrole`, stage 4c): the gadget only with one; its events need `hw.pro1x_typec.enable=1` too (`freebsd/cmdline`; `rc.d/pro1x_power` then loads `pro1x_typec.ko`), after run 14 | off (profile: on) |
-| `pro1x.standby_off=N` (kenv) | the panel off after N minutes of the stand-by screen (`pro1x-standby -O`, whole minutes: the stand-by screen comes 33 s after the last input), 0 at once, `never` the N9's stand-by screen for good | 2, with or without the profile (2026-10-31: the display off after 2 minutes on every system); `pro1x.standby=off`: the panel off 2 minutes after the last input |
+| `pro1x.standby_off=N` (kenv) | the panel off N minutes after the last input (`.xinitrc` passes `pro1x-standby -O` the seconds after the stand-by screen, which comes the time-out and 3 s after the last input), 0 at once, `never` the N9's stand-by screen for good | 2, with or without the profile (2026-10-31: the display off after 2 minutes on every system); `pro1x.standby=off`: the panel off 2 minutes after the last input |
 | `hw.pro1x_pm.mpm_veto`, `mpm_spi` | above | "100 102", 1 |
 | `hw.pro1x_pm.wake=1` | ends a suspend in progress (pro1x-autosleep's devd reader) | |
 | `pro1x_led_enable`, `pro1x_led_flags` (`rc.conf`) | the notification light; `-B percent` its brightness, `-L percent` the battery low | YES |
