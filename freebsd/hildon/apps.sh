@@ -267,7 +267,7 @@ REV+=(
 	[qrtr]=29e36ae16438 [rmtfs]=b30a3eb38f9a [tqftpserv]=0bf5b98c2422
 	[pd-mapper]=5ecd2fe926ac
 	[headphoned]=d476cb4a8bf9 [pedometerhomewidget]=06d5246191fa
-	[wifi-assistant]=604bbe98d8b5 [gpodder-leste]=2759445563b5
+	[wifi-assistant]=604bbe98d8b5 [gpodder-leste]=fb3c82f3252a
 	[maplibre-native-qt]=d929c7837371 [nemo-qml-plugin-dbus]=264aa47d6e94
 	[mapbox-gl-qml]=79e0cccea572 [pure-maps]=5807c1be2de7
 	[osmscout-server]=8db9b103142f
