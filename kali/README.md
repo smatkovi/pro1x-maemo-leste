@@ -13,7 +13,7 @@ touched.
 
 Both run as root on the phone in Maemo Leste:
 
-    bash kali/10-make-rootfs.sh                  # IMG=/host/kali.img SIZE=16G
+    bash kali/10-make-rootfs.sh                  # IMG=/host/kali.img SIZE=20G
     SSH_PUBKEY=/path/key.pub bash kali/20-pro1x-hardware.sh
 
 The boot menu entry needs an initramfs with the current

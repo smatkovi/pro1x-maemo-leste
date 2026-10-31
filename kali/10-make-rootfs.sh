@@ -6,10 +6,10 @@
 # (pro1x-loop-root) mounts as root like Leste's. The Pro1X hardware setup
 # follows in 20-pro1x-hardware.sh, inside the image.
 #
-#   bash kali/10-make-rootfs.sh            # IMG=/host/kali.img SIZE=16G
+#   bash kali/10-make-rootfs.sh            # IMG=/host/kali.img SIZE=20G
 set -euo pipefail
 IMG=${IMG:-/host/kali.img}
-SIZE=${SIZE:-16G}
+SIZE=${SIZE:-20G}
 MNT=${MNT:-/mnt/kali}
 MIRROR=${MIRROR:-http://http.kali.org/kali}
 KEYRING_DEB=kali-archive-keyring_2025.3_all.deb
