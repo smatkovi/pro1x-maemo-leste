@@ -12,7 +12,9 @@
 # signals).
 #
 #   sudo is needed (mounts, unshare, chroot); never run while the chroot
-#   builds.
+#   builds. MODULES_USER="radiostates;harmattan-lpm" adds the MeeGo boot's
+#   modules (meego/mce; harmattan-lpm's tklock_open modes 6 and 7 show in
+#   the system UI's requests).
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}
 WORK=${WORK:-$(cd "$REPO/.." && pwd)}
@@ -57,7 +59,7 @@ for deb in "$@"; do
 [Modules]
 ModulePath=/root/mcetest/$v/usr/lib/mce/modules
 Modules=rtconf-ini;lock-tklock;power-generic;input-ctrl;inactivity;inactivity-inhibit;filter-brightness-als-iio;display
-ModulesUser=
+ModulesUser=${MODULES_USER:-}
 
 [Display]
 UseLowPowerMode=1

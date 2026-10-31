@@ -34,8 +34,9 @@ PARTS=(
   "hildon-desktop|1273f9eee252|5"
   # the display's low power mode (patches/lpm), the LED (patches/fixes);
   # 5: low power mode in the display state's cache, ended by the power key
-  # and the keyboard slide (+pro1x3/4: the power key did nothing in it)
-  "mce|422d5f2bd618|5"
+  # and the keyboard slide (+pro1x3/4: the power key did nothing in it);
+  # 6: the MeeGo boot's Bluetooth bit and low power mode view (meego/mce)
+  "mce|422d5f2bd618|6"
   # the location framework's bugs (patches/fixes): liblocation linked to
   # its libraries, its dialog calls with dbus-glib's output terminator, the
   # user's methods (the "enable positioning" dialog's yes); location-ui's
@@ -147,19 +148,22 @@ for entry in "${PARTS[@]}"; do
     fi
   done
   # mce also as the MeeGo boot needs it (meego/39-leste-mce.sh): it closes
-  # a Harmattan system UI's lock screen, and the radiostates module maps
-  # Harmattan's radio states on the device mode (loaded where
-  # mce.ini.d/60-pro1x.ini names it)
+  # a Harmattan system UI's lock screen, the radiostates module maps
+  # Harmattan's radio states on the device mode and keeps its Bluetooth
+  # bit, harmattan-lpm opens sysuid's low power mode view (both loaded
+  # where mce.ini.d/60-pro1x.ini names them)
   if [ "$name" = mce ]; then
     patch -s -d "$d" -p1 < "$REPO/meego/patches/mce-tklock-close-harmattan.patch"
-    cp "$REPO/meego/mce/radiostates.c" "$d/src/modules/"
-    cat >> "$d/src/modules/CMakeLists.txt" <<'CMAKE'
+    for m in radiostates harmattan-lpm; do
+      cp "$REPO/meego/mce/$m.c" "$d/src/modules/"
+      cat >> "$d/src/modules/CMakeLists.txt" <<CMAKE
 
-add_library(radiostates SHARED radiostates.c)
-target_link_libraries(radiostates ${COMMON_LIBRARIES})
-target_include_directories(radiostates PRIVATE ${COMMON_INCLUDE_DIRS} ${MODULE_INCLUDE_DIRS})
-install(TARGETS radiostates DESTINATION ${MCE_MODULE_DIR})
+add_library($m SHARED $m.c)
+target_link_libraries($m \${COMMON_LIBRARIES})
+target_include_directories($m PRIVATE \${COMMON_INCLUDE_DIRS} \${MODULE_INCLUDE_DIRS})
+install(TARGETS $m DESTINATION \${MCE_MODULE_DIR})
 CMAKE
+    done
   fi
   # conversations and mce in the chroot of Leste's image (qemu): CMake
   # 3.25's first find_library(), the one in pkg_check_modules(glib-2.0),
