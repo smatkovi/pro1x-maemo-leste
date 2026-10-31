@@ -117,7 +117,7 @@ LOCAL = {
                          'MeeGo-like look is on; a tap or a drag sets it '
                          "(tools/pro1x-volume-osd). Nokia's graphics are not included.",
                          ['UNKNOWN']),
-    'pro1x-alarmboot': ('1.2', "After the RTC alarm switched the Pro1X on: the N9's alarm, then off",
+    'pro1x-alarmboot': ('1.3', "After the RTC alarm switched the Pro1X on: the N9's alarm, then off",
                         'When the boot menu started FreeBSD for the RTC alarm that FreeBSD '
                         'had set (kenv pro1x.alarmboot), rc.d/pro1x_alarmboot starts the '
                         'Hildon session; pro1x-alarmboot there does what the Nokia N9 did when '

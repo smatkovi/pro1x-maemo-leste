@@ -47,7 +47,7 @@ trap cleanup EXIT
 gcc -O2 -Wall -Wno-deprecated-declarations -I "$REPO/tests/alarm-boot/stub" \
   -o "$T/pro1x-alarmboot" "$REPO/tools/pro1x-alarmboot/pro1x-alarmboot.c" \
   "$REPO/tests/alarm-boot/stub/libalarm-stub.c" \
-  $(pkg-config --cflags --libs gtk+-2.0 gio-2.0 libpulse-simple x11 xext) -lm
+  $(pkg-config --cflags --libs gtk+-2.0 gio-2.0 gio-unix-2.0 libpulse-simple x11 xi) -lm
 
 if [ -n "${FONTS:-}" ]; then
   {

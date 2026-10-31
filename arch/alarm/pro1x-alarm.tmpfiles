@@ -1,0 +1,3 @@
+# alarmd's queue (/var/cache/alarmd/alarm_queue.ini): alarmd runs in the
+# Hildon session as the user alarm (arch/alarm, docs/alarm-power-on.md)
+d /var/cache/alarmd 0755 alarm alarm -

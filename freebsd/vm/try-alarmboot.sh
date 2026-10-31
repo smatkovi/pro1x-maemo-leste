@@ -21,7 +21,7 @@ cc -O2 -o /tmp/pro1x-alarmboot "$SRC" -I$I/gtk-2.0 -I$L/gtk-2.0/include \
     -I$I/atk-1.0 -I$I/gdk-pixbuf-2.0 -I$I/harfbuzz -I$I/freetype2 \
     -I$I/alarmd -I$I -L$L -Wl,-rpath,$L -lgtk-x11-2.0 -lgdk-x11-2.0 \
     -lpangocairo-1.0 -lpango-1.0 -lcairo -lgio-2.0 -lgobject-2.0 \
-    -lglib-2.0 -lintl -lalarm -lpulse-simple -lpulse -lX11 -lXext -lm || exit 1
+    -lglib-2.0 -lintl -lalarm -lpulse-simple -lpulse -lX11 -lXi -lm || exit 1
 
 service dbus onestatus > /dev/null 2>&1 || service dbus onestart
 export DISPLAY=:1 PRO1X_TRY=1 XDG_RUNTIME_DIR=/tmp/alarmboot-run

@@ -68,7 +68,7 @@ mkdir -p "$OUT" "$MNT$P/root" "$MNT$P/pkg" "$MNT$P/done" "$MNT$P/log"
 # patches (scripts/49-hidpi.sh), the versions of its own tools
 declare -A PRO1X=()
 eval "$(sed -n 's/^ *"\([a-z0-9-]*\)|[0-9a-f]*|\([0-9]*\)".*/PRO1X[\1]=\2/p' "$REPO/scripts/49-hidpi.sh")"
-declare -A VERSIONS=([pro1x-fm]=1.0 [pro1x-sessions]=1.0 [meego-clock]=0.1 [statusmenu-plugins]=0.1
+declare -A VERSIONS=([pro1x-fm]=1.0 [pro1x-sessions]=1.1 [meego-clock]=0.1 [statusmenu-plugins]=0.1
 	[libngf]=0.29 [ngfd]=1.4.13 [vte]=0.28.2 [libical3]=3.0.20 [qt5-positioning]=5.15.19)
 eval "$(sed -n 's/^declare -A VERSIONS=(\(.*\))$/VERSIONS+=(\1)/p' "$REPO/scripts/mkdeb-tools.sh")"
 # the parts' repositories: 40's (freebsd/hildon/build.sh), 41's (apps.sh,
@@ -90,6 +90,7 @@ declare -A T_DESC=(
 	[pro1x-events]="The Nokia N9's Events page for Hildon's MeeGo look, with its settings applet"
 	[pro1x-volume-osd]="The Nokia N9's volume bar for Hildon's MeeGo look"
 	[pro1x-fm]="FM radio for Hildon: the F(x)tec Pro1X's WCN3950 receiver (/dev/radio0)"
+	[pro1x-alarmboot]="Alarms that switch the F(x)tec Pro1X on: the N9's alarm screens in Hildon, then off again"
 	[libngf]="Sailfish OS's client library of the event sound daemon ngfd"
 	[ngfd]="Sailfish OS's event sound and vibra daemon (Nemo's successor of the N9's)"
 	[harmattan-statusmenu-plugins]="The N9's status menu rows: volume, internet connection, Bluetooth"
@@ -113,6 +114,7 @@ declare -A T_LICENSE=([gconf]=LGPL-2.0-or-later [vte]=LGPL-2.0-or-later
 	[libical3]="MPL-2.0 OR LGPL-2.1-only" [qt5-positioning]="LGPL-3.0-only OR GPL-2.0-or-later"
 	[pro1x-sessions]=LicenseRef-pro1x-maemo-leste [pro1x-events]=LicenseRef-pro1x-maemo-leste
 	[pro1x-volume-osd]=LicenseRef-pro1x-maemo-leste [pro1x-fm]=LicenseRef-pro1x-maemo-leste
+	[pro1x-alarmboot]=LicenseRef-pro1x-maemo-leste
 	[libngf]=LGPL-2.1-or-later [ngfd]=LGPL-2.1-or-later [qt-components]=BSD-3-Clause
 	[meego-clock]=BSD-3-Clause)
 # Harmattan's: LGPL 2.1 (LICENSE.LGPL, the sources' headers)
@@ -144,6 +146,7 @@ declare -A T_DEPENDS=(
 	[wifi-assistant]="python python-dbus python-gobject"
 	[yappari-leste]="dbus qt5-multimedia"
 	[pro1x-fm]="libpulse alsa-utils python"
+	[pro1x-alarmboot]="alarmd osso-systemui osso-systemui-alarm statusbar-alarm"
 )
 declare -A T_OPTDEPENDS=(
 	[harmattan-meego-messages]="modemmanager:%the%modem's%SMS"
@@ -182,7 +185,7 @@ parts_of() {
 	30) parts30 ;;
 	40) [ ! -f "$MNT$B/parts" ] || cut -d'|' -f1 "$MNT$B/parts" ;;
 	41) [ ! -f "$MNT$B/apps-list" ] || cut -d'|' -f1 "$MNT$B/apps-list" ;;
-	42) printf '%s\n' pro1x-events pro1x-volume-osd pro1x-fm ;;
+	42) printf '%s\n' pro1x-events pro1x-volume-osd pro1x-fm pro1x-alarmboot ;;
 	extra) printf '%s\n' gconf vte libical3 qt5-positioning python-pyotherside pro1x-sessions ;;
 	esac
 }

@@ -44,7 +44,7 @@
  *     a key, the power key (the display going off or locking), during a
  *     call, with the charger connected (the N9 stayed in its charging
  *     state then), when it was used meanwhile (any input but on these
- *     screens, X's idle time), and when an alarm is still to come but the
+ *     screens, XInput's raw events), and when an alarm is still to come but the
  *     RTC's wake-up for it is not set within 15 s. A new alarm ringing
  *     meanwhile takes over. With after-alarm=ask in the configuration
  *     file (or -Q) it asks instead, as the N9's query dialogs look,
@@ -88,11 +88,14 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include <X11/Xlib.h>
-#include <X11/extensions/sync.h>
+#include <X11/extensions/XInput2.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <gdk/gdkx.h>
 #include <gio/gio.h>
+#ifdef __linux__
+#include <gio/gunixfdlist.h>
+#endif
 #include <gtk/gtk.h>
 #include <langinfo.h>
 #include <libalarm.h>
@@ -745,39 +748,42 @@ static void wake_screen(void)
 
 /* --- before switching off: what keeps the phone on ---------------------------- */
 
-/* X's idle time (the SYNC extension's IDLETIME counter): when the last
- * input of any kind came, -1 where X does not say */
-static Display *xdpy;
-static XSyncCounter idle_counter;
-static gboolean have_idle;
+/* The last input from a device (XInput 2's raw key, button and touch
+ * events on the root window; not what resets X's idle time without a
+ * device, as the system UI may), 0 none */
+static int xi_opcode = -1;
+static gint64 t_input;
 
-static void idle_init(void)
+static GdkFilterReturn raw_input(GdkXEvent *xev, GdkEvent *ev, gpointer unused)
 {
-	int ev, er, maj, min, n;
-	XSyncSystemCounter *c;
+	XEvent *e = xev;
 
-	xdpy = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
-	if (!XSyncQueryExtension(xdpy, &ev, &er) || !XSyncInitialize(xdpy, &maj, &min))
-		return;
-	c = XSyncListSystemCounters(xdpy, &n);
-	for (int i = 0; c && i < n; i++)
-		if (!strcmp(c[i].name, "IDLETIME")) {
-			idle_counter = c[i].counter;
-			have_idle = TRUE;
-		}
-	if (c)
-		XSyncFreeSystemCounterList(c);
+	(void)ev; (void)unused;
+	if (e->type == GenericEvent && e->xcookie.extension == xi_opcode &&
+	    (e->xcookie.evtype == XI_RawKeyPress || e->xcookie.evtype == XI_RawButtonPress ||
+	     e->xcookie.evtype == XI_RawTouchBegin))
+		t_input = now_ms();
+	return GDK_FILTER_CONTINUE;
 }
 
-static gint64 last_input_ms(void)
+static void input_init(void)
 {
-	XSyncValue v;
-	gint64 idle;
+	Display *d = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
+	unsigned char m[XIMaskLen(XI_LASTEVENT)] = { 0 };
+	XIEventMask em = { XIAllMasterDevices, sizeof(m), m };
+	int ev, er, maj = 2, min = 2;
 
-	if (!have_idle || !XSyncQueryCounter(xdpy, idle_counter, &v))
-		return -1;
-	idle = ((gint64)XSyncValueHigh32(v) << 32) | (guint32)XSyncValueLow32(v);
-	return now_ms() - idle;
+	if (!XQueryExtension(d, "XInputExtension", &xi_opcode, &ev, &er) ||
+	    XIQueryVersion(d, &maj, &min) != Success) {
+		xi_opcode = -1;
+		return;
+	}
+	XISetMask(m, XI_RawKeyPress);
+	XISetMask(m, XI_RawButtonPress);
+	if (maj > 2 || min >= 2)
+		XISetMask(m, XI_RawTouchBegin);
+	XISelectEvents(d, DefaultRootWindow(d), &em, 1);
+	gdk_window_add_filter(NULL, raw_input, NULL);
 }
 
 /* Input that was on no alarm screen: before the first alarm rang (noted
@@ -790,7 +796,7 @@ static void alarm_begins(void)
 	if (alarm_began)
 		return;
 	alarm_began = TRUE;
-	used_before = last_input_ms() > t_start + 1000;
+	used_before = t_input > 0;
 	if (used_before)
 		say("the phone was used before the alarm rang");
 }
@@ -803,9 +809,58 @@ static void alarm_ends(void)
 
 static gboolean used_meanwhile(void)
 {
-	gint64 last = last_input_ms();
+	return used_before || t_input > t_own + 400;
+}
 
-	return used_before || (last > t_start + 1000 && last > t_own + 400);
+static gboolean has_owner(const char *name)
+{
+	GVariant *r = g_dbus_connection_call_sync(sysbus, "org.freedesktop.DBus",
+						  "/org/freedesktop/DBus", "org.freedesktop.DBus",
+						  "NameHasOwner", g_variant_new("(s)", name),
+						  G_VARIANT_TYPE("(b)"), G_DBUS_CALL_FLAGS_NONE,
+						  1000, NULL, NULL);
+	gboolean has = FALSE;
+
+	if (r) {
+		g_variant_get(r, "(b)", &has);
+		g_variant_unref(r);
+	}
+	return has;
+}
+
+/* ModemManager (Arch): a call object not yet terminated (MM_CALL_STATE_
+ * TERMINATED is 7) */
+static gboolean mm_in_call(void)
+{
+	GVariant *r = g_dbus_connection_call_sync(sysbus, "org.freedesktop.ModemManager1",
+						  "/org/freedesktop/ModemManager1",
+						  "org.freedesktop.DBus.ObjectManager",
+						  "GetManagedObjects", NULL,
+						  G_VARIANT_TYPE("(a{oa{sa{sv}}})"),
+						  G_DBUS_CALL_FLAGS_NO_AUTO_START, 1000, NULL, NULL);
+	GVariantIter *objs;
+	GVariant *ifaces;
+	const gchar *path;
+	gboolean call = FALSE;
+
+	if (!r)
+		return FALSE;
+	g_variant_get(r, "(a{oa{sa{sv}}})", &objs);
+	while (!call && g_variant_iter_next(objs, "{&o@a{sa{sv}}}", &path, &ifaces)) {
+		GVariant *props = g_variant_lookup_value(ifaces,
+							 "org.freedesktop.ModemManager1.Call",
+							 G_VARIANT_TYPE("a{sv}"));
+		gint32 st = 0;
+
+		if (props && g_variant_lookup(props, "State", "i", &st))
+			call = st != 7;
+		if (props)
+			g_variant_unref(props);
+		g_variant_unref(ifaces);
+	}
+	g_variant_iter_free(objs);
+	g_variant_unref(r);
+	return call;
 }
 
 /* mce: a call ("none" when there is none) */
@@ -853,7 +908,46 @@ static gboolean in_call(void)
 		g_variant_iter_free(it);
 		g_variant_unref(r);
 	}
-	return call;
+	return call || mm_in_call();
+}
+
+/* While switching off, logind leaves the power key to the session (an
+ * inhibitor, Arch): it reaches X, and our window keeps the phone on */
+static int key_inhibitor = -1;
+
+static void power_key_hold(gboolean hold)
+{
+#ifdef __linux__
+	GUnixFDList *fds = NULL;
+	GVariant *r;
+
+	if (!hold) {
+		if (key_inhibitor >= 0)
+			close(key_inhibitor);
+		key_inhibitor = -1;
+		return;
+	}
+	if (key_inhibitor >= 0 || !sysbus || !has_owner("org.freedesktop.login1"))
+		return;
+	r = g_dbus_connection_call_with_unix_fd_list_sync(sysbus, "org.freedesktop.login1",
+							  "/org/freedesktop/login1",
+							  "org.freedesktop.login1.Manager", "Inhibit",
+							  g_variant_new("(ssss)", "handle-power-key",
+									"pro1x-alarmboot",
+									"the power key keeps the phone on",
+									"block"),
+							  G_VARIANT_TYPE("(h)"), G_DBUS_CALL_FLAGS_NONE,
+							  2000, NULL, &fds, NULL, NULL);
+	if (r && fds && g_unix_fd_list_get_length(fds) > 0)
+		key_inhibitor = g_unix_fd_list_get(fds, 0, NULL);
+	if (r)
+		g_variant_unref(r);
+	if (fds)
+		g_object_unref(fds);
+	say("the power key %s logind's", key_inhibitor >= 0 ? "kept from" : "left to");
+#else
+	(void)hold;
+#endif
 }
 
 /* The charger connected (the N9 stayed in its charging state then) */
@@ -1023,14 +1117,18 @@ static void power_off(void)
 	if (scr.demo)
 		return;
 #ifdef __linux__
-	/* as the power key menu does: dsme shuts down (the RTC alarm of a
-	 * snoozed or the next alarm stays set) */
-	GVariant *r = g_dbus_connection_call_sync(sysbus, "com.nokia.dsme",
-						  "/com/nokia/dsme/request",
-						  "com.nokia.dsme.request",
-						  "req_shutdown", NULL, NULL,
-						  G_DBUS_CALL_FLAGS_NONE, 5000,
-						  NULL, &err);
+	/* as the power key menu does: dsme shuts down (Leste, MeeGo; the RTC
+	 * alarm of a snoozed or the next alarm stays set); without dsme
+	 * (Arch) systemd's logind */
+	GVariant *r = has_owner("com.nokia.dsme") ?
+		g_dbus_connection_call_sync(sysbus, "com.nokia.dsme", "/com/nokia/dsme/request",
+					    "com.nokia.dsme.request", "req_shutdown", NULL, NULL,
+					    G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err) :
+		g_dbus_connection_call_sync(sysbus, "org.freedesktop.login1",
+					    "/org/freedesktop/login1",
+					    "org.freedesktop.login1.Manager", "PowerOff",
+					    g_variant_new("(b)", FALSE), NULL,
+					    G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
 	if (r)
 		g_variant_unref(r);
 #else
@@ -1071,6 +1169,7 @@ static void switching_off(void)
 {
 	off_requested = TRUE;
 	switching_soon = FALSE;
+	power_key_hold(FALSE);
 	scr.nbtn = 0;
 	g_strlcpy(scr.title, tx->switching, sizeof(scr.title));
 	screen_show(SCR_SWITCHING, NULL);
@@ -1086,6 +1185,7 @@ static void stay_on(const char *why)
 {
 	say("staying on: %s", why);
 	switching_soon = FALSE;
+	power_key_hold(FALSE);
 	if (answer_timer)
 		g_source_remove(answer_timer);
 	if (rtc_timer)
@@ -1199,6 +1299,7 @@ static gboolean ask(gpointer unused)
 		say("switching off in %d s unless kept on", OFF_IN);
 		power_key = FALSE;
 		switching_soon = TRUE;
+		power_key_hold(TRUE);
 		rtc_tries = 0;
 		off_in = OFF_IN;
 		g_strlcpy(scr.title, tx->switching, sizeof(scr.title));
@@ -1241,6 +1342,7 @@ static void after_cancel(void)
 		g_source_remove(rtc_timer);
 	answer_timer = rtc_timer = 0;
 	switching_soon = FALSE;
+	power_key_hold(FALSE);
 	asked = FALSE;
 	screen_hide();
 }
@@ -1391,6 +1493,8 @@ struct alarm_info {
 	int snooze_secs;
 };
 
+static cookie_t stopped;	/* the alarm just stopped (alarmd may not have it done) */
+
 static gboolean find_alarm(time_t now, gboolean ringing_only, struct alarm_info *ai)
 {
 	cookie_t *c;
@@ -1409,6 +1513,10 @@ static gboolean find_alarm(time_t now, gboolean ringing_only, struct alarm_info 
 
 		if (!e)
 			continue;
+		if (c[i] == stopped) {
+			alarm_event_delete(e);
+			continue;
+		}
 		t = alarm_event_get_trigger(e);
 		rings = t <= now + 5;
 		if (!found)
@@ -1545,6 +1653,7 @@ static void overlay_settle(void)
 {
 	if (ov.pending == STOPPING) {
 		say("stop for alarm %d (button %d)", (int)ov.alarm.cookie, ov.alarm.stop);
+		stopped = ov.alarm.cookie;
 		if (alarmd_ack_dialog(ov.alarm.cookie, ov.alarm.stop) == -1)
 			fprintf(stderr, "pro1x-alarmboot: alarmd did not take the stop\n");
 	}
@@ -1933,7 +2042,7 @@ int main(int argc, char **argv)
 	have_display = gtk_init_check(&argc, &argv);
 	if (have_display) {
 		display_ready(theme);
-		idle_init();
+		input_init();
 	} else {
 		fprintf(stderr, "pro1x-alarmboot: no display: the tone alone\n");
 	}

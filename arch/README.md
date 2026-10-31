@@ -46,6 +46,13 @@ unit; `pro1x-desktop phosh|hildon|meego|harmattan` (as root) picks one:
 | `meego` | the same, `42-meego-look.sh` | Hildon with the Nokia N9's look as on Leste and FreeBSD (`patches/meego`): the home views, the launcher and the open applications as pages in a ring, the edge gestures, no title bars but the N9's thin status bar, the one-column app menu, the N9's icon shapes and rolling wheels for dates and times; the Events page (`tools/pro1x-events`: the weather, notifications, the calendar's appointments, a Mastodon timeline; Settings, Events) and the N9's volume bar (`tools/pro1x-volume-osd`); the MeeGo clock and the other MeeGo apps with the N9's theme |
 | `harmattan` | `30-meego.sh` | the N9's own user interface ported to Qt 5 (smatkovi/harmattan-qt5: mcompositor, the home screen, the system UI with its status menu, the settings, the N9's keyboard), its touch and event sounds |
 
+Alarms (docs/alarm-power-on.md): in the `hildon` and `meego` sessions
+`hildon-session` starts alarmd (with `librtc-realtime`, so that an alarm
+switches the phone on) and the system UI's alarm dialog; step 42 builds
+`pro1x-alarmboot` (the N9's alarm screens after such a start, then off
+again as the N9) with what alarmd needs as the user `alarm`
+(`arch/alarm`: its D-Bus policy, its queue's directory, rtc0).
+
 Step 42 also builds the FM radio (`apps/pro1x-fm`, "FM Radio" in the
 launcher: the WCN3950's receiver through `/dev/radio0`, the kernel's
 radio-qca-fm from the shared kernel and its modules, docs/fm-radio.md; its

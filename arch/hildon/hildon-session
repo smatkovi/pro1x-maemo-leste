@@ -31,6 +31,15 @@ eval "$(/usr/local/bin/pro1x-hidpi env)"
 GDK_DISABLE_XSHM=1 /usr/lib/sapwood/sapwood-server &
 sapwood=$!
 
+# After a start by the RTC alarm: the N9's screens over the system UI's
+# alarm dialog, then off again as the N9 (pro1x-alarmboot,
+# docs/alarm-power-on.md); before alarmd and the system UI, so that it sees
+# the dialog of an alarm already due come up; it ends at once after any
+# other start. Its log: /tmp/pro1x-alarmboot.log
+if [ -x /usr/bin/pro1x-alarmboot ]; then
+	/usr/bin/pro1x-alarmboot -v > /dev/null 2> /tmp/pro1x-alarmboot.log &
+fi
+
 session=$$
 respawn() {
 	trap 'kill $pid 2> /dev/null; exit 0' TERM
@@ -50,6 +59,24 @@ if [ -x /usr/bin/pro1x-volume-osd ]; then
 	respawn /usr/bin/pro1x-volume-osd &
 	extra=$!
 fi
+# The alarm daemon and the system UI, which shows its alarm dialog (Leste:
+# Xsession.d/03alarmd and 03osso-systemui), as this session's user (arch/
+# alarm: its D-Bus policy, the queue's directory, rtc0 for it). alarmd sets
+# the RTC's wake alarm through librtc-realtime: the Pro1X's RTC keeps no
+# real time (tools/pro1x-rtc)
+alarm=
+if [ -x /usr/bin/alarmd ]; then
+	if [ -f /usr/lib/pro1x/librtc-realtime.so ]; then
+		respawn env LD_PRELOAD=/usr/lib/pro1x/librtc-realtime.so /usr/bin/alarmd &
+	else
+		respawn /usr/bin/alarmd &
+	fi
+	alarm=$!
+fi
+if [ -x /usr/bin/systemui ]; then
+	respawn /usr/bin/systemui &
+	alarm="$alarm $!"
+fi
 respawn /usr/bin/hildon-status-menu &
 menu=$!
 # The N9's Events page, the first home view while the MeeGo look is on
@@ -60,5 +87,20 @@ if [ -x /usr/bin/pro1x-events ]; then
 fi
 respawn /usr/bin/hildon-home &
 home=$!
+# The desktop is up: alarmd shows alarms only then (out of its "limbo"),
+# as Leste's Xsession.post/21hildon-desktop-wait and 99initdone tell it
+if [ -n "$alarm" ]; then
+	(
+		for _ in $(seq 120); do
+			[ -e /tmp/hildon-desktop/desktop-started.stamp ] && break
+			sleep 1
+		done
+		sleep 5
+		dbus-send --system --type=signal /com/nokia/HildonDesktop/ready \
+			com.nokia.HildonDesktop.ready
+		dbus-send --system --type=signal /com/nokia/startup/signal \
+			com.nokia.startup.signal.init_done
+	) &
+fi
 /usr/bin/hildon-desktop
-kill $menu $home $extra $sapwood 2> /dev/null
+kill $menu $home $extra $alarm $sapwood 2> /dev/null

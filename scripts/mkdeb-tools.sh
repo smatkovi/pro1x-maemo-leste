@@ -39,7 +39,7 @@ export DEBIAN_FRONTEND=noninteractive
 MAINTAINER="Sebastian Matkovich <sebastian.matkovich@gmail.com>"
 HOMEPAGE=https://github.com/smatkovi/pro1x-maemo-leste
 ARCH=$(dpkg --print-architecture)
-declare -A VERSIONS=([pro1x-events]=1.2 [pro1x-volume-osd]=1.0 [pro1x-alarmboot]=1.2)
+declare -A VERSIONS=([pro1x-events]=1.2 [pro1x-volume-osd]=1.0 [pro1x-alarmboot]=1.3)
 log() { echo ">> $*"; }
 
 # Build dependencies (49-events.sh's and 49-volume-osd.sh's). The -dev
@@ -49,7 +49,7 @@ log() { echo ">> $*"; }
 if [ "$ONLY" = pro1x-alarmboot ]; then
   # alone (49-alarmboot.sh, an image): only its own
   pkgs=(gcc libc6-dev pkg-config binutils dpkg-dev libpulse-dev libalarm-dev
-    libdbus-1-dev libx11-dev libxext-dev)
+    libdbus-1-dev libx11-dev libxi-dev)
   devs=(libgtk2.0-dev)
 else
   pkgs=(gcc g++ libc6-dev pkg-config make gettext binutils dpkg-dev libgconf2-dev
@@ -198,7 +198,7 @@ if want pro1x-alarmboot; then
   # shellcheck disable=SC2046,SC2086
   gcc $CPPFLAGS $CFLAGS -Wall -o "$d/usr/bin/pro1x-alarmboot" \
     "$REPO/tools/pro1x-alarmboot/pro1x-alarmboot.c" $LDFLAGS \
-    $(pkg-config --cflags --libs gtk+-2.0 gio-2.0 alarm libpulse-simple x11 xext) -lm
+    $(pkg-config --cflags --libs gtk+-2.0 gio-2.0 gio-unix-2.0 alarm libpulse-simple x11 xi) -lm
   chmod 755 "$d/usr/bin/pro1x-alarmboot"
   install -D -m 644 "$REPO/rootfs-overlay/etc/X11/Xsession.d/02pro1x-alarmboot" \
     "$d/etc/X11/Xsession.d/02pro1x-alarmboot"

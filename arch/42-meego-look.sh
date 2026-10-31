@@ -11,6 +11,12 @@
 #   pro1x-fm          the FM radio (apps/pro1x-fm: the WCN3950's receiver,
 #                     /dev/radio0, its sound through PipeWire's PulseAudio
 #                     server) with its test tools (tools/pro1x-fm)
+#   pro1x-alarmboot   alarms that switch the phone on (tools/pro1x-alarmboot,
+#                     docs/alarm-power-on.md): the N9's alarm screens after
+#                     such a start, then off again; with librtc-realtime
+#                     for alarmd (tools/pro1x-rtc) and what alarmd needs as
+#                     the session's user (arch/alarm: its D-Bus policy, its
+#                     queue's directory, rtc0)
 #
 # hildon-session starts the first two; both show only while the MeeGo look
 # is on (meego.service). After 40-hildon.sh and 41-hildon-apps.sh, which
@@ -27,11 +33,15 @@
 #                                          of the parts above, into /dir
 #   PKGS=/dir bash arch/42-meego-look.sh   install such packages (the
 #                                          release's) instead of building
+#   ONLY="pro1x-alarmboot" ...             build (and package) only these
+#                                          of this step's own tools
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 MNT=${MNT:-/mnt/arch}
 OUT=${OUT:-}
 PKGS=${PKGS:-}
+TOOLS="pro1x-events pro1x-volume-osd pro1x-fm pro1x-alarmboot"
+ONLY=${ONLY:-}
 # the repository's commit the packages name (REPO may be a git archive)
 COMMIT=${COMMIT:-$(git -C "$REPO" rev-parse --short HEAD 2> /dev/null || echo unknown)}
 B=/usr/src/hildon
@@ -91,13 +101,18 @@ else
 	log "packages"
 	in_root -euo pipefail <<'EOF'
 # the Events page's JSON (Mastodon, the weather); amixer and pactl for the
-# FM sound, Python for its test tools
-pacman -S --noconfirm --needed json-glib alsa-utils libpulse python > /dev/null
+# FM sound, Python for its test tools; the compiler where 40 and 41 did not
+# run before (ONLY=pro1x-alarmboot on the release's packages), XInput
+pacman -S --noconfirm --needed base-devel json-glib alsa-utils libpulse python libxi > /dev/null
 gpgconf --homedir /etc/pacman.d/gnupg --kill all 2> /dev/null || true
 EOF
 	missing=
-	for pc in hildon-1 hildon-control-panel gconf-2.0 libosso rtcom-eventlogger \
-	    calendar-backend libtime libpulse-mainloop-glib json-glib-1.0 libcurl; do
+	pcs="hildon-1 hildon-control-panel gconf-2.0 libosso rtcom-eventlogger
+	    calendar-backend libtime libpulse-mainloop-glib json-glib-1.0 libcurl"
+	# pro1x-alarmboot alone: alarmd's library, GTK, PulseAudio, X
+	[ "$ONLY" != pro1x-alarmboot ] ||
+	    pcs="gtk+-2.0 gio-unix-2.0 alarm libpulse-simple x11 xi"
+	for pc in $pcs; do
 		in_root -c "PKG_CONFIG_PATH=/opt/libical3/lib/pkgconfig pkg-config --exists $pc" ||
 		    missing="$missing $pc"
 	done
@@ -108,38 +123,62 @@ EOF
 	fi
 	S=$B/pro1x
 	rm -rf "${R:?}$S"
-	mkdir -p "$R$S/apps" "$R$S/tools"
-	for d in apps/pro1x-events apps/pro1x-fm tools/pro1x-events tools/pro1x-volume-osd tools/pro1x-fm; do
+	mkdir -p "$R$S/apps" "$R$S/tools" "$R$S/arch"
+	for d in apps/pro1x-events apps/pro1x-fm tools/pro1x-events tools/pro1x-volume-osd tools/pro1x-fm \
+	    tools/pro1x-alarmboot tools/pro1x-rtc arch/alarm; do
 		cp -a "$REPO/$d" "$R$S/$d"
 	done
-	log "pro1x-events ${VERSIONS[pro1x-events]}, pro1x-volume-osd ${VERSIONS[pro1x-volume-osd]}, pro1x-fm ${VERSIONS[pro1x-fm]}"
-	in_root -euo pipefail -s "$S" <<'EOF'
-S=$1 B=/usr/src/hildon
+	tools=${ONLY:-$TOOLS}
+	log "$(for t in $tools; do printf '%s %s, ' "$t" "${VERSIONS[$t]}"; done)"
+	in_root -euo pipefail -s "$S" "$tools" <<'EOF'
+S=$1 tools=" $2 " B=/usr/src/hildon
 # C as it was written (today's GCC has C23 by default); the calendar on
 # libical 3 (/opt/libical3, 41-hildon-apps.sh) with calendar-backend's C++
 export PKG_CONFIG_PATH=/opt/libical3/lib/pkgconfig CPATH=/opt/libical3/include
 export CC="gcc -std=gnu17" CXX="g++ -std=gnu++17" CFLAGS="-O2 -pipe" CXXFLAGS="-O2 -pipe"
-for name in pro1x-events pro1x-volume-osd pro1x-fm; do
+want() { case $tools in *" $1 "*) return 0 ;; esac; return 1; }
+for name in $tools; do
 	rm -rf "${B:?}/root/$name"
 	mkdir -p "$B/root/$name"
 done
+if want pro1x-alarmboot; then
+	R=$B/root/pro1x-alarmboot
+	install -d $R/usr/bin $R/usr/lib/pro1x
+	# shellcheck disable=SC2046
+	$CC $CFLAGS -Wall -o $R/usr/bin/pro1x-alarmboot $S/tools/pro1x-alarmboot/pro1x-alarmboot.c \
+		$(pkg-config --cflags --libs gtk+-2.0 gio-2.0 gio-unix-2.0 alarm libpulse-simple x11 xi) -lm
+	$CC $CFLAGS -Wall -fPIC -shared -fvisibility=hidden -o $R/usr/lib/pro1x/librtc-realtime.so \
+		$S/tools/pro1x-rtc/rtc-realtime.c -ldl
+	install -D -m 644 $S/arch/alarm/pro1x-alarm.conf $R/usr/share/dbus-1/system.d/pro1x-alarm.conf
+	install -D -m 644 $S/arch/alarm/pro1x-alarm.tmpfiles $R/usr/lib/tmpfiles.d/pro1x-alarm.conf
+	install -D -m 644 $S/arch/alarm/84-pro1x-rtc-alarm.rules \
+		$R/usr/lib/udev/rules.d/84-pro1x-rtc-alarm.rules
+fi
+if want pro1x-events; then
 make -C $S/apps/pro1x-events PREFIX=/usr HAVE_CAL=1 \
 	> $S/pro1x-events.log 2>&1 &&
 make -C $S/apps/pro1x-events install PREFIX=/usr HAVE_CAL=1 \
 	DESTDIR=$B/root/pro1x-events >> $S/pro1x-events.log 2>&1 ||
 	{ grep -m20 -E "error|Error" $S/pro1x-events.log; exit 1; }
+fi
+if want pro1x-volume-osd; then
 install -d $B/root/pro1x-volume-osd/usr/bin
 # shellcheck disable=SC2046
 $CC $CFLAGS -Wall -o $B/root/pro1x-volume-osd/usr/bin/pro1x-volume-osd \
 	$S/tools/pro1x-volume-osd/pro1x-volume-osd.c \
 	$(pkg-config --cflags --libs gtk+-2.0 gconf-2.0 libpulse-mainloop-glib) -lm
+fi
+if want pro1x-fm; then
 make -C $S/apps/pro1x-fm install PREFIX=/usr DESTDIR=$B/root/pro1x-fm > $S/pro1x-fm.log 2>&1 ||
 	{ grep -m20 -E "error|Error" $S/pro1x-fm.log; exit 1; }
 install -m 755 $S/tools/pro1x-fm/pro1x-fm-test $S/tools/pro1x-fm/pro1x-fm-audio-test \
 	$B/root/pro1x-fm/usr/bin/
-for name in pro1x-events pro1x-volume-osd pro1x-fm; do
+fi
+for name in $tools; do
 	cp -a "$B/root/$name/." /
 done
+# alarmd's queue directory and rtc0 for the session's user, at once
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/pro1x-alarm.conf 2> /dev/null || true
 EOF
 fi
 
@@ -154,8 +193,10 @@ if [ -n "$OUT" ] && [ -z "$PKGS" ]; then
 		echo "$v${n:++pro1x$n}"
 	}
 	list=
+	# (with ONLY those tools alone)
+	[ -z "$ONLY" ] || PARTS40= PARTS41=
 	for name in $PARTS40 $PARTS41; do list="$list $name=$(ver "$name")"; done
-	for name in pro1x-events pro1x-volume-osd pro1x-fm; do list="$list $name=${VERSIONS[$name]}"; done
+	for name in ${ONLY:-$TOOLS}; do list="$list $name=${VERSIONS[$name]}"; done
 	in_root -euo pipefail -s "$PARTS40" "$list" "$COMMIT" <<'EOF'
 parts40=$1 list=$2 commit=$3 B=/usr/src/hildon
 # 40 installed its parts into the root: once more into their own
@@ -175,13 +216,15 @@ declare -A DESC=(
 	[pro1x-events]="The Nokia N9's Events page for Hildon's MeeGo look, with its settings applet"
 	[pro1x-volume-osd]="The Nokia N9's volume bar for Hildon's MeeGo look"
 	[pro1x-fm]="FM radio for Hildon: the F(x)tec Pro1X's WCN3950 receiver (/dev/radio0)"
+	[pro1x-alarmboot]="Alarms that switch the F(x)tec Pro1X on: the N9's alarm screens in Hildon, then off again"
 )
 declare -A LICENSE=([libhildon]=LGPL-2.1-or-later [hildon-status-menu]=LGPL-2.1-or-later
 	[hildon-desktop]=GPL-2.0-or-later [calendar-backend]=LGPL-2.1-or-later
 	[rtcom-eventlogger]=LGPL-2.1-or-later [rtcom-eventlogger-plugins]=LGPL-2.1-or-later)
 # what the files need besides the libraries they link (those go by the
 # packages that have them, below)
-declare -A EXTRA=([pro1x-fm]="libpulse alsa-utils python")
+declare -A EXTRA=([pro1x-fm]="libpulse alsa-utils python"
+	[pro1x-alarmboot]="alarmd osso-systemui osso-systemui-alarm statusbar-alarm")
 # left out: the event log's test suite (Leste packages it apart; it wants
 # the check library)
 declare -A DROP=([rtcom-eventlogger]="usr/bin/rtcom-eventlogger-testsuite usr/lib/tests")

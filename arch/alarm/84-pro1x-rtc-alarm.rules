@@ -1,0 +1,5 @@
+# alarmd runs in the Hildon session as the user alarm and sets the RTC's
+# wake alarm for alarms that switch the phone on (through librtc-realtime,
+# which translates the real time into the Pro1X's RTC count;
+# docs/alarm-power-on.md). Leste's rule gives rtc0 to its group users.
+SUBSYSTEM=="rtc", KERNEL=="rtc0", GROUP="alarm", MODE="0660"

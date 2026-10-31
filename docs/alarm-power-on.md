@@ -179,8 +179,9 @@ with the N9's font and button pictures installed); make them with
   everywhere mce's display going off or locking, which a press does),
   during a call (mce's `get_call_state`, oFono's calls), with the charger
   connected, and when the phone was used: input before the alarm rang or
-  after its end that was not on these screens (X's idle time, the SYNC
-  extension's `IDLETIME`). Input on the Hildon dialog while it rang counts
+  after its end that was not on these screens (XInput 2's raw key, button
+  and touch events: input from a device, not what only resets X's idle
+  time). Input on the Hildon dialog while it rang counts
   as the alarm's. The old question: `after-alarm=ask` (or `-Q`).
 - **The snooze's wake-up first:** with an alarm still to come (alarmd's
   queue: an `ACTDEAD` or `BOOT` alarm not switched off; MeeGo: timed's next
@@ -211,7 +212,7 @@ rings then is each system's own.
 | Maemo Leste | clock-ui, meego-clock (alarmd, the system UI's alarm dialog) | yes: alarmd sets the RTC (`pro1x-rtc`, `librtc-realtime`) | yes: the alarm screen over the dialog, then off again as the N9 | PC (stub alarmd, test bus, Xvfb), the package built in the image's chroot; phone 2026-10-31 |
 | MeeGo (N9 UI on Leste's copy) | the N9's clock (timed and its own alarm screen) | yes: timed through `librtc-realtime` | the N9's own ringing screen; then off again as the N9 ("Switching off" in the N9 look, `-T`) | PC (timed's signal on a test bus); phone open |
 | FreeBSD | clock-ui, meego-clock (alarmd, the system UI) | yes: `qcom_rtc`'s wakealarm, `kenv pro1x.alarmboot` | yes, as Leste | PC; the FreeBSD VM against the real alarmd and system UI (`freebsd/vm/try-alarmboot.sh`: Stop, Snooze, three runs; 1.1 with the question, 1.2's switch-off not yet in the VM) |
-| Arch | GNOME Clocks in Phosh; in Hildon meego-clock is installed, but Arch's Hildon session starts neither alarmd nor the system UI, so its alarms do not ring | no: GNOME Clocks sets no RTC alarm, nothing else does | no (no alarm to switch it on) | sources (`arch/20-pro1x-hardware.sh`, `arch/hildon/hildon-session`) |
+| Arch | in the Hildon and MeeGo-look sessions (`hildon`, `meego`): clock-ui and meego-clock on alarmd and the system UI's alarm dialog, started by Arch's `hildon-session` since 2026-10-31; not in Phosh (GNOME Clocks sets no RTC alarm) nor in the N9 UI session (`harmattan`: no alarm service) | yes: alarmd as the user `alarm` sets the RTC through `librtc-realtime` (package `pro1x-alarmboot`), the menu starts Arch, which starts the desktop `pro1x-desktop` chose (the alarm rings only in a Hildon one) | yes, as Leste; switching off through logind (Arch has no dsme), calls through ModemManager, the power key kept from logind while switching off (it reaches X) | PC (the Arch build in a chroot of Arch Linux ARM; its alarmd, system UI and `pro1x-alarmboot` under qemu, see below); phone open |
 | Kali | none installed | no | no | sources |
 | LuneOS | its own clock (sleepd's alarms) | open: whether sleepd leaves an RTC alarm set when LuneOS is switched off; if it does, the menu starts LuneOS for it | no, by choice: LuneOS keeps its own alarm look (and has no switch-off question) | not yet (needs the phone: an alarm in LuneOS's clock, then `cat /sys/class/rtc/rtc0/wakealarm` before switching off) |
 | KolibriOS | none (the ARM port has no alarm clock and no RTC alarm) | no | no | sources (smatkovi/kolibrios-arm) |
@@ -228,6 +229,10 @@ In the images built on the PC the parts are there by default:
 - **MeeGo:** `meego/45-meego-image.sh` copies that Leste system, with the
   package and `Xsession.d/01pro1x-meego` (from `45-pro1x-hardware.sh`'s
   `rootfs-overlay`).
+- **Arch:** `arch/42-meego-look.sh` builds `pro1x-alarmboot` with
+  `librtc-realtime` and the files above (`ONLY=pro1x-alarmboot` for it
+  alone), `arch/43-packages.sh` packages it (step 42's parts) and the
+  sessions' `pro1x-sessions` with the new `hildon-session`.
 - **FreeBSD:** `freebsd/hildon/build.sh` puts `pro1x-alarmboot` and
   `rc.d/pro1x_alarmboot` into the Hildon stage (package `pro1x-alarmboot`,
   in hildon-meta's list), `freebsd/rootfs.sh` copies the stage and
@@ -366,6 +371,25 @@ In the images built on the PC the parts are there by default:
      that is a time to come. timed snoozes an unanswered alarm itself. Its
      own ringing should no such signal come in 2 minutes (it does not ask
      Leste's alarmd there).
+   - **Arch** (the `hildon` and `meego` sessions): as Leste. Arch's
+     `hildon-session` starts `pro1x-alarmboot` (log
+     `/tmp/pro1x-alarmboot.log`), then alarmd (with
+     `LD_PRELOAD=/usr/lib/pro1x/librtc-realtime.so`: the RTC keeps no real
+     time) and the system UI, as the session's user `alarm`; the package
+     `pro1x-alarmboot` brings what that needs: the D-Bus policy for alarmd
+     (`/usr/share/dbus-1/system.d/pro1x-alarm.conf`: Arch's alarmd package
+     has Leste's below `/usr/etc`, which the bus does not read, and for
+     the user `user`), alarmd's queue directory (`/var/cache/alarmd`,
+     tmpfiles.d) and rtc0 for the group `alarm` (udev). Switching off
+     goes through logind's `PowerOff` (no dsme); `hildon-session` tells
+     alarmd that the desktop is up (`com.nokia.HildonDesktop.ready`, as
+     Leste's `Xsession.post/21hildon-desktop-wait`, and `init_done` as its
+     `99initdone`: alarmd shows no alarm
+     before, its "limbo"); while switching off the
+     power key is kept from logind (an inhibitor), so it reaches X and our
+     window keeps the phone on; calls are ModemManager's. The alarm rings
+     only when the desktop that comes up is Hildon's (`pro1x-desktop
+     hildon` or `meego`).
    - **The others:** [below](#which-systems).
 
 Kernel patch 0028 (`device/kernel/patches/0028-power-reset-qcom-pon-...`,
@@ -549,6 +573,23 @@ after all takes over, and unanswered for 50 s the screen snoozes it. The
 Leste package built by `49-alarmboot.sh` in the chroot of the official
 image (`gcc -Wall`, no warnings) and installed there with apt over the
 previous version.
+
+`tests/alarm-boot/arch-chroot.sh` (2026-10-31, 1.3, 7 checks, 0 failures):
+Arch's side in `arch/pc-chroot.sh`'s chroot of Arch Linux ARM (qemu) with
+the packages of arch-hildon-2026.10.30.1 and the new `pro1x-alarmboot`
+and `pro1x-sessions` installed, on an Xvfb of the PC: a system bus of its
+own (the chroot's `dbus-daemon` with Arch's policy files), alarmd as the
+user `alarm` with `librtc-realtime` (it owns `com.nokia.alarmd` through
+`pro1x-alarm.conf`; the PC's rtc0 is `/dev/null` for the chroot then),
+Arch's system UI, the desktop's ready and `init_done` signals; an alarm as
+clock-ui sets one: the system UI's dialog rings, the N9 screen covers it,
+Stop: the system UI took the face-down signal, its dialog went, alarmd
+got the Stop and switched the alarm off, "Switching off", a tap keeps the
+phone on (`~/ps/pro1x-screens/alarmboot-arch-chroot-*.png`; without a
+window manager the system UI's dialog stays partly above our screen
+there). It also found that alarmd, started in a session, waits for
+`init_done` (its "limbo") before it shows any alarm: `hildon-session`
+sends it.
 
 `freebsd/vm/try-alarmboot.sh` (2026-10-30 with 1.1, the FreeBSD VM, its Hildon
 session on Xvfb with the real alarmd and osso-systemui-alarm 0.3.3, the
