@@ -11,11 +11,17 @@
 # off), the program's log and alarmd's queue. Then everything ends and the
 # alarms are deleted. RUNS="snooze stop" (default "stop snooze"): which, in
 # order; "power": Stop, then the power key during "Switching off" (needs
-# STANDBY). STANDBY=/tmp/pro1x-standby.c (the repository's
-# tools/pro1x-standby): pro1x-standby built from it runs in each run with a
-# short time-out (STANDBY_S, default 4 s; its log /tmp/standby-NAME.log),
-# which must not dim nor show its stand-by screen while pro1x-alarmboot
-# runs; the power key is its SIGUSR1, as pro1x-powerkey sends it.
+# STANDBY); "resnooze": Snooze (a 40 s snooze), kept on, then the snoozed
+# alarm rings again in the session (pro1x-alarmboot is gone then);
+# "plain": an alarm in the session without pro1x-alarmboot.
+# STANDBY=/tmp/pro1x-standby.c (the repository's tools/pro1x-standby):
+# pro1x-standby built from it runs in each run with a short time-out
+# (STANDBY_S, default 4 s; its log /tmp/standby-NAME.log), started first,
+# so that its stand-by screen is up when the alarm rings: it must step
+# aside for the alarm's dialog and screens and not time out while they
+# show; the power key is its SIGUSR1, as pro1x-powerkey sends it.
+# STANDBY_CONF=file: its D-Bus policy (freebsd/hildon/extra/pro1x-standby),
+# installed for the test where none is, removed after.
 set -u
 SRC=${1:-/tmp/pro1x-alarmboot.c}
 SHOTS=/root/shots
@@ -36,6 +42,12 @@ if [ -n "${STANDBY:-}" ]; then
 fi
 
 service dbus onestatus > /dev/null 2>&1 || service dbus onestart
+conf=/usr/local/etc/dbus-1/system.d/pro1x-standby.conf conf_added=
+if [ -n "${STANDBY_CONF:-}" ] && [ ! -e "$conf" ]; then
+	cp "$STANDBY_CONF" "$conf" && conf_added=1
+	dbus-send --system --type=method_call --dest=org.freedesktop.DBus / \
+	    org.freedesktop.DBus.ReloadConfig
+fi
 export DISPLAY=:1 PRO1X_TRY=1 XDG_RUNTIME_DIR=/tmp/alarmboot-run
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
@@ -59,7 +71,7 @@ main(int argc, char **argv)
 {
 	cookie_t *list, *c;
 
-	if (argc == 4 && !strcmp(argv[1], "add")) {
+	if ((argc == 4 || argc == 5) && !strcmp(argv[1], "add")) {
 		alarm_event_t *e = alarm_event_create();
 		alarm_action_t *a;
 		cookie_t cookie;
@@ -76,6 +88,8 @@ main(int argc, char **argv)
 		e->flags |= ALARM_EVENT_ACTDEAD | ALARM_EVENT_SHOW_ICON |
 		    ALARM_EVENT_POSTPONE_DELAYED;
 		e->alarm_time = time(NULL) + atoi(argv[2]);
+		if (argc == 5)
+			e->snooze_secs = atoi(argv[4]);
 		cookie = alarmd_event_add(e);
 		alarm_event_delete(e);
 		printf("%ld\n", (long)cookie);
@@ -103,23 +117,38 @@ cc -O -o /tmp/alarmboot-test /tmp/alarmboot-test.c -I$I/alarmd -L$L \
 # One run: the note, the program, the alarm; at 2160x1080 and 403 dpi the
 # N9 screen's Snooze is at y 590, Stop at 750; "Switching off" comes 2 s
 # after the dialog went and switches off 10 s later: tapped at once
+standby_log() {
+	[ -n "${STANDBY:-}" ] || return 0
+	echo "== $1: pro1x-standby's log"
+	cat /tmp/standby-$1.log
+}
 run() {
-	name=$1 y=$2 how=${3:-tap}
+	name=$1 y=$2 how=${3:-tap} snooze=
 	now=$(date +%s)
-	printf 'system=freebsd\nrtc_alarm=%s\ndue=%s\n' "$now" $((now + 30)) > /tmp/alarmboot-note
-	/tmp/pro1x-alarmboot -f /tmp/alarmboot-note -s freebsd -v -d 403 \
-	    2> /tmp/alarmboot-$name.log &
 	if [ -n "${STANDBY:-}" ]; then
-		sleep 3
 		PRO1X_STANDBY_DEBUG=1 /tmp/pro1x-standby -d 403 -s "${STANDBY_S:-4}" \
 		    -P /tmp/pro1x-standby.pid 2> /tmp/standby-$name.log &
 		standby=$!
 	fi
-	cookie=$(/tmp/alarmboot-test add 30 "try-alarmboot $name")
+	printf 'system=freebsd\nrtc_alarm=%s\ndue=%s\n' "$now" $((now + 30)) > /tmp/alarmboot-note
+	[ "$how" = plain ] || /tmp/pro1x-alarmboot -f /tmp/alarmboot-note -s freebsd -v -d 403 \
+	    2> /tmp/alarmboot-$name.log &
+	[ "$how" != resnooze ] || snooze=40
+	cookie=$(/tmp/alarmboot-test add 30 "try-alarmboot $name" $snooze)
 	cookies="${cookies:-} $cookie"
 	echo "== $name: alarm $cookie in 30 s"
 	sleep $((30 + ${RINGWAIT:-12}))
 	xwd -root -silent > "$SHOTS/alarmboot-$name-ring.xwd"
+	if [ "$how" = plain ]; then
+		# the system UI's dialog alone: its alarm deleted
+		/tmp/alarmboot-test del "$cookie"
+		sleep 3
+		xwd -root -silent > "$SHOTS/alarmboot-$name-after.xwd"
+		/tmp/alarmboot-test list
+		standby_log "$name"
+		kill "$standby" 2> /dev/null
+		return
+	fi
 	xdotool mousemove 1080 "$y" click 1
 	sleep ${TAPWAIT:-6}
 	xwd -root -silent > "$SHOTS/alarmboot-$name-off.xwd"
@@ -138,17 +167,28 @@ run() {
 	sleep 2
 	echo "== $name: its log"
 	cat /tmp/alarmboot-$name.log
-	if [ -n "${STANDBY:-}" ]; then
-		kill "$standby" 2> /dev/null
-		echo "== $name: pro1x-standby's log"
-		cat /tmp/standby-$name.log
+	if [ "$how" = resnooze ]; then
+		# its 40 s snooze from the tap (about 12 s ago), the stand-by
+		# screen up meanwhile
+		sleep 22
+		xwd -root -silent > "$SHOTS/alarmboot-$name-standby.xwd"
+		sleep 14
+		xwd -root -silent > "$SHOTS/alarmboot-$name-rering.xwd"
+		echo "== $name: rang again"
+		/tmp/alarmboot-test list
+		/tmp/alarmboot-test del "$cookie"
+		sleep 3
 	fi
+	standby_log "$name"
+	kill "$standby" 2> /dev/null
 }
 for r in ${RUNS:-stop snooze}; do
 	case $r in
 	stop) run stop 750 ;;
 	snooze) run snooze 590 ;;
 	power) run power 750 power ;;
+	resnooze) run resnooze 590 resnooze ;;
+	plain) run plain 0 plain ;;
 	esac
 done
 
@@ -159,4 +199,9 @@ for p in $(ps -axo pid=); do
 	fi
 done
 kill $xvfb 2> /dev/null
+if [ -n "$conf_added" ]; then
+	rm -f "$conf"
+	dbus-send --system --type=method_call --dest=org.freedesktop.DBus / \
+	    org.freedesktop.DBus.ReloadConfig
+fi
 tail -20 /tmp/session.log

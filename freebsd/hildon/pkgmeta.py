@@ -81,12 +81,18 @@ LOCAL = {
     # 1.1: -O, the panel off after some minutes of it (the power profile);
     # 1.2: -O in seconds too, mce's display_status_ind sent where no mce
     # runs (hildon-desktop and the clients stop drawing while it is off)
-    'pro1x-standby': ('1.2', "The Nokia N9's stand-by screen as the X screen saver",
+    # 1.3: steps aside for an alarm's screen and takes mce's display
+    # requests where no mce runs (com.nokia.mce, its D-Bus policy)
+    'pro1x-standby': ('1.3', "The Nokia N9's stand-by screen as the X screen saver",
                       'pro1x-standby shows the time, unread notifications and the '
                       "charging state in the style of the N9's low power mode when "
                       'X blanks the screen, the rest black for the AMOLED panel '
                       "(tools/pro1x-standby); Nokia's icons and font are not "
-                      'included.', ['UNKNOWN']),
+                      'included. Where no mce runs it takes what mce would for the '
+                      "display: the system UI's alarm dialog state (the stand-by "
+                      'screen steps aside while an alarm shows) and the display '
+                      'requests (req_display_state_on, req_display_blanking_pause, '
+                      'get_display_status) as com.nokia.mce.', ['UNKNOWN']),
     # 1.1: the weather (Open-Meteo) and the calendar's appointments
     # (calendar-backend), each section on or off; 1.2: the posts' pictures
     # as the N9's feeds showed theirs; 1.3: nothing while unseen (display
@@ -124,7 +130,7 @@ LOCAL = {
                          'MeeGo-like look is on; a tap or a drag sets it '
                          "(tools/pro1x-volume-osd). Nokia's graphics are not included.",
                          ['UNKNOWN']),
-    'pro1x-alarmboot': ('1.4', "After the RTC alarm switched the Pro1X on: the N9's alarm, then off",
+    'pro1x-alarmboot': ('1.5', "After the RTC alarm switched the Pro1X on: the N9's alarm, then off",
                         'When the boot menu started FreeBSD for the RTC alarm that FreeBSD '
                         'had set (kenv pro1x.alarmboot), rc.d/pro1x_alarmboot starts the '
                         'Hildon session; pro1x-alarmboot there does what the Nokia N9 did when '
@@ -565,6 +571,10 @@ REVISION = {
     # 2026-10-31: the sensor core's batched, non-waking delivery and flushes
     # (patches/libssc/libssc-wakeup-batching.patch, docs/sensors.md)
     'libssc': 1,
+    # 2026-10-31: no /etc/xdg/user-dirs.defaults (0001): Maemo's MyDocs
+    # folders as ~/.config/user-dirs.dirs, which xdg-user-dirs-update
+    # misreads, outside PREFIX; Leste's and Arch's packages lack it too
+    'libhildonfm': 1,
 }
 
 # Maemo 5's sounds as Leste's archive has them: Nokia's (debian/copyright:

@@ -13,12 +13,13 @@ keeps it on; a call, the charger or the phone being used keep it on too.
 
 Status (2026-10-31): built and tested on the PC (below); the power-on
 itself is untested on the phone. To be flashed with kernel pro1x.10;
-`pro1x-alarmboot` 1.4 (the N9 look, off again as the N9; 1.4: the power
-key told apart from a display time-out) in the pre-release
-`leste-alarmboot-2026.10.31.2` (1.1 in `leste-alarmboot-2026.10.30.1`
-asked instead); Arch: `arch-hildon-2026.10.31.1`, and with all of
-Arch's packages in `arch-hildon-2026.10.31.2`; FreeBSD:
-`freebsd-hildon-2026.10.31.3`.
+`pro1x-alarmboot` 1.5 (the N9 look, off again as the N9; 1.5: its
+screens are an alarm's to mce and to `pro1x-standby`, as the system UI's
+dialog is) in the pre-release `leste-alarmboot-2026.10.31.3` (1.1 in
+`leste-alarmboot-2026.10.30.1` asked instead); FreeBSD:
+`freebsd-hildon-2026.10.31.4` with `pro1x-standby` 1.3; Arch: 1.4 in
+`arch-hildon-2026.10.31.1` and with all of Arch's packages in
+`arch-hildon-2026.10.31.2`, 1.5 with the next Arch build.
 
 ## Is it possible on this hardware?
 
@@ -181,15 +182,16 @@ with the N9's font and button pictures installed); make them with
   power key (Linux's input devices with `KEY_POWER` where readable, and
   everywhere the display going off, to the stand-by screen or locking,
   which a press does: Leste's mce says "off", FreeBSD's `pro1x-standby`
-  "lpm"; while these screens show no time-out can do that, since 1.4
-  they keep the display on as a video player would: mce's
-  `req_display_blanking_pause` every 30 s (mce's pause lasts 60 s), X's
-  idle time reset every 2 s, which `pro1x-standby` times out by (its
-  stand-by screen comes 3 s after dimming at the earliest); "dimmed" is no
-  power key. From its start until the alarm's screen X's idle time alone,
-  so that FreeBSD's stand-by screen, which stays above everything, cannot
-  come before the alarm rings; mce's time-outs stay as they are, the
-  alarm dialog asks mce for the display),
+  "lpm"; "dimmed" is no power key. No time-out can do that while these
+  screens show: since 1.5 they are an alarm's, as the system UI's dialog
+  is, saying their state the way it does (`alarm_dialog_status` 5 for the
+  own ringing, 6 for "Switching off" and the question, 7 when gone;
+  nothing while over the dialog, which says its own), and they pause
+  mce's blanking every 30 s (a pause lasts 60 s). Leste's mce takes the
+  state as the dialog's; where no mce runs (FreeBSD) `pro1x-standby` 1.3
+  takes it and mce's display requests
+  ([below](#the-stand-by-screen-and-alarms)). 1.4 kept X's idle time low
+  instead),
   during a call (mce's `get_call_state`, oFono's calls), with the charger
   connected, and when the phone was used: input before the alarm rang or
   after its end that was not on these screens (XInput 2's raw key, button
@@ -212,6 +214,39 @@ with the N9's font and button pictures installed); make them with
 - **A look without an alarm:** `pro1x-alarmboot -D ring` (or `ask`,
   `off`, `switching`; `-L de`), in the session as its user; a tap prints
   0 (the upper button) or 1 and ends it.
+
+### The stand-by screen and alarms
+
+On the N9 mce turned the display on for the alarm dialog and kept it from
+timing out; Leste's mce does the same from the system UI's
+`alarm_dialog_status` (its alarm UI state: 5 ringing, 6 visible, 7 off),
+and Leste's `pro1x-standby -M` follows mce. FreeBSD runs no mce: there
+`pro1x-standby` 1.3 (without `-M`) takes what mce would for the display:
+
+- the system UI's `alarm_dialog_status`, by sender (`pro1x-alarmboot`'s
+  screens say theirs the same way): while one shows (5, 6) there is no
+  time-out, and when one comes the stand-by screen goes and the panel
+  comes on, also when the stand-by screen was up before the alarm rang
+  and for a snoozed alarm ringing again in the session. The power key
+  still brings the stand-by screen meanwhile.
+- as `com.nokia.mce`, where no mce owns that name (its D-Bus policy:
+  `freebsd/hildon/extra/pro1x-standby`): `req_display_state_on` (the
+  desktop back), `req_display_blanking_pause` (no time-out for 60 s,
+  renewed by the next request; Leste's `false` or Harmattan's
+  `req_display_cancel_blanking_pause` end it) and `get_display_status`;
+  any other request gets an error at once, as callers got one before
+  without an mce.
+
+Each sender's state holds until it changes it or leaves the bus. Before
+the alarm rings the stand-by screen may come as usual (saving power); it
+steps aside when the alarm shows. 1.4 of `pro1x-alarmboot` kept X's idle
+time low from its start instead.
+
+On Leste, while an alarm UI shows mce shows no power key menu
+(`can_show_menu()` in its `powerkey.c`), now also during "Switching off":
+a single short press reaches `pro1x-alarmboot` there through `/dev/input`
+where the session can read it (as with 1.4, when mce showed its menu
+instead), a double press (mce's tklock, "off") always.
 
 ## Which systems
 
@@ -451,21 +486,23 @@ package. **Writing boot_b needs the owner's OK on the day.**
    ends in Sailfish after three tries; back with
    `TARGET=b IMG=/host/boot_b-before-7.1.0-pro1x.10.img VBMETA= sh scripts/60-flash-slot-b.sh flash`
    or `fastboot flash boot_b $OUT/boot_b-before-7.1.0-pro1x.10.img`.
-3. The package, from the pre-release `leste-alarmboot-2026.10.31.2`
-   (1.4, the N9 look and off again as the N9; built by `scripts/mkdeb-tools.sh`,
+3. The package, from the pre-release `leste-alarmboot-2026.10.31.3`
+   (1.5, the N9 look and off again as the N9; built by `scripts/mkdeb-tools.sh`,
    `ONLY=pro1x-alarmboot`; `pro1x-update` sees it too):
    ```sh
-   gh release download leste-alarmboot-2026.10.31.2 -R smatkovi/pro1x-maemo-leste -D /tmp/alarmboot
+   gh release download leste-alarmboot-2026.10.31.3 -R smatkovi/pro1x-maemo-leste -D /tmp/alarmboot
    (cd /tmp/alarmboot && sha256sum -c SHA256SUMS)
-   scp /tmp/alarmboot/pro1x-alarmboot_1.4_arm64.deb root@172.16.42.1:/root/
+   scp /tmp/alarmboot/pro1x-alarmboot_1.5_arm64.deb root@172.16.42.1:/root/
    # in Leste, as root (1.0's Xsession.post/48pro1x-alarmboot goes)
-   apt install /root/pro1x-alarmboot_1.4_arm64.deb
+   apt install /root/pro1x-alarmboot_1.5_arm64.deb
    ```
-   then log out of Hildon or reboot. FreeBSD: `pro1x-alarmboot` 1.4 is in
-   `freebsd-hildon-2026.10.31.3` (`pkg upgrade -r pro1x pro1x-alarmboot`).
+   then log out of Hildon or reboot. FreeBSD: `pro1x-alarmboot` 1.5 and
+   `pro1x-standby` 1.3 are in `freebsd-hildon-2026.10.31.4` (`pkg upgrade
+   -r pro1x pro1x-alarmboot pro1x-standby`, then `service dbus restart`
+   or a reboot for `pro1x-standby`'s D-Bus policy, and a new X session).
    MeeGo's copy (`/host/meego-leste.img`, from Leste with the copy
    mounted, e.g. on `/mnt/ml`): the same package (`chroot /mnt/ml apt
-   install /root/pro1x-alarmboot_1.4_arm64.deb` after copying it there)
+   install /root/pro1x-alarmboot_1.5_arm64.deb` after copying it there)
    and the new `rootfs-overlay/etc/X11/Xsession.d/01pro1x-meego` into its
    `/etc/X11/Xsession.d/`; a newly made copy (`meego/45-meego-image.sh`)
    has both from Leste.
@@ -567,24 +604,23 @@ INITRD=$WORK/out-pro1x.5/initrd.img-7.1.0-pro1x.5 LINUX=$WORK/build/linux \
 the PC against a stub of alarmd's libalarm (`tests/alarm-boot/stub`), in
 an Xvfb and with a D-Bus daemon of its own as the system bus: `shots`
 makes the screens' pictures (both languages, landscape and portrait);
-`test` checks the answers, 29 checks, 0 failures with `OWN=1` (1.4,
+`test` checks the answers, 32 checks, 0 failures with `OWN=1` (1.5,
 2026-10-31): status 5
 puts the N9 screen over the dialog with the alarm's text; a tap on Stop
 sends `face_up` and `face_down`; status 7 gives alarmd the Stop button
-(`ack 77 1`) and "Switching off" follows 2 s later; a tap keeps the
-phone on; status 6 takes the screen away, status 5 brings it back; a tap
+(`ack 77 1`) and "Switching off" follows 2 s later, its alarm UI state 6
+(none of ours while over the dialog) and mce's blanking pause asked; a
+tap keeps the phone on, state 7; status 6 takes the screen away, status 5 brings it back; a tap
 without a status after it steps aside after 3 s and leaves alarmd to the
 system UI; with no alarm to come it switches off after 10 s (asks dsme);
 the same alarm a second time does nothing; a click elsewhere after the
 alarm ("the phone was used") keeps it on; while switching off
 `display_status_ind` "dimmed" does not, "lpm" (`pro1x-standby`'s
-stand-by screen, FreeBSD's power key) does; 15 s without input while the
-screens show, X's idle time stays under 2 s (no stand-by time-out), and
-from the start, 5 s before the alarm rings; in MeeGo's mode (`-s meego`) timed's
+stand-by screen, FreeBSD's power key) does; in MeeGo's mode (`-s meego`) timed's
 `next_bootup_event` 1 puts nothing over timed's screen, its end with the
 next alarm's time switches off only with that alarm's RTC wake-up set
 (on the PC it is not: stays on after 15 s); `-Q` asks as 1.1 did; without
-a dialog it rings itself after 90 s with the alarm's text, its Snooze
+a dialog it rings itself after 90 s with the alarm's text (state 5), its Snooze
 goes to alarmd (`ack 79 0`) and switching off begins, a dialog that comes
 after all takes over, and unanswered for 50 s the screen snoozes it. The
 Leste package built by `49-alarmboot.sh` in the chroot of the official
@@ -622,22 +658,43 @@ back to the override-redirect window as described, which worked the
 same (shown blurred under the dialog's dimming). The pictures:
 `~/ps/pro1x-screens/alarmboot-vm-freebsd-*.png`.
 
-Again on 2026-10-31 with 1.4 and `pro1x-standby` (`STANDBY=`, built from
-the repository's source, time-out 4 s, `RUNS="stop power"`): it started
-3 s after `pro1x-alarmboot`, about 27 s before the alarm rang, and
-neither dimmed nor showed its stand-by screen in the 53 s until the alarm
-was over (before it, while it rang, during "Switching off"); it dimmed
-5 s after the tap that kept the phone on. Its SIGUSR1 (the power key, as
-`pro1x-powerkey` sends it) during "Switching off": `display_status_ind
-lpm: the power key`, `staying on: the power key`, the VM stayed on.
+Again on 2026-10-31 with 1.5 and `pro1x-standby` 1.3 (`STANDBY=`, built
+from the repository's source, time-out 4 s, its D-Bus policy installed for
+the test, `RUNS="stop power resnooze plain"`): started first, its stand-by
+screen was up 23 s before each alarm rang. `stop`: the dialog's 5 brought
+the desktop back, the N9 screen over the dialog, no time-out while the
+dialog, "Switching off" (our 6) and `pro1x-alarmboot`'s blanking pause
+lasted; it dimmed 4 s after `pro1x-alarmboot` had gone. `power`: its
+SIGUSR1 (the power key, as `pro1x-powerkey` sends it) during "Switching
+off": `display_status_ind lpm: the power key`, `staying on: the power
+key`, the VM stayed on. `resnooze`: Snooze (40 s), kept on, the stand-by
+screen came 7 s after, and the snoozed alarm ringing again in the session
+(no `pro1x-alarmboot` any more) brought the desktop back with the dialog.
+`plain`: an alarm in the session without `pro1x-alarmboot`, the stand-by
+screen up: the dialog's 5 brought the desktop back.
+
+`tests/alarm-boot/standby.sh` (2026-10-31, `pro1x-standby` 1.3 on the PC,
+an Xvfb and a system bus of its own, time-out 2 s, 20 checks, 0
+failures): it owns `com.nokia.mce`; the time-out brings the stand-by
+screen; `alarm_dialog_status` 5 brings the desktop back and no time-out
+follows while it shows; the power key meanwhile still brings the stand-by
+screen; a second sender's 5 brings the desktop back from it; both senders
+gone, the time-out again; a sender's 7 ends its hold;
+`req_display_state_on` brings the desktop back; `get_display_status`
+answers; `get_call_state` gets an error at once; a blanking pause holds
+while its requester stays on the bus, ends when it leaves, and with
+Leste's `false`.
 
 ```sh
 bash tests/alarm-boot/screens.sh shots      # OUT=~/ps/pro1x-screens
 OWN=1 bash tests/alarm-boot/screens.sh test
 # in the FreeBSD VM, with the packages installed, the source in /tmp:
 sh freebsd/vm/try-alarmboot.sh /tmp/pro1x-alarmboot.c
-# with pro1x-standby and the power key (its source in /tmp too)
-RUNS="stop power" STANDBY=/tmp/pro1x-standby.c sh freebsd/vm/try-alarmboot.sh
+# with pro1x-standby (its source and freebsd/hildon/extra/pro1x-standby's
+# D-Bus policy in /tmp too): the power key, a snoozed alarm again, a plain one
+RUNS="stop power resnooze plain" STANDBY=/tmp/pro1x-standby.c \
+    STANDBY_CONF=/tmp/pro1x-standby.conf sh freebsd/vm/try-alarmboot.sh
+bash tests/alarm-boot/standby.sh
 ```
 
 Not tested: anything on the phone (the PMIC registers through debugfs,

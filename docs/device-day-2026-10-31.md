@@ -677,10 +677,10 @@ See `docs/alarm-power-on.md`, "The test on the phone". It needs pro1x.10
   once the package is in a `leste-*` pre-release (`fetch.sh` again)
 - or `dpkg -i` of the deb
 
-Use `pro1x-alarmboot` 1.4 (pre-release `leste-alarmboot-2026.10.31.2`: the
-N9's alarm screen, then off again as the N9; 1.4 tells the power key apart
-from a display time-out); after installing it, log out of Hildon or
-reboot. The charger off (it keeps the phone on).
+Use `pro1x-alarmboot` 1.5 (pre-release `leste-alarmboot-2026.10.31.3`: the
+N9's alarm screen, then off again as the N9; its screens count as an
+alarm's for mce, as the system UI's dialog does); after installing it,
+log out of Hildon or reboot. The charger off (it keeps the phone on).
 
 Steps:
 1. `pro1x-boot pmic`: "power-on sources" must name "RTC alarm".

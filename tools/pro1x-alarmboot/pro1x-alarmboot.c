@@ -42,9 +42,8 @@
  *     again, as the N9 did: "Switching off" for 10 s, then dsme's shutdown
  *     (FreeBSD: shutdown -p). The phone stays on with a tap on that screen,
  *     a key, the power key (the display going off, to the stand-by screen
- *     or locking: while these screens show they keep the display from
- *     timing out, mce's blanking paused and X's idle time reset for
- *     pro1x-standby, so only the key does that), during a
+ *     or locking: these screens are an alarm's to mce and pro1x-standby,
+ *     below, so no time-out does that, only the key), during a
  *     call, with the charger connected (the N9 stayed in its charging
  *     state then), when it was used meanwhile (any input but on these
  *     screens, XInput's raw events), and when an alarm is still to come but the
@@ -130,7 +129,15 @@
 #define CONF_PATH "/usr/local/etc/pro1x-alarmboot.conf"
 #endif
 
-/* alarm_dialog_status (systemui/alarm_dialog-dbus-names.h) */
+/*
+ * alarm_dialog_status (systemui/alarm_dialog-dbus-names.h): the system UI's
+ * alarm dialog, to mce (its alarm UI state: 5 ringing, 6 visible, 7 off).
+ * Our screens say theirs the same way when not over that dialog (own
+ * ringing 5, "Switching off" and the question 6, gone 7), so that mce
+ * (Leste, MeeGo) and pro1x-standby where no mce runs (FreeBSD) treat them
+ * as the dialog: the display on, the stand-by screen out of the way, no
+ * time-out while they show.
+ */
 #define DIALOG_ON_SCREEN 5
 #define DIALOG_NOT_RINGING 6
 #define DIALOG_NOT_ON_SCREEN 7
@@ -664,49 +671,51 @@ static gboolean check_size(gpointer unused)
 	return FALSE;
 }
 
-/* While our screens show, nothing times the display out: mce's blanking
- * paused (Leste, MeeGo; mce's pause lasts 60 s, renewed every 30 s), X's
- * idle time reset every 2 s (pro1x-standby's time-outs, FreeBSD's: its
- * stand-by screen comes 3 s after its dimming at the earliest, so never,
- * whatever its time-out). So a display that goes off or to the stand-by
- * screen meanwhile is the power key (mce_display). From the start until
- * then X's idle time alone (mce's own time-outs as they are: the alarm
- * dialog asks mce for the display): pro1x-standby's stand-by screen, which
- * stays above everything, cannot come before the alarm rings. */
+/* While our screens show, mce's display time-outs paused as a video
+ * player pauses them (Leste, MeeGo; where no mce runs pro1x-standby takes
+ * the request): a pause lasts 60 s, renewed every 30 s */
 static void mce_call(const char *method, GVariant *args);
-static guint awake_timer, awake_ticks;
-static gboolean awake_mce;
+static guint awake_timer;
 
 static gboolean keep_awake_tick(gpointer unused)
 {
 	(void)unused;
-	if (awake_mce && awake_ticks++ % 15 == 0)
-		mce_call("req_display_blanking_pause", NULL);
-	XResetScreenSaver(GDK_DISPLAY_XDISPLAY(gdk_display_get_default()));
-	XFlush(GDK_DISPLAY_XDISPLAY(gdk_display_get_default()));
+	mce_call("req_display_blanking_pause", NULL);
 	return TRUE;
 }
 
-/* on: with mce's blanking paused too or X's idle time alone; off: neither */
-static void keep_awake(gboolean on, gboolean mce)
+static void keep_awake(gboolean on)
 {
-	if (!on) {
-		if (awake_timer)
-			g_source_remove(awake_timer);
-		awake_timer = 0;
-		awake_mce = FALSE;
-		return;
-	}
-	if (mce && !awake_mce) {
+	if (on && !awake_timer) {
 		say("keeping the display on");
-		awake_mce = TRUE;
-		awake_ticks = 0;
-	} else if (!awake_timer) {
-		say("keeping X's idle time low until the alarm");
+		keep_awake_tick(NULL);
+		awake_timer = g_timeout_add_seconds(30, keep_awake_tick, NULL);
+	} else if (!on && awake_timer) {
+		g_source_remove(awake_timer);
+		awake_timer = 0;
 	}
-	if (!awake_timer)	/* (in seconds it could come up to 1 s late) */
-		awake_timer = g_timeout_add(2000, keep_awake_tick, NULL);
-	keep_awake_tick(NULL);
+}
+
+/* Our screens' alarm UI state, as the system UI's dialog says its own
+ * (above); while that dialog shows, its state stands (and is the one in
+ * sysui_status) */
+static guint32 ui_said = DIALOG_NOT_ON_SCREEN;
+static guint32 sysui_status = DIALOG_NOT_ON_SCREEN;
+static gboolean over_dialog(void);
+
+static void alarm_ui(guint32 status)
+{
+	if (!sysbus || status == ui_said)
+		return;
+	ui_said = status;
+	if (status == DIALOG_NOT_ON_SCREEN &&
+	    (sysui_status == DIALOG_ON_SCREEN || sysui_status == DIALOG_NOT_RINGING))
+		return;
+	g_dbus_connection_emit_signal(sysbus, NULL, "/com/nokia/system_ui/signal",
+				      "com.nokia.system_ui.signal", "alarm_dialog_status",
+				      g_variant_new("(u)", status), NULL);
+	g_dbus_connection_flush_sync(sysbus, NULL, NULL);
+	say("our alarm UI: %u", status);
 }
 
 static void screen_show(enum screen_kind kind, void (*clicked)(int))
@@ -728,14 +737,19 @@ static void screen_show(enum screen_kind kind, void (*clicked)(int))
 	else
 		gtk_window_present(GTK_WINDOW(scr.win));
 	gtk_widget_queue_draw(scr.area);
-	keep_awake(TRUE, TRUE);
+	keep_awake(TRUE);
+	if (kind != SCR_RING)
+		alarm_ui(DIALOG_NOT_RINGING);
+	else if (!over_dialog())
+		alarm_ui(DIALOG_ON_SCREEN);
 	if (!scr.popup && !scr.width && !size_check)
 		size_check = g_timeout_add_seconds(2, check_size, NULL);
 }
 
 static void screen_hide(void)
 {
-	keep_awake(FALSE, FALSE);
+	keep_awake(FALSE);
+	alarm_ui(DIALOG_NOT_ON_SCREEN);
 	if (scr.win)
 		gtk_widget_hide(scr.win);
 	scr.busy = FALSE;
@@ -1196,6 +1210,7 @@ static void power_off(void)
 
 static void quit(void)
 {
+	alarm_ui(DIALOG_NOT_ON_SCREEN);
 	if (have_display)
 		gtk_main_quit();
 	else
@@ -1660,6 +1675,12 @@ static struct {
 	guint step_aside, auto_snooze;
 } ov;
 
+/* our ring screen is over the system UI's dialog (which says its state) */
+static gboolean over_dialog(void)
+{
+	return ov.shown;
+}
+
 /* What mce says when the phone is turned over: the system UI's ringing
  * alarm dialog snoozes on face_up then face_down */
 static void turned_face_down(void)
@@ -1828,11 +1849,16 @@ static void dialog_status(GDBusConnection *c, const gchar *sender, const gchar *
 {
 	guint32 st = 0;
 
-	(void)c; (void)sender; (void)path; (void)iface; (void)signal; (void)unused;
+	(void)c; (void)path; (void)iface; (void)signal; (void)unused;
 	if (!g_variant_is_of_type(params, G_VARIANT_TYPE("(u)")))
+		return;
+	/* (what our screens say comes back: not the dialog's) */
+	if (sender && !g_strcmp0(sender, g_dbus_connection_get_unique_name(sysbus)))
 		return;
 	g_variant_get(params, "(u)", &st);
 	say("alarm dialog status %u", st);
+	if (st >= DIALOG_ON_SCREEN && st <= DIALOG_NOT_ON_SCREEN)
+		sysui_status = st;
 	if (st == DIALOG_ON_SCREEN) {
 		/* (the next alarm, after a tap's) */
 		overlay_settle();
@@ -2097,7 +2123,6 @@ int main(int argc, char **argv)
 	if (have_display) {
 		display_ready(theme);
 		input_init();
-		keep_awake(TRUE, FALSE);
 	} else {
 		fprintf(stderr, "pro1x-alarmboot: no display: the tone alone\n");
 	}

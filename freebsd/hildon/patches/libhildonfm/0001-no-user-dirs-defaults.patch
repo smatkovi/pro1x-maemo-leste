@@ -1,0 +1,23 @@
+libhildonfm: leave out /etc/xdg/user-dirs.defaults
+
+Maemo's MyDocs folders in the format of ~/.config/user-dirs.dirs, which
+xdg-user-dirs-update misreads; outside PREFIX; not in Leste's packages
+either (debian/*.install). As Arch's libhildonfm 2.28.27-2 (4d55808).
+
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -18,9 +18,11 @@
+ pkgconfigdir = $(libdir)/pkgconfig
+ pkgconfig_DATA = hildon-fm-2.pc hildon-fm.pc
+ 
+-xdgdir = /etc/xdg
+-# FIXME: Use $(sysconfdir)/xdg if the prefix is not /usr
+-xdg_DATA = data/user-dirs.defaults
++# data/user-dirs.defaults is not installed: it is Maemo's MyDocs folders
++# in the format of ~/.config/user-dirs.dirs, which xdg-user-dirs-update
++# misreads (a folder named "$HOME, XDG_XDG_*_DIR_DIR lines), and outside
++# the prefix; the file chooser falls back to MyDocs without it, and
++# Leste's packages leave it out too (debian/*.install)
+ 
+ MAINTAINERCLEANFILES = Makefile.in aclocal.m4 configure config.h.in compile \
+ 		       ltmain.sh depcomp missing install-sh config.sub \

@@ -24,6 +24,9 @@
 # 6 (silent) takes the screen away, 5 brings it back; with no alarm to come
 # it then switches off (dsme is not there: an error). Input elsewhere after
 # the alarm, or mce's display going off (the power key), keeps it on.
+# Its own screens say their alarm UI state as the dialog does (6 for
+# "Switching off", 7 gone, 5 its own ringing; nothing while over the
+# dialog) and pause mce's blanking.
 # MeeGo (-s meego): timed's next_bootup_event 1, then the next alarm's
 # time: nothing over timed's own screen, and without that alarm's RTC
 # wake-up (the PC's is not set) it stays on after 15 s. Asking (-Q): the
@@ -48,30 +51,6 @@ gcc -O2 -Wall -Wno-deprecated-declarations -I "$REPO/tests/alarm-boot/stub" \
   -o "$T/pro1x-alarmboot" "$REPO/tools/pro1x-alarmboot/pro1x-alarmboot.c" \
   "$REPO/tests/alarm-boot/stub/libalarm-stub.c" \
   $(pkg-config --cflags --libs gtk+-2.0 gio-2.0 gio-unix-2.0 libpulse-simple x11 xi) -lm
-
-# X's idle time (SYNC's IDLETIME), in ms: what pro1x-standby times out by
-cat > "$T/idle.c" <<'EOF'
-#include <X11/Xlib.h>
-#include <X11/extensions/sync.h>
-#include <stdio.h>
-#include <string.h>
-int main(void)
-{
-	Display *d = XOpenDisplay(NULL);
-	int ev, er, ma, mi, n;
-	XSyncSystemCounter *l;
-	XSyncValue v;
-
-	if (!d || !XSyncQueryExtension(d, &ev, &er) || !XSyncInitialize(d, &ma, &mi))
-		return 1;
-	l = XSyncListSystemCounters(d, &n);
-	for (int i = 0; i < n; i++)
-		if (!strcmp(l[i].name, "IDLETIME") && XSyncQueryCounter(d, l[i].counter, &v))
-			printf("%lld\n", ((long long)XSyncValueHigh32(v) << 32) | (unsigned)XSyncValueLow32(v));
-	return 0;
-}
-EOF
-gcc -O -o "$T/idle" "$T/idle.c" -lX11 -lXext
 
 if [ -n "${FONTS:-}" ]; then
   {
@@ -142,18 +121,16 @@ EOF
   mkdir -p "$T/run"
   chmod 700 "$T/run"
   dbus-monitor --system "type='signal',interface='com.nokia.mce.signal'" > "$T/mce.log" 2>&1 &
-  local mon=$! p
+  local mon=$! mon2 p
+  dbus-monitor --system "type='method_call',interface='com.nokia.mce.request'" > "$T/req.log" 2>&1 &
+  mon2=$!
 
   # 1: the dialog rings, Stop tapped, the dialog goes, "Switching off", a tap
   printf 'system=test\nrtc_alarm=1001\ndue=%s\n' "$(($(date +%s) - 20))" > "$T/note"
   STUB_ALARMD="77,-10,Wake up" "$T/pro1x-alarmboot" -f "$T/note" -s test -v -g 2160x1080 \
     "${args[@]}" 2> "$T/run1.log" &
   p=$!
-  # before the alarm rings, no input: X's idle time kept low already (no
-  # stand-by screen before the dialog)
-  sleep 5
-  idle=$("$T/idle" || echo 99999)
-  if [ "${idle:-99999}" -lt 2600 ]; then echo "ok   before the alarm: X's idle time low ($idle ms)"; else echo "FAIL before the alarm: X's idle time $idle ms"; fails=$((fails + 1)); fi
+  sleep 1.5
   status 5
   sleep 1.5
   snap 2160x1080 "$T/over.png"
@@ -165,12 +142,16 @@ EOF
   status 7
   sleep 1
   check "status 7: alarmd gets Stop (button 1)" "ack 77 1" "$T/run1.log"
+  if grep -q "our alarm UI" "$T/run1.log"; then echo "FAIL said an alarm UI state over the dialog"; fails=$((fails + 1)); else echo "ok   over the dialog: its state, none of ours"; fi
   sleep 2
   check "then switching off, 10 s to keep it on" "switching off in 10 s" "$T/run1.log"
+  check "switching off: our alarm UI shown (6)" "our alarm UI: 6" "$T/run1.log"
+  check "the screens pause mce's blanking" "req_display_blanking_pause" "$T/req.log"
   snap 2160x1080 "$T/off.png"
   tap 300
   sleep 1
   check "a tap keeps it on" "staying on: kept on" "$T/run1.log"
+  check "then our alarm UI gone (7)" "our alarm UI: 7" "$T/run1.log"
   kill -0 "$p" 2> /dev/null && { echo "FAIL still running"; fails=$((fails + 1)); kill "$p"; }
   wait "$p" 2> /dev/null || true
 
@@ -262,12 +243,7 @@ EOF
     --signal com.nokia.time.next_bootup_event "int32 $(($(date +%s) + 600))" > /dev/null
   sleep 3
   check "MeeGo: its end, switching off" "switching off in 10 s" "$T/run6.log"
-  # no input for 15 s, the screens up: X's idle time kept under 2 s (no
-  # stand-by time-out while they show)
-  sleep 15
-  idle=$("$T/idle" || echo 99999)
-  if [ "${idle:-99999}" -lt 2600 ]; then echo "ok   the screens keep X's idle time low ($idle ms)"; else echo "FAIL X's idle time $idle ms with the screens up"; fails=$((fails + 1)); fi
-  sleep 11
+  sleep 26
   check "MeeGo: an alarm to come without its RTC wake-up: stays on" "wake-up for the next alarm is not set" "$T/run6.log"
   kill "$p" 2> /dev/null || true
   wait "$p" 2> /dev/null || true
@@ -302,6 +278,7 @@ EOF
     p=$!
     sleep 93
     check "no dialog: rings itself" "ringing" "$T/run8.log"
+    check "its own ringing: our alarm UI ringing (5)" "our alarm UI: 5" "$T/run8.log"
     snap 2160x1080 "$T/own.png"
     tap "${ring_y[0]}"
     sleep 1
@@ -321,7 +298,7 @@ EOF
     kill "$p" 2> /dev/null || true
     wait "$p" 2> /dev/null || true
   fi
-  kill "$mon" 2> /dev/null || true
+  kill "$mon" "$mon2" 2> /dev/null || true
   [ -z "${KEEP:-}" ] || cp "$T"/*.log "$T"/*.png "$KEEP/"
   echo ">> $fails failed"
   [ "$fails" = 0 ]

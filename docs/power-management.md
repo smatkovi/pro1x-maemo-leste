@@ -1087,10 +1087,22 @@ What changed in each:
   "off" during its 10 s "switching off" countdown for the power key
   (Leste's mce sends "off" for it) and stays on; with this signal a
   time-out could have looked the same, and on FreeBSD the power key gives
-  "lpm" (the stand-by screen), not "off". Since pro1x-alarmboot 1.4 its
-  screens keep the display on (mce's blanking pause every 30 s, X's idle
-  time reset every 2 s), so no time-out falls into the countdown, and "lpm" counts
-  as the power key too ([alarm-power-on.md](alarm-power-on.md)).
+  "lpm" (the stand-by screen), not "off". Since pro1x-alarmboot 1.4 no
+  time-out falls into the countdown, and "lpm" counts as the power key
+  too ([alarm-power-on.md](alarm-power-on.md)).
+- **pro1x-standby 1.3**: where no mce runs (FreeBSD) it takes what mce
+  would for the display: the system UI's `alarm_dialog_status` (while an
+  alarm's screen shows no time-out; one coming brings the desktop back
+  from the stand-by screen, the panel on) and, as `com.nokia.mce` (its
+  D-Bus policy in `freebsd/hildon/extra/pro1x-standby`),
+  `req_display_state_on`, `req_display_blanking_pause` (60 s, as mce's)
+  and `get_display_status`; other requests get an error at once.
+  pro1x-alarmboot 1.5's screens say their alarm UI state as the system
+  UI's dialog does, so 1.4's X idle resets are gone: the stand-by screen
+  may come before an alarm and steps aside when it rings
+  ([alarm-power-on.md](alarm-power-on.md#the-stand-by-screen-and-alarms)).
+  libosso's `osso_display_blanking_pause()` (video players) now works
+  there too.
 
 Checked, nothing to change:
 

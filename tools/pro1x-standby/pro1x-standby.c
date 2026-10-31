@@ -59,6 +59,20 @@
  *       while it is off: com.nokia.mce.signal display_status_ind on the
  *       system bus, "on", "dimmed", "lpm" (the stand-by screen, as
  *       patches/lpm's mce) and "off" (the panel off).
+ *       There it also takes what mce would for the display: the system
+ *       UI's alarm dialog state (com.nokia.system_ui.signal
+ *       alarm_dialog_status: 5 ringing, 6 shown, 7 gone; pro1x-alarmboot
+ *       says its screens' the same way) and, as com.nokia.mce where no mce
+ *       owns that name (freebsd/hildon/extra: its D-Bus policy),
+ *       req_display_state_on, req_display_blanking_pause (60 s each, as
+ *       mce's; Leste's false or Harmattan's
+ *       req_display_cancel_blanking_pause end it) and get_display_status;
+ *       other requests get an error at once. While an alarm's screen shows
+ *       or a pause runs there is no time-out; an alarm's screen coming
+ *       (5, 6) and req_display_state_on bring the desktop back from the
+ *       stand-by screen and the panel on, as mce turns the display on.
+ *       Each sender's state holds until it changes it or leaves the bus.
+ *       The power key works as before.
  *   pro1x-standby -M [-R ...] [-t themedir] [-d dpi] [-f font] [-2]
  *       on Leste, with mce's low power mode (patches/lpm): mce decides
  *       (time-outs, proximity, the power key, the panel's lpm and
@@ -834,9 +848,10 @@ static XSyncAlarm new_alarm(struct standby *sb)
  * runs): hildon-desktop stops drawing while it is "off", libosso tells the
  * applications, pro1x-events and pro1x-volume-osd wait; once per change
  */
+static const char *said;		/* what announce said last */
+
 static void announce(struct standby *sb, const char *state)
 {
-	static const char *said;
 	DBusMessage *m;
 
 	if (!announce_display || !sb->sys || (said && !strcmp(said, state)))
@@ -854,6 +869,76 @@ static void announce(struct standby *sb, const char *state)
 	dbus_message_unref(m);
 }
 
+/*
+ * Where no mce runs: what keeps the display on as mce's would, by sender
+ * (its unique bus name): an alarm's screen (alarm_dialog_status 5 or 6)
+ * and blanking pauses (mce's BLANK_PREVENT_TIMEOUT, 60 s)
+ */
+#define HOLDERS 8
+#define PAUSE_MS 60000LL
+static struct holder {
+	char name[64];		/* "" a free one */
+	unsigned alarm;		/* its alarm UI state 5 or 6, 0 none */
+	long long pause_until;	/* its blanking pause's end (now_ms), 0 none */
+} holders[HOLDERS];
+static int mce_owned;		/* com.nokia.mce is ours (no mce runs) */
+
+static int held(void)
+{
+	long long now = now_ms();
+
+	for (int i = 0; i < HOLDERS; i++)
+		if (holders[i].name[0] &&
+		    (holders[i].alarm || holders[i].pause_until > now))
+			return 1;
+	return 0;
+}
+
+/* NameOwnerChanged for it: a holder that leaves the bus holds no more */
+static void name_watch(struct standby *sb, const char *name, int on)
+{
+	char rule[256];
+
+	snprintf(rule, sizeof(rule), "type='signal',sender='org.freedesktop.DBus',"
+	    "interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='%.63s'",
+	    name);
+	if (on)
+		dbus_bus_add_match(sb->sys, rule, NULL);
+	else
+		dbus_bus_remove_match(sb->sys, rule, NULL);
+}
+
+static struct holder *holder(struct standby *sb, const char *name, int add)
+{
+	struct holder *free_one = NULL;
+
+	if (!name || !*name)
+		return NULL;
+	for (int i = 0; i < HOLDERS; i++) {
+		if (!strcmp(holders[i].name, name))
+			return &holders[i];
+		if (!holders[i].name[0] && !free_one)
+			free_one = &holders[i];
+	}
+	if (!add || !free_one || strlen(name) >= sizeof(free_one->name))
+		return NULL;
+	snprintf(free_one->name, sizeof(free_one->name), "%s", name);
+	free_one->alarm = 0;
+	free_one->pause_until = 0;
+	name_watch(sb, name, 1);
+	return free_one;
+}
+
+/* one that holds nothing any more: forgotten */
+static void holder_done(struct standby *sb, struct holder *h)
+{
+	if (h->alarm || h->pause_until > now_ms())
+		return;
+	name_watch(sb, h->name, 0);
+	h->name[0] = 0;
+	h->pause_until = 0;
+}
+
 static void go_active(struct standby *sb)
 {
 	long long base;
@@ -862,6 +947,12 @@ static void go_active(struct standby *sb)
 	debug("active");
 	announce(sb, "on");
 	if (follow_mce) {
+		arm(sb, 0, 0);
+		return;
+	}
+	if (held()) {
+		/* an alarm's screen or a pause: no time-out */
+		debug("held");
 		arm(sb, 0, 0);
 		return;
 	}
@@ -1090,6 +1181,153 @@ static void sb_hide(struct standby *sb)
 	go_active(sb);
 }
 
+/* The display on, as mce's req_display_state_on: the desktop back from
+ * the stand-by screen or from dimming, the time-out counted anew */
+static void display_on(struct standby *sb)
+{
+	if (sb->mode == STANDBY) {
+		sb_hide(sb);
+	} else {
+		if (sb->mode == DIMMED)
+			undim(sb);
+		go_active(sb);
+	}
+}
+
+/* What holds the display changed: the time-out as that says now */
+static void hold_changed(struct standby *sb)
+{
+	if (sb->mode == ACTIVE)
+		go_active(sb);
+}
+
+/* alarm_dialog_status from SENDER: its alarm's screen comes (5, 6), the
+ * display on for it, or goes (7) */
+static void alarm_status(struct standby *sb, const char *sender, unsigned status)
+{
+	int shown = status == 5 || status == 6;
+	struct holder *h = holder(sb, sender, shown);
+	char what[96];
+
+	snprintf(what, sizeof(what), "alarm UI %u from %s", status,
+	    sender ? sender : "?");
+	debug(what);
+	if (!h)
+		return;
+	h->alarm = shown ? status : 0;
+	if (shown) {
+		display_on(sb);
+		return;
+	}
+	holder_done(sb, h);
+	hold_changed(sb);
+}
+
+/* req_display_blanking_pause from SENDER (ON 0: ended) */
+static void blanking_pause(struct standby *sb, const char *sender, int on)
+{
+	struct holder *h = holder(sb, sender, on);
+
+	if (!h)
+		return;
+	debug(on ? "blanking paused" : "blanking pause ended");
+	if (!on) {
+		h->pause_until = 0;
+		holder_done(sb, h);
+		hold_changed(sb);
+		return;
+	}
+	h->pause_until = now_ms() + PAUSE_MS;
+	if (sb->mode == DIMMED)
+		undim(sb);
+	if (sb->mode != STANDBY)
+		go_active(sb);
+}
+
+/* A holder left the bus */
+static void holder_gone(struct standby *sb, const char *name)
+{
+	struct holder *h = holder(sb, name, 0);
+
+	if (!h)
+		return;
+	debug("a holder left");
+	h->alarm = 0;
+	h->pause_until = 0;
+	holder_done(sb, h);
+	hold_changed(sb);
+}
+
+/* ms until the next pause ends, -1 none; ended ones forgotten */
+static long long pauses_due(struct standby *sb)
+{
+	long long now = now_ms(), next = -1;
+	int ended = 0;
+
+	for (int i = 0; i < HOLDERS; i++) {
+		struct holder *h = &holders[i];
+
+		if (!h->name[0] || !h->pause_until)
+			continue;
+		if (h->pause_until <= now) {
+			h->pause_until = 0;
+			holder_done(sb, h);
+			ended = 1;
+		} else if (next < 0 || h->pause_until - now < next) {
+			next = h->pause_until - now;
+		}
+	}
+	if (ended) {
+		debug("blanking pause over");
+		hold_changed(sb);
+	}
+	return next;
+}
+
+/* A request to com.nokia.mce (ours): the display's, others an error */
+static void mce_request(struct standby *sb, DBusMessage *m)
+{
+	const char *member = dbus_message_get_member(m);
+	const char *sender = dbus_message_get_sender(m);
+	DBusMessage *r = NULL;
+	dbus_bool_t on = TRUE;
+
+	if (member && dbus_message_has_interface(m, "com.nokia.mce.request")) {
+		if (!strcmp(member, "req_display_state_on")) {
+			debug("req_display_state_on");
+			display_on(sb);
+			r = dbus_message_new_method_return(m);
+		} else if (!strcmp(member, "req_display_blanking_pause")) {
+			/* Leste's mce: an optional false ends it */
+			if (!dbus_message_get_args(m, NULL, DBUS_TYPE_BOOLEAN, &on,
+						   DBUS_TYPE_INVALID))
+				on = TRUE;
+			blanking_pause(sb, sender, on != 0);
+			r = dbus_message_new_method_return(m);
+		} else if (!strcmp(member, "req_display_cancel_blanking_pause")) {
+			blanking_pause(sb, sender, 0);
+			r = dbus_message_new_method_return(m);
+		} else if (!strcmp(member, "get_display_status")) {
+			const char *st = said ? said : "on";
+
+			r = dbus_message_new_method_return(m);
+			if (r)
+				dbus_message_append_args(r, DBUS_TYPE_STRING, &st,
+							 DBUS_TYPE_INVALID);
+		}
+	}
+	if (!r)
+		r = dbus_message_new_error(m, DBUS_ERROR_UNKNOWN_METHOD,
+		    "pro1x-standby takes only the display's requests");
+	if (!r)
+		return;
+	if (!dbus_message_get_no_reply(m)) {
+		dbus_connection_send(sb->sys, r, NULL);
+		dbus_connection_flush(sb->sys);
+	}
+	dbus_message_unref(r);
+}
+
 /* mce: the display on, out of low power mode */
 static void mce_display_on(struct standby *sb)
 {
@@ -1154,9 +1392,27 @@ static void sys_bus_input(struct standby *sb)
 	dbus_connection_read_write(sb->sys, 0);
 	while ((m = dbus_connection_pop_message(sb->sys))) {
 		dbus_bool_t near;
-		const char *state;
+		dbus_uint32_t status;
+		const char *state, *name, *old, *new_owner;
 
-		if (follow_mce &&
+		if (mce_owned &&
+		    dbus_message_get_type(m) == DBUS_MESSAGE_TYPE_METHOD_CALL) {
+			mce_request(sb, m);
+		} else if (!follow_mce &&
+		    dbus_message_is_signal(m, "com.nokia.system_ui.signal",
+					   "alarm_dialog_status") &&
+		    dbus_message_get_args(m, NULL, DBUS_TYPE_UINT32, &status,
+					  DBUS_TYPE_INVALID)) {
+			alarm_status(sb, dbus_message_get_sender(m), status);
+		} else if (dbus_message_is_signal(m, "org.freedesktop.DBus",
+						  "NameOwnerChanged") &&
+		    dbus_message_get_args(m, NULL, DBUS_TYPE_STRING, &name,
+					  DBUS_TYPE_STRING, &old,
+					  DBUS_TYPE_STRING, &new_owner,
+					  DBUS_TYPE_INVALID)) {
+			if (!*new_owner)
+				holder_gone(sb, name);
+		} else if (follow_mce &&
 		    dbus_message_is_signal(m, "com.nokia.mce.signal",
 					   "display_status_ind") &&
 		    dbus_message_get_args(m, NULL, DBUS_TYPE_STRING, &state,
@@ -1284,6 +1540,18 @@ static int run_x(void)
 		/* (an mce of its own says it, Leste's with -M) */
 		announce_display = !follow_mce &&
 		    !dbus_bus_name_has_owner(sb.sys, "com.nokia.mce", NULL);
+		/* what mce would take for the display (alarms, requests) */
+		if (!follow_mce)
+			dbus_bus_add_match(sb.sys, "type='signal',"
+			    "interface='com.nokia.system_ui.signal',"
+			    "member='alarm_dialog_status'", NULL);
+		if (announce_display) {
+			mce_owned = dbus_bus_request_name(sb.sys, "com.nokia.mce",
+			    DBUS_NAME_FLAG_DO_NOT_QUEUE, NULL) ==
+			    DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER;
+			debug(mce_owned ? "com.nokia.mce: the display's requests" :
+			    "com.nokia.mce not ours (its D-Bus policy?)");
+		}
 	}
 #ifdef __linux__
 	/* minute ticks and the keyboard light's 30 s: a tenth of a second
@@ -1412,6 +1680,9 @@ static int run_x(void)
 					wait = t > 0 ? t : 0;
 			}
 		}
+		t = pauses_due(&sb);
+		if (t >= 0 && (wait < 0 || t < wait))
+			wait = t;
 		if (sb.kbd_off_ms) {
 			t = sb.kbd_off_ms - now_ms();
 			if (t <= 0) {
