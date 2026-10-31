@@ -8,9 +8,32 @@
  * the MeeGo session share:
  *
  *   org.pro1x.Steps  /org/pro1x/Steps  org.pro1x.Steps
- *     GetSteps () -> (t steps)       steps since the daemon started (boot)
+ *     GetSteps () -> (t steps)       steps since the daemon started (boot),
+ *                                     up to date: the sensor core first
+ *                                     hands over what it holds (a flush)
  *     signal StepsChanged (t steps)  at most every COALESCE_S seconds while
  *                                     walking, so listeners wake up rarely
+ *
+ * The sensor core delivers the count in its power-saving mode
+ * (patches/libssc-wakeup-batching.patch, docs/sensors.md):
+ *
+ *   - non-waking: while the system is suspended the sensor core keeps the
+ *     step events and sends them after the resume (with a kernel that
+ *     tells the ADSP about suspends, patches 0038/0039); a step never
+ *     wakes the phone;
+ *   - batched: one report every ACTIVE_BATCH_S seconds of walking while
+ *     the display is on (or nobody tells us about the display), one every
+ *     IDLE_BATCH_S while it is off (mce's display_status_ind). When the
+ *     display comes on again the request is sent again with the short
+ *     period, and the sensor core hands over everything it held at once:
+ *     the count after a pocketful of walking or a suspend is there when the
+ *     screen is.
+ *
+ * The step events carry the count since the sensor was activated, so a
+ * batch or a dropped event loses nothing. Without a step counter in the
+ * sensor core (other phones) the daemon counts steps itself from the
+ * accelerometer, batched the same way; that keeps the ADSP's accelerometer
+ * on all day and counts only while the system is awake.
  *
  * Like Android's step counter the count only grows and starts over at boot;
  * clients keep their own day totals from the differences. When the ADSP
@@ -19,17 +42,22 @@
  *
  * Runs as root (FastRPC/QRTR), from /etc/init.d/pro1x-steps.
  */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <gio/gio.h>
 #include <glib-unix.h>
 #include <libssc-sensor-pedometer.h>
+#include <libssc-sensor-accelerometer.h>
 
 #define NAME "org.pro1x.Steps"
 #define PATH "/org/pro1x/Steps"
 #define RETRY_S 30
 #define OPEN_TIMEOUT_S 20
 #define COALESCE_S 5
+#define ACTIVE_BATCH_S 5
+#define IDLE_BATCH_S 600
+#define FLUSH_WAIT_MS 800	/* GetSteps waits at most this for the sensor core */
 #define STATE "/run/pro1x-steps"
 
 static const char introspection[] =
@@ -41,11 +69,14 @@ static const char introspection[] =
 	"</node>";
 
 static GDBusConnection *bus;
-static SSCSensorPedometer *sensor;
+static SSCSensor *sensor;	/* the step counter, or the accelerometer */
+static gboolean counting_self;	/* no step counter: steps from the accelerometer */
+static gboolean opened;
 static guint64 base;	/* steps before the ADSP's counter last started over */
-static guint last;	/* the ADSP's counter */
+static guint last;	/* the ADSP's counter (or our own) */
 static gint64 emitted_us;	/* when StepsChanged was last sent */
 static guint emit_id;	/* pending, coalesced StepsChanged */
+static gboolean display_off;	/* mce says so; without mce: on */
 
 static guint64 total(void)
 {
@@ -70,15 +101,11 @@ static gboolean emit_cb(gpointer data)
 	return G_SOURCE_REMOVE;
 }
 
-static void measurement_cb(SSCSensorPedometer *s, guint steps, gpointer data)
+/* a new count: StepsChanged at most every COALESCE_S seconds */
+static void counted(void)
 {
 	gint64 due;
 
-	(void)s, (void)data;
-	if (steps < last)
-		base += last;
-	last = steps;
-	/* the ADSP reports every step: pass them on in batches */
 	if (emit_id)
 		return;
 	due = emitted_us + COALESCE_S * G_USEC_PER_SEC - g_get_monotonic_time();
@@ -86,6 +113,173 @@ static void measurement_cb(SSCSensorPedometer *s, guint steps, gpointer data)
 		emit_cb(NULL);
 	else
 		emit_id = g_timeout_add((guint)(due / 1000) + 1, emit_cb, NULL);
+}
+
+static void measurement_cb(SSCSensorPedometer *s, guint steps, gpointer data)
+{
+	(void)s, (void)data;
+	if (steps < last)
+		base += last;
+	last = steps;
+	counted();
+}
+
+/*
+ * Steps from the accelerometer, when the sensor core has no step counter:
+ * the magnitude of the acceleration, smoothed, against its slow mean
+ * (gravity); a step is a rise above the mean by STEP_RISE after a fall
+ * below it, at least STEP_GAP_S after the last one. The samples come in
+ * batches, so time is counted in samples at the sensor's rate.
+ */
+#define STEP_RISE 1.2	/* m/s^2 */
+#define STEP_GAP_S 0.3
+
+static double acc_rate = 13;
+static double acc_smooth, acc_mean;
+static gboolean acc_armed;
+static guint64 acc_samples, acc_last_step;
+
+static void accel_cb(SSCSensorAccelerometer *s, gfloat x, gfloat y, gfloat z, gpointer data)
+{
+	double m = sqrt((double)x * x + (double)y * y + (double)z * z);
+
+	(void)s, (void)data;
+	if (acc_samples++ == 0)
+		acc_smooth = acc_mean = m;
+	acc_smooth += (m - acc_smooth) * 0.35;
+	acc_mean += (m - acc_mean) * 0.02;
+	if (acc_smooth < acc_mean) {
+		acc_armed = TRUE;
+	} else if (acc_armed && acc_smooth > acc_mean + STEP_RISE &&
+		   acc_samples - acc_last_step >= (guint64)(STEP_GAP_S * acc_rate)) {
+		acc_armed = FALSE;
+		acc_last_step = acc_samples;
+		last++;
+		counted();
+	}
+}
+
+/* --- the sensor core's delivery ---------------------------------------- */
+
+static void set_delivery(void)
+{
+	guint32 period = (display_off ? IDLE_BATCH_S : ACTIVE_BATCH_S) * G_USEC_PER_SEC;
+
+	/* non-waking; the sensor core keeps at least a batch period of events */
+	ssc_sensor_set_delivery(sensor, FALSE, period, 0, FALSE);
+}
+
+static void reconfigured_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(GError) err = NULL;
+
+	(void)data;
+	if (!ssc_sensor_reconfigure_finish(SSC_SENSOR(src), res, &err))
+		g_warning("step counter: new batch period not taken: %s", err->message);
+}
+
+static void display_state(const char *state)
+{
+	gboolean off = g_strcmp0(state, "off") == 0;
+
+	if (off == display_off)
+		return;
+	display_off = off;
+	g_debug("display %s: batches of up to %d s", state, off ? IDLE_BATCH_S : ACTIVE_BATCH_S);
+	if (!sensor)
+		return;
+	set_delivery();
+	/* the display on again: with the short period the sensor core sends
+	 * what it held at once */
+	if (opened)
+		ssc_sensor_reconfigure(sensor, NULL, reconfigured_cb, NULL);
+}
+
+static void display_sig(GDBusConnection *conn, const char *sender, const char *path,
+			const char *iface, const char *signal, GVariant *params, gpointer data)
+{
+	const char *state;
+
+	(void)conn, (void)sender, (void)path, (void)iface, (void)signal, (void)data;
+	if (g_variant_is_of_type(params, G_VARIANT_TYPE("(s)"))) {
+		g_variant_get(params, "(&s)", &state);
+		display_state(state);
+	}
+}
+
+static void display_status_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(GVariant) r = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), res, NULL);
+	const char *state;
+
+	(void)data;
+	if (!r)
+		return;		/* no mce: the display counts as on */
+	g_variant_get(r, "(&s)", &state);
+	display_state(state);
+}
+
+/* --- GetSteps: the count after a flush --------------------------------- */
+
+static GSList *pending;		/* GetSteps calls waiting for the flush */
+static guint flush_wait_id;
+static gboolean flushing;
+
+/* after the flush's step events: libssc hands them over in idle callbacks
+ * of default idle priority, these replies come after them */
+static gboolean reply_cb(gpointer data)
+{
+	GSList *calls = g_slist_reverse(pending);
+
+	(void)data;
+	pending = NULL;
+	for (GSList *l = calls; l; l = l->next)
+		g_dbus_method_invocation_return_value(l->data, g_variant_new("(t)", total()));
+	g_slist_free(calls);
+	return G_SOURCE_REMOVE;
+}
+
+static void reply_pending(void)
+{
+	if (flush_wait_id)
+		g_source_remove(flush_wait_id);
+	flush_wait_id = 0;
+	g_idle_add_full(G_PRIORITY_LOW, reply_cb, NULL, NULL);
+}
+
+static void flushed_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(GError) err = NULL;
+
+	(void)data;
+	flushing = FALSE;
+	if (!ssc_sensor_flush_finish(SSC_SENSOR(src), res, &err))
+		g_debug("flush: %s", err->message);
+	if (pending)
+		reply_pending();
+}
+
+static gboolean flush_wait_cb(gpointer data)
+{
+	(void)data;
+	flush_wait_id = 0;
+	reply_pending();	/* the count as it is; the flush may still come */
+	return G_SOURCE_REMOVE;
+}
+
+static void get_steps(GDBusMethodInvocation *inv)
+{
+	if (!sensor || !opened) {
+		g_dbus_method_invocation_return_value(inv, g_variant_new("(t)", total()));
+		return;
+	}
+	pending = g_slist_prepend(pending, inv);
+	if (!flush_wait_id)
+		flush_wait_id = g_timeout_add(FLUSH_WAIT_MS, flush_wait_cb, NULL);
+	if (!flushing) {
+		flushing = TRUE;
+		ssc_sensor_flush(sensor, NULL, flushed_cb, NULL);
+	}
 }
 
 /*
@@ -106,6 +300,7 @@ static void retry(const char *why)
 		g_source_remove(attempt_timeout);
 	attempt_timeout = 0;
 	attempt++;
+	opened = FALSE;
 	g_clear_object(&sensor);
 	g_warning("step counter: %s, again in %d s", why, RETRY_S);
 	g_timeout_add_seconds(RETRY_S, open_sensor, NULL);
@@ -114,17 +309,58 @@ static void retry(const char *why)
 static void opened_cb(GObject *src, GAsyncResult *res, gpointer data)
 {
 	g_autoptr(GError) err = NULL;
-	gboolean ok = ssc_sensor_pedometer_open_finish(SSC_SENSOR_PEDOMETER(src), res, &err);
+	gboolean ok = counting_self
+		? ssc_sensor_accelerometer_open_finish(SSC_SENSOR_ACCELEROMETER(src), res, &err)
+		: ssc_sensor_pedometer_open_finish(SSC_SENSOR_PEDOMETER(src), res, &err);
 
 	if (GPOINTER_TO_UINT(data) != attempt)
 		return;
 	if (!ok) {
-		retry(err->message);
+		retry(err ? err->message : "not opened");
 		return;
 	}
 	g_source_remove(attempt_timeout);
 	attempt_timeout = 0;
-	g_message("step counter enabled");
+	opened = TRUE;
+	if (counting_self)
+		g_message("no step counter in the sensor core: counting from the accelerometer");
+	else
+		g_message("step counter enabled");
+}
+
+static void start(SSCSensor *s, gpointer data)
+{
+	sensor = s;
+	set_delivery();
+	if (counting_self) {
+		gfloat rate = 0;
+
+		g_object_get(sensor, SSC_SENSOR_SAMPLE_RATE, &rate, NULL);
+		if (rate > 0)
+			acc_rate = rate;
+		g_signal_connect(sensor, "measurement", G_CALLBACK(accel_cb), NULL);
+		ssc_sensor_accelerometer_open(SSC_SENSOR_ACCELEROMETER(sensor), NULL, opened_cb, data);
+	} else {
+		g_signal_connect(sensor, "measurement", G_CALLBACK(measurement_cb), NULL);
+		ssc_sensor_pedometer_open(SSC_SENSOR_PEDOMETER(sensor), NULL, opened_cb, data);
+	}
+}
+
+static void accel_created_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(GError) err = NULL;
+	SSCSensorAccelerometer *s = ssc_sensor_accelerometer_new_finish(res, &err);
+
+	(void)src;
+	if (GPOINTER_TO_UINT(data) != attempt) {
+		g_clear_object(&s);
+		return;
+	}
+	if (!s) {
+		retry(err ? err->message : "neither a step counter nor an accelerometer");
+		return;
+	}
+	start(SSC_SENSOR(s), data);
 }
 
 static void created_cb(GObject *src, GAsyncResult *res, gpointer data)
@@ -137,13 +373,17 @@ static void created_cb(GObject *src, GAsyncResult *res, gpointer data)
 		g_clear_object(&s);
 		return;
 	}
+	if (!s && !err) {
+		/* the sensor core answered: it has no step counter */
+		counting_self = TRUE;
+		ssc_sensor_accelerometer_new(NULL, accel_created_cb, data);
+		return;
+	}
 	if (!s) {
 		retry(err->message);
 		return;
 	}
-	sensor = s;
-	g_signal_connect(sensor, "measurement", G_CALLBACK(measurement_cb), NULL);
-	ssc_sensor_pedometer_open(sensor, NULL, opened_cb, data);
+	start(SSC_SENSOR(s), data);
 }
 
 static gboolean attempt_timeout_cb(gpointer data)
@@ -157,6 +397,7 @@ static gboolean attempt_timeout_cb(gpointer data)
 static gboolean open_sensor(gpointer data)
 {
 	(void)data;
+	counting_self = FALSE;
 	attempt_timeout = g_timeout_add_seconds(OPEN_TIMEOUT_S, attempt_timeout_cb, NULL);
 	ssc_sensor_pedometer_new(NULL, created_cb, GUINT_TO_POINTER(attempt));
 	return G_SOURCE_REMOVE;
@@ -168,7 +409,7 @@ static void method_cb(GDBusConnection *conn, const char *sender, const char *pat
 {
 	(void)conn, (void)sender, (void)path, (void)iface, (void)params, (void)data;
 	if (!g_strcmp0(method, "GetSteps"))
-		g_dbus_method_invocation_return_value(inv, g_variant_new("(t)", total()));
+		get_steps(inv);
 	else
 		g_dbus_method_invocation_return_error(inv, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD,
 						      "no method %s", method);
@@ -186,6 +427,14 @@ static void bus_acquired_cb(GDBusConnection *conn, const char *name, gpointer da
 	if (!g_dbus_connection_register_object(conn, PATH, node->interfaces[0], &vtable,
 					       NULL, NULL, &err))
 		g_warning("register: %s", err->message);
+	/* the display's state from mce, where there is one */
+	g_dbus_connection_signal_subscribe(conn, NULL, "com.nokia.mce.signal", "display_status_ind",
+					   "/com/nokia/mce/signal", NULL, G_DBUS_SIGNAL_FLAGS_NONE,
+					   display_sig, NULL, NULL);
+	g_dbus_connection_call(conn, "com.nokia.mce", "/com/nokia/mce/request",
+			       "com.nokia.mce.request", "get_display_status", NULL,
+			       G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NO_AUTO_START, 5000, NULL,
+			       display_status_cb, NULL);
 }
 
 static void name_lost_cb(GDBusConnection *conn, const char *name, gpointer data)
@@ -203,7 +452,10 @@ static gboolean quit_cb(gpointer loop)
 
 static void closed_cb(GObject *src, GAsyncResult *res, gpointer loop)
 {
-	ssc_sensor_pedometer_close_finish(SSC_SENSOR_PEDOMETER(src), res, NULL);
+	if (counting_self)
+		ssc_sensor_accelerometer_close_finish(SSC_SENSOR_ACCELEROMETER(src), res, NULL);
+	else
+		ssc_sensor_pedometer_close_finish(SSC_SENSOR_PEDOMETER(src), res, NULL);
 	g_main_loop_quit(loop);
 }
 
@@ -221,11 +473,15 @@ int main(void)
 	g_unix_signal_add(SIGTERM, quit_cb, loop);
 	g_unix_signal_add(SIGINT, quit_cb, loop);
 	g_main_loop_run(loop);
-	if (sensor) {
+	if (sensor && opened) {
 		/* switch the counter off, without waiting long for the ADSP */
-		ssc_sensor_pedometer_close(sensor, NULL, closed_cb, loop);
+		if (counting_self)
+			ssc_sensor_accelerometer_close(SSC_SENSOR_ACCELEROMETER(sensor), NULL, closed_cb, loop);
+		else
+			ssc_sensor_pedometer_close(SSC_SENSOR_PEDOMETER(sensor), NULL, closed_cb, loop);
 		g_timeout_add_seconds(2, quit_cb, loop);
 		g_main_loop_run(loop);
 	}
+	save();
 	return 0;
 }

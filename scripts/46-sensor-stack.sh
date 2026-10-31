@@ -15,7 +15,10 @@
 #   libssc        talks to that service (needs libqmi >= 1.33.4; daedalus has
 #                 1.32, so libqmi 1.34 is built too). patches/libssc-pedometer
 #                 adds the ADSP's step counter ("pedometer"; ssccli --sensor
-#                 pedometer), which pro1x-steps serves on D-Bus.
+#                 pedometer), which pro1x-steps serves on D-Bus;
+#                 patches/libssc-wakeup-batching the sensor core's
+#                 power-saving delivery (batched, non-waking events, flushes;
+#                 docs/sensors.md), whose defaults /etc/libssc.conf sets.
 #   iio-sensor-proxy 3.9, the first release with SSC support; built with a
 #                 tiny g_autofd shim because daedalus has GLib 2.74, not 2.76.
 #                 It replaces Leste's 3.0 through a dpkg diversion, so mce's
@@ -79,7 +82,12 @@ git -C "$SRC/libssc" apply "$REPO/patches/libssc-pedometer.patch"
 # libssc waited for its own replies by spinning through non-blocking main
 # loop iterations: a busy core for as long as a reply took
 git -C "$SRC/libssc" apply "$REPO/patches/libssc-sync-wait.patch"
+# batched and non-waking events, flushes (docs/sensors.md)
+git -C "$SRC/libssc" apply "$REPO/patches/libssc-wakeup-batching.patch"
 build libssc
+# the delivery's defaults for every libssc client (iio-sensor-proxy, ...);
+# an edited one stays
+[ -e /etc/libssc.conf ] || install -m 644 "$REPO/rootfs-overlay/etc/libssc.conf" /etc/
 
 log "iio-sensor-proxy $IIO_SENSOR_PROXY_TAG"
 fetch iio-sensor-proxy https://gitlab.freedesktop.org/hadess/iio-sensor-proxy.git "$IIO_SENSOR_PROXY_TAG" "$IIO_SENSOR_PROXY_TAG"
@@ -99,7 +107,7 @@ gcc -O2 -Wall -o /usr/local/bin/pro1x-gnss "$REPO/tools/pro1x-gnss/pro1x-gnss.c"
   $(pkg-config --cflags --libs qmi-glib qrtr-glib)
 log "pro1x-steps (the ADSP's step counter on D-Bus)"
 gcc -O2 -Wall -o /usr/local/sbin/pro1x-steps "$REPO/tools/pro1x-steps/pro1x-steps.c" \
-  $(PKG_CONFIG_PATH=/usr/local/lib/aarch64-linux-gnu/pkgconfig pkg-config --cflags --libs libssc gio-unix-2.0)
+  $(PKG_CONFIG_PATH=/usr/local/lib/aarch64-linux-gnu/pkgconfig pkg-config --cflags --libs libssc gio-unix-2.0) -lm
 install -m 644 "$REPO/rootfs-overlay/etc/dbus-1/system.d/org.pro1x.Steps.conf" /etc/dbus-1/system.d/
 install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-steps" /etc/init.d/
 log "pro1x-rtc (real time across power off, wake alarms from power off)"

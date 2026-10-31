@@ -40,7 +40,14 @@
  * display_status_ind): every sample wakes the ADSP link, this daemon and
  * each reader of the device - sensord, qmkeyd and the MeeGo Touch processes
  * - about a hundred wakeups a second in all, for a screen nobody sees.
- * Proximity (on-change) and the keys stay on.
+ * While it streams, the sensor core sends its samples in batches of
+ * ACCEL_BATCH_MS (a few samples per report, one wakeup for them all) and
+ * never to a suspended system (docs/sensors.md). The proximity sensor
+ * (on-change) is on while the display is on and during a call, ringing or
+ * active (mce's sig_call_state_ind: the call screen blanks the display
+ * while it is covered and needs it to light up again), as mce's own
+ * proximity module has it; it is the one sensor that may wake the system.
+ * The keys stay on.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -61,6 +68,7 @@
 #define RANGE 4096
 #define LONG_BITS (8 * sizeof(long))
 #define LANDSCAPE_START_US (20 * G_USEC_PER_SEC)
+#define ACCEL_BATCH_MS 200
 
 static const int side_keys[] = { KEY_VOLUMEUP, KEY_VOLUMEDOWN, KEY_CAMERA };
 static int out_fd = -1;
@@ -213,60 +221,148 @@ static gboolean keys_cb(gint fd, GIOCondition cond, gpointer data)
 	return G_SOURCE_CONTINUE;
 }
 
-/* The accelerometer follows the display: open while it is on or dimmed. */
-static SSCSensorAccelerometer *accel;
-static gboolean accel_want, accel_on, accel_busy;
+/*
+ * A sensor that follows a wish: opened while wanted, closed when not, one
+ * request at a time; a change of the wish meanwhile is applied when the
+ * request is done.
+ */
+typedef struct {
+	const char *name;
+	SSCSensor *sensor;
+	void (*open)(SSCSensor *, GCancellable *, GAsyncReadyCallback, gpointer);
+	gboolean (*open_finish)(SSCSensor *, GAsyncResult *, GError **);
+	void (*close)(SSCSensor *, GCancellable *, GAsyncReadyCallback, gpointer);
+	gboolean (*close_finish)(SSCSensor *, GAsyncResult *, GError **);
+	void (*closed)(void);	/* after closing */
+	gboolean want, on, busy;
+} Follower;
 
-static void accel_apply(void);
+static void follow(Follower *f);
 
-static void accel_done(GObject *src, GAsyncResult *res, gpointer opening)
+static void follow_done(GObject *src, GAsyncResult *res, gpointer data)
 {
+	Follower *f = data;
 	g_autoptr(GError) err = NULL;
-	gboolean ok = opening ? ssc_sensor_accelerometer_open_finish(accel, res, &err)
-			      : ssc_sensor_accelerometer_close_finish(accel, res, &err);
+	gboolean opening = !f->on;
+	gboolean ok = opening ? f->open_finish(f->sensor, res, &err)
+			      : f->close_finish(f->sensor, res, &err);
 
 	(void)src;
-	accel_busy = FALSE;
+	f->busy = FALSE;
 	if (!ok) {
-		/* tried again at the next change of the display */
-		fprintf(stderr, "accelerometer %s: %s\n", opening ? "open" : "close",
+		/* tried again at the next change */
+		fprintf(stderr, "%s %s: %s\n", f->name, opening ? "open" : "close",
 			err ? err->message : "?");
 		return;
 	}
-	accel_on = opening != NULL;
+	f->on = opening;
+	if (!f->on && f->closed)
+		f->closed();
 	/* the landscape start counts from the first samples, which wait for
 	 * the display when the session starts in the dark */
-	if (accel_on && !start_us)
+	if (f->on && !strcmp(f->name, "accelerometer") && !start_us)
 		start_us = g_get_monotonic_time();
-	accel_apply();		/* the display may have changed meanwhile */
+	follow(f);		/* the wish may have changed meanwhile */
 }
 
-static void accel_apply(void)
+static void follow(Follower *f)
 {
-	if (accel_busy || accel_want == accel_on)
+	if (!f->sensor || f->busy || f->want == f->on)
 		return;
-	accel_busy = TRUE;
-	if (accel_want)
-		ssc_sensor_accelerometer_open(accel, NULL, accel_done, GINT_TO_POINTER(1));
+	f->busy = TRUE;
+	if (f->want)
+		f->open(f->sensor, NULL, follow_done, f);
 	else
-		ssc_sensor_accelerometer_close(accel, NULL, accel_done, NULL);
+		f->close(f->sensor, NULL, follow_done, f);
+}
+
+/* while closed the proximity sensor says nothing: "far" for the readers */
+static void prox_closed(void)
+{
+	emit(EV_SW, SW_FRONT_PROXIMITY, 0);
+	emit(EV_SYN, SYN_REPORT, 0);
+}
+
+/* the sensor types' own open and close (they connect their reports) */
+static void accel_open(SSCSensor *s, GCancellable *c, GAsyncReadyCallback cb, gpointer d)
+{
+	ssc_sensor_accelerometer_open(SSC_SENSOR_ACCELEROMETER(s), c, cb, d);
+}
+static gboolean accel_open_finish(SSCSensor *s, GAsyncResult *r, GError **e)
+{
+	return ssc_sensor_accelerometer_open_finish(SSC_SENSOR_ACCELEROMETER(s), r, e);
+}
+static void accel_close(SSCSensor *s, GCancellable *c, GAsyncReadyCallback cb, gpointer d)
+{
+	ssc_sensor_accelerometer_close(SSC_SENSOR_ACCELEROMETER(s), c, cb, d);
+}
+static gboolean accel_close_finish(SSCSensor *s, GAsyncResult *r, GError **e)
+{
+	return ssc_sensor_accelerometer_close_finish(SSC_SENSOR_ACCELEROMETER(s), r, e);
+}
+static void prox_open(SSCSensor *s, GCancellable *c, GAsyncReadyCallback cb, gpointer d)
+{
+	ssc_sensor_proximity_open(SSC_SENSOR_PROXIMITY(s), c, cb, d);
+}
+static gboolean prox_open_finish(SSCSensor *s, GAsyncResult *r, GError **e)
+{
+	return ssc_sensor_proximity_open_finish(SSC_SENSOR_PROXIMITY(s), r, e);
+}
+static void prox_close(SSCSensor *s, GCancellable *c, GAsyncReadyCallback cb, gpointer d)
+{
+	ssc_sensor_proximity_close(SSC_SENSOR_PROXIMITY(s), c, cb, d);
+}
+static gboolean prox_close_finish(SSCSensor *s, GAsyncResult *r, GError **e)
+{
+	return ssc_sensor_proximity_close_finish(SSC_SENSOR_PROXIMITY(s), r, e);
+}
+
+static Follower accel_f = {
+	"accelerometer", NULL, accel_open, accel_open_finish, accel_close, accel_close_finish,
+	NULL, FALSE, FALSE, FALSE,
+};
+static Follower prox_f = {
+	"proximity", NULL, prox_open, prox_open_finish, prox_close, prox_close_finish,
+	prox_closed, FALSE, FALSE, FALSE,
+};
+
+/* The accelerometer follows the display (on or dimmed), the proximity
+ * sensor the display and calls. Without mce: both always on. */
+static gboolean display_on = TRUE, in_call;
+
+static void apply(void)
+{
+	accel_f.want = display_on;
+	prox_f.want = display_on || in_call;
+	follow(&accel_f);
+	follow(&prox_f);
 }
 
 static void display_state(const char *state)
 {
-	accel_want = g_strcmp0(state, "off") != 0;
-	accel_apply();
+	display_on = g_strcmp0(state, "off") != 0;
+	apply();
 }
 
-static void display_sig(GDBusConnection *conn, const char *sender, const char *path,
-			const char *iface, const char *signal, GVariant *params, gpointer data)
+static void call_state(const char *state)
+{
+	in_call = !g_strcmp0(state, "ringing") || !g_strcmp0(state, "active");
+	apply();
+}
+
+static void mce_sig(GDBusConnection *conn, const char *sender, const char *path,
+		    const char *iface, const char *signal, GVariant *params, gpointer data)
 {
 	const char *state;
 
-	(void)conn, (void)sender, (void)path, (void)iface, (void)signal, (void)data;
-	if (g_variant_is_of_type(params, G_VARIANT_TYPE("(s)"))) {
+	(void)conn, (void)sender, (void)path, (void)iface, (void)data;
+	if (!strcmp(signal, "display_status_ind") && g_variant_is_of_type(params, G_VARIANT_TYPE("(s)"))) {
 		g_variant_get(params, "(&s)", &state);
 		display_state(state);
+	} else if (!strcmp(signal, "sig_call_state_ind") &&
+		   g_variant_is_of_type(params, G_VARIANT_TYPE("(ss)"))) {
+		g_variant_get(params, "(&s&s)", &state, NULL);
+		call_state(state);
 	}
 }
 
@@ -279,6 +375,18 @@ static void display_status_cb(GObject *src, GAsyncResult *res, gpointer data)
 	if (r)
 		g_variant_get(r, "(&s)", &state);
 	display_state(state);
+}
+
+static void call_status_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(GVariant) r = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), res, NULL);
+	const char *state;
+
+	(void)data;
+	if (r && g_variant_is_of_type(r, G_VARIANT_TYPE("(ss)"))) {
+		g_variant_get(r, "(&s&s)", &state, NULL);
+		call_state(state);
+	}
 }
 
 int main(void)
@@ -300,29 +408,41 @@ int main(void)
 	if (resin_fd >= 0)
 		g_unix_fd_add(resin_fd, G_IO_IN, keys_cb, NULL);
 
-	accel = ssc_sensor_accelerometer_new_sync(NULL, &err);
+	SSCSensorAccelerometer *accel = ssc_sensor_accelerometer_new_sync(NULL, &err);
 	if (!accel) {
 		fprintf(stderr, "accelerometer: %s\n", err ? err->message : "?");
 		return 1;
 	}
 	g_signal_connect(accel, "measurement", G_CALLBACK(accel_cb), NULL);
+	/* batched, never to a suspended system */
+	ssc_sensor_set_delivery(SSC_SENSOR(accel), FALSE, ACCEL_BATCH_MS * 1000, 0, FALSE);
+	accel_f.sensor = SSC_SENSOR(accel);
+
+	g_clear_error(&err);
+	SSCSensorProximity *prox = ssc_sensor_proximity_new_sync(NULL, &err);
+	if (prox) {
+		g_signal_connect(prox, "measurement", G_CALLBACK(prox_cb), NULL);
+		/* at once, and it may wake the system (a call) */
+		ssc_sensor_set_delivery(SSC_SENSOR(prox), TRUE, 0, 0, FALSE);
+		prox_f.sensor = SSC_SENSOR(prox);
+	} else {
+		fprintf(stderr, "proximity: %s\n", err ? err->message : "?");
+	}
+
 	GDBusConnection *sys = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
 	if (sys) {
-		g_dbus_connection_signal_subscribe(sys, NULL, "com.nokia.mce.signal", "display_status_ind",
+		g_dbus_connection_signal_subscribe(sys, NULL, "com.nokia.mce.signal", NULL,
 						   "/com/nokia/mce/signal", NULL, G_DBUS_SIGNAL_FLAGS_NONE,
-						   display_sig, NULL, NULL);
+						   mce_sig, NULL, NULL);
+		g_dbus_connection_call(sys, "com.nokia.mce", "/com/nokia/mce/request", "com.nokia.mce.request",
+				       "get_call_state", NULL, G_VARIANT_TYPE("(ss)"),
+				       G_DBUS_CALL_FLAGS_NONE, 5000, NULL, call_status_cb, NULL);
 		g_dbus_connection_call(sys, "com.nokia.mce", "/com/nokia/mce/request", "com.nokia.mce.request",
 				       "get_display_status", NULL, G_VARIANT_TYPE("(s)"),
 				       G_DBUS_CALL_FLAGS_NONE, 5000, NULL, display_status_cb, NULL);
 	} else {
 		display_state("on");
 	}
-
-	SSCSensorProximity *prox = ssc_sensor_proximity_new_sync(NULL, &err);
-	if (prox)
-		g_signal_connect(prox, "measurement", G_CALLBACK(prox_cb), NULL);
-	if (!prox || !ssc_sensor_proximity_open_sync(prox, NULL, &err))
-		fprintf(stderr, "proximity: %s\n", err ? err->message : "?");
 
 	g_main_loop_run(loop);
 	return 0;

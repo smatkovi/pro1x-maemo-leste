@@ -849,7 +849,7 @@ if [ $# -eq 0 ] || [[ " $* " == *" pro1x-events "* ]]; then
 	events_page || failed+=(pro1x-events)
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-steps "* ]]; then
-	dsp_tool pro1x-steps sbin "libssc gio-unix-2.0" || failed+=(pro1x-steps)
+	dsp_tool pro1x-steps sbin "libssc gio-unix-2.0" -lm || failed+=(pro1x-steps)
 fi
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-gnss "* ]]; then
 	dsp_tool pro1x-gnss bin "qmi-glib qrtr-glib" || failed+=(pro1x-gnss)

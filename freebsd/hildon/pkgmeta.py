@@ -46,7 +46,9 @@ LOCAL = {
                      'pro1x-camera shows the viewfinder, focuses on a tap and takes '
                      'pictures into MyDocs/DCIM through /dev/camss0 of qcom_camss.ko '
                      '(freebsd/camera).', ['GPLv2']),
-    'pro1x-steps': ('1.0', "The Pro1X's hardware step counter on D-Bus",
+    # 1.1: batched, non-waking step events, a flush for GetSteps, the
+    # accelerometer where there is no step counter (docs/sensors.md)
+    'pro1x-steps': ('1.1', "The Pro1X's hardware step counter on D-Bus",
                     "pro1x-steps reads the ADSP's pedometer through libssc and "
                     'serves the count as org.pro1x.Steps on the system bus '
                     '(tools/pro1x-steps), with its rc.d script.', ['UNKNOWN']),
@@ -169,7 +171,7 @@ UPSTREAM = {
                ['LGPL21+', 'GPLv2+'], 'multi'),
     'libssc': ('0.4.4', 'Qualcomm Sensor Core client library',
                "libssc reads the sensors of a Qualcomm DSP (accelerometer, light, "
-               "proximity, the step counter) over QMI, with Leste's two patches.",
+               "proximity, the step counter) over QMI, with Leste's patches.",
                ['GPLv3+']),
     'qrtr': ('1.2.18', 'Qualcomm IPC router library and lookup tool',
              "libqrtr, QRTR sockets and QMI encoding for C programs, and "
@@ -539,6 +541,9 @@ REVISION = {
     # 2026-10-30: asks for the headphones (their cable is the antenna) when
     # pro1x-audiod reports none plugged in
     'pro1x-fm': 1,
+    # 2026-10-31: the sensor core's batched, non-waking delivery and flushes
+    # (patches/libssc/libssc-wakeup-batching.patch, docs/sensors.md)
+    'libssc': 1,
 }
 
 # Maemo 5's sounds as Leste's archive has them: Nokia's (debian/copyright:

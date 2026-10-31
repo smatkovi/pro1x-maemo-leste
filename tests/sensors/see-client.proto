@@ -1,0 +1,74 @@
+// The sensor core's client API as far as libssc uses it, written for the
+// tests from the field numbers and wire types of Qualcomm's interface
+// (sns_client.proto's sns_client_request_msg with its suspend_config and
+// sns_client_event_msg, sns_std.proto's sns_std_request with its
+// batch_spec, sns_std_sensor.proto's sns_std_sensor_config and
+// sns_std_sensor_event, sns_pedometer.proto's sns_step_event, as Android
+// vendor images ship them in /vendor/etc/sensors/proto). The names here are
+// our own; only numbers and types have to agree with the sensor core.
+// docs/sensors.md has the table.
+syntax = "proto2";
+
+package see;
+
+message Suid {
+  required fixed64 low = 1;
+  required fixed64 high = 2;
+}
+
+// client_proc_type: 1 = the application processor (APSS)
+// delivery: 0 = WAKEUP, 1 = NO_WAKEUP
+message SuspendConfig {
+  required uint32 client_proc_type = 1;
+  required uint32 delivery = 2;
+  repeated fixed32 nowakeup_msg_ids = 3;
+}
+
+// microseconds
+message BatchSpec {
+  required uint32 batch_period = 1;
+  optional uint32 flush_period = 2;
+  optional bool flush_only = 3;
+  optional bool max_batch = 4;
+}
+
+message StdRequest {
+  optional BatchSpec batching = 1;
+  optional bytes payload = 2;
+  optional bool is_passive = 3;
+}
+
+message ClientRequest {
+  required Suid suid = 1;
+  required fixed32 msg_id = 2;
+  required SuspendConfig susp_config = 3;
+  required StdRequest request = 4;
+}
+
+// msg_id 513 (a streaming sensor's enable request)
+message StdSensorConfig {
+  required float sample_rate = 1;
+}
+
+// msg_id 1025
+message StdSensorEvent {
+  repeated float data = 1;
+  required uint32 status = 2;
+}
+
+// msg_id 1028 (a step) and 775 (the count when a request comes in)
+message StepEvent {
+  required uint32 step_count = 1;
+}
+
+message ClientEvent {
+  required fixed32 msg_id = 1;
+  required fixed64 timestamp = 2;
+  required bytes payload = 3;
+}
+
+// one report (QMI indication): one sensor, any number of events
+message ClientEventMsg {
+  required Suid suid = 1;
+  repeated ClientEvent events = 2;
+}

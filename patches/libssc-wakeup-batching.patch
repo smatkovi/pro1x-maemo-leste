@@ -1,0 +1,1313 @@
+The sensor core's power-saving delivery for libssc (docs/sensors.md):
+non-waking delivery and batching in every enable request (the batch spec
+and suspend mode of the sensor core's client API, which libssc's protocol
+had as "unknown" field 1 and a fixed WAKEUP), set per sensor
+(ssc_sensor_set_delivery) or system-wide in libssc.conf; flush requests
+(ssc_sensor_flush) and reconfiguring an open sensor (ssc_sensor_reconfigure);
+the step counter's real step event (1028) besides the count on a request
+(775), flush and error events no longer read as counts; ssccli --batch-ms,
+--no-wakeup, --flush-only, --flush-every, --probe. Without libssc.conf and
+without a client's own setting the requests are byte for byte those of
+before. Applies after libssc-pedometer.patch and libssc-sync-wait.patch.
+
+diff --git a/data/ssc-common.proto b/data/ssc-common.proto
+index 87c89a3..f539f3a 100644
+--- a/data/ssc-common.proto
++++ b/data/ssc-common.proto
+@@ -32,21 +32,42 @@ message SscUid {
+  * Client configuration 
+  * @processor: a value from the SscProcessorType enum. Default APPS (1).
+  * @suspend_mode: a value from the SscSuspendType enum. Default WAKEUP (0).
++ *   WAKEUP (0): events are sent as they become due, also to a suspended
++ *   processor. NO_WAKEUP (1): while the processor is suspended the sensor
++ *   core keeps the events (it may drop the oldest periodic ones when its
++ *   buffer is full) and sends them once the processor is awake again.
+  * @no_wakeup_msg_ids: list of messages that do not cause a wakeup.
+  */
+ message SscClientConfig {
+         required int32 processor = 1 [default = 1];
+         required int32 suspend_mode = 2 [default = 0]; 
++        repeated fixed32 no_wakeup_msg_ids = 3;
++}
++
++/*
++ * Batching of a request
++ * @batch_period: microseconds an event may wait in the sensor core before
++ *   it is sent, so that several go out in one report; 0: no batching.
++ * @flush_period: microseconds of events the sensor core keeps at least
++ *   (older ones may be dropped); default: batch_period plus a margin.
++ * @flush_only: send only on a flush request or when the buffer is full.
++ * @max_batch: batch at the sensor core's full capacity.
++ */
++message SscBatchSpec {
++	required uint32 batch_period = 1;
++	optional uint32 flush_period = 2;
++	optional bool flush_only = 3 [default = false];
++	optional bool max_batch = 4 [default = false];
+ }
+ 
+ /*
+  * Client request body
+- * @unknown: optional
++ * @batching: batching of the events of this request, none by default.
+  * @msg: the actual sensor request, specific for each sensor.
+  * @is_passive: request is passive or not. Active triggers sensor activation.
+  */
+ message SscClientRequestBody {
+-	optional bytes unknown = 1;
++	optional SscBatchSpec batching = 1;
+ 	optional bytes msg = 2;
+ 	optional bool is_passive = 3 [default = false];
+ }
+diff --git a/libssc.map b/libssc.map
+index 11d7eaf..2ff0ef0 100644
+--- a/libssc.map
++++ b/libssc.map
+@@ -81,6 +81,11 @@ LIBSSC_0.4.0 {
+ 		ssc_sensor_pedometer_close_finish;
+ 		ssc_sensor_pedometer_close_sync;
+ 		ssc_sensor_pedometer_get_type;
++		ssc_sensor_set_delivery;
++		ssc_sensor_reconfigure;
++		ssc_sensor_reconfigure_finish;
++		ssc_sensor_flush;
++		ssc_sensor_flush_finish;
+ 	local:
+ 		*;
+ };
+diff --git a/src/libssc-cli.c b/src/libssc-cli.c
+index 00f3cb6..9aed754 100644
+--- a/src/libssc-cli.c
++++ b/src/libssc-cli.c
+@@ -178,6 +178,90 @@ static void gyroscope_measurement (SSCSensorGyroscope *sensor, gfloat velocity_x
+ 
+ /*****************************************************************************/
+ 
++/*****************************************************************************/
++
++/* --batch-ms, --no-wakeup, --flush-only, --flush-every: the delivery */
++static gint cli_batch_ms = -1;
++static gboolean cli_no_wakeup = FALSE;
++static gboolean cli_flush_only = FALSE;
++static gint cli_flush_every = 0;
++
++static void
++cli_delivery (SSCSensor *sensor)
++{
++	if (cli_batch_ms < 0 && !cli_no_wakeup && !cli_flush_only)
++		return;		/* libssc.conf's */
++	ssc_sensor_set_delivery (sensor, !cli_no_wakeup,
++				 cli_batch_ms > 0 ? (guint32) cli_batch_ms * 1000 : 0, 0,
++				 cli_flush_only);
++}
++
++static void
++cli_flush_done (GObject *src, GAsyncResult *res, gpointer user_data)
++{
++	g_autoptr (GError) err = NULL;
++
++	if (ssc_sensor_flush_finish (SSC_SENSOR (src), res, &err))
++		g_printf ("Flush complete\n");
++	else
++		g_printf ("Flush failed: %s\n", err->message);
++	fflush (stdout);
++}
++
++static gboolean
++cli_flush_cb (gpointer sensor)
++{
++	ssc_sensor_flush (SSC_SENSOR (sensor), NULL, cli_flush_done, NULL);
++	return G_SOURCE_CONTINUE;
++}
++
++static void
++cli_flush (SSCSensor *sensor)
++{
++	if (cli_flush_every > 0)
++		g_timeout_add_seconds (cli_flush_every, cli_flush_cb, sensor);
++}
++
++/* --probe TYPE: whether the sensor core has a sensor of that data type */
++static void
++probe_ready (GObject *src, GAsyncResult *res, gpointer user_data)
++{
++	SSCSensor **out = user_data;
++	g_autoptr (GError) err = NULL;
++
++	*out = ssc_sensor_new_finish (res, &err);
++	if (!*out && err)
++		g_printf ("Probing failed: %s\n", err->message);
++	*out = *out ? *out : (SSCSensor *) GINT_TO_POINTER (1);
++}
++
++static int
++probe (const gchar *data_type)
++{
++	SSCSensor *sensor = NULL;
++	g_autofree gchar *name = NULL, *vendor = NULL;
++	guint stream_type = 0;
++	gboolean available = FALSE;
++	gfloat rate = 0;
++
++	ssc_sensor_new ((gchar *) data_type, NULL, probe_ready, &sensor);
++	while (!sensor)
++		g_main_context_iteration (NULL, TRUE);
++	if (sensor == (SSCSensor *) GINT_TO_POINTER (1)) {
++		g_printf ("No '%s' sensor\n", data_type);
++		return INIT_FAIL_EXIT_CODE;
++	}
++	g_object_get (sensor, SSC_SENSOR_NAME, &name, SSC_SENSOR_VENDOR, &vendor,
++		      SSC_SENSOR_STREAM_TYPE, &stream_type, SSC_SENSOR_AVAILABLE, &available,
++		      SSC_SENSOR_SAMPLE_RATE, &rate, NULL);
++	g_printf ("'%s' sensor: %s (%s), %s, %s, lowest rate %.1f Hz\n", data_type,
++		  name ? name : "?", vendor ? vendor : "?",
++		  stream_type == 1 ? "on-change" : "streaming",
++		  available ? "available" : "not available", rate);
++	g_object_unref (sensor);
++	return 0;
++}
++
+ int main(int argc, char *argv[])
+ {
+ 	g_autoptr(GOptionContext) opt_context = NULL;
+@@ -187,11 +271,17 @@ int main(int argc, char *argv[])
+ 	gboolean debug = FALSE;
+ 	gchar *sensor_str = "";
+ 	gint64 timeout = DEFAULT_ENABLE_SECONDS;
++	gchar *probe_str = NULL;
+ 	const GOptionEntry options[] = {
+ 		{ "version", 0, 0, G_OPTION_ARG_NONE, &print_version, "Print version information and exit.", NULL },
+ 		{ "debug", 'v', 0, G_OPTION_ARG_NONE, &debug, "Enable debug logs.", NULL },
+ 		{ "sensor", 0, 0, G_OPTION_ARG_STRING, &sensor_str, "Enable a sensor. Supported sensors: 'proximity', 'light', 'accelerometer', 'magnetometer', 'compass', 'pedometer'", NULL },
+ 		{ "timeout", 0, 0, G_OPTION_ARG_INT64, &timeout, "Number of seconds before this will timeout [default 10]", NULL },
++		{ "batch-ms", 0, 0, G_OPTION_ARG_INT, &cli_batch_ms, "Batch the sensor's events in the sensor core for up to MS milliseconds [default: libssc.conf]", "MS" },
++		{ "no-wakeup", 0, 0, G_OPTION_ARG_NONE, &cli_no_wakeup, "The sensor core keeps the events while the processor is suspended", NULL },
++		{ "flush-only", 0, 0, G_OPTION_ARG_NONE, &cli_flush_only, "Events only on a flush or a full buffer", NULL },
++		{ "flush-every", 0, 0, G_OPTION_ARG_INT, &cli_flush_every, "Ask the sensor core for its batched events every S seconds", "S" },
++		{ "probe", 0, 0, G_OPTION_ARG_STRING, &probe_str, "Look for a sensor of a data type (e.g. 'pedometer', 'remote_proc_state') and exit", "TYPE" },
+ 		{ NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL, NULL }
+ 	};
+ 
+@@ -221,6 +311,9 @@ int main(int argc, char *argv[])
+ 
+ 	g_info("libssc %d.%d.%d starting", LIBSSC_MAJOR_VERSION, LIBSSC_MINOR_VERSION, LIBSSC_PATCH_VERSION);
+ 
++	if (probe_str)
++		return probe (probe_str);
++
+ 	if (g_strcmp0 (sensor_str, "pedometer") == 0) {
+ 		SSCSensorPedometer *pedometer = ssc_sensor_pedometer_new_sync (NULL, &err);
+ 		if (!pedometer) {
+@@ -231,10 +324,12 @@ int main(int argc, char *argv[])
+ 			  	  "measurement",
+ 			  	  G_CALLBACK (pedometer_measurement),
+ 			  	  NULL);
++		cli_delivery (SSC_SENSOR (pedometer));
+ 		if (!ssc_sensor_pedometer_open_sync (pedometer, NULL, &err)) {
+ 			g_printf ("Unable to open pedometer sensor: %s\n", err ? err->message : "UNKNOWN");
+ 			return OPEN_FAIL_EXIT_CODE;
+ 		}
++		cli_flush (SSC_SENSOR (pedometer));
+ 		g_timeout_add_seconds (timeout, (GSourceFunc)pedometer_close_cb, pedometer);
+ 	} else if (g_strcmp0 (sensor_str, "proximity") == 0) {
+ 		SSCSensorProximity *proximity = ssc_sensor_proximity_new_sync (NULL, &err);
+@@ -246,10 +341,12 @@ int main(int argc, char *argv[])
+ 			  	  "measurement",
+ 			  	  G_CALLBACK (proximity_measurement),
+ 			  	  NULL);
++		cli_delivery (SSC_SENSOR (proximity));
+ 		if (!ssc_sensor_proximity_open_sync (proximity, NULL, &err)) {
+ 			g_printf ("Unable to open proximity sensor: %s\n", err ? err->message : "UNKNOWN");
+ 			return OPEN_FAIL_EXIT_CODE;
+ 		}
++		cli_flush (SSC_SENSOR (proximity));
+ 		g_timeout_add_seconds (timeout, (GSourceFunc)proximity_close_cb, proximity);
+ 	} else if (g_strcmp0 (sensor_str, "light") == 0) {
+ 		SSCSensorLight *light = ssc_sensor_light_new_sync (NULL, &err);
+@@ -261,10 +358,12 @@ int main(int argc, char *argv[])
+ 			  	  "measurement",
+ 			  	  G_CALLBACK (light_measurement),
+ 			  	  NULL);
++		cli_delivery (SSC_SENSOR (light));
+ 		if (!ssc_sensor_light_open_sync (light, NULL, &err)) {
+ 			g_printf ("Unable to open light sensor: %s\n", err ? err->message : "UNKNOWN");
+ 			return OPEN_FAIL_EXIT_CODE;
+ 		}
++		cli_flush (SSC_SENSOR (light));
+ 		g_timeout_add_seconds (timeout, (GSourceFunc)light_close_cb, light);
+ 	} else if (g_strcmp0 (sensor_str, "accelerometer") == 0) {
+ 		SSCSensorAccelerometer *accelerometer = ssc_sensor_accelerometer_new_sync (NULL, &err);
+@@ -276,10 +375,12 @@ int main(int argc, char *argv[])
+ 			  	  "measurement",
+ 			  	  G_CALLBACK (accelerometer_measurement),
+ 			  	  NULL);
++		cli_delivery (SSC_SENSOR (accelerometer));
+ 		if (!ssc_sensor_accelerometer_open_sync (accelerometer, NULL, &err)) {
+ 			g_printf ("Unable to open accelerometer sensor: %s\n", err ? err->message : "UNKNOWN");
+ 			return OPEN_FAIL_EXIT_CODE;
+ 		}
++		cli_flush (SSC_SENSOR (accelerometer));
+ 		g_timeout_add_seconds (timeout, (GSourceFunc)accelerometer_close_cb, accelerometer);
+ 	} else if (g_strcmp0 (sensor_str, "magnetometer") == 0) {
+ 		SSCSensorMagnetometer *magnetometer = ssc_sensor_magnetometer_new_sync (NULL, &err);
+@@ -291,10 +392,12 @@ int main(int argc, char *argv[])
+ 			  	  "measurement",
+ 			  	  G_CALLBACK (magnetometer_measurement),
+ 			  	  NULL);
++		cli_delivery (SSC_SENSOR (magnetometer));
+ 		if (!ssc_sensor_magnetometer_open_sync (magnetometer, NULL, &err)) {
+ 			g_printf ("Unable to open magnetometer sensor: %s\n", err ? err->message : "UNKNOWN");
+ 			return OPEN_FAIL_EXIT_CODE;
+ 		}
++		cli_flush (SSC_SENSOR (magnetometer));
+ 		g_timeout_add_seconds (timeout, (GSourceFunc)magnetometer_close_cb, magnetometer);
+ 	} else if (g_strcmp0 (sensor_str, "compass") == 0) {
+ 		SSCSensorCompass *compass = ssc_sensor_compass_new_sync (NULL, &err);
+@@ -306,10 +409,12 @@ int main(int argc, char *argv[])
+ 			  	  "measurement",
+ 			  	  G_CALLBACK (compass_measurement),
+ 			  	  NULL);
++		cli_delivery (SSC_SENSOR (compass));
+ 		if (!ssc_sensor_compass_open_sync (compass, NULL, &err)) {
+ 			g_printf ("Unable to open compass sensor: %s\n", err ? err->message : "UNKNOWN");
+ 			return OPEN_FAIL_EXIT_CODE;
+ 		}
++		cli_flush (SSC_SENSOR (compass));
+ 		g_timeout_add_seconds (timeout, (GSourceFunc)compass_close_cb, compass);
+ 	} else if (g_strcmp0 (sensor_str, "gyroscope") == 0) {
+ 		SSCSensorGyroscope *gyroscope = ssc_sensor_gyroscope_new_sync (NULL, &err);
+@@ -321,10 +426,12 @@ int main(int argc, char *argv[])
+ 			  	  "measurement",
+ 			  	  G_CALLBACK (gyroscope_measurement),
+ 			  	  NULL);
++		cli_delivery (SSC_SENSOR (gyroscope));
+ 		if (!ssc_sensor_gyroscope_open_sync (gyroscope, NULL, &err)) {
+ 			g_printf ("Unable to open gyroscope sensor: %s\n", err ? err->message : "UNKNOWN");
+ 			return OPEN_FAIL_EXIT_CODE;
+ 		}
++		cli_flush (SSC_SENSOR (gyroscope));
+ 		g_timeout_add_seconds (timeout, (GSourceFunc)gyroscope_close_cb, gyroscope);
+ 	} else {
+ 		g_printf ("Specify a supported sensor: 'proximity', 'light', 'accelerometer', 'magnetometer', 'compass', 'gyroscope'\n");
+diff --git a/src/libssc-client-private.h b/src/libssc-client-private.h
+index e1a6671..97030f0 100644
+--- a/src/libssc-client-private.h
++++ b/src/libssc-client-private.h
+@@ -30,6 +30,7 @@
+ #include "libssc-common-private.h"
+ #include "libssc-sensor.h"
+ #include "ssc-common.pb-c.h"
++#include "libssc-request-private.h"
+ 
+ G_BEGIN_DECLS
+ 
+@@ -62,6 +63,9 @@ ssc_client_new_finish (GAsyncResult *res, GError **error);
+ void
+ ssc_client_send (SSCClient *self, guint64 uid_high, guint64 uid_low, guint32 message_id, GArray *protobuf, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data); 
+ 
++void
++ssc_client_send_delivery (SSCClient *self, guint64 uid_high, guint64 uid_low, guint32 message_id, GArray *protobuf, const SSCDelivery *delivery, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
++
+ gboolean
+ ssc_client_send_finish (SSCClient *self, GAsyncResult *res, GError **error);
+ 
+diff --git a/src/libssc-client.c b/src/libssc-client.c
+index 1448312..feff34d 100644
+--- a/src/libssc-client.c
++++ b/src/libssc-client.c
+@@ -163,44 +163,29 @@ ssc_client_send_finish (SSCClient *self, GAsyncResult *res, GError **error)
+ 
+ void
+ ssc_client_send (SSCClient *self, guint64 uid_high, guint64 uid_low, guint32 message_id, GArray *protobuf, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data)
++{
++	ssc_client_send_delivery (self, uid_high, uid_low, message_id, protobuf, NULL, cancellable, callback, user_data);
++}
++
++/*
++ * As ssc_client_send, with the delivery of the events this request asks
++ * for (NULL: as ssc_client_send, every event at once, waking the processor)
++ */
++void
++ssc_client_send_delivery (SSCClient *self, guint64 uid_high, guint64 uid_low, guint32 message_id, GArray *protobuf, const SSCDelivery *delivery, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data)
+ {
+ 	GTask *task = NULL;
+ 	GError *error = NULL;
+ 	QmiMessageSscControlInput *input = NULL;
+ 	SSCClientPrivate *priv = NULL;
+ 	g_autoptr (GArray) buf = NULL;
+-	SscClientRequestBody body_msg;
+-	SscClientConfig config_msg;
+-	SscClientRequest client_msg;
+-	SscUid uid_msg;
+ 
+ 	task = g_task_new (self, cancellable, callback, user_data);
+-	buf = g_array_new (FALSE, FALSE, 1);
+ 	priv = ssc_client_get_instance_private (self);
+ 
+-	ssc_client_config__init (&config_msg);
+-	config_msg.processor = SSC_PROCESSOR_APSS;
+-	config_msg.suspend_mode = SSC_SUSPEND_MODE_WAKEUP;
+-
+-	ssc_client_request_body__init (&body_msg);
+-	if (protobuf) {
+-		body_msg.has_msg = true;
+-		body_msg.msg.data = (uint8_t *)protobuf->data;
+-		body_msg.msg.len = protobuf->len;
+-	}
+-
+-	ssc_uid__init (&uid_msg);
+-	uid_msg.low = uid_low;
+-	uid_msg.high = uid_high;
+-
+-	ssc_client_request__init (&client_msg);
+-	client_msg.uid = &uid_msg;
+-	client_msg.msg_id = message_id;
+-	client_msg.config = &config_msg;
+-	client_msg.request = &body_msg;
+-
+-	g_array_set_size (buf, ssc_client_request__get_packed_size (&client_msg));
+-	ssc_client_request__pack (&client_msg, (unsigned char*) buf->data);
++	buf = ssc_request_pack (uid_high, uid_low, message_id,
++				protobuf ? (const guint8 *) protobuf->data : NULL,
++				protobuf ? protobuf->len : 0, delivery);
+ 
+ 	if (buf == NULL) {
+ 		g_set_error (&error, ssc_client_error_quark(), SSC_CLIENT_ERROR_PROTOBUF,
+diff --git a/src/libssc-common-private.h b/src/libssc-common-private.h
+index ba9ab12..9ed1ba5 100644
+--- a/src/libssc-common-private.h
++++ b/src/libssc-common-private.h
+@@ -36,6 +36,11 @@
+ #define SSC_MSG_REPORT_MEASUREMENT_PROXIMITY		769
+ #define SSC_MSG_REPORT_MEASUREMENT			1025
+ #define SSC_MSG_REPORT_PEDOMETER			775	/* step count (Pro1X, SM6115) */
++#define SSC_MSG_REPORT_STEP_CONFIG			775	/* the step count when (re)configured */
++#define SSC_MSG_REPORT_STEP				1028	/* a step event: the count since activation */
++#define SSC_MSG_REQUEST_FLUSH				2	/* send what is batched, then a flush event */
++#define SSC_MSG_EVENT_FLUSH				129	/* a flush is complete */
++#define SSC_MSG_EVENT_ERROR				130
+ 
+ #define SSC_ACCURACY_UNRELIABLE				0
+ #define SSC_ACCURACY_LOW				1
+diff --git a/src/libssc-request-private.h b/src/libssc-request-private.h
+new file mode 100644
+index 0000000..cfa49d7
+--- /dev/null
++++ b/src/libssc-request-private.h
+@@ -0,0 +1,70 @@
++/*
++ * libssc: Library to expose Qualcomm Sensor Core sensors
++ * Copyright (C) 2022-2026 Dylan Van Assche
++ * Copyright (C) 2026 Sebastian Matkovich (delivery and batching)
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++#ifndef _LIBSSC_REQUEST_PRIVATE_H_
++#define _LIBSSC_REQUEST_PRIVATE_H_
++
++#include <glib.h>
++
++G_BEGIN_DECLS
++
++#define SSC_SUSPEND_MODE_NO_WAKEUP	1
++
++/*
++ * How the sensor core delivers a sensor's events (SscClientConfig and
++ * SscClientRequestBody.batching of the enable request):
++ *
++ * @wakeup: TRUE: events are sent as they become due, also to a suspended
++ *   application processor (WAKEUP, libssc's only mode before). FALSE: the
++ *   sensor core keeps them while the processor is suspended and sends them
++ *   when it is awake again (NO_WAKEUP).
++ * @batch_period_us: events wait up to this long in the sensor core and go
++ *   out together, one report for many; 0: every event at once. The core
++ *   treats periods below its registry's min_batch_period_thrshld_ms (10 ms
++ *   on the SM6115) as 0 and rejects periods below 1 ms.
++ * @flush_period_us: the core keeps at least this much of the newest events;
++ *   0: its default (the batch period plus 0.75 s).
++ * @flush_only: events only on a flush request or when the buffer is full.
++ *
++ * Without any of these (wakeup TRUE, the rest 0) the request carries no
++ * batch spec at all and is the same as libssc's before.
++ */
++typedef struct {
++	gboolean wakeup;
++	guint32 batch_period_us;
++	guint32 flush_period_us;
++	gboolean flush_only;
++} SSCDelivery;
++
++#define SSC_DELIVERY_DEFAULT { TRUE, 0, 0, FALSE }
++
++GArray		*ssc_request_pack	(guint64 uid_high, guint64 uid_low, guint32 msg_id,
++					 const guint8 *payload, gsize payload_len,
++					 const SSCDelivery *delivery);
++
++void		 ssc_request_delivery_defaults	(const gchar *data_type, gboolean continuous,
++						 SSCDelivery *delivery);
++
++void		 ssc_request_reset_config	(void);
++
++gboolean	 ssc_report_parse_count		(const guint8 *buf, gsize len, guint *count);
++
++G_END_DECLS
++
++#endif /* _LIBSSC_REQUEST_PRIVATE_H_ */
+diff --git a/src/libssc-request.c b/src/libssc-request.c
+new file mode 100644
+index 0000000..b8aeea8
+--- /dev/null
++++ b/src/libssc-request.c
+@@ -0,0 +1,283 @@
++/*
++ * libssc: Library to expose Qualcomm Sensor Core sensors
++ * Copyright (C) 2022-2026 Dylan Van Assche
++ * Copyright (C) 2026 Sebastian Matkovich (delivery and batching)
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++#include <stdlib.h>
++#include <stdbool.h>
++#include <string.h>
++
++#include "ssc-common.pb-c.h"
++#include "libssc-request-private.h"
++
++#define SSC_PROCESSOR_APSS_ID	1
++#define SSC_SUSPEND_WAKEUP_ID	0
++
++/*
++ * One client request to the sensor core (SscClientRequest): the sensor, the
++ * message, the delivery (suspend config and batch spec) and the sensor's own
++ * payload. The field numbers are those of the sensor core's client API
++ * (sns_client_request_msg, its suspend_config and sns_std_request with its
++ * batch_spec), see docs/sensors.md in the Pro1X repository.
++ */
++GArray *
++ssc_request_pack (guint64 uid_high, guint64 uid_low, guint32 msg_id,
++		  const guint8 *payload, gsize payload_len, const SSCDelivery *delivery)
++{
++	static const SSCDelivery fallback = SSC_DELIVERY_DEFAULT;
++	SscClientRequest client_msg;
++	SscClientConfig config_msg;
++	SscClientRequestBody body_msg;
++	SscBatchSpec batch_msg;
++	SscUid uid_msg;
++	GArray *buf;
++
++	if (!delivery)
++		delivery = &fallback;
++
++	ssc_client_config__init (&config_msg);
++	config_msg.processor = SSC_PROCESSOR_APSS_ID;
++	config_msg.suspend_mode = delivery->wakeup ? SSC_SUSPEND_WAKEUP_ID : SSC_SUSPEND_MODE_NO_WAKEUP;
++
++	ssc_client_request_body__init (&body_msg);
++	if (payload) {
++		body_msg.has_msg = true;
++		body_msg.msg.data = (uint8_t *) payload;
++		body_msg.msg.len = payload_len;
++	}
++
++	/* Only a request that batches carries a batch spec: without one the
++	 * bytes are the same as before batching existed in libssc */
++	ssc_batch_spec__init (&batch_msg);
++	if (delivery->batch_period_us > 0 || delivery->flush_only) {
++		batch_msg.batch_period = delivery->batch_period_us;
++		if (delivery->flush_period_us > 0) {
++			batch_msg.has_flush_period = true;
++			batch_msg.flush_period = MAX (delivery->flush_period_us, delivery->batch_period_us);
++		}
++		if (delivery->flush_only) {
++			batch_msg.has_flush_only = true;
++			batch_msg.flush_only = true;
++		}
++		body_msg.batching = &batch_msg;
++	}
++
++	ssc_uid__init (&uid_msg);
++	uid_msg.low = uid_low;
++	uid_msg.high = uid_high;
++
++	ssc_client_request__init (&client_msg);
++	client_msg.uid = &uid_msg;
++	client_msg.msg_id = msg_id;
++	client_msg.config = &config_msg;
++	client_msg.request = &body_msg;
++
++	buf = g_array_new (FALSE, FALSE, 1);
++	g_array_set_size (buf, ssc_client_request__get_packed_size (&client_msg));
++	ssc_client_request__pack (&client_msg, (unsigned char *) buf->data);
++
++	return buf;
++}
++
++/*****************************************************************************/
++
++/*
++ * The system's defaults for the delivery, from libssc.conf: LIBSSC_CONF if
++ * set (empty: none), else /etc/libssc.conf, else /usr/local/etc/libssc.conf.
++ *
++ *   [delivery]
++ *   continuous-batch-ms=200
++ *	batch period of streaming sensors (accelerometer, gyroscope,
++ *	magnetometer, ...); on-change sensors (light, proximity, the step
++ *	counter) report rarely and are not batched by default
++ *   no-wakeup=accel;mag;gyro;rotv;ambient_light;pedometer
++ *	data types whose events never wake a suspended processor
++ *
++ * The environment overrides the file for one process:
++ * LIBSSC_CONTINUOUS_BATCH_MS and LIBSSC_NO_WAKEUP (separated by ';' or ',').
++ * Without the file and the variables nothing changes: every event at once,
++ * waking the processor, as libssc did before. A client can still set its
++ * own (ssc_sensor_set_delivery).
++ */
++
++typedef struct {
++	guint continuous_batch_ms;
++	gchar **no_wakeup;
++} DeliveryConfig;
++
++static DeliveryConfig *config;
++G_LOCK_DEFINE_STATIC (config);
++
++static gchar **
++split_list (const gchar *s)
++{
++	gchar **v = g_strsplit_set (s, ";, \t", -1);
++	GPtrArray *out = g_ptr_array_new ();
++
++	for (gchar **p = v; *p; p++)
++		if (**p)
++			g_ptr_array_add (out, g_strdup (*p));
++	g_ptr_array_add (out, NULL);
++	g_strfreev (v);
++	return (gchar **) g_ptr_array_free (out, FALSE);
++}
++
++static DeliveryConfig *
++load_config (void)
++{
++	DeliveryConfig *c = g_new0 (DeliveryConfig, 1);
++	const gchar *env = g_getenv ("LIBSSC_CONF");
++	const gchar *files[] = { "/etc/libssc.conf", "/usr/local/etc/libssc.conf", NULL };
++	g_autoptr (GKeyFile) kf = g_key_file_new ();
++	gboolean loaded = FALSE;
++	const gchar *v;
++
++	if (env) {
++		if (*env)
++			loaded = g_key_file_load_from_file (kf, env, G_KEY_FILE_NONE, NULL);
++	} else {
++		for (guint i = 0; files[i] && !loaded; i++)
++			loaded = g_key_file_load_from_file (kf, files[i], G_KEY_FILE_NONE, NULL);
++	}
++
++	if (loaded) {
++		g_autofree gchar *list = NULL;
++		gint ms = g_key_file_get_integer (kf, "delivery", "continuous-batch-ms", NULL);
++
++		c->continuous_batch_ms = ms > 0 ? (guint) ms : 0;
++		list = g_key_file_get_value (kf, "delivery", "no-wakeup", NULL);
++		if (list)
++			c->no_wakeup = split_list (list);
++	}
++
++	v = g_getenv ("LIBSSC_CONTINUOUS_BATCH_MS");
++	if (v)
++		c->continuous_batch_ms = (guint) strtoul (v, NULL, 10);
++	v = g_getenv ("LIBSSC_NO_WAKEUP");
++	if (v) {
++		g_strfreev (c->no_wakeup);
++		c->no_wakeup = split_list (v);
++	}
++	if (!c->no_wakeup)
++		c->no_wakeup = g_new0 (gchar *, 1);
++
++	/* the sensor core rejects batch periods below 1 ms and streams below
++	 * its threshold anyway; keep a period within what a uint32 of
++	 * microseconds holds */
++	c->continuous_batch_ms = MIN (c->continuous_batch_ms, G_MAXUINT32 / 1000);
++
++	g_debug ("Delivery defaults: continuous sensors batched %u ms, no wakeup for '%s'",
++		 c->continuous_batch_ms, c->no_wakeup[0] ? c->no_wakeup[0] : "");
++	return c;
++}
++
++void
++ssc_request_reset_config (void)
++{
++	G_LOCK (config);
++	if (config) {
++		g_strfreev (config->no_wakeup);
++		g_free (config);
++		config = NULL;
++	}
++	G_UNLOCK (config);
++}
++
++void
++ssc_request_delivery_defaults (const gchar *data_type, gboolean continuous, SSCDelivery *delivery)
++{
++	G_LOCK (config);
++	if (!config)
++		config = load_config ();
++
++	delivery->wakeup = !(data_type && g_strv_contains ((const gchar * const *) config->no_wakeup, data_type));
++	delivery->batch_period_us = continuous ? config->continuous_batch_ms * 1000 : 0;
++	delivery->flush_period_us = 0;
++	delivery->flush_only = FALSE;
++	G_UNLOCK (config);
++}
++
++/*****************************************************************************/
++
++static gboolean
++read_varint (const guint8 **p, const guint8 *end, guint64 *value)
++{
++	guint shift = 0;
++
++	*value = 0;
++	while (*p < end && shift < 64) {
++		guint8 b = *(*p)++;
++		*value |= (guint64)(b & 0x7f) << shift;
++		if (!(b & 0x80))
++			return TRUE;
++		shift += 7;
++	}
++	return FALSE;
++}
++
++/*
++ * The count in a step counter's report: field 1, a varint (the step events
++ * 1028 and 775), a float or packed floats (a standard sensor event, 1025).
++ */
++gboolean
++ssc_report_parse_count (const guint8 *buf, gsize len, guint *steps)
++{
++	const guint8 *p = buf, *end = buf + len;
++	guint64 key, value;
++	gfloat f;
++
++	while (p < end) {
++		if (!read_varint (&p, end, &key))
++			return FALSE;
++		switch (key & 7) {
++		case 0:
++			if (!read_varint (&p, end, &value))
++				return FALSE;
++			if ((key >> 3) == 1) {
++				*steps = (guint) value;
++				return TRUE;
++			}
++			break;
++		case 1:
++			p += 8;
++			break;
++		case 2:
++			if (!read_varint (&p, end, &value) || value > (guint64)(end - p))
++				return FALSE;
++			if ((key >> 3) == 1 && value >= sizeof (f)) {
++				memcpy (&f, p, sizeof (f));
++				*steps = f > 0 ? (guint)(f + 0.5f) : 0;
++				return TRUE;
++			}
++			p += value;
++			break;
++		case 5:
++			if (end - p < 4)
++				return FALSE;
++			if ((key >> 3) == 1) {
++				memcpy (&f, p, sizeof (f));
++				*steps = f > 0 ? (guint)(f + 0.5f) : 0;
++				return TRUE;
++			}
++			p += 4;
++			break;
++		default:
++			return FALSE;
++		}
++	}
++	return FALSE;
++}
+diff --git a/src/libssc-sensor-pedometer.c b/src/libssc-sensor-pedometer.c
+index f05b054..5f77270 100644
+--- a/src/libssc-sensor-pedometer.c
++++ b/src/libssc-sensor-pedometer.c
+@@ -22,15 +22,20 @@
+ #include "libssc-client-private.h"
+ #include "libssc-common-private.h"
+ #include "libssc-sensor-pedometer.h"
++#include "libssc-request-private.h"
+ 
+ /*
+  * The ADSP's step counter ("pedometer"). It counts on the sensor core from
+  * the accelerometer, so the application processor may sleep while walking.
+- * A report carries the steps counted since the sensor was enabled: on the
+- * Pro1X (SM6115) message 775 with the count as field 1 (varint). Other
++ * A report carries the steps counted since the sensor was activated, as
++ * field 1 (varint): message 1028 for each step (a recurrent event, which
++ * the sensor core batches and may drop the oldest of while a non-waking
++ * client's processor is suspended) and 775 at once whenever a client's
++ * request comes in (enable, reconfigure), with the count so far. Other
+  * firmware may send a standard sensor event with the count as its first
+  * float, so the report is read with a small protobuf scanner instead of a
+- * .proto.
++ * .proto. Every report is an absolute count: the newest one is all that
++ * matters, dropped or batched ones lose nothing.
+  */
+ 
+ enum {
+@@ -70,72 +75,6 @@ emit_signal (gpointer user_data) {
+ 	return G_SOURCE_REMOVE;
+ }
+ 
+-static gboolean
+-read_varint (const guint8 **p, const guint8 *end, guint64 *value)
+-{
+-	guint shift = 0;
+-
+-	*value = 0;
+-	while (*p < end && shift < 64) {
+-		guint8 b = *(*p)++;
+-		*value |= (guint64)(b & 0x7f) << shift;
+-		if (!(b & 0x80))
+-			return TRUE;
+-		shift += 7;
+-	}
+-	return FALSE;
+-}
+-
+-/* Field 1 of the report: a varint, a float or packed floats. */
+-static gboolean
+-parse_steps (const guint8 *buf, gsize len, guint *steps)
+-{
+-	const guint8 *p = buf, *end = buf + len;
+-	guint64 key, value;
+-	gfloat f;
+-
+-	while (p < end) {
+-		if (!read_varint (&p, end, &key))
+-			return FALSE;
+-		switch (key & 7) {
+-		case 0:
+-			if (!read_varint (&p, end, &value))
+-				return FALSE;
+-			if ((key >> 3) == 1) {
+-				*steps = (guint) value;
+-				return TRUE;
+-			}
+-			break;
+-		case 1:
+-			p += 8;
+-			break;
+-		case 2:
+-			if (!read_varint (&p, end, &value) || value > (guint64)(end - p))
+-				return FALSE;
+-			if ((key >> 3) == 1 && value >= sizeof (f)) {
+-				memcpy (&f, p, sizeof (f));
+-				*steps = f > 0 ? (guint)(f + 0.5f) : 0;
+-				return TRUE;
+-			}
+-			p += value;
+-			break;
+-		case 5:
+-			if (end - p < 4)
+-				return FALSE;
+-			if ((key >> 3) == 1) {
+-				memcpy (&f, p, sizeof (f));
+-				*steps = f > 0 ? (guint)(f + 0.5f) : 0;
+-				return TRUE;
+-			}
+-			p += 4;
+-			break;
+-		default:
+-			return FALSE;
+-		}
+-	}
+-	return FALSE;
+-}
+-
+ static void
+ report_received (SSCClient *self, guint32 msg_id, guint64 uid_high, guint64 uid_low, GArray *buf, gpointer user_data)
+ {
+@@ -161,11 +100,13 @@ report_received (SSCClient *self, guint32 msg_id, guint64 uid_high, guint64 uid_
+ 		g_debug ("Pedometer report %u: %s", msg_id, hex);
+ 	}
+ 
+-	/* Answers to the attribute and enable requests; the step event itself
+-	 * comes as message 775 on the Pro1X (SM6115) */
+-	if (msg_id == SSC_MSG_RESPONSE_GET_ATTRIBUTES || msg_id == SSC_MSG_RESPONSE_ENABLE_REPORT)
++	/* Only step events (1028), the count on a request (775) and standard
++	 * sensor events (1025) carry a count; the others are answers to the
++	 * attribute and enable requests, flush and error events */
++	if (msg_id != SSC_MSG_REPORT_STEP && msg_id != SSC_MSG_REPORT_STEP_CONFIG &&
++	    msg_id != SSC_MSG_REPORT_MEASUREMENT)
+ 		return;
+-	if (!parse_steps ((const guint8 *) buf->data, buf->len, &steps)) {
++	if (!ssc_report_parse_count ((const guint8 *) buf->data, buf->len, &steps)) {
+ 		g_warning ("Failed to read pedometer report %u", msg_id);
+ 		return;
+ 	}
+diff --git a/src/libssc-sensor.c b/src/libssc-sensor.c
+index 9618164..a20e428 100644
+--- a/src/libssc-sensor.c
++++ b/src/libssc-sensor.c
+@@ -61,6 +61,12 @@ typedef struct _SSCSensorPrivate {
+ 	gboolean attr_populated;
+ 	gboolean service_available;
+ 	guint service_retries;
++
++	/* how the sensor core delivers the events (libssc.conf's defaults
++	 * unless the client set its own), and whether the sensor is on */
++	SSCDelivery delivery;
++	gboolean delivery_set;
++	gboolean opened;
+ } SSCSensorPrivate;
+ 
+ static void async_initable_iface_init (GAsyncInitableIface *iface);
+@@ -127,6 +133,7 @@ sensor_close (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback ca
+ 	priv = ssc_sensor_get_instance_private (self);
+ 
+ 	g_info ("Disabling sensor (%" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT ")", priv->uid_high, priv->uid_low);
++	priv->opened = FALSE;
+ 
+ 	ssc_client_send (priv->client,
+ 			 priv->uid_high,
+@@ -177,12 +184,53 @@ sensor_open_ready (SSCClient *self, GAsyncResult *result, gpointer user_data)
+ 	g_debug ("Sensor enable request sent successfully");
+ }
+ 
++/*
++ * The enable request: a sample rate for streaming sensors, none for
++ * on-change ones; the delivery from the client or libssc.conf
++ */
++static gboolean
++build_enable_request (SSCSensor *self, guint32 *msg_id, GArray **buf, GError **error)
++{
++	SSCSensorPrivate *priv = ssc_sensor_get_instance_private (self);
++	SscEnableConfigRequest msg;
++
++	*buf = NULL;
++	if (priv->stream_type == SSC_STREAM_TYPE_CONTINUOUS) {
++		ssc_enable_config_request__init (&msg);
++
++		if (priv->sample_rate <= 0.0) {
++			g_set_error (error, ssc_sensor_error_quark(), SSC_SENSOR_ERROR_SAMPLE_RATE_UNAVAILABLE,
++				     "Sensor sample rate is unavailable");
++			return FALSE;
++		}
++
++		msg.sample_rate = priv->sample_rate;
++		*buf = g_array_new (FALSE, FALSE, 1);
++		g_array_set_size (*buf, ssc_enable_config_request__get_packed_size (&msg));
++		ssc_enable_config_request__pack (&msg, (unsigned char*) (*buf)->data);
++
++		*msg_id = SSC_MSG_REQUEST_ENABLE_REPORT_CONTINUOUS;
++	} else if (priv->stream_type == SSC_STREAM_TYPE_ON_CHANGE) {
++		*msg_id = SSC_MSG_REQUEST_ENABLE_REPORT_ON_CHANGE;
++	} else
++		g_assert_not_reached ();
++
++	if (!priv->delivery_set)
++		ssc_request_delivery_defaults (priv->data_type,
++					       priv->stream_type == SSC_STREAM_TYPE_CONTINUOUS,
++					       &priv->delivery);
++	g_debug ("Delivery for '%s' sensor: %s, batch period %u us, flush period %u us%s",
++		 priv->data_type, priv->delivery.wakeup ? "wakeup" : "no wakeup",
++		 priv->delivery.batch_period_us, priv->delivery.flush_period_us,
++		 priv->delivery.flush_only ? ", flush only" : "");
++	return TRUE;
++}
++
+ static void
+ sensor_open (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data)
+ {
+ 	SSCSensorPrivate *priv = NULL;
+ 	GTask *task = NULL;
+-	SscEnableConfigRequest msg;
+ 	g_autoptr (GArray) buf = NULL;
+ 	ReportReceivedContext *ctx;
+ 	guint32 msg_id;
+@@ -205,31 +253,11 @@ sensor_open (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback cal
+ 	 * Sensors which support continuous streaming need a sample rate,
+ 	 * on-change sensors do not have a message payload
+ 	 */
+-	if (priv->stream_type == SSC_STREAM_TYPE_CONTINUOUS) {
+-		ssc_enable_config_request__init (&msg);
+-
+-		if (priv->sample_rate <= 0.0) {
+-			g_set_error (&error, ssc_sensor_error_quark(), SSC_SENSOR_ERROR_SAMPLE_RATE_UNAVAILABLE,
+-				     "Sensor sample rate is unavailable");
+-			g_task_return_error (task, error);
+-			g_object_unref (task);
+-			return;
+-		}
+-
+-		msg.sample_rate = priv->sample_rate;
+-		buf = g_array_new (FALSE, FALSE, 1);
+-		g_array_set_size (buf, ssc_enable_config_request__get_packed_size (&msg));
+-		ssc_enable_config_request__pack (&msg, (unsigned char*) buf->data);
+-
+-		msg_id = SSC_MSG_REQUEST_ENABLE_REPORT_CONTINUOUS;
+-	/*
+-	 * Sensors which support on-change do not need any configuration,
+-	 * only a different message ID to enable them.
+-	 */
+-	} else if (priv->stream_type == SSC_STREAM_TYPE_ON_CHANGE) {
+-		msg_id = SSC_MSG_REQUEST_ENABLE_REPORT_ON_CHANGE;
+-	} else
+-		g_assert_not_reached ();
++	if (!build_enable_request (self, &msg_id, &buf, &error)) {
++		g_task_return_error (task, error);
++		g_object_unref (task);
++		return;
++	}
+ 
+ 	ctx = g_slice_new (ReportReceivedContext);
+ 	ctx->task = task;
+@@ -241,14 +269,15 @@ sensor_open (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback cal
+ 			G_CALLBACK (report_received),
+ 			ctx);
+ 
+-	ssc_client_send (priv->client,
+-			 priv->uid_high,
+-			 priv->uid_low,
+-			 msg_id,
+-			 buf,
+-			 g_task_get_cancellable (task),
+-			 (GAsyncReadyCallback)sensor_open_ready,
+-			 task);
++	ssc_client_send_delivery (priv->client,
++				  priv->uid_high,
++				  priv->uid_low,
++				  msg_id,
++				  buf,
++				  &priv->delivery,
++				  g_task_get_cancellable (task),
++				  (GAsyncReadyCallback)sensor_open_ready,
++				  task);
+ }
+ 
+ gboolean
+@@ -268,6 +297,203 @@ ssc_sensor_open (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback
+ 
+ /*****************************************************************************/
+ 
++/**
++ * ssc_sensor_set_delivery:
++ * @wakeup: TRUE: events wake a suspended processor; FALSE: the sensor core
++ *   keeps them while it is suspended and sends them once it is awake
++ * @batch_period_us: how long events may wait in the sensor core to go out
++ *   together (0: at once)
++ * @flush_period_us: how much of the newest events the core keeps at least
++ *   (0: its default, the batch period plus 0.75 s)
++ * @flush_only: events only on ssc_sensor_flush() or a full buffer
++ *
++ * How the sensor core is to deliver this sensor's events, instead of the
++ * defaults of libssc.conf. Takes effect at the next ssc_sensor_open() or
++ * ssc_sensor_reconfigure().
++ */
++void
++ssc_sensor_set_delivery (SSCSensor *self, gboolean wakeup, guint32 batch_period_us,
++			 guint32 flush_period_us, gboolean flush_only)
++{
++	SSCSensorPrivate *priv = ssc_sensor_get_instance_private (self);
++
++	priv->delivery.wakeup = wakeup;
++	priv->delivery.batch_period_us = batch_period_us;
++	priv->delivery.flush_period_us = flush_period_us;
++	priv->delivery.flush_only = flush_only;
++	priv->delivery_set = TRUE;
++}
++
++static void
++reconfigure_sent (SSCClient *client, GAsyncResult *result, gpointer user_data)
++{
++	GTask *task = G_TASK (user_data);
++	GError *error = NULL;
++
++	if (!ssc_client_send_finish (client, result, &error))
++		g_task_return_error (task, error);
++	else
++		g_task_return_boolean (task, TRUE);
++	g_object_unref (task);
++}
++
++/**
++ * ssc_sensor_reconfigure:
++ *
++ * Sends the enable request of an open sensor again with its current
++ * delivery (ssc_sensor_set_delivery()). The sensor core's client manager
++ * then sends what it has batched for this client at once and goes on with
++ * the new batch period; the sensor itself is not switched off and on. A
++ * closed sensor only keeps the delivery for its next open.
++ */
++void
++ssc_sensor_reconfigure (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data)
++{
++	SSCSensorPrivate *priv = ssc_sensor_get_instance_private (self);
++	GTask *task = g_task_new (self, cancellable, callback, user_data);
++	g_autoptr (GArray) buf = NULL;
++	GError *error = NULL;
++	guint32 msg_id;
++
++	if (!priv->opened) {
++		g_task_return_boolean (task, TRUE);
++		g_object_unref (task);
++		return;
++	}
++	if (!build_enable_request (self, &msg_id, &buf, &error)) {
++		g_task_return_error (task, error);
++		g_object_unref (task);
++		return;
++	}
++	g_info ("Reconfiguring sensor (%" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT ")", priv->uid_high, priv->uid_low);
++	ssc_client_send_delivery (priv->client, priv->uid_high, priv->uid_low, msg_id, buf,
++				  &priv->delivery, cancellable,
++				  (GAsyncReadyCallback) reconfigure_sent, task);
++}
++
++gboolean
++ssc_sensor_reconfigure_finish (SSCSensor *self, GAsyncResult *result, GError **error)
++{
++	return g_task_propagate_boolean (G_TASK (result), error);
++}
++
++/*
++ * A flush: the request goes out, the sensor core sends what it has batched
++ * for this client and then a flush event (129), which completes the task.
++ * The task holds a reference for the report handler, the time limit and
++ * the request each; whichever finishes it first returns the result.
++ */
++#define FLUSH_TIMEOUT_MS 5000
++
++typedef struct {
++	SSCSensor *sensor;
++	gulong report_id;
++	guint timeout_id;
++	gboolean done;
++} FlushContext;
++
++static void
++flush_done (GTask *task, GError *error)
++{
++	FlushContext *fc = g_task_get_task_data (task);
++	SSCSensorPrivate *priv = ssc_sensor_get_instance_private (fc->sensor);
++
++	if (fc->done) {
++		g_clear_error (&error);
++		return;
++	}
++	fc->done = TRUE;
++	g_object_ref (task);
++	if (fc->report_id)
++		g_signal_handler_disconnect (priv->client, fc->report_id);
++	fc->report_id = 0;
++	if (fc->timeout_id)
++		g_source_remove (fc->timeout_id);
++	fc->timeout_id = 0;
++	if (error)
++		g_task_return_error (task, error);
++	else
++		g_task_return_boolean (task, TRUE);
++	g_object_unref (task);
++}
++
++static void
++flush_report (SSCClient *client, guint32 msg_id, guint64 uid_high, guint64 uid_low, GArray *buf, gpointer user_data)
++{
++	GTask *task = G_TASK (user_data);
++	FlushContext *fc = g_task_get_task_data (task);
++	SSCSensorPrivate *priv = ssc_sensor_get_instance_private (fc->sensor);
++
++	if (msg_id == SSC_MSG_EVENT_FLUSH && uid_high == priv->uid_high && uid_low == priv->uid_low) {
++		g_debug ("Flush complete for '%s' sensor", priv->data_type);
++		flush_done (task, NULL);
++	}
++}
++
++static gboolean
++flush_timeout (gpointer user_data)
++{
++	GTask *task = G_TASK (user_data);
++	FlushContext *fc = g_task_get_task_data (task);
++
++	fc->timeout_id = 0;
++	flush_done (task, g_error_new (G_IO_ERROR, G_IO_ERROR_TIMED_OUT, "No flush event within %d ms", FLUSH_TIMEOUT_MS));
++	return G_SOURCE_REMOVE;
++}
++
++static void
++flush_sent (SSCClient *client, GAsyncResult *result, gpointer user_data)
++{
++	GTask *task = G_TASK (user_data);
++	GError *error = NULL;
++
++	if (!ssc_client_send_finish (client, result, &error))
++		flush_done (task, error);
++	g_object_unref (task);
++}
++
++/**
++ * ssc_sensor_flush:
++ *
++ * Asks the sensor core for everything it has batched for this sensor; the
++ * events arrive as usual ("measurement" signals), then the task completes.
++ * It fails after 5 s without the sensor core's flush event, at once for a
++ * closed sensor.
++ */
++void
++ssc_sensor_flush (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data)
++{
++	SSCSensorPrivate *priv = ssc_sensor_get_instance_private (self);
++	GTask *task = g_task_new (self, cancellable, callback, user_data);
++	FlushContext *fc;
++
++	if (!priv->opened) {
++		g_task_return_new_error (task, ssc_sensor_error_quark (), SSC_SENSOR_ERROR_UNAVAILABLE,
++					 "Cannot flush a sensor that is not open");
++		g_object_unref (task);
++		return;
++	}
++	fc = g_new0 (FlushContext, 1);
++	fc->sensor = self;
++	g_task_set_task_data (task, fc, g_free);
++	fc->report_id = g_signal_connect_data (priv->client, "report", G_CALLBACK (flush_report),
++					       g_object_ref (task), (GClosureNotify) g_object_unref, 0);
++	fc->timeout_id = g_timeout_add_full (G_PRIORITY_DEFAULT, FLUSH_TIMEOUT_MS, flush_timeout,
++					     g_object_ref (task), g_object_unref);
++	ssc_client_send_delivery (priv->client, priv->uid_high, priv->uid_low, SSC_MSG_REQUEST_FLUSH,
++				  NULL, &priv->delivery, cancellable,
++				  (GAsyncReadyCallback) flush_sent, g_object_ref (task));
++	g_object_unref (task);
++}
++
++gboolean
++ssc_sensor_flush_finish (SSCSensor *self, GAsyncResult *result, GError **error)
++{
++	return g_task_propagate_boolean (G_TASK (result), error);
++}
++
++/*****************************************************************************/
++
+ static void
+ report_received (SSCClient *self, guint32 msg_id, guint64 uid_high, guint64 uid_low, GArray *buf, gpointer user_data)
+ {
+@@ -467,6 +693,7 @@ report_received (SSCClient *self, guint32 msg_id, guint64 uid_high, guint64 uid_
+ 		g_debug ("  sample-rate: %f Hz", config_msg->has_sample_rate ? config_msg->sample_rate : 0.0);
+ 
+ 		/* Configuration updated, complete task and stop listening */
++		priv->opened = TRUE;
+ 		if (ctx->task) {
+ 			g_signal_handler_disconnect (self, priv->report_id);
+ 			priv->report_id = 0;
+@@ -484,8 +711,9 @@ report_received (SSCClient *self, guint32 msg_id, guint64 uid_high, guint64 uid_
+ 	 * Either a configuration update or measurement will complete the task and disconnect the listener.
+ 	 */
+ 	} else if (uid_high == priv->uid_high && uid_low == priv->uid_low && (msg_id == SSC_MSG_REPORT_MEASUREMENT || msg_id == SSC_MSG_REPORT_MEASUREMENT_PROXIMITY ||
+-										      msg_id == SSC_MSG_REPORT_PEDOMETER)) {
++										      msg_id == SSC_MSG_REPORT_PEDOMETER || msg_id == SSC_MSG_REPORT_STEP)) {
+ 		g_debug ("Measurement received for '%s' sensor (%" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT "), assuming enabled", priv->data_type, priv->uid_high, priv->uid_low);
++		priv->opened = TRUE;
+ 
+ 		if (ctx->task) {
+ 			g_signal_handler_disconnect (self, priv->report_id);
+@@ -858,28 +1086,30 @@ ssc_sensor_class_init (SSCSensorClass *klass)
+ 				     G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+ 	g_object_class_install_property (object_class, PROP_DATA_TYPE, properties[PROP_DATA_TYPE]);
+ 
++	/* (these three were string properties holding a number or boolean,
++	 * which g_object_get() could not read) */
+ 	properties[PROP_STREAM_TYPE] =
+-		g_param_spec_string (SSC_SENSOR_STREAM_TYPE,
+-				     "Stream type",
+-				     "The stream type supported by the sensor.",
+-				     NULL,
+-				     G_PARAM_READABLE);
++		g_param_spec_uint (SSC_SENSOR_STREAM_TYPE,
++				   "Stream type",
++				   "The stream type supported by the sensor (0: continuous, 1: on-change).",
++				   0, G_MAXUINT, 0,
++				   G_PARAM_READABLE);
+ 	g_object_class_install_property (object_class, PROP_STREAM_TYPE, properties[PROP_STREAM_TYPE]);
+ 
+ 	properties[PROP_AVAILABLE] =
+-		g_param_spec_string (SSC_SENSOR_AVAILABLE,
+-				     "Availability",
+-				     "If the sensor is available for measurements.",
+-				     NULL,
+-				     G_PARAM_READABLE);
++		g_param_spec_boolean (SSC_SENSOR_AVAILABLE,
++				      "Availability",
++				      "If the sensor is available for measurements.",
++				      FALSE,
++				      G_PARAM_READABLE);
+ 	g_object_class_install_property (object_class, PROP_AVAILABLE, properties[PROP_AVAILABLE]);
+ 
+ 	properties[PROP_SAMPLE_RATE] =
+-		g_param_spec_string (SSC_SENSOR_SAMPLE_RATE,
+-				     "Sample rate",
+-				     "The sample rate in Hz supported by the sensor.",
+-				     NULL,
+-				     G_PARAM_READABLE);
++		g_param_spec_float (SSC_SENSOR_SAMPLE_RATE,
++				    "Sample rate",
++				    "The sample rate in Hz supported by the sensor.",
++				    0, G_MAXFLOAT, 0,
++				    G_PARAM_READABLE);
+ 	g_object_class_install_property (object_class, PROP_SAMPLE_RATE, properties[PROP_SAMPLE_RATE]);
+ 
+ 	properties[PROP_MOUNT_MATRIX] =
+diff --git a/src/libssc-sensor.h b/src/libssc-sensor.h
+index 698be9c..1810ca2 100644
+--- a/src/libssc-sensor.h
++++ b/src/libssc-sensor.h
+@@ -56,6 +56,11 @@ void		 ssc_sensor_open (SSCSensor *self, GCancellable *cancellable, GAsyncReadyC
+ gboolean	 ssc_sensor_open_finish (SSCSensor *self, GAsyncResult *result, GError **error);
+ void		 ssc_sensor_close (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
+ gboolean	 ssc_sensor_close_finish (SSCSensor *self, GAsyncResult *result, GError **error);
++void		 ssc_sensor_set_delivery (SSCSensor *self, gboolean wakeup, guint32 batch_period_us, guint32 flush_period_us, gboolean flush_only);
++void		 ssc_sensor_reconfigure (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
++gboolean	 ssc_sensor_reconfigure_finish (SSCSensor *self, GAsyncResult *result, GError **error);
++void		 ssc_sensor_flush (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
++gboolean	 ssc_sensor_flush_finish (SSCSensor *self, GAsyncResult *result, GError **error);
+ 
+ struct _SSCSensorClass {
+ 	GObjectClass parent_class;
+diff --git a/src/meson.build b/src/meson.build
+index bfb6730..773c612 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -54,6 +54,7 @@ sources += files(
+   'libssc-sensor-compass.c',
+   'libssc-sensor-gyroscope.c',
+   'libssc-sensor-pedometer.c',
++  'libssc-request.c',
+ )
+ 
+ cli_sources = files(

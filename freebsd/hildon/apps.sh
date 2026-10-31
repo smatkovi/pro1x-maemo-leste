@@ -873,7 +873,8 @@ custom_libqmi() {
 	    -Dgtk_doc=false -Dman=false -Dbash_completion=false
 }
 
-# The ADSP's sensors over QMI (Leste: v0.4.4 with its two patches)
+# The ADSP's sensors over QMI (Leste: v0.4.4 with its patches: the step
+# counter, sleeping waits, the sensor core's batched, non-waking delivery)
 custom_libssc() {
 	meson_cross
 }
