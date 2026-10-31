@@ -132,32 +132,58 @@ comes back from its release (`apt install --allow-change-held-packages
 
 ## Arch Linux
 
-`arch.manifest` lists the newest package of each name across the
-`arch-hildon-*` releases (pacman's version order). The tool compares them
-with `pacman -Q` (`vercmp`), downloads and checks them as on Leste
-(SHA-256, `.PKGINFO`'s name and version), and checks the files they bring
-that already exist:
+`arch.manifest` (format 2) lists the newest package of each name across the
+`arch-hildon-*` releases (pacman's version order), with each package's
+`depend`, `provides` and `conflict` from its `.PKGINFO`. Since
+arch-hildon-2026.10.30.1 these are all 152 parts of the Arch steps, which
+depend on each other, so the tool picks as on Leste:
 
-- **Files without a package** (put there by steps 40/41 without pacman) are
-  taken over. The dry run counts them.
+| group | packages | installed |
+|---|---|---|
+| `core` | the parts of arch-hildon-2026.10.30 (libhildon, hildon-status-menu, hildon-desktop, calendar-backend, rtcom-eventlogger, rtcom-eventlogger-plugins, pro1x-events, pro1x-volume-osd, pro1x-fm) and this repository's own `pro1x-*` (pro1x-sessions) | also where missing |
+| `harmattan` | `harmattan-*`, qt-components, libngf, ngfd | where installed (registered in pacman); `--with harmattan` installs them all |
+| `apps` | the rest: Hildon's apps and their libraries | where installed; `--with apps` |
+
+To these it adds what they depend on in the set, whatever its group: by
+name, or through a package's `provides` where nothing installed provides
+it already (`pacman -T`). The dry run marks those
+`install (for <package>)`. For the core alone that is 14 more (gtk2-maemo,
+gconf, libosso, alarmd, clockd, libhildondesktop, ...). An installed
+package is upgraded when the manifest has a newer version and never
+downgraded. `--skip PKG` leaves one out; the dry run warns when another
+one needs it. `--add PKG` takes one of the opt-in groups.
+
+Then, as on Leste, the downloads are checked (SHA-256, `.PKGINFO`'s name
+and version). The tool also checks the files they bring that already
+exist:
+
+- **Files without a package** (put there by steps 30 to 42 without
+  pacman) are taken over. The dry run counts them.
 - **Files of another package** stop the update before anything is
-  installed, with a list: `42-meego-look.sh` installs with `--overwrite '*'`,
-  which would overwrite them too.
+  installed, with a list. Two exceptions, which pacman handles itself: a
+  package that a new one conflicts with (it is removed), and a package
+  upgraded in the same run whose new version no longer has the file.
+- **Conflicts**: where a new package conflicts with an installed one, the
+  dry run says so (e.g. `gtk2-maemo replaces the installed gtk2`). pacman
+  then removes the old one (`--ask 4`, which answers pacman's "remove
+  it?" with yes; with `--noconfirm` alone pacman would stop).
 
-Then the dry run shows `pacman -U --print`. With `--yes` the packages go to
-`arch/42-meego-look.sh`'s PKGS mode (`PKGS=<dir> MNT=/`). The script and
-the files it installs come with the manifest (`arch-files.tar.gz`). It
-runs `pacman -U --needed`, then installs the session's files
-(`hildon-session`, `pro1x-rtc.service`, PipeWire's PulseAudio server), as
-the release notes say. snap-pac takes a Btrfs snapshot before and after
-(`pro1x-boot next arch@<number>` boots the one before).
+The dry run ends with what pacman would also take from Arch Linux ARM
+(`pacman -U --print`). With `--yes`: `pacman -U --noconfirm --needed
+--overwrite '*'`, as the release says. After the check above only
+nobody's files are left to overwrite. Then the session's settings, as
+`arch/42-meego-look.sh`'s PKGS mode makes them: PipeWire's PulseAudio
+server enabled for every user's session, MeeCast's icons where the Events
+page looks for them, `systemctl daemon-reload`. The sessions' scripts and
+units come with `pro1x-sessions`. snap-pac takes a Btrfs snapshot before
+and after (`pro1x-boot next arch@<number>` boots the one before).
 
-All of them are installed where missing (policy `always`): the Arch image
-has these parts from steps 40/41 without pacman. The packages are built
-against Arch Linux ARM of their date. If pacman cannot find a dependency,
-or a program misses a library, run `pacman -Syu` first: `--sysupgrade`
-does that before installing. Arch has no holds and needs none: Arch Linux
-ARM has none of these packages.
+The packages are built against Arch Linux ARM of their date. If pacman
+cannot find a dependency, or a program misses a library, run
+`pacman -Syu` first: `--sysupgrade` does that before installing. Arch has
+no holds and needs none: Arch Linux ARM has none of these packages
+(where it has one of the name, the release's is `<name>-maemo`, which
+provides and conflicts with it).
 
 For an Arch image mounted in Leste (`/mnt/arch`), use
 `PKGS=/dir bash arch/42-meego-look.sh` as before (`arch/README.md`).
@@ -201,9 +227,11 @@ then picks the newest of each package. It warns when a later release has
 an older version than an earlier one, or the same version with other
 contents. Example: `harmattan-system-ui 1.2.24-2+0m7+pro1x1` differs
 between leste-harmattan-2026.10.28 and .29; both are superseded by
-`+pro1x2`. The policies are in `leste_policy()`. The bundles
-`leste-files.tar.gz` and `arch-files.tar.gz` and the copy of
-`pro1x-update` come from `git archive HEAD`, so `--publish` refuses
+`+pro1x2`. (The nine parts of arch-hildon-2026.10.30 were rebuilt with
+the same versions in .30.1, so they give that warning too.) The policies
+are in `leste_policy()` and `arch_group()`. The bundle
+`leste-files.tar.gz` and the copy of `pro1x-update` come from
+`git archive HEAD`, so `--publish` refuses
 uncommitted changes to them and a HEAD that is not pushed. The manifests
 are uploaded last, so that a phone reading a new manifest also finds its
 files. The release's notes list every package with its version and
@@ -238,11 +266,18 @@ system does not use.
     `pro1x-waydroid` (not held) with weston from the archive;
   - without the chroot's own policy-rc.d: the tool put its own there for
     the install and removed it afterwards.
-- **Arch**: on the PC with a stand-in `pacman` (answers `-Q`, passes `-Qo` to the
-  real one, refuses installs) and a stand-in 42: the table, download and
-  checks, a crafted package with `/usr/bin/ls` (stopped: belongs to
-  coreutils) and an unowned file (taken over), `--yes` handing the
-  packages to 42.
+- **Arch**: on the PC with a stand-in `pacman` (its installed packages
+  from a list, `-Qo` from the real one for those, installs only logged)
+  and the real packages of arch-hildon-2026.10.30.1:
+  - nothing registered: the core and its 14 dependencies, 24 packages,
+    92 apps and 36 Harmattan parts left out;
+  - with gtk2, an older libhildon, a newer rtcom-eventlogger registered:
+    gtk2-maemo replaces gtk2 (gtk2's files on the PC allowed), libhildon
+    upgraded, rtcom-eventlogger kept;
+  - `--with harmattan` (55) and `--with apps,harmattan` (150);
+  - a crafted package with `/usr/bin/ls` (stopped: belongs to coreutils);
+  - `--yes`: `pacman -U --noconfirm --needed --overwrite '*' --ask 4` with
+    the 19 packages, then the session's settings (stand-in `systemctl`).
 - **FreeBSD**: the FreeBSD VM was in use. Tested on the PC with stand-ins for
   `pkg` and `fetch`: the tag from GitHub's API, the table from
   freebsd-hildon-2026.10.30.3's real catalogue, the rewrite of

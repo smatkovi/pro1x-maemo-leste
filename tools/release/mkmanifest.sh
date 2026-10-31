@@ -5,12 +5,14 @@
 #   leste.manifest    the newest version of every package across all
 #                     leste-* releases (by Debian version order), with its
 #                     release, URL, SHA-256, group and install policy
-#   arch.manifest     the same for the arch-* releases (pacman's order)
+#   arch.manifest     the same for the arch-* releases (pacman's order),
+#                     with each package's depends, provides and conflicts
+#                     (format 2: pro1x-update installs a package's
+#                     dependencies of the set with it)
 #   freebsd.manifest  the newest freebsd-hildon-* release (a pkg repository)
-#   leste-files.tar.gz, arch-files.tar.gz
-#                     the repository's scripts the tool runs for some
-#                     groups (49-mobile-data.sh, arch/42-meego-look.sh), at
-#                     HEAD (git archive)
+#   leste-files.tar.gz  the repository's script the tool runs for Leste's
+#                     mobile-data group (49-mobile-data.sh), at HEAD
+#                     (git archive)
 #   pro1x-update      the tool itself, at HEAD
 #
 # Every package is downloaded once (into CACHE) and its SHA-256 checked
@@ -51,15 +53,13 @@ for t in gh jq curl bsdtar python3 vercmp git sha256sum; do
   command -v "$t" > /dev/null || die "$t missing"
 done
 
-# The repository files the tool runs (hooks), per system. 42 reads the
-# tools' versions from mkdeb-tools.sh and 49-hidpi.sh.
+# The repository files the tool runs (hooks)
 LESTE_FILES="scripts/49-mobile-data.sh rootfs-overlay/etc/init.d/pro1x-modem-wait tools/pro1x-rmnet-flags"
-ARCH_FILES="arch/42-meego-look.sh scripts/mkdeb-tools.sh scripts/49-hidpi.sh arch/hildon/hildon-session kali/rootfs-overlay/etc/systemd/system/pro1x-rtc.service"
 TOOL=tools/pro1x-update/pro1x-update
 
 commit=$(git -C "$REPO" rev-parse HEAD)
 # shellcheck disable=SC2086
-if [ -n "$(git -C "$REPO" status --porcelain -- $LESTE_FILES $ARCH_FILES $TOOL)" ]; then
+if [ -n "$(git -C "$REPO" status --porcelain -- $LESTE_FILES $TOOL)" ]; then
   [ "$PUBLISH" = 0 ] || die "uncommitted changes in the files the manifests carry (git archive takes HEAD)"
   log "note: uncommitted changes in the carried files are not in them (HEAD is)"
 fi
@@ -96,9 +96,12 @@ sums_of() {
 # arch-; pacman's packages may be .xz or .zst): downloaded,
 # checked, its control data read. Writes rows of
 #   name version arch sha256 size tag created url
+# and for pacman's packages into ROWS.meta
+#   tag name|depends|provides|conflicts   (each space-separated)
 collect() {
   local prefix=$1 ext=$2 rows=$3
   : > "$rows"
+  : > "$rows.meta"
   local tag created name size digest url f sha sums meta pn pv pa
   while IFS=$'\t' read -r tag created name size digest url; do
     case $tag in "$prefix"*) ;; *) continue ;; esac
@@ -131,6 +134,10 @@ collect() {
       pn=$(printf '%s\n' "$meta" | sed -n 's/^pkgname = //p')
       pv=$(printf '%s\n' "$meta" | sed -n 's/^pkgver = //p')
       pa=$(printf '%s\n' "$meta" | sed -n 's/^arch = //p')
+      printf '%s %s|%s|%s|%s\n' "$tag" "$pn" \
+        "$(printf '%s\n' "$meta" | sed -n 's/^depend = //p' | tr '\n' ' ')" \
+        "$(printf '%s\n' "$meta" | sed -n 's/^provides = //p' | tr '\n' ' ')" \
+        "$(printf '%s\n' "$meta" | sed -n 's/^conflict = //p' | tr '\n' ' ')" >> "$rows.meta"
     fi
     [ -n "$pn" ] && [ -n "$pv" ] && [ -n "$pa" ] || die "$tag/$name: no name, version or architecture"
     printf '%s %s %s %s %s %s %s %s\n' "$pn" "$pv" "$pa" "$sha" "$size" "$tag" "$created" "$url" >> "$rows"
@@ -262,7 +269,7 @@ files_tar() {
 header() {
   cat << EOF
 # pro1x-update manifest, made by tools/release/mkmanifest.sh; docs/updating.md
-format 1
+format ${2:-1}
 system $1
 generated $NOW
 commit $commit
@@ -297,22 +304,41 @@ files_tar leste-files.tar.gz "$LESTE_FILES"
 } > "$OUT/leste.manifest"
 
 # --- Arch -------------------------------------------------------------------
-# All of them are installed where missing: the Arch image has these parts
-# from steps 40/41 without pacman, 42-meego-look.sh's PKGS mode puts the
-# packages over them and installs the session's files.
+# Groups and policies as on Leste: the core (the parts of the first
+# release, arch-hildon-2026.10.30, and this repository's own pro1x-*) is
+# installed where missing (the Arch image has these parts from steps 40/41
+# without pacman); harmattan (the N9's user interface) and apps (the rest:
+# Hildon's apps, their libraries) only where installed or with --with.
+# pro1x-update adds what a package it installs depends on in the set
+# (dep/prov lines), whatever its group.
+ARCH_CORE="libhildon hildon-status-menu hildon-desktop calendar-backend rtcom-eventlogger rtcom-eventlogger-plugins pro1x-events pro1x-volume-osd pro1x-fm"
+arch_group() {
+  case " $ARCH_CORE " in *" $1 "*) echo core; return ;; esac
+  case $1 in
+  pro1x-*) echo core ;;
+  harmattan-* | qt-components | libngf | ngfd) echo harmattan ;;
+  *) echo apps ;;
+  esac
+}
 log "Arch: arch-* packages"
 collect arch- '*.pkg.tar.*' "$CACHE/arch.rows"
 newest pac "$CACHE/arch.rows" > "$CACHE/arch.newest"
-files_tar arch-files.tar.gz "$ARCH_FILES"
 {
-  header arch
-  echo "files arch-files.tar.gz $(sha256sum "$OUT/arch-files.tar.gz" | cut -d' ' -f1) $URLBASE/arch-files.tar.gz"
-  echo "hook hildon arch-files.tar.gz arch/42-meego-look.sh"
+  header arch 2
   echo "# pkg name version arch group policy hold sha256 size release url"
+  echo "# dep/prov/conflict name list: its .PKGINFO's depend, provides, conflict"
   while read -r name ver arch sha size tag url; do
-    echo "pkg $name $ver $arch $(group_of "$tag") always no $sha $size $tag $url"
+    group=$(arch_group "$name")
+    policy=installed
+    [ "$group" != core ] || policy=always
+    echo "pkg $name $ver $arch $group $policy no $sha $size $tag $url"
+    m=$(awk -v t="$tag" -v n="$name" '$1 == t && substr($0, length(t) + 2, length(n) + 1) == n "|" { print substr($0, length(t) + length(n) + 3); exit }' "$CACHE/arch.rows.meta")
+    IFS='|' read -r deps provs confs <<< "$m"
+    [ -z "${deps// /}" ] || echo "dep $name $deps"
+    [ -z "${provs// /}" ] || echo "prov $name $provs"
+    [ -z "${confs// /}" ] || echo "conflict $name $confs"
   done < "$CACHE/arch.newest"
-} > "$OUT/arch.manifest"
+} | sed 's/ *$//' > "$OUT/arch.manifest"
 
 # --- FreeBSD ----------------------------------------------------------------
 # The newest freebsd-hildon-* release that is a pkg repository (meta.conf,
@@ -349,9 +375,9 @@ fbsd=$(awk -F'\t' '$1 ~ /^freebsd-hildon-/ && $3 == "packagesite.pkg" { print $1
   echo
   echo "### Arch (\`arch.manifest\`)"
   echo
-  echo "| package | version | release |"
-  echo "|---|---|---|"
-  awk '$1 == "pkg" { printf "| %s | %s | %s |\n", $2, $3, $10 }' "$OUT/arch.manifest"
+  echo "| package | version | release | group |"
+  echo "|---|---|---|---|"
+  awk '$1 == "pkg" { printf "| %s | %s | %s | %s%s |\n", $2, $3, $10, $5, ($6 == "always" ? ", installed where missing" : "") }' "$OUT/arch.manifest"
   echo
   echo "### FreeBSD (\`freebsd.manifest\`)"
   echo
@@ -359,7 +385,7 @@ fbsd=$(awk -F'\t' '$1 ~ /^freebsd-hildon-/ && $3 == "packagesite.pkg" { print $1
 } > "$OUT/notes.md"
 
 ls -l "$OUT"
-awk '$1 == "pkg" { print "   " $2, $3, $10, $6, $7 }' "$OUT/leste.manifest" "$OUT/arch.manifest"
+awk '$1 == "pkg" { print "   " $2, $3, $10, $5, $6, $7 }' "$OUT/leste.manifest" "$OUT/arch.manifest"
 echo "   freebsd-hildon-$fbsd"
 
 [ "$PUBLISH" = 1 ] || exit 0
@@ -373,6 +399,8 @@ else
 fi
 # the manifests last: a phone that reads a new manifest finds its files
 log "upload to $POINTER"
-gh release upload "$POINTER" -R "$GH" --clobber "$OUT/pro1x-update" "$OUT/leste-files.tar.gz" "$OUT/arch-files.tar.gz"
+gh release upload "$POINTER" -R "$GH" --clobber "$OUT/pro1x-update" "$OUT/leste-files.tar.gz"
 gh release upload "$POINTER" -R "$GH" --clobber "$OUT/leste.manifest" "$OUT/arch.manifest" "$OUT/freebsd.manifest"
+# (the Arch hook's files of format 1, no longer read)
+gh release delete-asset "$POINTER" arch-files.tar.gz -R "$GH" -y > /dev/null 2>&1 || true
 log "published: https://github.com/$GH/releases/tag/$POINTER"

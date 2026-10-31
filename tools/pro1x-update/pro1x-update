@@ -11,19 +11,22 @@
 #                them with apt in one go (no service restarted), holds the
 #                +pro1x rebuilds of Leste's packages. Never upgrades the
 #                rest of the system.
-#   Arch Linux   arch.manifest: the same for the arch-hildon-* packages,
-#                installed by arch/42-meego-look.sh's PKGS mode (pacman -U,
-#                then the session's files)
+#   Arch Linux   arch.manifest: the same for the arch-hildon-* packages:
+#                the core (the Hildon session's parts, pro1x-*) and what
+#                is installed, with what they depend on in the set; files
+#                of other packages stop it; pacman -U, the session's
+#                settings
 #   FreeBSD      the newest freebsd-hildon-* release (GitHub's API, else
 #                freebsd.manifest) into /usr/local/etc/pkg/repos/pro1x.conf,
 #                then pkg update -r pro1x and pkg upgrade -r pro1x
 #
 #   pro1x-update                 dry run: what would change
 #   pro1x-update --yes           do it
-#   --with GROUP[,GROUP]         Leste: also install the missing packages of
-#                                these groups (harmattan, waydroid,
-#                                mobile-data: the first oFono from this
-#                                repository, through 49-mobile-data.sh)
+#   --with GROUP[,GROUP]         also install the missing packages of these
+#                                groups. Leste: harmattan, waydroid,
+#                                mobile-data (the first oFono from this
+#                                repository, through 49-mobile-data.sh);
+#                                Arch: harmattan, apps
 #   --add PKG, --skip PKG        a package (shell pattern) in addition / not
 #   --allow-remove               Leste: let apt remove packages the update
 #                                conflicts with (shown by the dry run);
@@ -47,7 +50,7 @@ GH=${PRO1X_GH:-smatkovi/pro1x-maemo-leste}
 POINTER=${PRO1X_POINTER:-pro1x-latest}
 BASE=https://github.com/$GH/releases/download/$POINTER
 # the manifest format this reads
-FORMAT=1
+FORMAT=2
 
 say() { printf '%s\n' "$*"; }
 log() { printf '>> %s\n' "$*"; }
@@ -411,12 +414,17 @@ leste() {
 # --- Arch Linux --------------------------------------------------------------
 arch() {
   load_manifest arch
+  [ "$(awk '$1 == "format" { print $2 }' "$M")" -ge 2 ] ||
+    die "an arch.manifest of format 1: this pro1x-update needs the new one (tools/release/mkmanifest.sh)"
   ARCH=$(uname -m)
+  TAB=$(printf '\t')
   P=$TMP/plan
+  pacman -Q > "$TMP/registered" 2> /dev/null || : > "$TMP/registered"
   : > "$P"
+  # pkg name version arch group policy hold sha256 size release url
   awk '$1 == "pkg"' "$M" | while read -r _ name ver arch group policy hold sha size tag url; do
     case $arch in any | "$ARCH") ;; *) continue ;; esac
-    inst=$(pacman -Q "$name" 2> /dev/null | awk '{ print $2 }' || true)
+    inst=$(awk -v n="$name" '$1 == n { print $2 }' "$TMP/registered")
     if matches "$name" $SKIPS; then
       act=skip
     elif [ -n "$inst" ]; then
@@ -427,81 +435,177 @@ arch() {
     else
       act=absent
     fi
-    echo "$name ${inst:--} $ver $act $group $sha $url" >> "$P"
+    echo "$name ${inst:--} $ver $act $group $sha $url -" >> "$P"
   done
+  # What the ones to install depend on in the set comes along (its .PKGINFO's
+  # depend, in the manifest): by name, or by what a package provides where
+  # nothing installed provides it (pacman -T); recorded as "for <package>"
+  provs=$(awk '$1 == "prov" { for (i = 3; i <= NF; i++) { p = $i; sub(/[<>=].*/, "", p); print p } }' "$M" | sort -u)
+  unsat=
+  # shellcheck disable=SC2086
+  [ -z "$provs" ] || unsat=$(pacman -T $provs 2> /dev/null | tr '\n' ' ' || true)
+  awk -v unsat=" $unsat " '
+    FILENAME == ARGV[1] { n[++N] = $1; line[$1] = $0; act[$1] = $4; why[$1] = $8; next }
+    $1 == "dep" { d[$2] = $0 }
+    $1 == "prov" { for (i = 3; i <= NF; i++) { p = $i; sub(/[<>=].*/, "", p); if (!(p in by)) by[p] = $2 } }
+    END {
+      for (i = 1; i <= N; i++) if (act[n[i]] == "install" || act[n[i]] == "upgrade") q[++Q] = n[i]
+      for (h = 1; h <= Q; h++) {
+        p = q[h]
+        m = split(d[p], ds, " ")
+        for (j = 3; j <= m; j++) {
+          x = ds[j]
+          sub(/[<>=].*/, "", x)
+          t = ""
+          if (x in act) t = x
+          else if ((x in by) && index(unsat, " " x " ")) t = by[x]
+          if (t == "" || t == p) continue
+          if (act[t] == "absent") { act[t] = "install"; why[t] = p; q[++Q] = t }
+          else if (act[t] == "skip") print "!! " t " is needed by " p " but left out (--skip)" > "/dev/stderr"
+        }
+      }
+      for (i = 1; i <= N; i++) {
+        x = n[i]
+        split(line[x], f, " ")
+        print f[1], f[2], f[3], act[x], f[5], f[6], f[7], why[x]
+      }
+    }' "$P" "$M" > "$P.new"
+  mv "$P.new" "$P"
+
   say
   row package installed new action
-  while read -r name inst ver act group sha url; do
+  while read -r name inst ver act group sha url why; do
     case $act in
-    upgrade | install) row "$name" "$inst" "$ver" "$act" ;;
+    install) if [ "$why" = - ]; then row "$name" - "$ver" install; else row "$name" - "$ver" "install (for $why)"; fi ;;
+    upgrade) row "$name" "$inst" "$ver" upgrade ;;
     newer) row "$name" "$inst" "$ver" "kept: newer installed" ;;
     skip) row "$name" "$inst" "$ver" "kept (--skip)" ;;
-    *) [ "$VERBOSE" = 0 ] || row "$name" "$inst" "$ver" "$act" ;;
+    current) [ "$VERBOSE" = 0 ] || row "$name" "$inst" "$ver" "up to date" ;;
+    absent) [ "$VERBOSE" = 0 ] || row "$name" - "$ver" "not installed" ;;
     esac
   done < "$P"
+  n=$(($(awk '$4 == "install" && $8 != "-"' "$P" | wc -l)))
+  [ "$n" = 0 ] || say "  ($n of them because a package to install depends on them)"
+  n=$(($(awk '$4 == "current"' "$P" | wc -l)))
+  [ "$VERBOSE" = 1 ] || [ "$n" = 0 ] || say "  ($n up to date; -v lists them)"
+  awk '$4 == "absent" { n[$5]++ } END { for (g in n) print g, n[g] }' "$P" | sort |
+    while read -r g n; do
+      say "  $g: $n not installed, left out (--with $g installs them)"
+    done
   awk '$4 == "upgrade" || $4 == "install"' "$P" > "$TMP/sel"
   if [ ! -s "$TMP/sel" ]; then
     say
     log "nothing to install"
     return 0
   fi
+  # the installed packages they conflict with: pacman removes them
+  : > "$TMP/gone"
+  for name in $(awk '{ print $1 }' "$TMP/sel"); do
+    for c in $(awk -v n="$name" '$1 == "conflict" && $2 == n { for (i = 3; i <= NF; i++) { c = $i; sub(/[<>=].*/, "", c); print c } }' "$M"); do
+      [ "$c" != "$name" ] || continue
+      awk -v c="$c" '$1 == c { f = 1 } END { exit !f }' "$TMP/registered" || continue
+      say "  $name replaces the installed $c (they conflict): pacman removes $c"
+      echo "$c" >> "$TMP/gone"
+    done
+  done
+
   say
   log "downloading to $CACHE"
   rm -rf "$TMP/pkgs"
   mkdir -p "$TMP/pkgs"
-  while read -r name inst ver act group sha url; do
+  while read -r name inst ver act group sha url why; do
     f=$CACHE/$(echo "${url##*/}" | sed 's/%2B/+/g')
     fetch_checked "$url" "$f" "$sha"
     got=$(bsdtar -xOf "$f" .PKGINFO | sed -n 's/^pkgname = //p; s/^pkgver = //p' | tr '\n' ' ')
     [ "$got" = "$name $ver " ] || die "${f##*/} is not $name $ver: $got"
     cp "$f" "$TMP/pkgs/"
   done < "$TMP/sel"
-  # The files they bring that are there already: those of steps 40/41
-  # (nobody's) 42 overwrites; one of another package would be overwritten
-  # too (--overwrite '*'), so that stops the update
+  # The files they bring that are there already: nobody's (steps 30 to 42
+  # put them there without pacman) are taken over; one of another package
+  # stops the update before anything is installed, unless that package
+  # goes (a conflict above), or is upgraded too and its new version no
+  # longer has the file (pacman moves it)
   log "files already there"
-  : > "$TMP/theirs"
-  nobody=0
-  for f in $(ls "$TMP/pkgs"); do
-    name=$(bsdtar -xOf "$TMP/pkgs/$f" .PKGINFO | sed -n 's/^pkgname = //p')
-    bsdtar -tf "$TMP/pkgs/$f" | grep -v -e '^\.' -e '/$' | while read -r p; do
-      [ -e "/$p" ] || [ -L "/$p" ] || continue
-      [ ! -d "/$p" ] || [ -L "/$p" ] || continue
-      echo "/$p"
-    done > "$TMP/there"
-    [ -s "$TMP/there" ] || continue
-    # shellcheck disable=SC2046
-    pacman -Qo $(cat "$TMP/there") 2> /dev/null | sed -n 's/^\(.*\) is owned by \([^ ]*\) .*/\1 \2/p' > "$TMP/owned" || true
-    awk -v n="$name" '$2 != n { print "   " $1 " belongs to " $2 }' "$TMP/owned" >> "$TMP/theirs"
-    nobody=$((nobody + $(wc -l < "$TMP/there") - $(wc -l < "$TMP/owned")))
+  : > "$TMP/newfiles"
+  for f in $(find "$TMP/pkgs" -name '*.pkg.tar.*' | sort); do
+    name=$(bsdtar -xOf "$f" .PKGINFO | sed -n 's/^pkgname = //p')
+    bsdtar -tf "$f" | grep -v -e '^\.' -e '/$' | sed "s|^|/|; s|\$|$TAB$name|" >> "$TMP/newfiles"
   done
-  say "   $nobody files without a package (steps 40/41): pacman takes them over"
+  while IFS="$TAB" read -r p name; do
+    { [ -e "$p" ] || [ -L "$p" ]; } || continue
+    [ ! -d "$p" ] || [ -L "$p" ] || continue
+    echo "$p"
+  done < "$TMP/newfiles" | sort -u > "$TMP/there"
+  if [ -s "$TMP/there" ]; then
+    tr '\n' '\0' < "$TMP/there" | xargs -0 pacman -Qo 2> /dev/null |
+      sed -n "s/^\\(.*\\) is owned by \\([^ ]*\\) .*/\\1$TAB\\2/p" > "$TMP/owned" || true
+  else
+    : > "$TMP/owned"
+  fi
+  awk '{ print $1 }' "$TMP/sel" > "$TMP/selnames"
+  awk -F "$TAB" -v gone=" $(tr '\n' ' ' < "$TMP/gone") " '
+    FILENAME == ARGV[1] {
+      if ($1 in newpkg && newpkg[$1] != $2) print "   " $1 " is in both " newpkg[$1] " and " $2
+      newpkg[$1] = $2
+      next
+    }
+    FILENAME == ARGV[2] { insel[$1] = 1; next }
+    {
+      if (newpkg[$1] == $2 || index(gone, " " $2 " ") || ($2 in insel)) next
+      print "   " $1 " belongs to " $2
+    }' "$TMP/newfiles" "$TMP/selnames" "$TMP/owned" > "$TMP/theirs"
+  say "   $(($(wc -l < "$TMP/there") - $(wc -l < "$TMP/owned"))) files without a package: pacman takes them over"
   if [ -s "$TMP/theirs" ]; then
     cat "$TMP/theirs"
     die "files of other packages above: not overwritten, nothing installed"
   fi
-  log "pacman's plan (pacman -U --print)"
-  # shellcheck disable=SC2046
-  pacman -U --print --print-format '   %n %v' $(find "$TMP/pkgs" -name '*.pkg.tar.*' | sort) 2>&1 || true
-  n=$(wc -l < "$TMP/sel")
+  ASK=
+  [ ! -s "$TMP/gone" ] || ASK="--ask 4"
+  log "pacman's plan (pacman -U --print): what it takes from Arch Linux ARM"
+  ok=1
+  # shellcheck disable=SC2046,SC2086
+  pacman -U --print --print-format '%n %v' --noconfirm $ASK $(find "$TMP/pkgs" -name '*.pkg.tar.*' | sort) \
+    > "$TMP/print" 2>&1 || ok=0
+  while read -r n v; do
+    grep -q "^$n\$" "$TMP/selnames" || say "   $n $v"
+  done < "$TMP/print"
+  [ "$ok" = 1 ] || warn "pacman -U --print failed (above): a dependency may need pacman -Syu first (--sysupgrade)"
+  n=$(($(wc -l < "$TMP/sel")))
   if [ "$YES" = 0 ]; then
     say
-    say "Dry run: $((n)) packages to install. pro1x-update --yes (as root) installs them."
+    say "Dry run: $n packages to install. pro1x-update --yes (as root) installs them."
     return 0
   fi
   if [ "$SYSUPGRADE" = 1 ]; then
     log "pacman -Syu"
     pacman -Syu --noconfirm
   fi
-  h=$(awk '$1 == "hook" { print $3, $4 }' "$M")
-  dir=$(hook_files "${h%% *}")
-  log "${h#* } (PKGS=$TMP/pkgs MNT=/)"
-  PKGS=$TMP/pkgs MNT=/ bash "$dir/${h#* }"
+  # --overwrite '*' as the release says: only nobody's files are left to
+  # overwrite (checked above); --ask 4 answers "remove the conflicting
+  # package?" with yes
+  log "pacman -U --needed --overwrite '*' $ASK ($n packages)"
+  # shellcheck disable=SC2046,SC2086
+  pacman -U --noconfirm --needed --overwrite '*' $ASK $(find "$TMP/pkgs" -name '*.pkg.tar.*' | sort)
+  # the session's settings, as arch/42-meego-look.sh's PKGS mode makes them:
+  # PipeWire's PulseAudio server for every user's session (the volume bar,
+  # the FM sound), MeeCast's icons where the Events page looks for them
+  systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service \
+    > /dev/null 2>&1 || true
+  if [ -d /usr/lib/meecast/share/iconsets ] && [ ! -e /opt/com.meecast.omweather ]; then
+    mkdir -p /opt/com.meecast.omweather/share
+    ln -s /usr/lib/meecast/share/iconsets /opt/com.meecast.omweather/share/iconsets
+  fi
+  systemctl daemon-reload || true
   say
   log "installed now"
-  while read -r name inst ver act group sha url; do
-    row "$name" "$(pacman -Q "$name" 2> /dev/null | awk '{ print $2 }')" "" ""
+  while read -r name inst ver act group sha url why; do
+    cur=$(pacman -Q "$name" 2> /dev/null | awk '{ print $2 }')
+    mark=
+    [ "$cur" = "$ver" ] || mark="   (wanted $ver)"
+    row "$name" "${cur:--}" "" "$mark"
   done < "$TMP/sel"
+  say
+  say "Then: pro1x-desktop meego (or hildon, harmattan) and restart the session."
 }
 
 # --- FreeBSD -----------------------------------------------------------------
