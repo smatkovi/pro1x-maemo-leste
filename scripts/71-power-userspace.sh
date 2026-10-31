@@ -213,7 +213,9 @@ dim_timeout() {
 
 # The autosuspend binary for Leste and the MeeGo copy (the same libraries);
 # pro1x-gnss for all four, against 46-sensor-stack.sh's libqmi (Kali and
-# Arch have that build in /usr/lib/pro1x); without it the old one stays
+# Arch have that build in /usr/lib/pro1x). Both before anything changes:
+# the new pro1x-gnss.service runs pro1x-gnss -x 60, which the old binary
+# does not know
 AS= GN=
 if [ "$ACTION" = install ]; then
 	AS=$(mktemp)
@@ -222,11 +224,8 @@ if [ "$ACTION" = install ]; then
 	gcc -O2 -Wall -o "$AS" "$SRC/tools/pro1x-autosuspend/pro1x-autosuspend.c" \
 		$(pkg-config --cflags --libs gio-unix-2.0)
 	# shellcheck disable=SC2046
-	if ! gcc -O2 -Wall -o "$GN" "$SRC/tools/pro1x-gnss/pro1x-gnss.c" \
-		$(PKG_CONFIG_PATH=/usr/local/lib/aarch64-linux-gnu/pkgconfig pkg-config --cflags --libs qmi-glib qrtr-glib); then
-		log "pro1x-gnss not built (libqmi of 46-sensor-stack.sh?): the old one stays"
-		GN=
-	fi
+	gcc -O2 -Wall -o "$GN" "$SRC/tools/pro1x-gnss/pro1x-gnss.c" \
+		$(PKG_CONFIG_PATH=/usr/local/lib/aarch64-linux-gnu/pkgconfig pkg-config --cflags --libs qmi-glib qrtr-glib)
 fi
 
 leste() {   # leste ROOT
