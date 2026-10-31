@@ -186,6 +186,25 @@ def bare(dep):
     return re.sub(r'[<>=].*', '', dep)
 
 
+def installed_provides():
+    """name -> the installed package that provides it"""
+    m = {}
+    db = os.path.join(ROOT, 'var/lib/pacman/local')
+    for e in os.listdir(db):
+        try:
+            with open(os.path.join(db, e, 'desc')) as f:
+                lines = f.read().split('\n')
+            name = lines[lines.index('%NAME%') + 1]
+        except (OSError, ValueError, IndexError):
+            continue
+        if '%PROVIDES%' in lines:
+            for x in lines[lines.index('%PROVIDES%') + 1:]:
+                if not x:
+                    break
+                m.setdefault(bare(x), name)
+    return m
+
+
 def repo_conflicts(stage):
     """the packages of Arch Linux ARM's repositories, installed or not, that
     have one of our files, but for those that conflict with ours already"""
@@ -212,10 +231,19 @@ def repo_conflicts(stage):
         c = re.search(r'^Conflicts With\s*: (.*)$', block, re.M)
         if n and c and ours & {bare(y) for y in c.group(1).split()}:
             shared.pop(n.group(1), None)
+    # a name one of ours provides too (libdsme-maemo provides libdsme): the
+    # conflict with a version, which that unversioned provide does not meet
+    provided = installed_provides()
+    out = []
     for p, fl in sorted(shared.items()):
-        note('conflicts with %s, which has %d of its files too (/%s%s)'
-             % (p, len(fl), fl[0], ' ...' if len(fl) > 1 else ''))
-    return sorted(shared)
+        c = p
+        if provided.get(p, NAME) != NAME:
+            c = p + '>0'
+        note('conflicts with %s, which has %d of its files too (/%s%s)%s'
+             % (p, len(fl), fl[0], ' ...' if len(fl) > 1 else '',
+                ': %s, as %s provides %s' % (c, provided[p], p) if c != p else ''))
+        out.append(c)
+    return out
 
 
 # --- version, description, licence ----------------------------------------------
