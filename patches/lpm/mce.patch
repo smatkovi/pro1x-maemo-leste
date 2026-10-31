@@ -1,6 +1,8 @@
 Low power mode for the display, ported from Harmattan's mce 1.11.20 (pro1x-maemo-leste
 patches/lpm): MCE_DISPLAY_LPM_ON/LPM_OFF, the panel's sysfs "lpm", proximity,
-display_status_ind "lpm" for a stand-by screen client. Off by default.
+display_status_ind "lpm" for a stand-by screen client; the filtered state in
+the display state pipe's cache, the power key and the keyboard slide ending it
+(lock-tklock). Off by default.
 
 diff --git a/config/mce.ini b/config/mce.ini
 index 7fbad5a..7976bc9 100644
@@ -64,7 +66,7 @@ index 891f1bc..711df3c 100644
  typedef enum {
  	COVER_UNDEF = -1,		/**< Cover state not set */
 diff --git a/src/modules/display.c b/src/modules/display.c
-index 019764e..2f691d7 100644
+index 019764e..e481bd1 100644
 --- a/src/modules/display.c
 +++ b/src/modules/display.c
 @@ -101,8 +101,54 @@ static bool is_tvout_state_changed = false;
@@ -332,7 +334,7 @@ index 019764e..2f691d7 100644
  	case MCE_DISPLAY_DIM:
  		display_dim();
  		break;
-@@ -687,6 +833,106 @@ EXIT:
+@@ -687,6 +833,113 @@ EXIT:
  	return;
  }
  
@@ -356,6 +358,13 @@ index 019764e..2f691d7 100644
 +		   (system_state == MCE_STATE_USER)) {
 +		display_state = MCE_DISPLAY_LPM_ON;
 +	}
++
++	/* The pipe caches what came in, before the filters (datapipe.c),
++	 * and the modules read that cache: it has to say low power mode
++	 * where this filter made it so, as Harmattan's display_state_filter
++	 * sets it. Without, LPM_ON read as off everywhere: "off" to the
++	 * stand-by screen's client, no proximity blanking, no double tap. */
++	display_state_pipe.cached_data = GINT_TO_POINTER(display_state);
 +
 +	return GINT_TO_POINTER(display_state);
 +}
@@ -439,7 +448,7 @@ index 019764e..2f691d7 100644
  /**
   * Datapipe trigger for device inactivity
   *
-@@ -704,6 +950,13 @@ static void device_inactive_trigger(gconstpointer data)
+@@ -704,6 +957,13 @@ static void device_inactive_trigger(gconstpointer data)
  	/* Unblank screen on device activity,
  	 * unless the device is in acting dead and no alarm is visible
  	 */
@@ -453,7 +462,7 @@ index 019764e..2f691d7 100644
  	if (((system_state == MCE_STATE_USER) ||
  		((system_state == MCE_STATE_ACTDEAD) &&
  		((alarm_ui_state == MCE_ALARM_UI_VISIBLE_INT32) ||
-@@ -727,7 +980,7 @@ static void tvout_trigger(gconstpointer data)
+@@ -727,7 +987,7 @@ static void tvout_trigger(gconstpointer data)
  	
  	mce_log(LL_DEBUG, "Recieved tvout state changing: is_tvout_on = %d", is_tvout_on);	
  	
@@ -462,7 +471,7 @@ index 019764e..2f691d7 100644
  		is_tvout_state_changed = true;
  		send_display_status(NULL);
  		is_tvout_state_changed = false;
-@@ -803,11 +1056,30 @@ const gchar *g_module_check_init(GModule *module)
+@@ -803,11 +1063,30 @@ const gchar *g_module_check_init(GModule *module)
  	dim_brightness = mce_conf_get_int("DisplayBrightness", "Dim", DEFAULT_DIM_BRIGHTNESS, NULL);
  	blank_during_shutdown = mce_conf_get_bool("Display", "BlankDuringShutdown", true, NULL);
  
@@ -493,7 +502,7 @@ index 019764e..2f691d7 100644
  	append_output_trigger_to_datapipe(&device_inactive_pipe,
  					  device_inactive_trigger);
  	append_output_trigger_to_datapipe(&tvout_pipe,
-@@ -927,6 +1199,10 @@ void g_module_unload(GModule *module)
+@@ -927,6 +1206,10 @@ void g_module_unload(GModule *module)
  					    device_inactive_trigger);
  	remove_output_trigger_from_datapipe(&display_state_pipe,
  					    display_state_trigger);
@@ -504,7 +513,7 @@ index 019764e..2f691d7 100644
  	remove_output_trigger_from_datapipe(&display_brightness_pipe,
  					    display_brightness_trigger);
  	remove_output_trigger_from_datapipe(&system_state_pipe,
-@@ -935,10 +1211,13 @@ void g_module_unload(GModule *module)
+@@ -935,10 +1218,13 @@ void g_module_unload(GModule *module)
  	/* Free strings */
  	g_free(brightness_file);
  	g_free(max_brightness_file);
@@ -785,7 +794,7 @@ index b05d5b1..f54241c 100644
  	return;
  }
 diff --git a/src/modules/lock-tklock.c b/src/modules/lock-tklock.c
-index 467dd0e..b092c64 100644
+index 467dd0e..6a14214 100644
 --- a/src/modules/lock-tklock.c
 +++ b/src/modules/lock-tklock.c
 @@ -400,7 +400,12 @@ static gboolean ts_disable_policy(void)
@@ -802,7 +811,32 @@ index 467dd0e..b092c64 100644
  		if (ts_event_control(FALSE) == FALSE)
  					goto EXIT;
  	} else if (is_tklock_enabled() == TRUE && disable_ts_immediately == TRUE) {
-@@ -802,7 +807,7 @@ static void setup_dim_blank_timeout_policy(gboolean force_blank)
+@@ -430,6 +435,24 @@ static void synthesise_activity(void)
+ 			       USE_INDATA, CACHE_INDATA);
+ }
+ 
++/**
++ * The display on from low power mode, where the activity synthesised for
++ * the power key or the keyboard slide does not do it: display.c does not
++ * end low power mode on activity, so that a touch on the stand-by screen
++ * does nothing (Harmattan's trigger_visual_tklock switched the display
++ * on itself, from off and from low power mode)
++ */
++static void lpm_display_on(void)
++{
++	display_state_t display_state = datapipe_get_gint(display_state_pipe);
++
++	if ((display_state == MCE_DISPLAY_LPM_ON) ||
++	    (display_state == MCE_DISPLAY_LPM_OFF))
++		(void)execute_datapipe(&display_state_pipe,
++				       GINT_TO_POINTER(MCE_DISPLAY_ON),
++				       USE_INDATA, CACHE_INDATA);
++}
++
+ static void cancel_tklock_disable_timeout(void)
+ {
+ 	if (tklock_disable_timeout_cb_id)
+@@ -802,7 +825,7 @@ static void setup_dim_blank_timeout_policy(gboolean force_blank)
  	display_state_t display_state = datapipe_get_gint(display_state_pipe);
  
  	/* If the display is already blank, don't bother */
@@ -811,7 +845,7 @@ index 467dd0e..b092c64 100644
  		goto EXIT;
  
  	if ((display_state == MCE_DISPLAY_DIM) ||
-@@ -1156,7 +1161,7 @@ static void trigger_visual_tklock(void)
+@@ -1156,7 +1179,7 @@ static void trigger_visual_tklock(void)
  {
  	display_state_t display_state = datapipe_get_gint(display_state_pipe);
  
@@ -820,7 +854,16 @@ index 467dd0e..b092c64 100644
  
  	if ((is_tklock_enabled() == FALSE) ||
  	    (is_autorelock_enabled() == FALSE))
-@@ -1463,7 +1468,7 @@ static void keyboard_slide_trigger(gconstpointer const data)
+@@ -1455,6 +1478,8 @@ static void keyboard_slide_trigger(gconstpointer const data)
+             synthesise_activity();
+           }
+ 		}
++		/* opened in low power mode: on, as from off */
++		lpm_display_on();
+ 		if (call_submode != MCE_INVALID_SUBMODE)
+ 		{
+ 			saved_submode &= ~MCE_TKLOCK_SUBMODE;
+@@ -1463,7 +1488,7 @@ static void keyboard_slide_trigger(gconstpointer const data)
  
  	case COVER_CLOSED:
  		if (((tk_autolock_enabled == TRUE) &&
@@ -829,16 +872,39 @@ index 467dd0e..b092c64 100644
  		    ((is_autorelock_enabled() == TRUE) &&
  		     ((autorelock_triggers & AUTORELOCK_KBD_SLIDE) != 0)))
  			/* This will also reset the autorelock policy */
-@@ -1584,6 +1589,8 @@ static void display_state_trigger(gconstpointer data)
+@@ -1529,6 +1554,10 @@ static void keypress_trigger(gconstpointer const data)
+ 		}
+ 		else
+ 			trigger_visual_tklock();
++
++		/* From low power mode as from off: the display on, with
++		 * the lock screen if locked */
++		lpm_display_on();
+ 	}
+ 
+ EXIT:
+@@ -1584,8 +1613,19 @@ static void display_state_trigger(gconstpointer data)
  
  	switch (display_state) {
  	case MCE_DISPLAY_OFF:
+-		if (tklock_ui_state == MCE_TKLOCK_UI_NORMAL)
 +	case MCE_DISPLAY_LPM_OFF:
 +	case MCE_DISPLAY_LPM_ON:
- 		if (tklock_ui_state == MCE_TKLOCK_UI_NORMAL)
++		if (tklock_ui_state == MCE_TKLOCK_UI_NORMAL) {
++			/* Locked already: from one low power mode state to
++			 * the other, the touchscreen on for the stand-by
++			 * screen's double tap, off while it is blank
++			 * (Harmattan applies its policy on each change) */
++			if (display_state == MCE_DISPLAY_LPM_ON)
++				(void)ts_enable_policy();
++			else if (old_display_state == MCE_DISPLAY_LPM_ON)
++				(void)ts_disable_policy();
  			break;
++		}
  		if (((alarm_ui_state != MCE_ALARM_UI_RINGING_INT32) &&
-@@ -1608,7 +1615,7 @@ static void display_state_trigger(gconstpointer data)
+ 		     (alarm_ui_state != MCE_ALARM_UI_RINGING_INT32)) &&
+ 		    (is_tklock_enabled() == TRUE)) {
+@@ -1608,7 +1648,7 @@ static void display_state_trigger(gconstpointer data)
  		 * to DIM or ON, do policy based enable
  		 */
  		if ((old_display_state == MCE_DISPLAY_UNDEF) ||
@@ -847,7 +913,7 @@ index 467dd0e..b092c64 100644
  			(void)ts_enable_policy();
  		}
  
-@@ -1620,7 +1627,7 @@ static void display_state_trigger(gconstpointer data)
+@@ -1620,7 +1660,7 @@ static void display_state_trigger(gconstpointer data)
  		 * to DIM or ON, do policy based enable
  		 */
  		if ((old_display_state == MCE_DISPLAY_UNDEF) ||

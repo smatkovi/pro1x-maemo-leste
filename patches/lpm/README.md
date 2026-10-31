@@ -2,7 +2,8 @@
 
 `mce.patch` ports the low power mode of Harmattan's mce (1.11.20, LGPL,
 from Nokia's N9 sources) to Leste's mce (maemo/daedalus 1.10.17). It is
-built by `scripts/49-hidpi.sh` (`ONLY=mce`) as `mce 1.10.17+pro1x3`.
+built by `scripts/49-hidpi.sh` (`ONLY=mce`), since 2026-10-31 as
+`mce 1.10.17+pro1x5` (+pro1x3 and +pro1x4 had the bugs below).
 
 ## How it behaves
 
@@ -32,6 +33,42 @@ power key bring the display back, with the lock screen.
 - The proximity sensor is claimed while in low power mode
   (`iio-proximity`), as during calls.
 - A display-on request ends low power mode also while locked.
+- The power key, the keyboard slide opened, a call and an alarm ringing
+  end it as they end off: the display on, with the lock screen where the
+  device is locked. Leste's lock module (`lock-tklock`, the one
+  `mce.ini.d/10-maemo.ini` loads; `lock-generic` is not loaded) does it
+  for the power key and the slide through synthesised activity, which
+  low power mode ignores; so in low power mode it switches the display
+  on itself, as Harmattan's `trigger_visual_tklock` did.
+- Locked, the touchscreen follows the two states: on in `LPM_ON`, off in
+  `LPM_OFF` (covered, or after `LowPowerModeBlankTimeout`).
+
+## Fixed in +pro1x5 (2026-10-31, found on the phone)
+
+On the phone (+pro1x3) a short press of the power key did not switch the
+display on; about 5 s after the last press only the stand-by screen came
+(dark: nothing drew on it), and only a press then gave the desktop.
+
+- **The state's cache.** mce's datapipes cache what goes *in*, before the
+  filters (`datapipe.c`), and the modules read that cache
+  (`datapipe_get_gint`). Harmattan's display state filter therefore
+  writes its result into `display_state_pipe.cached_data`; the port had
+  left that line out. So `LPM_ON` read as `off` everywhere except in the
+  triggers' argument: `get_display_status` and `display_status_ind` said
+  `off` (pro1x-standby never showed: the panel lit at 20 % with no
+  stand-by screen on it), the proximity sensor never blanked it, the
+  touchscreen was switched off in it (no double tap), a display-on
+  request was refused while locked, and activity *did* end it.
+- **The power key.** A press from `LPM_OFF` opened the lock screen
+  (`tklock_open`, visual) and synthesised activity, which `display.c`
+  ignores in low power mode: nothing switched the display on. The lock
+  screen's own 5 s time-out (`DEFAULT_VISUAL_BLANK_DELAY`, renewed by
+  each press) then asked for "off", which became `LPM_ON`: the stand-by
+  screen 5 s after the last press, for `LowPowerModeBlankTimeout`. A
+  press in that `LPM_ON` worked only because the cache said `off`.
+- The keyboard slide opened in low power mode: unlocked, but left the
+  display in it. The touchscreen stayed as it was between `LPM_ON` and
+  `LPM_OFF` with the lock screen up.
 
 ## Settings
 

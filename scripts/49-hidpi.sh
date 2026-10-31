@@ -32,7 +32,10 @@ PARTS=(
   "hildon-status-menu|33ba47660e7c|2"
   "hildon-home|0d34886acdc2|1"
   "hildon-desktop|1273f9eee252|5"
-  "mce|422d5f2bd618|4"
+  # the display's low power mode (patches/lpm), the LED (patches/fixes);
+  # 5: low power mode in the display state's cache, ended by the power key
+  # and the keyboard slide (+pro1x3/4: the power key did nothing in it)
+  "mce|422d5f2bd618|5"
   # the location framework's bugs (patches/fixes): liblocation linked to
   # its libraries, its dialog calls with dbus-glib's output terminator, the
   # user's methods (the "enable positioning" dialog's yes); location-ui's
