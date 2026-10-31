@@ -149,7 +149,11 @@ EOF
   STUB_ALARMD="77,-10,Wake up" "$T/pro1x-alarmboot" -f "$T/note" -s test -v -g 2160x1080 \
     "${args[@]}" 2> "$T/run1.log" &
   p=$!
-  sleep 1.5
+  # before the alarm rings, no input: X's idle time kept low already (no
+  # stand-by screen before the dialog)
+  sleep 5
+  idle=$("$T/idle" || echo 99999)
+  if [ "${idle:-99999}" -lt 2600 ]; then echo "ok   before the alarm: X's idle time low ($idle ms)"; else echo "FAIL before the alarm: X's idle time $idle ms"; fails=$((fails + 1)); fi
   status 5
   sleep 1.5
   snap 2160x1080 "$T/over.png"
@@ -258,11 +262,11 @@ EOF
     --signal com.nokia.time.next_bootup_event "int32 $(($(date +%s) + 600))" > /dev/null
   sleep 3
   check "MeeGo: its end, switching off" "switching off in 10 s" "$T/run6.log"
-  # no input for 15 s, the screens up: X's idle time kept under 10 s (no
+  # no input for 15 s, the screens up: X's idle time kept under 2 s (no
   # stand-by time-out while they show)
   sleep 15
   idle=$("$T/idle" || echo 99999)
-  if [ "${idle:-99999}" -lt 10500 ]; then echo "ok   the screens keep X's idle time low ($idle ms)"; else echo "FAIL X's idle time $idle ms with the screens up"; fails=$((fails + 1)); fi
+  if [ "${idle:-99999}" -lt 2600 ]; then echo "ok   the screens keep X's idle time low ($idle ms)"; else echo "FAIL X's idle time $idle ms with the screens up"; fails=$((fails + 1)); fi
   sleep 11
   check "MeeGo: an alarm to come without its RTC wake-up: stays on" "wake-up for the next alarm is not set" "$T/run6.log"
   kill "$p" 2> /dev/null || true

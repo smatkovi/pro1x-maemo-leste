@@ -180,9 +180,14 @@ with the N9's font and button pictures installed); make them with
   everywhere the display going off, to the stand-by screen or locking,
   which a press does: Leste's mce says "off", FreeBSD's `pro1x-standby`
   "lpm"; while these screens show no time-out can do that, since 1.4
-  they keep the display on as a video player would, every 10 s mce's
-  `req_display_blanking_pause` and X's idle time reset, which
-  `pro1x-standby` times out by; "dimmed" is no power key),
+  they keep the display on as a video player would: mce's
+  `req_display_blanking_pause` every 30 s (mce's pause lasts 60 s), X's
+  idle time reset every 2 s, which `pro1x-standby` times out by (its
+  stand-by screen comes 3 s after dimming at the earliest); "dimmed" is no
+  power key. From its start until the alarm's screen X's idle time alone,
+  so that FreeBSD's stand-by screen, which stays above everything, cannot
+  come before the alarm rings; mce's time-outs stay as they are, the
+  alarm dialog asks mce for the display),
   during a call (mce's `get_call_state`, oFono's calls), with the charger
   connected, and when the phone was used: input before the alarm rang or
   after its end that was not on these screens (XInput 2's raw key, button
@@ -560,7 +565,7 @@ INITRD=$WORK/out-pro1x.5/initrd.img-7.1.0-pro1x.5 LINUX=$WORK/build/linux \
 the PC against a stub of alarmd's libalarm (`tests/alarm-boot/stub`), in
 an Xvfb and with a D-Bus daemon of its own as the system bus: `shots`
 makes the screens' pictures (both languages, landscape and portrait);
-`test` checks the answers, 28 checks, 0 failures with `OWN=1` (1.4,
+`test` checks the answers, 29 checks, 0 failures with `OWN=1` (1.4,
 2026-10-31): status 5
 puts the N9 screen over the dialog with the alarm's text; a tap on Stop
 sends `face_up` and `face_down`; status 7 gives alarmd the Stop button
@@ -572,7 +577,8 @@ the same alarm a second time does nothing; a click elsewhere after the
 alarm ("the phone was used") keeps it on; while switching off
 `display_status_ind` "dimmed" does not, "lpm" (`pro1x-standby`'s
 stand-by screen, FreeBSD's power key) does; 15 s without input while the
-screens show, X's idle time stays under 10 s (no stand-by time-out); in MeeGo's mode (`-s meego`) timed's
+screens show, X's idle time stays under 2 s (no stand-by time-out), and
+from the start, 5 s before the alarm rings; in MeeGo's mode (`-s meego`) timed's
 `next_bootup_event` 1 puts nothing over timed's screen, its end with the
 next alarm's time switches off only with that alarm's RTC wake-up set
 (on the PC it is not: stays on after 15 s); `-Q` asks as 1.1 did; without
@@ -613,11 +619,22 @@ back to the override-redirect window as described, which worked the
 same (shown blurred under the dialog's dimming). The pictures:
 `~/ps/pro1x-screens/alarmboot-vm-freebsd-*.png`.
 
+Again on 2026-10-31 with 1.4 and `pro1x-standby` (`STANDBY=`, built from
+the repository's source, time-out 4 s, `RUNS="stop power"`): it started
+3 s after `pro1x-alarmboot`, about 27 s before the alarm rang, and
+neither dimmed nor showed its stand-by screen in the 53 s until the alarm
+was over (before it, while it rang, during "Switching off"); it dimmed
+5 s after the tap that kept the phone on. Its SIGUSR1 (the power key, as
+`pro1x-powerkey` sends it) during "Switching off": `display_status_ind
+lpm: the power key`, `staying on: the power key`, the VM stayed on.
+
 ```sh
 bash tests/alarm-boot/screens.sh shots      # OUT=~/ps/pro1x-screens
 OWN=1 bash tests/alarm-boot/screens.sh test
 # in the FreeBSD VM, with the packages installed, the source in /tmp:
 sh freebsd/vm/try-alarmboot.sh /tmp/pro1x-alarmboot.c
+# with pro1x-standby and the power key (its source in /tmp too)
+RUNS="stop power" STANDBY=/tmp/pro1x-standby.c sh freebsd/vm/try-alarmboot.sh
 ```
 
 Not tested: anything on the phone (the PMIC registers through debugfs,

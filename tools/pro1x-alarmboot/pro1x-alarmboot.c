@@ -665,31 +665,48 @@ static gboolean check_size(gpointer unused)
 }
 
 /* While our screens show, nothing times the display out: mce's blanking
- * paused (Leste, MeeGo), X's idle time reset (pro1x-standby's time-outs:
- * FreeBSD's, every 10 s, under its shortest). So a display that goes off
- * or to the stand-by screen meanwhile is the power key (mce_display) */
+ * paused (Leste, MeeGo; mce's pause lasts 60 s, renewed every 30 s), X's
+ * idle time reset every 2 s (pro1x-standby's time-outs, FreeBSD's: its
+ * stand-by screen comes 3 s after its dimming at the earliest, so never,
+ * whatever its time-out). So a display that goes off or to the stand-by
+ * screen meanwhile is the power key (mce_display). From the start until
+ * then X's idle time alone (mce's own time-outs as they are: the alarm
+ * dialog asks mce for the display): pro1x-standby's stand-by screen, which
+ * stays above everything, cannot come before the alarm rings. */
 static void mce_call(const char *method, GVariant *args);
-static guint awake_timer;
+static guint awake_timer, awake_ticks;
+static gboolean awake_mce;
 
 static gboolean keep_awake_tick(gpointer unused)
 {
 	(void)unused;
-	mce_call("req_display_blanking_pause", NULL);
+	if (awake_mce && awake_ticks++ % 15 == 0)
+		mce_call("req_display_blanking_pause", NULL);
 	XResetScreenSaver(GDK_DISPLAY_XDISPLAY(gdk_display_get_default()));
 	XFlush(GDK_DISPLAY_XDISPLAY(gdk_display_get_default()));
 	return TRUE;
 }
 
-static void keep_awake(gboolean on)
+/* on: with mce's blanking paused too or X's idle time alone; off: neither */
+static void keep_awake(gboolean on, gboolean mce)
 {
-	if (on && !awake_timer) {
-		say("keeping the display on");
-		keep_awake_tick(NULL);
-		awake_timer = g_timeout_add_seconds(10, keep_awake_tick, NULL);
-	} else if (!on && awake_timer) {
-		g_source_remove(awake_timer);
+	if (!on) {
+		if (awake_timer)
+			g_source_remove(awake_timer);
 		awake_timer = 0;
+		awake_mce = FALSE;
+		return;
 	}
+	if (mce && !awake_mce) {
+		say("keeping the display on");
+		awake_mce = TRUE;
+		awake_ticks = 0;
+	} else if (!awake_timer) {
+		say("keeping X's idle time low until the alarm");
+	}
+	if (!awake_timer)	/* (in seconds it could come up to 1 s late) */
+		awake_timer = g_timeout_add(2000, keep_awake_tick, NULL);
+	keep_awake_tick(NULL);
 }
 
 static void screen_show(enum screen_kind kind, void (*clicked)(int))
@@ -711,14 +728,14 @@ static void screen_show(enum screen_kind kind, void (*clicked)(int))
 	else
 		gtk_window_present(GTK_WINDOW(scr.win));
 	gtk_widget_queue_draw(scr.area);
-	keep_awake(TRUE);
+	keep_awake(TRUE, TRUE);
 	if (!scr.popup && !scr.width && !size_check)
 		size_check = g_timeout_add_seconds(2, check_size, NULL);
 }
 
 static void screen_hide(void)
 {
-	keep_awake(FALSE);
+	keep_awake(FALSE, FALSE);
 	if (scr.win)
 		gtk_widget_hide(scr.win);
 	scr.busy = FALSE;
@@ -2080,6 +2097,7 @@ int main(int argc, char **argv)
 	if (have_display) {
 		display_ready(theme);
 		input_init();
+		keep_awake(TRUE, FALSE);
 	} else {
 		fprintf(stderr, "pro1x-alarmboot: no display: the tone alone\n");
 	}

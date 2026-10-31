@@ -10,7 +10,12 @@
 # dialog, then "Switching off", which a tap keeps from switching the VM
 # off), the program's log and alarmd's queue. Then everything ends and the
 # alarms are deleted. RUNS="snooze stop" (default "stop snooze"): which, in
-# order.
+# order; "power": Stop, then the power key during "Switching off" (needs
+# STANDBY). STANDBY=/tmp/pro1x-standby.c (the repository's
+# tools/pro1x-standby): pro1x-standby built from it runs in each run with a
+# short time-out (STANDBY_S, default 4 s; its log /tmp/standby-NAME.log),
+# which must not dim nor show its stand-by screen while pro1x-alarmboot
+# runs; the power key is its SIGUSR1, as pro1x-powerkey sends it.
 set -u
 SRC=${1:-/tmp/pro1x-alarmboot.c}
 SHOTS=/root/shots
@@ -22,6 +27,13 @@ cc -O2 -o /tmp/pro1x-alarmboot "$SRC" -I$I/gtk-2.0 -I$L/gtk-2.0/include \
     -I$I/alarmd -I$I -L$L -Wl,-rpath,$L -lgtk-x11-2.0 -lgdk-x11-2.0 \
     -lpangocairo-1.0 -lpango-1.0 -lcairo -lgio-2.0 -lgobject-2.0 \
     -lglib-2.0 -lintl -lalarm -lpulse-simple -lpulse -lX11 -lXi -lm || exit 1
+if [ -n "${STANDBY:-}" ]; then
+	cc -O2 -o /tmp/pro1x-standby "$STANDBY" -I$I/cairo -I$I/pango-1.0 \
+	    -I$I/glib-2.0 -I$L/glib-2.0/include -I$I/harfbuzz -I$I/freetype2 \
+	    -I$I/dbus-1.0 -I$L/dbus-1.0/include -I$I -L$L -Wl,-rpath,$L \
+	    -lX11 -lXext -lXi -lcairo -lpangocairo-1.0 -lpango-1.0 \
+	    -lgobject-2.0 -lglib-2.0 -lsqlite3 -ldbus-1 -lm || exit 1
+fi
 
 service dbus onestatus > /dev/null 2>&1 || service dbus onestart
 export DISPLAY=:1 PRO1X_TRY=1 XDG_RUNTIME_DIR=/tmp/alarmboot-run
@@ -92,11 +104,17 @@ cc -O -o /tmp/alarmboot-test /tmp/alarmboot-test.c -I$I/alarmd -L$L \
 # N9 screen's Snooze is at y 590, Stop at 750; "Switching off" comes 2 s
 # after the dialog went and switches off 10 s later: tapped at once
 run() {
-	name=$1 y=$2
+	name=$1 y=$2 how=${3:-tap}
 	now=$(date +%s)
 	printf 'system=freebsd\nrtc_alarm=%s\ndue=%s\n' "$now" $((now + 30)) > /tmp/alarmboot-note
 	/tmp/pro1x-alarmboot -f /tmp/alarmboot-note -s freebsd -v -d 403 \
 	    2> /tmp/alarmboot-$name.log &
+	if [ -n "${STANDBY:-}" ]; then
+		sleep 3
+		PRO1X_STANDBY_DEBUG=1 /tmp/pro1x-standby -d 403 -s "${STANDBY_S:-4}" \
+		    -P /tmp/pro1x-standby.pid 2> /tmp/standby-$name.log &
+		standby=$!
+	fi
 	cookie=$(/tmp/alarmboot-test add 30 "try-alarmboot $name")
 	cookies="${cookies:-} $cookie"
 	echo "== $name: alarm $cookie in 30 s"
@@ -105,18 +123,32 @@ run() {
 	xdotool mousemove 1080 "$y" click 1
 	sleep ${TAPWAIT:-6}
 	xwd -root -silent > "$SHOTS/alarmboot-$name-off.xwd"
-	xdotool mousemove 1080 300 click 1
+	if [ "$how" = power ]; then
+		# the stand-by screen, as pro1x-powerkey asks for it; then back
+		kill -USR1 "$standby"
+		sleep 3
+		xwd -root -silent > "$SHOTS/alarmboot-$name-standby.xwd"
+		kill -USR1 "$standby"
+	else
+		xdotool mousemove 1080 300 click 1
+	fi
 	sleep 2
 	echo "== $name: after the tap"
 	/tmp/alarmboot-test list
 	sleep 2
 	echo "== $name: its log"
 	cat /tmp/alarmboot-$name.log
+	if [ -n "${STANDBY:-}" ]; then
+		kill "$standby" 2> /dev/null
+		echo "== $name: pro1x-standby's log"
+		cat /tmp/standby-$name.log
+	fi
 }
 for r in ${RUNS:-stop snooze}; do
 	case $r in
 	stop) run stop 750 ;;
 	snooze) run snooze 590 ;;
+	power) run power 750 power ;;
 	esac
 done
 

@@ -1088,8 +1088,8 @@ What changed in each:
   (Leste's mce sends "off" for it) and stays on; with this signal a
   time-out could have looked the same, and on FreeBSD the power key gives
   "lpm" (the stand-by screen), not "off". Since pro1x-alarmboot 1.4 its
-  screens keep the display on (mce's blanking pause, X's idle time reset
-  every 10 s), so no time-out falls into the countdown, and "lpm" counts
+  screens keep the display on (mce's blanking pause every 30 s, X's idle
+  time reset every 2 s), so no time-out falls into the countdown, and "lpm" counts
   as the power key too ([alarm-power-on.md](alarm-power-on.md)).
 
 Checked, nothing to change:
