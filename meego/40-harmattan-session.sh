@@ -24,6 +24,12 @@ ROTATE=${ROTATE:-right}
 TOUCH="Goodix Capacitive TouchScreen"
 LOG=$H/var/log/pro1x-session
 HOST_USER=user
+# MyDocs, the N9's user partition (music, pictures, downloads: Harmattan's
+# file views, the storage settings and tracker look there), from /host
+# (userdata, 222 GB) when this directory exists, instead of harmattan.img's
+# 7.8 GB. Made once by hand (docs/device-day-2026-10-31.md): the image's
+# MyDocs stays underneath, as it was.
+MYDOCS=${MYDOCS:-/host/MyDocs}
 
 # Harmattan's groups (adm, dialout, input, pulse-access) and Leste's
 # device groups, by number.
@@ -57,6 +63,9 @@ do_mount() {
 		mountpoint -q "$H/run/user/$HUID" || mount --bind /run/user/$HUID "$H/run/user/$HUID"
 	fi
 	mountpoint -q "$H/tmp/.X11-unix" || mount --bind /tmp/.X11-unix "$H/tmp/.X11-unix"
+	if [ -d "$MYDOCS" ] && ! mountpoint -q "$H/home/user/MyDocs"; then
+		mount --bind "$MYDOCS" "$H/home/user/MyDocs"
+	fi
 	cp /home/$HOST_USER/.Xauthority "$H/home/user/.Xauthority"
 	chown $HUID:$HUID "$H/home/user/.Xauthority"
 	if [ -f /home/$HOST_USER/.config/pulse/cookie ]; then
@@ -69,7 +78,7 @@ do_mount() {
 
 do_umount() {
 	do_stop || true
-	for m in tmp/.X11-unix run/user/$HUID var/run/dbus var/run dev/shm dev/pts dev proc sys; do
+	for m in home/user/MyDocs tmp/.X11-unix run/user/$HUID var/run/dbus var/run dev/shm dev/pts dev proc sys; do
 		mountpoint -q "$H/$m" && umount "$H/$m"
 	done
 	umount "$H"

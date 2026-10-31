@@ -11,6 +11,7 @@
 #               gpsd (positioning/)
 #   leste-apps  Leste applications (camera, Firefox...) in Harmattan's
 #               application grid (leste-apps/, /etc/pro1x-meego/leste-apps)
+# and the system bus's policy for Harmattan's bluetoothd (bluez4/).
 #
 # Runs as root on Leste, after scripts/46-sensor-stack.sh (libssc).
 #
@@ -39,6 +40,7 @@ apt-get install -y -q --no-install-recommends python3-dbus python3-gi \
 install -m 755 "$SRC/positioning/positioningd.py" /usr/lib/pro1x-meego/positioningd
 install -m 755 "$SRC/leste-apps/leste-apps.py" /usr/lib/pro1x-meego/leste-apps
 install -m 644 "$SRC/leste-apps/org.pro1x.LesteLauncher.conf" /etc/dbus-1/system.d/
+install -m 644 "$SRC/bluez4/pro1x-meego-bluez4.conf" /etc/dbus-1/system.d/
 install -d /etc/pro1x-meego
 [ -e /etc/pro1x-meego/leste-apps ] || install -m 644 "$SRC/leste-apps/leste-apps.list" /etc/pro1x-meego/leste-apps
 
