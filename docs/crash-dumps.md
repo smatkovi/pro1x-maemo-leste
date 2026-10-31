@@ -139,8 +139,9 @@ the same:
   With the FlexNoC reading the error code is 0 (SLV, the target answered
   with an error).
 - **Earlier in TZ's log:** the bootloaders' image loads at 1.8-2.1 s, and
-  three more at 21.2-21.7 s: Linux starting the three DSPs (ADSP, CDSP,
-  modem) through TZ. Nothing else reached TZ's log until the crash.
+  three more at 21.2-21.7 s, by their count and time most likely Linux
+  starting the three DSPs (ADSP, CDSP, modem) through TZ (TZ does not name
+  them). Nothing else reached TZ's log until the crash.
 
 ### What follows from it
 
@@ -241,9 +242,14 @@ Limits:
   0.23 s into its boot, right after the I/O schedulers
   (docs/kernel-update.md), the same kernel into itself too; the next line
   of a cold boot is the MPM's probe. So run 0 is a calibration: K=pro1x.5
-  into itself with `EXTRA="ignore_loglevel initcall_debug"`, which names
-  the initcall it stops in. A candidate tested before a run gets past that
-  point says nothing about the candidate.
+  into itself with `NOSERIAL=1 EXTRA="ignore_loglevel initcall_debug"`,
+  which names the initcall it stops in (NOSERIAL drops the 115200-baud
+  serial console, whose thousands of lines could otherwise outlast the
+  watchdog; runs 1-4 keep it as the crashed starts had it). `after` tells
+  the test's start from boot_b's by the marker `pro1x.kexectest=` on the
+  command line. A candidate tested before a run gets past that point says
+  nothing about the candidate; if run 0 stops there again, the only test
+  left is a flash with a trial.
 - The running system's state carries over: the DSPs keep running, the
   display and UFS stay powered (0004/0005), and pro1x.5's SMMU shutdown
   sets sCR0.CLIENTPD (no translation for any stream, unless the hypervisor
@@ -268,7 +274,7 @@ initramfs made in Leste; no partition written).
 
 | Run | Kernel | If it stays up (5 min) | If it goes down |
 |---|---|---|---|
-| 0 | pro1x.5 into itself, `initcall_debug` | kexec works: go on | kexec from Leste does not work here (the console names the initcall); stop, the candidates need another way |
+| 0 | pro1x.5 into itself, `NOSERIAL=1`, `initcall_debug` | kexec works: go on | kexec from Leste does not work here (the console names the initcall); stop, the candidates need another way |
 | 1 | pro1x.12 | the crash needs a cold start (or the trial's boot): read run 1's logs anyway | the pstore shows what happened: often that alone names the patch |
 | 2 | pro1x.12nobt | the Bluetooth set is it: run 3 | not the Bluetooth set (alone): run 4 |
 | 3 | pro1x.12no29 | 0029 (the WCN3950 power-off) | 0023/0024/0030 (the UART switched off while open) |

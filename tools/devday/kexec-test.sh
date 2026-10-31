@@ -47,6 +47,9 @@
 #
 # EXTRA: more for the command line (default ignore_loglevel: the whole
 # kernel log in the RAM console; it slows the serial console's boot).
+# NOSERIAL=1: the running command line without console=ttyMSM0 and earlycon
+# (run 0 only: initcall_debug's lines at 115200 baud could outlast the 32 s
+# watchdog; runs 1-4 keep the console as the crashed starts had it).
 # BASE: the kernel that must run and that boot_b must hold (7.1.0-pro1x.5).
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -126,7 +129,12 @@ print((d[64:576].split(b'\0')[0] + d[608:1632].split(b'\0')[0]).decode())" "$1";
 		add=$(comm -13 <(args "$T/flashed.hdr" | tr ' ' '\n' | sort -u) \
 		    <(args "$OUT/boot_b-$KVER.img" | tr ' ' '\n' | sort -u) | paste -sd' ' -)
 	fi
-	echo "$live${add:+ $add} $TEST_ARGS${EXTRA:+ $EXTRA}" | tr -s ' '
+	# NOSERIAL=1: without the serial console and earlycon (115200 baud,
+	# nothing attached), for run 0's initcall_debug, whose thousands of
+	# lines there could outlast the 32 s watchdog before the menu re-arms it
+	echo "$live${add:+ $add} $TEST_ARGS${EXTRA:+ $EXTRA}" | tr ' ' '\n' | grep . |
+	    if [ "${NOSERIAL:-0}" = 1 ]; then grep -v -e '^console=ttyMSM' -e '^earlycon'; else cat; fi |
+	    paste -sd' ' -
 }
 
 checks() {
@@ -225,6 +233,10 @@ go)
 	;;
 after)
 	log "waiting for the phone (at most 12 minutes)"
+	# "<version> kexec" for the test's start (its marker on the command
+	# line), "<version> boot" for a start from boot_b: for run 0 both are
+	# 7.1.0-pro1x.5
+	whoami="echo \"\$(uname -r) \$(grep -q 'pro1x.kexectest=$KVER' /proc/cmdline && echo kexec || echo boot)\""
 	now=
 	for i in $(seq 72); do
 		if lsusb -d 05c6:900e > /dev/null 2>&1; then
@@ -232,7 +244,8 @@ after)
 			log "crash-dump mode (05c6:900e)"
 			if [ "${OK:-}" = yes ]; then
 				need_space "$RUNS" 50
-				sudo -n qdl ramdump -o "$d" "$QDL_FILTER" || log "qdl ramdump failed"
+				sudo -n qdl ramdump -o "$d" "$QDL_FILTER" ||
+				    die "qdl ramdump failed; the phone is still in 900e (docs/device-day-2026-10-31.md, ways back 4)"
 				python3 -I "$(dirname "$0")/crashdump.py" "$d" > "$d/decoded.txt" 2>&1 || true
 				log "dump in $d (decoded.txt); the phone resets into boot_b now"
 				sleep 30
@@ -243,26 +256,28 @@ after)
 			fi
 		fi
 		bash "$(dirname "$0")/phone.sh" usbnet > /dev/null 2>&1 || true
-		now=$(CONNECT_TIMEOUT=8 ph 'uname -r' 2> /dev/null) && break
+		now=$(CONNECT_TIMEOUT=8 ph "$whoami" 2> /dev/null) && break
 		now=
 		sleep 10
 	done
 	case $now in
-	"$KVER")
+	"$KVER kexec")
 		# pro1x.12 went down about 40 s after its start, ssh never came up
-		log "up with $KVER: watching it until it has run ${MIN_UP:-300} s"
+		log "up with $KVER (the test's start): watching it until it has run ${MIN_UP:-300} s"
 		while :; do
-			up=$(CONNECT_TIMEOUT=8 ph 'cut -d. -f1 /proc/uptime' 2> /dev/null) || {
+			up=$(CONNECT_TIMEOUT=8 ph "$whoami; cut -d. -f1 /proc/uptime" 2> /dev/null) &&
+			    [ "${up%%$'\n'*}" = "$KVER kexec" ] || {
 				log "$KVER is gone: waiting for what comes back"
 				exec bash "$0" after "$K"
 			}
+			up=${up##*$'\n'}
 			[ "$up" -ge "${MIN_UP:-300}" ] && break
 			sleep 15
 		done
 		log "$KVER has run $up s; its logs:"
 		bash "$(dirname "$0")/collect.sh" "kexec-$K-up" || true ;;
 	"")	log "no answer after 12 minutes: the power key [HAND], then collect.sh"; exit 1 ;;
-	*)	log "back with $now: $KVER did not stay up; its console is in the pstore now"
+	*)	log "back with ${now% *} from boot_b: $KVER did not stay up; its console is in the pstore now"
 		bash "$(dirname "$0")/collect.sh" "kexec-$K" || true
 		echo "  then: grep -n 'pretimeout\\|rcu.*stall\\|Bluetooth\\|remoteproc\\|Call trace' $RUNS/kexec-$K*/pstore.txt" ;;
 	esac

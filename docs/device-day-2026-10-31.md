@@ -1378,6 +1378,8 @@ Per run, `K` = the kernel's name, with `D`, `WORK`, `PHONE` as above:
    they are prepared).
 2. `bash $D/kexec-test.sh check $K`: no FAIL.
 3. `bash $D/kexec-test.sh load $K` (nothing restarts; `unload` takes it back).
+   The table's EXTRA and NOSERIAL go in front of check and load: the
+   command line is fixed at load.
 4. **[OK]** `OK=yes bash $D/kexec-test.sh go $K`
 5. **[OK] for its way back** `OK=yes bash $D/kexec-test.sh after $K`:
    waits; up: watches it for 5 minutes, then collects (`kexec-$K-up`);
@@ -1386,7 +1388,7 @@ Per run, `K` = the kernel's name, with `D`, `WORK`, `PHONE` as above:
 
 | Run | K | EXTRA | Stays up | Goes down |
 |---|---|---|---|---|
-| 0 | pro1x.5 | `ignore_loglevel initcall_debug` | kexec works: run 1 | as on 10-28 (0.23 s): the pstore names the initcall; stop here |
+| 0 | pro1x.5 | `ignore_loglevel initcall_debug`, and `NOSERIAL=1` | kexec works: run 1 | as on 10-28 (0.23 s): the pstore names the initcall; stop here (then only a flash with trial is left) |
 | 1 | pro1x.12 | (default) | not reproduced under kexec: run 2 anyway | its pstore: what Linux did before the bite |
 | 2 | pro1x.12nobt | | the Bluetooth set: run 3 | not that set alone: run 4 |
 | 3 | pro1x.12no29 | | 0029 | 0023/0024/0030 |
