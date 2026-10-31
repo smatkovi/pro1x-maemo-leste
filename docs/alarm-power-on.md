@@ -589,7 +589,8 @@ Leste package built by `49-alarmboot.sh` in the chroot of the official
 image (`gcc -Wall`, no warnings) and installed there with apt over the
 previous version.
 
-`tests/alarm-boot/arch-chroot.sh` (2026-10-31, 1.3, 7 checks, 0 failures):
+`tests/alarm-boot/arch-chroot.sh` (2026-10-31, 1.3 and again with 1.4, 7
+checks, 0 failures):
 Arch's side in `arch/pc-chroot.sh`'s chroot of Arch Linux ARM (qemu) with
 the packages of arch-hildon-2026.10.30.1 and the new `pro1x-alarmboot`
 and `pro1x-sessions` installed, on an Xvfb of the PC: a system bus of its
