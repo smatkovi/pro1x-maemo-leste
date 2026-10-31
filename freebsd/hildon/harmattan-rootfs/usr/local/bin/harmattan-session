@@ -20,6 +20,10 @@ export LANG
 export M_THEME_NAME=${M_THEME_NAME:-pro1x}
 export QT_QPA_PLATFORMTHEME=none
 export XDG_CURRENT_DESKTOP=MeeGo
+# FreeBSD has no GPU driver (Mesa's llvmpipe draws on the CPU): Qt Quick on
+# its basic render loop, no render thread of its own (freebsd/pm/README.md,
+# "The energy audit")
+export QSG_RENDER_LOOP=${QSG_RENDER_LOOP:-basic}
 
 # The bus ends with the X server (or at the end of this session, below);
 # --exit-with-session would end it when stdin closes

@@ -154,8 +154,11 @@ switch without leaving X (`pro1x-desktop hildon|harmattan|xfce`):
 A short press on the power key goes to the stand-by screen (or blanks
 the screen) or brings the desktop back, held
 for 2 s it powers the phone off (`pro1x-powerkey`). The RGB status LED
-shows charging (orange) and full (green), as on Leste
-(`rc.d/pro1x_statusled`).
+is Maemo 5's notification light (`pro1x-led`, `pm/README.md` stage 6):
+blue for a missed call, an SMS, a chat or mail message, a reminder
+while it waits, the battery charging orange, full green, low red; off
+otherwise and while suspended (`pro1x_led_enable="NO"`: only charging and
+full, `rc.d/pro1x_statusled`, as on Leste before).
 
 `freebsd/cmdline` on userdata (it overrides `pro1x.env`, `patches/0018`;
 `kern.smp.disabled=0` starts all eight CPUs): `pro1x.root=ram` stays in

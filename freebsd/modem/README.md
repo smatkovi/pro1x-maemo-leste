@@ -394,7 +394,14 @@ but location-daemon has no stop). Patch 0002 stops it again through the
 hook's `stop` (`service pro1x_gps onestop`: SIGTERM, pro1x-gnss sends LOC
 Stop); a gpsd that ran before location-daemon came is left alone.
 `pro1x_gps_enable="YES"` starts it at boot instead and keeps it running
-(the hook's `stop` does nothing then). While pro1x-gnss runs,
+(the hook's `stop` does nothing then). pro1x-gnss's own idle stop (`-g`,
+default 30 s: the LOC session ends when gpsd has closed its UDP source,
+for gpsd without `-n` on Leste, Kali and Arch) does not come into play:
+`rc.d/pro1x_gps` runs gpsd with `-n`, which keeps the source open for as
+long as it runs, and passes no `-x` (daemon(8)'s `-r` would start an
+exited pro1x-gnss again); the chain ends with gpsd, through the hook. Only
+a gpsd that dies alone leaves pro1x-gnss behind, its session stopped
+after 30 s and a probe every 5 s, until `service pro1x_gps onestop`. While pro1x-gnss runs,
 `pro1x-autosleep` does not suspend (the positions would wake it every
 second; `freebsd/pm/README.md`, stage 6).
 

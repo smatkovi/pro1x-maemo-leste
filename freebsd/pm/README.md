@@ -941,6 +941,65 @@ device runs measure next):
   it today; if it works there, FreeBSD's `goodix` follows it). Until
   then the panel off means the power key only, and the stand-by screen
   (touch awake, double tap) costs the touch controller's full scanning.
+- Drawing on the CPU: FreeBSD has no GPU driver, so hildon-desktop
+  (Clutter) and the N9's session draw with Mesa's llvmpipe. Measured in the
+  VM (`test/vm-anim.sh`: Hildon on Xvfb at 2160x1080, CPU seconds of
+  hildon-desktop per step, 4 emulated CPUs): idle 0.00 s in 30 s on the
+  home view and with an idle app open (nothing is drawn while nothing
+  changes; a GTK cursor blinking in leafpad cost nothing either), an app
+  opened about 1 s (the first one 9.5 s), the task navigator about 23 s
+  for each entry and 18-23 s for the app closed from it: its blurred
+  full-screen frames are the cost. Transitions cut to 40 % of their length
+  and the blur replaced by `[thp_tweaks] blurless` changed nothing there
+  (23.0, 23.2, 23.2 s): under emulation one such frame takes seconds, so
+  every transition is its first and its last frame whatever its length.
+  Changed (`hildon-session`, `harmattan-session`): Clutter's frame rate
+  30 instead of 60 (`CLUTTER_DEFAULT_FPS`: never more work, half of it
+  where the CPU keeps up), Qt Quick's basic render loop (`QSG_RENDER_LOOP`,
+  no render thread of its own). For the phone (run 26): the transitions'
+  length and the blur, llvmpipe's threads (`LP_NUM_THREADS`, as many as
+  CPUs by default: 8 with the profile), and no drawing at all with the
+  panel off: hildon-desktop stops every redraw on MCE's
+  `display_status_ind` "off" (and draws again on "on"), which nothing
+  sends on FreeBSD; `pro1x-standby`, which switches the panel off and on
+  (`-O`, the power key), is the one to send it (`tools/`, shared with
+  Leste, where mce sends it). Qt Quick's software renderer
+  (`QT_QUICK_BACKEND=software`, no GL at all) would spare llvmpipe for
+  QML apps, untried with the N9's components (shader effects).
+- Wi-Fi's offloads (ath10k on LinuxKPI): nothing to switch on safely.
+  The beacons need not reach the host: LinuxKPI 802.11 runs no software
+  beacon-miss timer (no `IEEE80211_FEXT_SWBMISS`), the firmware watches the
+  connection (ath10k's `CONNECTION_MONITOR`, its beacon loss through
+  `linuxkpi_ieee80211_beacon_loss`). The firmware's beacon filter and its
+  ARP/NS offload have command ids in ath10k's WMI-TLV table
+  (`WMI_TLV_ADD_BCN_FILTER_CMDID`, `WMI_TLV_SET_ARP_NS_OFFLOAD_CMDID`) but
+  no code sends them, in Linux's ath10k either; its WoW (patterns, magic
+  packet) needs mac80211's suspend with WoWLAN, which LinuxKPI 802.11 does
+  not have (and the freeze is no mac80211 suspend). Multicast: LinuxKPI
+  asks for all of it (`FIF_ALLMULTI` without the driver's
+  `prepare_multicast`), ath10k programs no list either way. What to do
+  next follows from run 22's counts: Wi-Fi's copy engine interrupts
+  associated and idle about ten a second (the 102.4 ms beacon interval)
+  mean the beacons do reach the host (then the beacon filter is the
+  piece), fewer and bursty ones are broadcast and multicast traffic (ARP,
+  IPv6 neighbour discovery, mDNS: the ARP/NS offload). Both are new WMI code
+  whose firmware behaviour nobody has tried; the power save of run 23
+  comes first.
+- Timers bundled: FreeBSD gives every timer that asks for no precision of
+  its own a slack of 5 % (`kern.timecounter.alloweddeviation`): user space's
+  sleeps and poll and kevent time-outs and the kernel's callouts, so they
+  coalesce within it already. This port's daemons wait for events and
+  keep timers only while something is due: pro1x-led none, pro1x-autosleep
+  10 s with the display on, pro1x-audiod the jack's 2 s check in `auto`
+  only (none with `clkstop`), pro1x-fmd only with the chip on, pro1x-modemd
+  GLib's whole-second timers (which GLib aligns across processes), the
+  battery every 30 s with 10 % slack, the watchdog's feed every 15 s with 5 s
+  slack; powerd's look (0.5 s, the profile 1 s) is the most frequent. More
+  bundling would be the slack itself: `sysctl
+  kern.timecounter.alloweddeviation=20` at run time on the phone, awake
+  with the stand-by screen, `hw.psci_idle.stats`' entries a minute at 5 and
+  at 20, and whether key repeat and sound stay even (every unprecise timer
+  may then be up to a fifth late). Not set by default until that run.
 
 ## Device runs (prepared, for 2026-10-31)
 
@@ -1221,6 +1280,24 @@ the kernel with `patches/0036` and `0037`; unplugged unless said):
     monitor: `BecomeMonitor` in the log); the colour shown but the LED
     dark (`sysctl dev.qcom_lpg.0` and `/dev/led/status_*` by hand, as
     `pro1x-statusled` sets them).
+
+26. **Drawing on the CPU** (the full system, Hildon, X Terminal as root,
+    the display on): `p=$(pgrep -x hildon-desktop); ps -o time= -p $p`,
+    then 10 times the task navigator and back (the switcher top left, an
+    app open), `ps -o time= -p $p` again: CPU seconds per entry. The same
+    with the transitions at 40 % (the theme's file wins over the
+    package's; `/etc/hildon/theme` is in `/var`):
+
+        awk -F' = ' '/^(duration|duration_in|duration_out|zoom_duration|fly_duration|delay) = [0-9]+$/ {
+            printf "%s = %d\n", $1, $2 * 0.4 + 0.5; next } { print }' \
+            /usr/local/share/hildon-desktop/transitions.ini > /etc/hildon/theme/transitions.ini
+
+    and the session restarted (`pro1x-desktop hildon`); then with
+    `blurless = 1` in that file; and with
+    `pro1x.power=on` (8 CPUs) `LP_NUM_THREADS=2` and `4` before `startx`.
+    Keep what costs least per entry and looks acceptable; `rm
+    /etc/hildon/theme/transitions.ini` afterwards. Also `CLUTTER_DEFAULT_FPS`
+    60 against the new 30 (`CLUTTER_DEFAULT_FPS=60 startx hildon`).
 
 Runs 1-4 (SMP, the CPUs' idle states) and 6-7 (the suspend, now also on
 one CPU without the IPI panic) are the profile's kernel half;
