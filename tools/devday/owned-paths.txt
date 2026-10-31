@@ -125,7 +125,6 @@ path	/etc/xdg/xfce4	parent
 path	/etc/xdg/xfce4/xfconf	parent
 path	/etc/xdg/xfce4/xfconf/xfce-perchannel-xml	parent
 path	/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml	kali/rootfs-overlay
-path	/host	parent
 tree	/host/pro1x-modules	65
 path	/lib	parent
 tree	/lib/firmware	40,kali/20,luneos/20

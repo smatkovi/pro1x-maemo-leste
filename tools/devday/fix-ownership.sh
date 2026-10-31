@@ -33,9 +33,10 @@
 #   file it is (dpkg's or pacman's lists), for a look by hand: fix does not
 #   touch it. Not looked at: the homes (/home/*, the users' home
 #   directories, /root's contents), /tmp/*, /var/tmp/*, /proc, /sys, /dev,
-#   /run, and other file systems below ROOT (/host is checked only for
-#   /host/pro1x-modules). The list's "known" entries (alarmd's cache, a
-#   crontab, a mailbox) are named, not counted.
+#   /run, and other file systems below ROOT (of /host, userdata, only
+#   /host/pro1x-modules is ours: /host itself is Sailfish's /data, with
+#   Android's owner, and is at most listed). The list's "known" entries
+#   (alarmd's cache, a crontab, a mailbox) are named, not counted.
 # fix: chown -h to the expected owner, g-w and o-w, a file whose owner
 # changes loses setuid/setgid. Before changing anything it writes every
 # path's owner and mode to UNDO_DIR (/root/devday) as
@@ -103,7 +104,7 @@ resolve() {
 # never ours, whatever a link says
 forbidden() {
 	case $1 in
-	/home|/home/*|/root/*|/tmp/*|/var/tmp/*|/var/lib/*|/proc|/proc/*|/sys|/sys/*|/dev|/dev/*|/run|/run/*) return 0 ;;
+	/home|/home/*|/root/*|/tmp/*|/var/tmp/*|/var/lib/*|/proc|/proc/*|/sys|/sys/*|/dev|/dev/*|/run|/run/*|/host) return 0 ;;
 	esac
 	return 1
 }

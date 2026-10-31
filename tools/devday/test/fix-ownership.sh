@@ -7,6 +7,7 @@
 #          rsync -a (40), the modules again into /host/pro1x-modules (65),
 #          a 71 backup, files the overlay had once (pro1x-rmnet, ...); and
 #          what must stay: the homes, /root, /tmp, a daemon's /var/lib,
+#          /host (userdata's root: Android's uid 1000, 0771),
 #          alarmd's cache, a crontab, a mailbox, a dpkg-statoverride entry,
 #          links that point out of the root's system paths
 #   kali:  merged /usr (lib -> usr/lib, sbin -> /usr/sbin), the overlay from
@@ -116,9 +117,12 @@ asroot install -d -o 1000 -g 100 "$F1/var/cache/alarmd"
 asroot install -o 1000 -g 101 -m 600 /dev/null "$F1/var/spool/cron/crontabs/user"
 asroot install -o 1000 -g 8 -m 660 /dev/null "$F1/var/mail/user"
 asroot ln -s ../mail "$F1/var/spool/mail"
+# userdata's root, Sailfish's /data: Android's system user (uid 1000), 0771
+asroot chown 1000:1000 "$F1/host"
+asroot chmod 771 "$F1/host"
 
 keep="home/user/.profile root/notes tmp/x var/lib/foo/data opt/userapp opt/other var/cache/alarmd
-var/spool/cron/crontabs/user var/mail/user home/user/evil/x home/user/dbus usr/bin/crontab"
+var/spool/cron/crontabs/user var/mail/user home/user/evil/x home/user/dbus usr/bin/crontab host"
 snap() { (cd "$1" && for f in $keep; do asroot stat -c '%u:%g %a %n' "$f"; done); }
 
 echo "== fake Leste"
@@ -144,6 +148,8 @@ check "check: a link in the middle of a path: left out" 'echo "$out1" | grep -q 
 check "check: a name with a line break: named, not checked" 'echo "$out1" | grep -q "not checked: a name with a line break in /lib/firmware"'
 check "check: by hand: /var/lib/foo/data, /opt/userapp (package foo), /opt/other" \
     'echo "$out1" | grep -q "/var/lib/foo/data  (in no package)" && echo "$out1" | grep -q "/opt/userapp  (package foo)" && echo "$out1" | grep -q "/opt/other  (in no package)"'
+check "check: /host (userdata's root) listed by hand, not ours" \
+    'echo "$out1" | grep -q "^  d 1000(user):1000(user) 0771  /host  (in no package)" && ! echo "$out1" | grep -q "  /host  \["'
 check "check: known: alarmd's cache, the crontab, the mailbox" \
     'echo "$out1" | grep -q "known: .* /var/cache/alarmd" && echo "$out1" | grep -q "known: .* /var/spool/cron/crontabs/user" && echo "$out1" | grep -q "known: .* /var/mail/user"'
 check "check: not the homes, /root, /tmp" '! echo "$out1" | grep -E -q "/home/user/\.profile|/root/notes|/tmp/x"'

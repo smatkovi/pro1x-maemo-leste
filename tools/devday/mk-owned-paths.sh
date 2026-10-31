@@ -48,6 +48,9 @@ parents() { # parents PATH: every directory above PATH, to /
 	local d=$1
 	while [ "$d" != / ]; do
 		d=$(dirname "$d")
+		# /host is userdata's root (Sailfish's and Android's /data, which
+		# has its own owner and mode): only what we put below it is ours
+		[ "$d" = /host ] && continue
 		add path "$d" parent
 	done
 }
@@ -134,7 +137,7 @@ add known '/var/spool/mail/*' "a user's mailbox"
 for p in "${!KIND[@]}"; do
 	[ "${KIND[$p]}" = known ] && continue
 	case $p in
-	/home|/home/*|/root|/root/*|/tmp|/tmp/*|/var/tmp|/var/tmp/*|/var/lib/*|/proc*|/sys*|/dev*|/run*)
+	/home|/home/*|/root|/root/*|/tmp|/tmp/*|/var/tmp|/var/tmp/*|/var/lib/*|/proc*|/sys*|/dev*|/run*|/host)
 		echo "error: $p is not ours to fix" >&2; exit 1 ;;
 	esac
 done

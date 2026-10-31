@@ -68,7 +68,7 @@ same pinned key. For Kali and Arch it is `phone.sh ssh kali`, and so on.
 | `fix-ownership.sh check\|fix\|undo [ROOT]` | phone | The images built before 2026-10-31 (bb39fa8/0f271a9) left `/`, `/etc`, `/usr`, the overlays' files, the modules and the firmware owned by uid 1000 (`user`, `kali`, `alarm`) or group-writable: a way to root. `check` lists them, read only; `fix` gives our paths back to root and writes an undo list first; `undo` puts that back. Our paths: `owned-paths.txt` next to it (`mk-owned-paths.sh` writes it from the repository). `deploy.sh tools` puts both into `/root/devday/` and `/host/devday/`. |
 | `check-initrd.sh INITRD [alarm]` | PC | Checks that the initramfs `prepare` made carries the trial's parts. The watchdog's arming is skipped silently without `qcom-wdt.ko` or `devmem`. Passes on pro1x.5's initramfs. |
 | `test/run.sh` | PC | Tests all of the above against a fake phone (fake ssh/scp): 39 checks. |
-| `test/fix-ownership.sh` | PC, sudo | Tests `fix-ownership.sh` on two fake roots made as the old builds made them (check, fix, check, undo): 46 checks; `CLEAN=<a correctly built image, mounted read-only>` adds 2. |
+| `test/fix-ownership.sh` | PC, sudo | Tests `fix-ownership.sh` on two fake roots made as the old builds made them (check, fix, check, undo): 47 checks; `CLEAN=<a correctly built image, mounted read-only>` adds 2. |
 
 `DRY=1` in front of deploy.sh, collect.sh or backup.sh prints the phone
 commands without running them.
@@ -354,6 +354,11 @@ Rollback: Rollback, ways back 2-4.
    - "owned by a user ..., not ours" lists the rest that belongs to a
      uid >= 1000 outside the homes, with its package. The fix leaves these
      alone. Look at them by hand.
+   - `/host` there, uid 1000 with 0771, is userdata's root: Sailfish's
+     `/data`, which Android gives its `system` user (uid 1000). The fix
+     leaves it alone. It does mean that `user` can rename or delete the
+     images in `/host`: that is the owner's decision, not today's (compare
+     `host-ls.txt` from block 2).
 
    The other systems' images, from Leste (as root, read only, never the
    image of a system that runs). Their reports go to `/root/devday/`:
