@@ -1,0 +1,5 @@
+# The Pro1X's deep-buffer front end routed when the sound card appears (see
+# /usr/local/sbin/pro1x-music-route), after 90-alsa-restore.rules: a state
+# that alsactl saved with the route off would switch it off again. The
+# session hook Xsession.post/48pro1x-music-sink sets it once more.
+ACTION=="add", SUBSYSTEM=="sound", KERNEL=="controlC*", ATTRS{id}=="Pro1X", RUN+="/usr/local/sbin/pro1x-music-route"

@@ -1,7 +1,10 @@
 # F(x)tec Pro1X (sourced by Xsession-post): music through PulseAudio's
 # deep-buffer sink (tools/pro1x-music-sink, docs/audio.md "Music with a deep
 # buffer"): the media player's streams to pro1x_music, which follows the
-# default sink's volume. Idle on kernels without that sink.
+# default sink's volume. Idle on kernels without that sink. The front end's
+# route first, in case a restored mixer state switched it off since udev set
+# it at boot.
 if [ -x /usr/local/bin/pro1x-music-sink ]; then
+	[ ! -x /usr/local/sbin/pro1x-music-route ] || /usr/local/sbin/pro1x-music-route
 	/usr/local/bin/pro1x-music-sink > /dev/null 2>&1 &
 fi

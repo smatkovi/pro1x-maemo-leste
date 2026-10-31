@@ -4,7 +4,7 @@
 # front end without a back end does not open, so PulseAudio's music sink
 # (/etc/pulse/default.pa.d/50-pro1x.pa) needs it before the session starts.
 # Nothing is powered by it until a stream runs. Called by
-# /etc/udev/rules.d/86-pro1x-music-route.rules when the card appears; on a
+# /etc/udev/rules.d/91-pro1x-music-route.rules when the card appears; on a
 # kernel without MultiMedia4 the control is missing and nothing happens.
 for amixer in /usr/bin/amixer /bin/amixer; do
 	if [ -x "$amixer" ]; then

@@ -17,7 +17,7 @@
 #       in Leste: loads PulseAudio's sink on the deep-buffer front end,
 #       moves the media player there, gives it the default sink's volume
 #   /etc/X11/Xsession.post/48pro1x-music-sink   starts it with the session
-#   /etc/udev/rules.d/86-pro1x-music-route.rules and
+#   /etc/udev/rules.d/91-pro1x-music-route.rules and
 #   /usr/local/sbin/pro1x-music-route      the front end's route when the
 #       card appears
 # install (the default): every file it replaces is saved first, once, under
@@ -36,7 +36,7 @@ esac
 
 FILES=(tools/pro1x-music-sink/pro1x-music-sink.c
 	rootfs-overlay/etc/X11/Xsession.post/48pro1x-music-sink
-	rootfs-overlay/etc/udev/rules.d/86-pro1x-music-route.rules
+	rootfs-overlay/etc/udev/rules.d/91-pro1x-music-route.rules
 	rootfs-overlay/usr/local/sbin/pro1x-music-route
 	scripts/72-audio-deep-buffer.sh)
 
@@ -92,7 +92,7 @@ leste() {   # leste ROOT
 	local r=$1 f
 	if [ "$ACTION" = restore ]; then
 		for f in usr/local/bin/pro1x-music-sink etc/X11/Xsession.post/48pro1x-music-sink \
-			etc/udev/rules.d/86-pro1x-music-route.rules usr/local/sbin/pro1x-music-route; do
+			etc/udev/rules.d/91-pro1x-music-route.rules usr/local/sbin/pro1x-music-route; do
 			back "$r" "$f"
 		done
 		return 0
@@ -100,8 +100,8 @@ leste() {   # leste ROOT
 	SRC=/ put "$r" "$BIN" 755 usr/local/bin/pro1x-music-sink
 	put "$r" rootfs-overlay/etc/X11/Xsession.post/48pro1x-music-sink 644 \
 		etc/X11/Xsession.post/48pro1x-music-sink
-	put "$r" rootfs-overlay/etc/udev/rules.d/86-pro1x-music-route.rules 644 \
-		etc/udev/rules.d/86-pro1x-music-route.rules
+	put "$r" rootfs-overlay/etc/udev/rules.d/91-pro1x-music-route.rules 644 \
+		etc/udev/rules.d/91-pro1x-music-route.rules
 	put "$r" rootfs-overlay/usr/local/sbin/pro1x-music-route 755 usr/local/sbin/pro1x-music-route
 }
 

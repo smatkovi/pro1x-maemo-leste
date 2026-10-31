@@ -459,10 +459,14 @@ patches 0001-0035, built 2026-10-31, not flashed):
   kernel without MultiMedia4 (`/proc/asound/Pro1X/pcm8p`), or with
   `/etc/pulse/pro1x-deep-buffer-off`. `-p BYTES` sets another period
   (a multiple of 1920; 61440 is 320 ms), `-v` logs what it does.
-- `/etc/udev/rules.d/86-pro1x-music-route.rules` runs
+- `/etc/udev/rules.d/91-pro1x-music-route.rules` runs
   `/usr/local/sbin/pro1x-music-route` when the card appears: the route
   above, which the UCM profile does not know (as `BootSequence` keeps
-  MultiMedia1's). Nothing is powered by it until a stream runs.
+  MultiMedia1's). After `90-alsa-restore.rules`, and the session hook sets
+  it once more before it starts pro1x-music-sink: a mixer state that
+  `alsactl` saved while it was off (a boot with the new kernel before the
+  files were there) would switch it off again at every boot. Nothing is
+  powered by it until a stream runs.
 - Kali and Arch (PipeWire) are unchanged. PipeWire runs one graph clock
   for all streams and does lower its quantum while only a stream with a
   large `node.latency` runs, but on a batch device its ALSA node keeps a
@@ -478,7 +482,12 @@ starts as before (PulseAudio fills the 1.28 s at once). Notifications,
 the keyboard and the other sounds stay on the UCM sink with its 20 ms
 periods; a call's audio does not go through PulseAudio at all (q6voice).
 If the delay is too long: `-p 61440` in the session hook (320 ms periods,
-about 3 wake-ups a second).
+about 3 wake-ups a second). A move by pro1x-music-sink is one that
+module-stream-restore remembers: after music was moved to Bluetooth
+headphones, a later x-maemo stream is restored to them while they are
+connected, also when the phone is the default again, until the media
+player writes its role volume (any volume change: mafw writes the entry
+without a device).
 
 **Measured on the PC (2026-10-31).** `tests/audio-deep-buffer`: Leste's own
 PulseAudio 16.1 and GStreamer in the Leste chroot (qemu) against
