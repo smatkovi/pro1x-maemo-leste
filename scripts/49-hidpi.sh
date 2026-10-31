@@ -44,8 +44,10 @@ PARTS=(
   "location-ui|55b9700aed33|2"
   # location-daemon stops the gpsd it started once its clients are gone
   # (patches/fixes): gpsd, pro1x-gnss and the modem's GNSS engine ran
-  # until the next boot after the first application that asked
-  "location-daemon|fc26fe2bf897|1"
+  # until the next boot after the first application that asked; 2: the
+  # reviewed upstream diff, gpsd stopped before the D-Bus name is released
+  # (+pro1x1, in leste-hildon-2026.10.31 for half an hour, had the old order)
+  "location-daemon|fc26fe2bf897|2"
   # repeating appointments on 64-bit (patches/fixes): none was expanded,
   # in qalendar's views and on the Events page (pro1x-events)
   "calendar-backend|7a149bfc9f76|1"
