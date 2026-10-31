@@ -1,0 +1,36 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sat, 31 Oct 2026 11:05:00 +0100
+Subject: [PATCH] ASoC: qcom: q6asm-dai: playback periods up to 122880 bytes
+
+Each playback period is one ASM write and one WRITE_DONE event, which
+wakes the CPU and the sound server. With 65536 bytes, and the driver's
+480-frame step, the longest period of 48 kHz stereo S16 was 16320 frames
+(340 ms), about three wake-ups a second. The downstream driver for the
+same ADSP firmware family (msm-pcm-q6-v2.h, the Pro1X's vendor kernel
+msm-4.19 "bengal") allows 122880 bytes: 30720 frames, 640 ms, a multiple
+of 480, so a deep-buffer stream needs about 1.5 wake-ups a second. The
+compress path already writes fragments of up to 128 KiB.
+
+The buffer limit follows (8 periods, 960 KiB, 5.1 s), and with it the
+buffer each MultiMedia PCM substream gets preallocated (pcm_new): 960 KiB
+instead of 512 KiB per substream. Short periods stay as they were.
+
+diff --git a/sound/soc/qcom/qdsp6/q6asm-dai.c b/sound/soc/qcom/qdsp6/q6asm-dai.c
+index 4f09fdd409..28a75e9d18 100644
+--- a/sound/soc/qcom/qdsp6/q6asm-dai.c
++++ b/sound/soc/qcom/qdsp6/q6asm-dai.c
+@@ -26,7 +26,13 @@
+ 
+ #define PLAYBACK_MIN_NUM_PERIODS    2
+ #define PLAYBACK_MAX_NUM_PERIODS   8
+-#define PLAYBACK_MAX_PERIOD_SIZE    65536
++/*
++ * Each period is one ASM write to the DSP and one WRITE_DONE back, i.e. a
++ * wake-up of the CPU. 122880 bytes as the downstream msm-pcm-q6-v2 driver
++ * allows (640 ms of 48 kHz stereo S16, a multiple of the 480-frame step),
++ * so that a deep-buffer stream wakes the CPU about 1.5 times a second.
++ */
++#define PLAYBACK_MAX_PERIOD_SIZE    122880
+ #define PLAYBACK_MIN_PERIOD_SIZE    128
+ #define CAPTURE_MIN_NUM_PERIODS     2
+ #define CAPTURE_MAX_NUM_PERIODS     8

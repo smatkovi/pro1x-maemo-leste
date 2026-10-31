@@ -1,0 +1,72 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sat, 31 Oct 2026 11:00:00 +0100
+Subject: [PATCH] arm64: dts: qcom: sm6115-pro1x: a deep-buffer playback front
+ end (MultiMedia4)
+
+Music played through MultiMedia1 wakes the CPU once per period: every
+period is one ASM write to the ADSP and one WRITE_DONE back, and the
+sound server refills it. PulseAudio cannot use timer-based scheduling on
+q6asm-dai (it sets SNDRV_PCM_INFO_BATCH, and PulseAudio turns tsched off
+for batch devices), so the period it opens with (about 20 ms) is the
+wake-up interval for everything, a notification sound as well as an hour
+of music.
+
+A second playback front end lets the sound server keep two sinks: the
+UCM one on MultiMedia1 with short periods for interactive sounds, and a
+music sink with periods of up to 640 ms (q6asm-dai's limit after the
+next patch). The ADSP mixes both sessions into the codec's
+RX_CODEC_DMA_RX_0 port (one COPP, two sessions in its matrix map), so the
+UCM profile's speaker, headphone and earpiece paths serve both.
+
+MultiMedia2 and MultiMedia3 are taken by capture (the microphones, the
+FM receiver), and a front end is one ASM session that its playback and
+capture streams would share, so the new one is MultiMedia4, playback
+only. Its DAI link is the last one: the card numbers its PCMs by link
+order, back ends included, so the existing ones (VoiceMMode1 is 5) keep
+their numbers and MultiMedia4 is hw:<card>,8. Like MultiMedia1 it opens
+only while a route ("RX_CODEC_DMA_RX_0 Audio Mixer MultiMedia4") is on.
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts b/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
+index 91755b757a..58de6cfbbb 100644
+--- a/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
++++ b/arch/arm64/boot/dts/qcom/sm6115-fxtec-pro1x.dts
+@@ -567,6 +567,20 @@ platform {
+ 				sound-dai = <&q6routing>;
+ 			};
+ 		};
++
++		/*
++		 * A second playback front end for music with large periods (a
++		 * deep buffer): the DSP mixes it with MultiMedia1 on
++		 * RX_CODEC_DMA_RX_0. Last, so that the PCM numbers of the links
++		 * above stay as they were (it is hw:<card>,8).
++		 */
++		mm4-dai-link {
++			link-name = "MultiMedia4";
++
++			cpu {
++				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA4>;
++			};
++		};
+ 	};
+ 
+ 	ts_i2c: i2c-touchscreen {
+@@ -1538,6 +1552,18 @@ dai@1 {
+ 	};
+ };
+ 
++/*
++ * MultiMedia4, the deep-buffer front end (mm4-dai-link): playback only.
++ * Each front end is one ASM session, which its playback and capture
++ * streams would share.
++ */
++&q6asmdai {
++	dai@3 {
++		reg = <MSM_FRONTEND_DAI_MULTIMEDIA4>;
++		direction = <Q6ASM_DAI_RX>;
++	};
++};
++
+ &cci {
+ 	status = "okay";
+ };
