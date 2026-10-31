@@ -705,9 +705,9 @@ Steps:
    stays on. Optional:
    portrait with the keyboard closed, MeeGo (its copy with the 1.2
    package and the new `01pro1x-meego`, see the document: the N9's own
-   alarm screen, then off). Arch (packages of `arch-hildon-2026.10.31` and
-   `pro1x-alarmboot` 1.4 of `arch-hildon-2026.10.31.1`, `pro1x-desktop
-   meego`): the same steps as Leste.
+   alarm screen, then off). Arch (the packages of `arch-hildon-2026.10.31.2`,
+   all of them, with `pro1x-alarmboot` 1.4; `pro1x-desktop meego`): the
+   same steps as Leste.
 5. Counter-check: a start by the power key shows the menu
    (`last-boot`: `alarm-check: none not-by-the-rtc`).
 6. `collect.sh 08-alarm /host/pro1x-boot/last-boot /tmp/pro1x-alarmboot.log`
@@ -788,6 +788,15 @@ See `arch/README.md`. Its trial must have ended.
    ```sh
    mkdir -p ~/pro1x-arch && tar -C ~/pro1x-arch -xf /host/devday/arch.tar
    sudo PKGS=/host/devday/arch-pkgs MNT=/ bash ~/pro1x-arch/arch/42-meego-look.sh
+   ```
+   The packages are those of `arch-hildon-2026.10.31.2` (all 153). Its
+   `libhildonfm` no longer has `/etc/xdg/user-dirs.defaults`, xdg-user-dirs'
+   file, where step 40 had put Maemo's MyDocs lines. Put xdg-user-dirs' back
+   (WLAN needed; `pro1x-update --yes` does the same):
+   ```sh
+   sudo pacman -Sw --noconfirm xdg-user-dirs &&
+     { ! grep -q MyDocs /etc/xdg/user-dirs.defaults || sudo rm /etc/xdg/user-dirs.defaults; } &&
+     { [ -e /etc/xdg/user-dirs.defaults ] || sudo pacman -S --noconfirm xdg-user-dirs; }
    ```
    Ownership (block 2b): `sudo sh /host/devday/fix-ownership.sh check`
    ends in `== 0 of our paths to fix`. If not: `fix` [OK], as in block 2b.
