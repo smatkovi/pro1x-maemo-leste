@@ -66,7 +66,8 @@ cp /etc/resolv.conf "$MNT/etc/resolv.conf"
 mkdir -p "$MNT$B/src" "$MNT$B/patches"
 # (and Linux for FreeBSD where a build names the target system: yappari's
 # Go backend)
-sed -e 's|/usr/local|/usr|g' -e 's|libdata/pkgconfig|lib/pkgconfig|g' -e 's|GOOS=freebsd|GOOS=linux|g' \
+# (also where a recipe names the prefix without its slash: LIBDIR=usr/local/lib)
+sed -e 's|/usr/local|/usr|g' -e 's|=usr/local/|=usr/|g' -e 's|libdata/pkgconfig|lib/pkgconfig|g' -e 's|GOOS=freebsd|GOOS=linux|g' \
 	"$REPO/freebsd/hildon/apps.sh" > "$MNT$B/apps-arch.sh"
 for d in hidpi meego fixes; do
 	rm -rf "${MNT:?}$B/patches/$d"
