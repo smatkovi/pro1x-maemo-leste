@@ -414,6 +414,11 @@ Preconditions: blocks 1-2 done, Rollback points 1-3 checked.
    mount), the way back without reflashing is a file on userdata, from
    any system that runs: `touch /host/pro1x-fs-defaults` (old options,
    plain loop, from the next start).
+
+   **One change at a time:** before the flash, in the running Leste,
+   `touch /host/pro1x-fs-defaults`, so the trial tests the new kernel
+   with the old mount options and the plain loop. The new options come in
+   step 6a, after the trial.
 3. **[OK] flash.** It saves boot_b as
    `/host/boot_b-before-$KVER.img` and copies it to `$OUT`, writes boot_b,
    and starts the trial with 3 tries:
@@ -431,6 +436,12 @@ Preconditions: blocks 1-2 done, Rollback points 1-3 checked.
 6. **[OK] one more reboot** ends the trial. `pro1x-boot list` then has no
    `trial:` line, and `slots.txt` in the collect shows boot_b with 7
    tries, successful.
+6a. **[OK] the new file-system options:** in Leste `rm /host/pro1x-fs-defaults`,
+   reboot, then `findmnt -n -o OPTIONS / /host` (lazytime, commit=30) and
+   `losetup -l -O NAME,DIO,LOG-SEC` (DIO 1 for images with 4 KiB blocks).
+   If Leste does not come up: start another system from the menu (Kali,
+   Arch) and `touch /host/pro1x-fs-defaults` there; they use the same loop
+   path, so if none comes up, ways back 2.
 7. The checks of `docs/fm-radio.md` (after the flash):
    - `cat /proc/asound/cards; lsmod | grep -E 'wcn399x|slimbus'`. If the
      card is missing, run `modprobe snd-soc-wcn399x` before any rollback.
