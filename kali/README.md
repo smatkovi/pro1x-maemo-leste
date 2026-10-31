@@ -37,7 +37,9 @@ The boot menu entry needs an initramfs with the current
   nm-applet in Xfce), or `mmcli -i any --pin=...` from a root shell (not
   through sudo, which logs the command line). How it fits
   together, the test and what can go wrong: [docs/kali-mobile-data.md](../docs/kali-mobile-data.md).
-- Sensors (iio-sensor-proxy), GPS (gpsd from pro1x-gnss), step counter
+- Sensors (iio-sensor-proxy), GPS (gpsd from pro1x-gnss, both started by
+  gpsd's socket for the first client, not at boot; `systemctl stop
+  gpsd.service` switches the GNSS engine off again), step counter
   (`org.pro1x.Steps`), audio (Leste's UCM profile), Bluetooth.
 
 The first boot worked (2026-10-25). Untested so far: mobile data (no SIM

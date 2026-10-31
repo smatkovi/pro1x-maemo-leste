@@ -193,8 +193,13 @@ mkdir -p /host
 
 systemctl enable pro1x-rtc.service pro1x-hexagonrpcd.service pro1x-sensors.service \
 	pro1x-gnss.service pro1x-steps.service pro1x-audio-init.service pro1x-usb0.service \
-	rmtfs.service tqftpserv.service gpsd.service \
+	rmtfs.service tqftpserv.service \
 	NetworkManager.service ModemManager.service bluetooth.service sshd.service phosh.service
+# GPS on demand (as Kali): gpsd started by its socket for the first client,
+# the GNSS engine (pro1x-gnss, WantedBy=gpsd.service) only with it; an
+# earlier run's gpsd.service goes, and its disable takes the socket along
+systemctl disable gpsd.service 2> /dev/null || true
+systemctl enable gpsd.socket
 # until the first boot is confirmed (pro1x-boot-ok), an unreachable boot
 # reboots into the boot menu's default system after 15 minutes
 systemctl enable pro1x-boot-guard.timer

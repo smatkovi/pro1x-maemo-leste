@@ -132,8 +132,13 @@ grep -q '^/dev/loop0' /etc/fstab || echo '/dev/loop0 / ext4 defaults,noatime 0 0
 mkdir -p /host
 
 systemctl enable pro1x-rtc.service pro1x-hexagonrpcd.service pro1x-sensors.service pro1x-gnss.service pro1x-steps.service \
-	pro1x-audio-init.service pro1x-usb0.service rmtfs.service tqftpserv.service gpsd.service \
+	pro1x-audio-init.service pro1x-usb0.service rmtfs.service tqftpserv.service \
 	NetworkManager.service ModemManager.service bluetooth.service ssh.service
+# GPS on demand: gpsd started by its socket for the first client, the GNSS
+# engine (pro1x-gnss, WantedBy=gpsd.service) only with it; Debian's package
+# enables gpsd.service itself, whose disable takes the socket along (Also=)
+systemctl disable gpsd.service 2> /dev/null || true
+systemctl enable gpsd.socket
 # replaced by pro1x-sensors.service (libssc)
 systemctl mask iio-sensor-proxy.service
 systemctl set-default graphical.target

@@ -121,6 +121,11 @@ install -m 755 "$REPO/rootfs-overlay/etc/init.d/pro1x-autosuspend" /etc/init.d/
 sed -i 's|^DAEMON=.*|DAEMON="/usr/local/sbin/alarmd-pro1x"|' /etc/conf.d/alarmd
 # gpsd-clients recommends matplotlib and friends; gpspipe/cgps need none of it.
 apt-get install -y -q --no-install-recommends gpsd gpsd-clients
+# gpsd only on demand (location-daemon starts and stops it, Leste's
+# policy-rc.d says so too); with it /etc/conf.d/gpsd starts the modem's
+# GNSS engine, so a gpsd at boot would keep that running for ever.
+# Devuan's postinst asks update-rc.d for runlevels 2-5: in none of them.
+rc-update del gpsd default 2> /dev/null || true
 
 log "sensor data files from the NixOS port"
 rm -rf /usr/share/pro1x/hexagonfs

@@ -1,5 +1,7 @@
-# Pro1X: NMEA from pro1x-gnss (pro1x-gnss.service)
+# Pro1X: NMEA from pro1x-gnss (pro1x-gnss.service), which runs only while
+# gpsd does; gpsd.socket starts gpsd for its first client. Without -n
+# gpsd opens the UDP source only while a client watches.
 START_DAEMON="true"
 USBAUTO="false"
 DEVICES="udp://127.0.0.1:29470"
-GPSD_OPTIONS="-n"
+GPSD_OPTIONS=""

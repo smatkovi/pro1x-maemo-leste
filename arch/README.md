@@ -30,7 +30,9 @@ image: one line `key|Label|/image.img|` each in `/host/pro1x-boot/extra`.
   logins are only accepted from 172.16.42.0/24, keys from anywhere.
 - WLAN and mobile data: NetworkManager (Phosh's settings); mobile data
   through ModemManager (QRTR modem, rmtfs and tqftpserv as on Leste).
-- Sensors (iio-sensor-proxy), GPS (gpsd from pro1x-gnss), step counter
+- Sensors (iio-sensor-proxy), GPS (gpsd from pro1x-gnss, both started by
+  gpsd's socket for the first client, not at boot; `systemctl stop
+  gpsd.service` switches the GNSS engine off again), step counter
   (`org.pro1x.Steps`), audio (Leste's UCM profile), Bluetooth.
 
 ## Desktops
