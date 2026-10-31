@@ -1,0 +1,222 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sat, 31 Oct 2026 10:00:00 +0100
+Subject: [PATCH] Input: goodix - double tap to wake in the controller's
+ gesture mode
+
+Double tap to wake (0002) looks for the two taps in the touch reports, so
+while user space has the touchscreen inhibited (mce blanking the display)
+the controller keeps scanning at its full rate and every touch of the dark
+screen, in a pocket too, is an interrupt and a read of its report over the
+F(x)tec Pro1X's bit-banged I2C.
+
+GT9xx controllers have a gesture ("doze") mode for that: command 8,
+written to 0x8046 and then to 0x8040, makes the controller scan slowly and
+interrupt only for a gesture, whose code it puts into 0x814B (0xCC for a
+double tap); a reset ends the mode. That is how Goodix's own driver does
+its "slide wake-up" (goodix_gt9xx_public, gtp_enter_doze() and
+gtp_gesture_handler()).
+
+The device gets open() and close(): close (inhibit, or the last user
+gone) with dt2w on enters the gesture mode, an interrupt there reads the
+code (polling it up to 20 ms, as the touch report's buffer status), a
+double tap reports KEY_POWER on the double-tap wake device, any code is
+cleared and the mode armed again; open leaves it by a reset (and sends
+the configuration if the controller came back with another one). A
+system suspend's screen-off ends the mode, so resume arms it again.
+
+A controller whose firmware has no gesture mode keeps sending touch
+reports: the first one seen in gesture mode switches back to the touch
+reports' double tap until the driver is loaded again. So does
+dt2w_gesture=0 (runtime, from the next blank on).
+
+Signed-off-by: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+---
+diff --git a/drivers/input/touchscreen/goodix.c b/drivers/input/touchscreen/goodix.c
+index 562c5d35ab..50bf0d4edc 100644
+--- a/drivers/input/touchscreen/goodix.c
++++ b/drivers/input/touchscreen/goodix.c
+@@ -574,6 +574,77 @@ static void goodix_ts_work_i2c_poll(struct input_dev *input)
+ 	goodix_i2c_write_u8(ts->client, GOODIX_READ_COOR_ADDR, 0);
+ }
+ 
++/*
++ * Double tap to wake in the controller's gesture mode. With dt2w alone the
++ * controller keeps scanning at its full rate while user space has the
++ * touchscreen inhibited, and every touch of the dark screen (a pocket) is
++ * an interrupt and a read of its report over the bit-banged I2C. In
++ * gesture mode it scans slowly and interrupts only for a gesture, which
++ * it names in 0x814B (0xCC: a double tap): entered with command 8 written
++ * to 0x8046 and 0x8040, left by a reset, as Goodix's own GT9xx driver
++ * does it for its "slide wake-up" (goodix_gt9xx_public, gtp_enter_doze()).
++ * A controller whose firmware has no gesture mode keeps sending touch
++ * reports: then the double tap is looked for in those, as above.
++ */
++static bool dt2w_gesture = true;
++module_param(dt2w_gesture, bool, 0644);
++MODULE_PARM_DESC(dt2w_gesture, "Double tap to wake in the controller's gesture mode (else from every touch report)");
++
++#define GOODIX_REG_COMMAND_CHECK	0x8046
++#define GOODIX_REG_GESTURE		0x814B
++#define GOODIX_CMD_GESTURE		0x08
++#define GOODIX_GESTURE_DOUBLE_TAP	0xCC
++
++static int goodix_gesture_arm(struct goodix_ts_data *ts)
++{
++	int error;
++
++	error = goodix_i2c_write_u8(ts->client, GOODIX_REG_COMMAND_CHECK,
++				    GOODIX_CMD_GESTURE);
++	if (!error)
++		error = goodix_i2c_write_u8(ts->client, GOODIX_REG_COMMAND,
++					    GOODIX_CMD_GESTURE);
++	return error;
++}
++
++/* An interrupt in gesture mode: a gesture, or a touch report after all */
++static void goodix_gesture_event(struct goodix_ts_data *ts)
++{
++	unsigned long timeout = jiffies + msecs_to_jiffies(GOODIX_BUFFER_STATUS_TIMEOUT);
++	u8 code, status = 0;
++
++	/* like the touch report's buffer status, the code may come late */
++	do {
++		if (goodix_i2c_read(ts->client, GOODIX_REG_GESTURE, &code, 1))
++			return;
++		if (code)
++			break;
++		if (!goodix_i2c_read(ts->client, GOODIX_READ_COOR_ADDR, &status, 1) &&
++		    (status & GOODIX_BUFFER_STATUS_READY))
++			break;
++		usleep_range(1000, 2000);
++	} while (time_before(jiffies, timeout));
++
++	if (!code && (status & GOODIX_BUFFER_STATUS_READY)) {
++		dev_info(&ts->client->dev,
++			 "no gesture mode: double tap to wake from the touch reports\n");
++		ts->gesture_failed = true;
++		WRITE_ONCE(ts->gesture, false);
++		goodix_process_events(ts);
++		goodix_i2c_write_u8(ts->client, GOODIX_READ_COOR_ADDR, 0);
++		return;
++	}
++	if (code == GOODIX_GESTURE_DOUBLE_TAP && ts->input_wake) {
++		input_report_key(ts->input_wake, KEY_POWER, 1);
++		input_sync(ts->input_wake);
++		input_report_key(ts->input_wake, KEY_POWER, 0);
++		input_sync(ts->input_wake);
++	}
++	/* another gesture, or nothing: cleared, and armed again */
++	goodix_i2c_write_u8(ts->client, GOODIX_REG_GESTURE, 0);
++	goodix_gesture_arm(ts);
++}
++
+ /**
+  * goodix_ts_irq_handler - The IRQ handler
+  *
+@@ -584,6 +655,11 @@ static irqreturn_t goodix_ts_irq_handler(int irq, void *dev_id)
+ {
+ 	struct goodix_ts_data *ts = dev_id;
+ 
++	if (READ_ONCE(ts->gesture)) {
++		goodix_gesture_event(ts);
++		return IRQ_HANDLED;
++	}
++
+ 	goodix_process_events(ts);
+ 	goodix_i2c_write_u8(ts->client, GOODIX_READ_COOR_ADDR, 0);
+ 
+@@ -886,6 +962,60 @@ static int goodix_reset(struct goodix_ts_data *ts)
+ 	return goodix_int_sync(ts);
+ }
+ 
++/*
++ * The input core closes the device when user space inhibits it (mce
++ * blanking the display) or its last user goes, and opens it again: the
++ * controller in gesture mode in between, for double tap to wake.
++ */
++static void goodix_input_close(struct input_dev *dev)
++{
++	struct goodix_ts_data *ts = input_get_drvdata(dev);
++
++	if (!READ_ONCE(dt2w) || !READ_ONCE(dt2w_gesture) || ts->gesture_failed ||
++	    !ts->input_wake || !ts->gpiod_rst || !ts->client->irq ||
++	    ts->irq_pin_access_method == IRQ_PIN_ACCESS_NONE)
++		return;
++
++	goodix_disable_irq(ts);
++	ts->dt2w_down = false;
++	ts->dt2w_last_tap = 0;
++	if (goodix_gesture_arm(ts))
++		dev_warn(&ts->client->dev,
++			 "no gesture mode: double tap to wake from the touch reports\n");
++	else
++		WRITE_ONCE(ts->gesture, true);
++	goodix_enable_irq(ts);
++}
++
++static int goodix_input_open(struct input_dev *dev)
++{
++	struct goodix_ts_data *ts = input_get_drvdata(dev);
++	u8 config_ver;
++	int error;
++
++	if (!ts->gesture)
++		return 0;
++
++	/* left by a reset; the interrupt line is an output meanwhile */
++	WRITE_ONCE(ts->gesture, false);
++	goodix_free_irq(ts);
++	error = goodix_reset(ts);
++	if (!error) {
++		error = goodix_i2c_read(ts->client, ts->chip->config_addr,
++					&config_ver, 1);
++		if (!error && config_ver != ts->config[0])
++			error = goodix_send_cfg(ts, ts->config,
++						ts->chip->config_len);
++	}
++	if (error)
++		dev_err(&ts->client->dev, "leaving gesture mode: %d\n", error);
++
++	error = goodix_request_irq(ts);
++	if (error)
++		dev_err(&ts->client->dev, "request IRQ failed: %d\n", error);
++	return 0;
++}
++
+ #ifdef ACPI_GPIO_SUPPORT
+ static const struct acpi_gpio_params first_gpio = { 0, 0, false };
+ static const struct acpi_gpio_params second_gpio = { 1, 0, false };
+@@ -1288,6 +1418,8 @@ static int goodix_configure_dev(struct goodix_ts_data *ts)
+ 	}
+ 
+ 	input_set_drvdata(ts->input_dev, ts);
++	ts->input_dev->open = goodix_input_open;
++	ts->input_dev->close = goodix_input_close;
+ 
+ 	if (!ts->client->irq) {
+ 		error = input_setup_polling(ts->input_dev, goodix_ts_work_i2c_poll);
+@@ -1597,6 +1729,10 @@ static int goodix_resume(struct device *dev)
+ 	if (error)
+ 		return error;
+ 
++	/* the suspend's screen off ended a gesture mode: armed again */
++	if (ts->gesture && goodix_gesture_arm(ts))
++		WRITE_ONCE(ts->gesture, false);
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/input/touchscreen/goodix.h b/drivers/input/touchscreen/goodix.h
+index efaedf490a..d34ac09395 100644
+--- a/drivers/input/touchscreen/goodix.h
++++ b/drivers/input/touchscreen/goodix.h
+@@ -111,6 +111,9 @@ struct goodix_ts_data {
+ 	ktime_t dt2w_last_tap;
+ 	int dt2w_x, dt2w_y;
+ 	int dt2w_last_x, dt2w_last_y;
++	/* the controller in its gesture mode while inhibited (dt2w_gesture) */
++	bool gesture;
++	bool gesture_failed;
+ };
+ 
+ int goodix_i2c_read(struct i2c_client *client, u16 reg, u8 *buf, int len);
