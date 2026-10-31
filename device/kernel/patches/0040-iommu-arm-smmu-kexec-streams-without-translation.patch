@@ -1,0 +1,132 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Sat, 31 Oct 2026 22:25:00 +0100
+Subject: [PATCH] iommu/arm-smmu: kexec: streams left without translation for
+ named devices
+
+The F(x)tec Pro1X's boot menu starts FreeBSD with kexec. FreeBSD does
+not drive the SMMU in front of UFS and hands the controller physical
+addresses, and it takes UFS over as Linux leaves it (0004), since it has
+no drivers for the controller's PHY, clocks and regulators. Until now
+the menu unbound UFS, switched its IOMMU group to an identity domain and
+bound it again before the jump. With 7.1 the rebound host comes up to
+the link, but its first NOP OUT completes without its descriptor or
+response ever reaching the memory Linux gave it (doorbell clear,
+UTRLCNR set, no completion interrupt, OCS still 0xf), the probe never
+finished, and the phone hung (2026-10-31). Why the host's DMA goes
+astray after the rebind (the identity domain or the second probe) is
+not known.
+
+Leave UFS bound and translated instead, and switch translation off only
+at the kexec, after its last command: a new parameter kexec_bypass
+(/sys/module/arm_smmu/parameters/kexec_bypass, platform device names,
+comma separated) names the devices whose streams the SMMU's shutdown
+leaves without translation when a kexec is in progress. The SMMU shuts
+down after its consumers. Their context banks get SCTLR.M = 0, the way
+arm-smmu-qcom emulates bypass streams where Qualcomm's hypervisor turns
+S2CR bypass writes into faults; FreeBSD's ufshci reports exactly this
+state ("MMU off: identity"). Whether the hypervisor lets the
+sCR0.CLIENTPD write through is not known; this does not depend on it.
+Nothing changes when the parameter is empty or for any other shutdown,
+reboot or power-off.
+
+--- a/drivers/iommu/arm/arm-smmu/arm-smmu.c
++++ b/drivers/iommu/arm/arm-smmu/arm-smmu.c
+@@ -26,6 +26,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/io.h>
+ #include <linux/iopoll.h>
++#include <linux/kexec.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/of_address.h>
+@@ -62,6 +63,10 @@
+ module_param(disable_bypass, bool, S_IRUGO);
+ MODULE_PARM_DESC(disable_bypass,
+ 	"Disable bypass streams such that incoming transactions from devices that are not attached to an iommu domain will report an abort back to the device and will not be allowed to pass through the SMMU.");
++static char *kexec_bypass;
++module_param(kexec_bypass, charp, 0644);
++MODULE_PARM_DESC(kexec_bypass,
++	"Devices (platform device names, comma separated) whose streams a kexec leaves without translation, for a next kernel that does not drive the SMMU and hands them physical addresses.");
+ 
+ #define s2cr_init_val (struct arm_smmu_s2cr){				\
+ 	.type = disable_bypass ? S2CR_TYPE_FAULT : S2CR_TYPE_BYPASS,	\
+@@ -2259,6 +2264,70 @@
+ 	return 0;
+ }
+ 
++/*
++ * kexec into a kernel that does not drive the SMMU (FreeBSD on the F(x)tec
++ * Pro1X, which takes over UFS as Linux leaves it): the streams of the devices
++ * named in kexec_bypass go without translation, the way arm-smmu-qcom
++ * emulates bypass streams (a context bank with SCTLR.M = 0), since
++ * Qualcomm's hypervisor turns S2CR bypass writes into faults. Their context
++ * banks are switched off rather than their S2CRs rewritten, so a device that
++ * shares a domain shares this. It runs from the SMMU's shutdown, after its
++ * consumers' (the devices are quiet by then); whether the hypervisor also
++ * lets the sCR0.CLIENTPD write below through is not known, this does not
++ * depend on it.
++ */
++static void arm_smmu_kexec_bypass_dev(struct arm_smmu_device *smmu,
++				      const char *name)
++{
++	struct arm_smmu_master_cfg *cfg;
++	struct iommu_fwspec *fwspec;
++	struct device *dev;
++	int i, idx;
++
++	dev = bus_find_device_by_name(&platform_bus_type, NULL, name);
++	if (!dev)
++		return;
++
++	cfg = dev_iommu_priv_get(dev);
++	fwspec = dev_iommu_fwspec_get(dev);
++	if (cfg && fwspec && cfg->smmu == smmu) {
++		for_each_cfg_sme(cfg, fwspec, i, idx) {
++			struct arm_smmu_s2cr *s2cr;
++			u32 sctlr;
++
++			if (idx == INVALID_SMENDX)
++				continue;
++			s2cr = &smmu->s2crs[idx];
++			if (s2cr->type != S2CR_TYPE_TRANS)
++				continue;
++			sctlr = arm_smmu_cb_read(smmu, s2cr->cbndx,
++						 ARM_SMMU_CB_SCTLR);
++			arm_smmu_cb_write(smmu, s2cr->cbndx, ARM_SMMU_CB_SCTLR, 0);
++			/* the read back also makes sure the write is done */
++			dev_notice(smmu->dev,
++				   "kexec: %s, stream %#x: context bank %u without translation (SCTLR %#x -> %#x)\n",
++				   name, fwspec->ids[i], s2cr->cbndx, sctlr,
++				   arm_smmu_cb_read(smmu, s2cr->cbndx,
++						    ARM_SMMU_CB_SCTLR));
++		}
++	}
++	put_device(dev);
++}
++
++static void arm_smmu_kexec_bypass(struct arm_smmu_device *smmu)
++{
++	char *names, *s, *name;
++
++	names = kstrdup(kexec_bypass, GFP_KERNEL);
++	if (!names)
++		return;
++	s = names;
++	while ((name = strsep(&s, ", \t\n")))
++		if (*name)
++			arm_smmu_kexec_bypass_dev(smmu, name);
++	kfree(names);
++}
++
+ static void arm_smmu_device_shutdown(struct platform_device *pdev)
+ {
+ 	struct arm_smmu_device *smmu = platform_get_drvdata(pdev);
+@@ -2267,6 +2336,8 @@
+ 		dev_notice(&pdev->dev, "disabling translation\n");
+ 
+ 	arm_smmu_rpm_get(smmu);
++	if (kexec_in_progress && kexec_bypass)
++		arm_smmu_kexec_bypass(smmu);
+ 	/* Turn the thing off */
+ 	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sCR0, ARM_SMMU_sCR0_CLIENTPD);
+ 	arm_smmu_rpm_put(smmu);

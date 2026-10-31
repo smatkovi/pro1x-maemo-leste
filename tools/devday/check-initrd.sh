@@ -2,7 +2,7 @@
 # Whether an initramfs carries what arms a kernel's trial start
 # (docs/device-day-2026-10-31.md, "Rollback"), on the PC, before the flash:
 #
-#   bash tools/devday/check-initrd.sh $OUT/initrd.img-$KVER [alarm]
+#   bash tools/devday/check-initrd.sh $OUT/initrd.img-$KVER [alarm] [freebsd]
 #
 # The boot menu (local-top/pro1x-loop-root with trial-check, pro1x-boot
 # with trial and trial-check, pro1x-bootmenu, sgdisk for the slot bits),
@@ -10,9 +10,12 @@
 # busybox's devmem (the initramfs arms the APSS watchdog with it; both
 # are skipped silently when missing, so a trial would run without a
 # watchdog). "alarm": also the alarm power-on's alarm-check (pro1x.10).
-# Reads the image only (xz, zstd or gzip, one cpio).
+# "freebsd": the FreeBSD start of 2026-10-31 (UFS handed over by the
+# kexec, arm_smmu.kexec_bypass of kernel patch 0040, no UFS rebind; the
+# watchdog armed before /host's umount). Reads the image only (xz, zstd
+# or gzip, one cpio).
 set -uo pipefail
-img=${1:?usage: check-initrd.sh INITRD [alarm]}
+img=${1:?usage: check-initrd.sh INITRD [alarm] [freebsd]}
 case $(file -b "$img") in
 XZ*) cat=(xz -dc) ;;
 Zstandard*) cat=(zstd -dc) ;;
@@ -37,9 +40,20 @@ member scripts/local-top/pro1x-loop-root
 grep -q 'trial-check' "$tmp/f" && grep -q 'modprobe qcom_wdt' "$tmp/f"; res "pro1x-loop-root: trial-check, the watchdog" $?
 member usr/sbin/pro1x-boot
 grep -q '^trial-check)' "$tmp/f" && grep -q '^trial)' "$tmp/f"; res "pro1x-boot: trial, trial-check" $?
-if [ "${2:-}" = alarm ]; then
-	grep -q 'alarm-check' "$tmp/f"; res "pro1x-boot: alarm-check" $?
-fi
+for want in "${@:2}"; do
+	case $want in
+	alarm)
+		member usr/sbin/pro1x-boot
+		grep -q 'alarm-check' "$tmp/f"; res "pro1x-boot: alarm-check" $? ;;
+	freebsd)
+		member scripts/local-top/pro1x-loop-root
+		grep -q 'arm_smmu/parameters/kexec_bypass' "$tmp/f" &&
+		    ! grep -q 'iommu_groups' "$tmp/f" &&
+		    sed -n '/^ *wdt_arm$/,/^ *umount \/host$/p' "$tmp/f" | grep -q 'umount /host'
+		res "pro1x-loop-root: FreeBSD's start without the UFS rebind" $? ;;
+	*) echo "unknown check: $want"; fails=$((fails + 1)) ;;
+	esac
+done
 # devmem: busybox's applet, linked into the image (usr/sbin/devmem); the
 # script finds it with command -v
 grep -q -E '^(usr/)?s?bin/devmem$' "$tmp/list"; res "devmem (busybox)" $?

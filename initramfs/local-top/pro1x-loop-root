@@ -52,6 +52,24 @@ find_backing() {
 }
 find_backing || panic "pro1x-loop-root: backing device $BACKING not found"
 
+# The SoC's APSS watchdog (0x0f017000, kpss layout, 32 kHz), armed for its
+# longest time, about 32 s; reloaded to the full time again; stopped. Linux's
+# qcom_wdt is not loaded at this point. Without devmem, nothing (a start
+# that hangs then needs the power key).
+wdt_arm() {
+  command -v devmem > /dev/null || return 0
+  devmem 0x0f017008 32 0
+  devmem 0x0f017004 32 1
+  devmem 0x0f017010 32 0xfffff
+  devmem 0x0f017014 32 0xfffff
+  devmem 0x0f017008 32 1
+}
+wdt_reload() { command -v devmem > /dev/null && devmem 0x0f017004 32 1; }
+wdt_stop() { command -v devmem > /dev/null && devmem 0x0f017008 32 0; }
+# A line in the kernel log at error level, so that the RAM console of a
+# start that went wrong (pstore, loglevel=4) shows how far it got
+kmsg() { echo "<3>pro1x-loop-root: $*" > /dev/kmsg 2> /dev/null; }
+
 mkdir -p /host
 mount -t ext4 -o "$HOST_OPTS" "$dev" /host \
   || panic "pro1x-loop-root: could not mount $dev on /host"
@@ -202,33 +220,31 @@ SNAPS
       fi
       args="FreeBSD:$args"
     fi
-    if kexec -s -l "/host$image" --command-line="$args"; then
+    # FreeBSD has no driver for the SMMU in front of UFS and hands the
+    # controller physical addresses. UFS stays bound and translated here;
+    # the kexec itself switches translation off for its stream, after its
+    # last command (device/kernel/patches/0040: arm_smmu.kexec_bypass), and
+    # keeps it powered (0004). A kernel without 0040 does not start FreeBSD.
+    # (Until 2026-10-31, UFS was unbound, put into an identity domain and
+    # bound again here: the rebound host lost its commands' DMA, the probe
+    # never finished, and the phone hung, docs/device-day-2026-10-31.md
+    # block 12.) KolibriOS leaves UFS alone.
+    smmu_bypass=/sys/module/arm_smmu/parameters/kexec_bypass
+    if [ "$key" = freebsd ] && [ ! -e $smmu_bypass ]; then
+      log_failure_msg "kernel $(uname -r) cannot hand UFS over to FreeBSD (needs patch 0040), booting $IMAGE"
+      kmsg "no arm_smmu.kexec_bypass in $(uname -r): not starting $key"
+      bootlog "not starting $key: no arm_smmu.kexec_bypass in $(uname -r)"
+    elif kexec -s -l "/host$image" --command-line="$args"; then
+      bootlog "starting $key: $image loaded; the watchdog, umount, kexec"
       sync
+      # The watchdog from here on: a hang anywhere until the next system
+      # feeds it (umount, the kexec's shutdown of Linux, the jump, the
+      # next system's early start) resets the phone into this menu, whose
+      # default starts then (the one-shot choice was taken above).
+      wdt_arm
+      kmsg "starting $key: watchdog armed"
       umount /host
-      # FreeBSD has no driver for the SMMU in front of UFS and gives the
-      # controller physical addresses: rebind UFS with an identity
-      # mapping. This also starts UFS over, and the kernel keeps it
-      # powered across kexec (device/kernel/patches/0004). KolibriOS
-      # leaves UFS alone.
-      ufs=/sys/bus/platform/devices/4804000.ufshc
-      grp=
-      [ "$key" != freebsd ] || grp=$(readlink "$ufs/iommu_group")
-      if [ -n "$grp" ]; then
-        echo 4804000.ufshc > $ufs/driver/unbind
-        echo identity > "/sys/kernel/iommu_groups/${grp##*/}/type" ||
-          log_warning_msg "UFS stays behind the SMMU"
-        echo 4804000.ufshc > /sys/bus/platform/drivers/ufshcd-qcom/bind
-        # back once its partitions are. If UFS does not come back (the
-        # host did not start again), FreeBSD would set it up behind the
-        # SMMU and fault there, which leaves the phone in the
-        # bootloader's crash dump mode: the boot menu again instead.
-        if ! find_backing; then
-          log_failure_msg "UFS did not come back: not starting $key, rebooting"
-          kexec -u 2> /dev/null
-          sync
-          reboot -f
-        fi
-      fi
+      [ "$key" != freebsd ] || echo 4804000.ufshc > $smmu_bypass
       # FreeBSD and KolibriOS drive these on the setup Linux leaves (no
       # clock drivers): runtime-active from here on, their clocks stay on.
       # 4a84000.i2c: the keyboard's I2C bus.
@@ -236,23 +252,20 @@ SNAPS
         pm=/sys/bus/platform/devices/$d/power/control
         [ -e $pm ] && echo on > $pm
       done
-      # The APSS watchdog (0x0f017000, kpss layout, 32 kHz) armed for its
-      # longest time, about 32 s: FreeBSD's qcom_wdt (KolibriOS's timer)
-      # keeps feeding it, and a system that hangs before or after that
-      # resets the phone into this menu again. Linux's qcom_wdt is not
-      # loaded here, so nothing stops it on the way out.
-      if command -v devmem > /dev/null; then
-        devmem 0x0f017008 32 0
-        devmem 0x0f017004 32 1
-        devmem 0x0f017010 32 0xfffff
-        devmem 0x0f017014 32 0xfffff
-        devmem 0x0f017008 32 1
-      fi
+      # The full 32 s again for the jump: FreeBSD's qcom_wdt (KolibriOS's
+      # timer) keeps feeding it, and a system that hangs before or after
+      # that resets the phone. Nothing stops it on the way out.
+      wdt_reload
       kexec -e
-      command -v devmem > /dev/null && devmem 0x0f017008 32 0
+      # kexec -e came back: Linux still runs, and so does UFS
+      [ "$key" != freebsd ] || echo > $smmu_bypass
+      wdt_stop
+      kmsg "kexec -e failed: not starting $key"
       find_backing && mount -t ext4 -o "$HOST_OPTS" "$dev" /host
+      log_failure_msg "kexec failed, booting $IMAGE"
+    else
+      log_failure_msg "kexec failed, booting $IMAGE"
     fi
-    log_failure_msg "kexec failed, booting $IMAGE"
     key=leste
   elif [ -n "$image" ]; then
     IMAGE=$image
@@ -262,7 +275,7 @@ SNAPS
   bootlog "starting $key: IMAGE=$IMAGE SUBVOL=${SUBVOL:-}"
   sync
   # On trial, and for a one-shot choice: the SoC's watchdog runs from here
-  # on (the APSS watchdog, 0x0f017000, as for FreeBSD above). qcom_wdt
+  # on (the APSS watchdog, wdt_arm, as for FreeBSD above). qcom_wdt
   # finds it running and the kernel feeds it until the system takes it
   # over (dsme on Leste and the MeeGo copy, systemd's RuntimeWatchdog
   # elsewhere, 66-boot-trial-install.sh) or for at most 15 minutes. A start
@@ -272,13 +285,7 @@ SNAPS
   # takes one of the trial's tries for every start.
   if [ "$trial" = running ] || [ -n "$oneshot" ]; then
     echo 900 > /sys/module/watchdog/parameters/open_timeout 2> /dev/null
-    if command -v devmem > /dev/null; then
-      devmem 0x0f017008 32 0
-      devmem 0x0f017004 32 1
-      devmem 0x0f017010 32 0xfffff
-      devmem 0x0f017014 32 0xfffff
-      devmem 0x0f017008 32 1
-    fi
+    wdt_arm
     modprobe qcom_wdt || log_warning_msg "pro1x-loop-root: no watchdog for this start"
   fi
 fi
