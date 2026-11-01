@@ -1,0 +1,46 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] ufshci: bRefClkFreq only when it differs, and not fatal
+
+The F(x)tec Pro1X's UFS device answers the write of bRefClkFreq with a
+failed query response (seen with 0043 on 2026-11-01: a QUERY RESPONSE
+UPIU in the right place, response code 0xfd/0xff), and the controller was
+given up: no da0, no root pool. Read it first and write it only when it
+differs, and go on when the device refuses, as Linux does
+(ufshcd_set_dev_ref_clk). Its boot loader set the clock long ago.
+
+---
+diff --git a/sys/dev/ufshci/ufshci_dev.c b/sys/dev/ufshci/ufshci_dev.c
+index dd196b1..d5f1b9f 100644
+--- a/sys/dev/ufshci/ufshci_dev.c
++++ b/sys/dev/ufshci/ufshci_dev.c
+@@ -252,16 +252,25 @@ ufshci_dev_reset(struct ufshci_controller *ctrlr)
+ int
+ ufshci_dev_init_reference_clock(struct ufshci_controller *ctrlr)
+ {
+-	int error;
++	uint64_t value = UINT64_MAX;
+ 	uint8_t index, selector;
+ 
+ 	index = 0;    /* bRefClkFreq is device type attribute */
+ 	selector = 0; /* bRefClkFreq is device type attribute */
+ 
+-	error = ufshci_dev_write_attribute(ctrlr, UFSHCI_ATTR_B_REF_CLK_FREQ,
+-	    index, selector, ctrlr->ref_clk);
+-	if (error)
+-		return (error);
++	/*
++	 * As Linux does: write bRefClkFreq only when it differs, and go on
++	 * when the device refuses. The F(x)tec Pro1X's UFS device answered
++	 * the write with a failed query response (2026-11-01), and the whole
++	 * controller was given up; its boot loader set the value long ago.
++	 */
++	if (ufshci_dev_read_attribute(ctrlr, UFSHCI_ATTR_B_REF_CLK_FREQ,
++	    index, selector, &value) == 0 && value == ctrlr->ref_clk)
++		return (0);
++	if (ufshci_dev_write_attribute(ctrlr, UFSHCI_ATTR_B_REF_CLK_FREQ,
++	    index, selector, ctrlr->ref_clk) != 0)
++		ufshci_printf(ctrlr, "bRefClkFreq stays %#jx (not %#x)\n",
++		    (uintmax_t)value, ctrlr->ref_clk);
+ 
+ 	return (0);
+ }

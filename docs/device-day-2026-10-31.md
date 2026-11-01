@@ -1149,6 +1149,23 @@ What is left (run 7's console):
   `ramconsole.py` now reads to where the text ends and clears the whole
   console (before, the first NUL, 207 bytes in, ended the output).
 
+### 12.5 UFS works (2026-11-01 09:58-10:10)
+
+The diagnostic (freebsd/patches/0043, run fbsd-G1-8-ufsdiag) showed the DMA
+was fine all along: UTRL at 0x1021da000, UCD at 0x102200000, the UTRD's OCS 0
+and a QUERY RESPONSE UPIU in the right place, for WRITE ATTRIBUTE IDN 0x0a
+(bRefClkFreq), with a failed query response code (0xfd/0xff). The Samsung
+KM8F8001JM-B813 (UFS 2.1) refuses that write, and ufshci gave up the whole
+controller. 0044: read it first, write only when it differs, go on when
+refused (as Linux). Run fbsd-G1-9-refclk: UFS device spec 2.1, 6 LUNs,
+256 GB, da0-da5 attached, GEOM sees them.
+
+Open: the console of run 9 ends in the middle of the CAM probe (`pass5 at
+ufshci`), and the phone restarted at once (PMIC: power-off reason PS_HOLD,
+the SoC reset itself, no crash dump). Run 10 keeps the raw RAM console
+before it is cleared. Also: the FreeBSD keymap on the Pro1X has no `|`; the
+RAM root has no termcap.
+
 ## Block 13: KolibriOS (should; 60-90 min)
 
 Sources: `~/ps/kolibrios-arm/docs/pro1x.md`, `power.md`, `storage.md`,
