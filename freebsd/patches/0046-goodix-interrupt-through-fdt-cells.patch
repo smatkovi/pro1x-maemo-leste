@@ -1,0 +1,70 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] goodix: the interrupt through the device tree's cells
+
+On the phone the touchscreen attached (GT9286, 1080x2160, 10 contacts)
+but said "unable to allocate the interrupt": the mapping of irq-gpios
+(INTR_MAP_DATA_GPIO) did not resolve, so the touchscreen was dead under X
+(2026-11-01). Map the pin of interrupts-extended through its FDT cells
+instead, as pro1x_kbd does with its own on the same TLMM, with the
+trigger from the controller's configuration as before. irq-gpios stays
+for the wake-up's INT output, and its mapping for a tree without
+interrupts-extended.
+
+---
+diff --git a/sys/dev/iicbus/goodix.c b/sys/dev/iicbus/goodix.c
+index c3c7188..30a0e92 100644
+--- a/sys/dev/iicbus/goodix.c
++++ b/sys/dev/iicbus/goodix.c
+@@ -231,14 +231,25 @@ goodix_sleep_sysctl(SYSCTL_HANDLER_ARGS)
+ 	return (error);
+ }
+ 
+-/* The interrupt of irq-gpios, with the trigger the configuration names */
++/*
++ * The interrupt of the device tree's pin, with the trigger the
++ * configuration names. The pin's interrupt through its FDT cells
++ * (interrupts-extended, as pro1x_kbd maps its own): irq-gpios' mapping
++ * (INTR_MAP_DATA_GPIO) did not resolve on the phone, "unable to allocate
++ * the interrupt" (2026-11-01). irq-gpios stays for the wake-up's INT
++ * output, and its mapping for a tree without interrupts-extended.
++ */
+ static int
+ goodix_setup_irq(struct goodix_softc *sc, u_int trigger)
+ {
+ 	static const uint32_t modes[] = { GPIO_INTR_EDGE_RISING,
+ 	    GPIO_INTR_EDGE_FALLING, GPIO_INTR_EDGE_FALLING /* low */,
+ 	    GPIO_INTR_EDGE_RISING /* high */ };
++	/* the same as IRQ_TYPE_* of the device tree's cells */
++	static const pcell_t types[] = { 1 /* EDGE_RISING */,
++	    2 /* EDGE_FALLING */, 2 /* low */, 1 /* high */ };
+ 	struct intr_map_data_gpio *gd;
++	pcell_t cells[3];
+ 	u_int irq;
+ 	int error;
+ 
+@@ -249,12 +260,19 @@ goodix_setup_irq(struct goodix_softc *sc, u_int trigger)
+ 		return (error);
+ 	}
+ 	gpio_pin_setflags(sc->irq_pin, GPIO_PIN_INPUT);
+-	gd = (struct intr_map_data_gpio *)intr_alloc_map_data(
+-	    INTR_MAP_DATA_GPIO, sizeof(*gd), M_WAITOK | M_ZERO);
+-	gd->gpio_pin_num = sc->irq_pin->pin;
+-	gd->gpio_pin_flags = sc->irq_pin->flags;
+-	gd->gpio_intr_mode = modes[trigger & 3];
+-	irq = intr_map_irq(sc->irq_pin->dev, 0, (struct intr_map_data *)gd);
++	if (OF_getencprop(ofw_bus_get_node(sc->dev), "interrupts-extended",
++	    cells, sizeof(cells)) == sizeof(cells)) {
++		cells[2] = types[trigger & 3];
++		irq = ofw_bus_map_intr(sc->dev, cells[0], 2, &cells[1]);
++	} else {
++		gd = (struct intr_map_data_gpio *)intr_alloc_map_data(
++		    INTR_MAP_DATA_GPIO, sizeof(*gd), M_WAITOK | M_ZERO);
++		gd->gpio_pin_num = sc->irq_pin->pin;
++		gd->gpio_pin_flags = sc->irq_pin->flags;
++		gd->gpio_intr_mode = modes[trigger & 3];
++		irq = intr_map_irq(sc->irq_pin->dev, 0,
++		    (struct intr_map_data *)gd);
++	}
+ 
+ 	/* After the device tree's interrupt (rid 0), which has a fixed type */
+ 	sc->irq_rid = 1;

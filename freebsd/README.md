@@ -143,10 +143,11 @@ presses and off 30 s after the last one, as on the N950
 happens; the panel off 2 minutes into the stand-by screen,
 `pro1x.standby_off=N` minutes, `never` for the N9's way; with
 `pro1x.standby=off` the panel off 2 minutes after the last input, scfb
-has no DPMS), `startx hildon`, `startx harmattan` (the Nokia N9's own user
-interface, `harmattan-session`) or
-`startx xfce`; without an argument `pro1x.desktop=hildon` (or `harmattan`) in
-`freebsd/cmdline` picks that one. "Hildon" in Xfce's menu and among the
+has no DPMS); `pro1x.desktop=hildon`, `harmattan` (the Nokia N9's own
+user interface, `harmattan-session`) or `xfce` in `freebsd/cmdline` picks
+the desktop, or `kenv pro1x.desktop=hildon` before `startx`, which reads it
+from `~/.xinitrc` (`startx hildon` does not: with an argument startx runs
+xterm instead of `~/.xinitrc`). "Hildon" in Xfce's menu and among the
 N9's applications, "Xfce" in Hildon's and the N9's, "MeeGo" in Xfce's and
 Hildon's, or N9 and Xfce in Hildon's Settings, Desktop (`apps/pro1x-look`),
 switch without leaving X (`pro1x-desktop hildon|harmattan|xfce`):

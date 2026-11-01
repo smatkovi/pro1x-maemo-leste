@@ -22,7 +22,10 @@ L=/tmp/pro1x-x.log
 } > $L 2>&1
 cat $L > /dev/pro1xshot
 cd /root || exit 1
-HOME=/root startx "${1:-hildon}" -- \
+# The desktop through the kernel environment, which ~/.xinitrc reads:
+# startx gives ~/.xinitrc no arguments (with any, it runs xterm instead)
+kenv pro1x.desktop="${1:-hildon}" > /dev/null
+HOME=/root startx -- \
     -modulepath $H/xorg-modules,/usr/local/lib/xorg/modules
 cat $L /var/log/Xorg.0.log > /dev/pro1xshot 2>&1
 echo "X ended; its log is in /dev/pro1xshot"
