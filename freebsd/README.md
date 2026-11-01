@@ -257,6 +257,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `vm/` | a FreeBSD/arm64 VM on the PC (qemu): packages, ZFS image, tries |
 | `pkgfetch.py`, `mkspec.py` | packages with dependencies, checked; the image's owners and modes |
 | `hildon/` | Leste's Hildon desktop cross-compiled for FreeBSD |
+| `scfb/` | X's framebuffer driver without `xf86DisableRandR` (the package's ends Xorg on the rotated screen), built in the VM |
 | `fm/` | the FM radio: the Bluetooth UART, the WCN3950's receiver, its tests (`fm/README.md`) |
 | `camera/` | the cameras: CCI, clocks, pins, CAMSS, `pro1x-cam`, its tests (`camera/README.md`) |
 

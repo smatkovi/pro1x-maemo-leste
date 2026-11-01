@@ -1,0 +1,23 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] scfb: no xf86DisableRandR() for a rotated screen
+
+xorg-server 21.1.25 (FreeBSD's quarterly packages, November 2026) no
+longer has xf86DisableRandR(), and scfb calls it when Option "Rotate" is
+set: Xorg ends with ld-elf's "Undefined symbol xf86DisableRandR" right
+after "Enabling Driver Rotation, disabling RandR", the console left in
+graphics mode. Without the call RandR stays on with the one mode;
+the driver offers it no rotations, so clients cannot turn the screen.
+
+---
+diff --git a/src/scfb_driver.c b/src/scfb_driver.c
+index ac3ca97..73906dd 100644
+--- a/src/scfb_driver.c
++++ b/src/scfb_driver.c
+@@ -839,7 +839,6 @@ ScfbScreenInit(SCREEN_INIT_ARGS_DECL)
+ 	if (fPtr->rotate) {
+ 		xf86DrvMsg(pScrn->scrnIndex, X_INFO, "Enabling Driver Rotation, "
+ 		    "disabling RandR\n");
+-		xf86DisableRandR();
+ 		if (pScrn->bitsPerPixel == 24)
+ 			xf86DrvMsg(pScrn->scrnIndex, X_WARNING,
+ 			    "Rotation might be broken in 24 bpp\n");

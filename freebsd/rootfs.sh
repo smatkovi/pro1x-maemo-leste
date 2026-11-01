@@ -120,6 +120,17 @@ with open(sys.argv[1], "a") as out:
 	done < "$P/list"
 	specs+=("$WORK/spec.pkgs")
 	log "$n packages unpacked"
+	# X's framebuffer driver built without xf86DisableRandR (scfb/build.sh):
+	# the package's ends Xorg on the rotated screen. Same path, so the
+	# package's owner and mode stay.
+	SCFB=$OUT/scfb/scfb_drv.so
+	d=$R/usr/local/lib/xorg/modules/drivers
+	if [ -f "$SCFB" ] && [ -f "$d/scfb_drv.so" ]; then
+		cp "$SCFB" "$d/scfb_drv.so"
+		log "scfb_drv.so from scfb/build.sh"
+	elif [ -f "$d/scfb_drv.so" ]; then
+		log "no $SCFB (scfb/build.sh): the package's scfb, X dies on the rotated screen"
+	fi
 	# pkg's @sample: the configuration files that a package installs as
 	# FILE.sample, copied to FILE where there is none, as pkg install
 	# does (and the test VM, whose packages pkg installed, has them).
