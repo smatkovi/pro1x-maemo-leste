@@ -17,8 +17,22 @@ L=/tmp/pro1x-x.log
 		timeout 8 devd -d 2>&1 | head -n 60
 		service devd onestart
 		sleep 1
-		service devd status
 	fi
+	# The root image of 2026-11-01 has a pro1x_typec.conf devd cannot
+	# parse (an escaped quote, fixed in the repository): a copy of the
+	# configuration in /tmp with that one mended
+	if ! service devd status; then
+		d=/tmp/pro1x-devd.d
+		mkdir -p $d
+		cp /usr/local/etc/devd/*.conf $d/
+		sed -i '' 's/\\"//g' $d/pro1x_typec.conf
+		sed "s|\"/usr/local/etc/devd\"|\"$d\"|" /etc/devd.conf \
+		    > /tmp/pro1x-devd.conf
+		echo "--- devd -f /tmp/pro1x-devd.conf"
+		devd -f /tmp/pro1x-devd.conf
+		sleep 1
+	fi
+	service devd status || pgrep -lx devd
 } > $L 2>&1
 cat $L > /dev/pro1xshot
 cd /root || exit 1
