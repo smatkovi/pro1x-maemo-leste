@@ -1,0 +1,63 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] iicbb, gpioiic: pass resources and interrupts to the parent
+
+Neither had bus methods for resources, so a device on a bit-banged I2C
+bus could not allocate an interrupt: BUS_ALLOC_RESOURCE fell to
+null_alloc_resource. On the F(x)tec Pro1X the touchscreen (Goodix GT9286)
+sits on gpioiic (GPIOs 6 and 7) and said "interrupt 203 (pin 80): unable
+to allocate it" (2026-11-01). Both now pass allocation, activation and
+interrupt set-up through the generic bus methods.
+
+---
+diff --git a/sys/dev/iicbus/iicbb.c b/sys/dev/iicbus/iicbb.c
+index a9da39e..96499ba 100644
+--- a/sys/dev/iicbus/iicbb.c
++++ b/sys/dev/iicbus/iicbb.c
+@@ -105,6 +105,20 @@ static device_method_t iicbb_methods[] = {
+ 	/* bus interface */
+ 	DEVMETHOD(bus_child_detached,	iicbb_child_detached),
+ 	DEVMETHOD(bus_print_child,	iicbb_print_child),
++	/*
++	 * Resources and interrupts of the devices on the bus (a touchscreen's
++	 * interrupt, say) pass through to the parent: without these the
++	 * allocation got null_alloc_resource's NULL
++	 */
++	DEVMETHOD(bus_alloc_resource,	bus_generic_alloc_resource),
++	DEVMETHOD(bus_release_resource,	bus_generic_release_resource),
++	DEVMETHOD(bus_activate_resource, bus_generic_activate_resource),
++	DEVMETHOD(bus_deactivate_resource, bus_generic_deactivate_resource),
++	DEVMETHOD(bus_adjust_resource,	bus_generic_adjust_resource),
++	DEVMETHOD(bus_setup_intr,	bus_generic_setup_intr),
++	DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
++	DEVMETHOD(bus_config_intr,	bus_generic_config_intr),
++	DEVMETHOD(bus_describe_intr,	bus_generic_describe_intr),
+ 
+ 	/* iicbus interface */
+ 	DEVMETHOD(iicbus_callback,	iicbb_callback),
+diff --git a/sys/dev/gpio/gpioiic.c b/sys/dev/gpio/gpioiic.c
+index 2197d23..6797ef4 100644
+--- a/sys/dev/gpio/gpioiic.c
++++ b/sys/dev/gpio/gpioiic.c
+@@ -345,6 +345,22 @@ static device_method_t gpioiic_methods[] = {
+ 	DEVMETHOD(device_attach,	gpioiic_attach),
+ 	DEVMETHOD(device_detach,	gpioiic_detach),
+ 
++	/* Bus interface */
++	/*
++	 * Resources and interrupts of the devices on the bus (a touchscreen's
++	 * interrupt, say) pass through to the parent: without these the
++	 * allocation got null_alloc_resource's NULL
++	 */
++	DEVMETHOD(bus_alloc_resource,	bus_generic_alloc_resource),
++	DEVMETHOD(bus_release_resource,	bus_generic_release_resource),
++	DEVMETHOD(bus_activate_resource, bus_generic_activate_resource),
++	DEVMETHOD(bus_deactivate_resource, bus_generic_deactivate_resource),
++	DEVMETHOD(bus_adjust_resource,	bus_generic_adjust_resource),
++	DEVMETHOD(bus_setup_intr,	bus_generic_setup_intr),
++	DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
++	DEVMETHOD(bus_config_intr,	bus_generic_config_intr),
++	DEVMETHOD(bus_describe_intr,	bus_generic_describe_intr),
++
+ 	/* iicbb interface */
+ 	DEVMETHOD(iicbb_setsda,		gpioiic_setsda),
+ 	DEVMETHOD(iicbb_setscl,		gpioiic_setscl),

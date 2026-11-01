@@ -39,7 +39,12 @@ cd /root || exit 1
 # The desktop through the kernel environment, which ~/.xinitrc reads:
 # startx gives ~/.xinitrc no arguments (with any, it runs xterm instead)
 kenv pro1x.desktop="${1:-hildon}" > /dev/null
+# userdata's X configuration first when there is one (freebsd/xorg.conf.d,
+# a touchscreen transformation on trial)
+C=
+[ -d $H/xorg.conf.d ] && C="-configdir $H/xorg.conf.d"
+# shellcheck disable=SC2086
 HOME=/root startx -- \
-    -modulepath $H/xorg-modules,/usr/local/lib/xorg/modules
+    -modulepath $H/xorg-modules,/usr/local/lib/xorg/modules $C
 cat $L /var/log/Xorg.0.log > /dev/pro1xshot 2>&1
 echo "X ended; its log is in /dev/pro1xshot"

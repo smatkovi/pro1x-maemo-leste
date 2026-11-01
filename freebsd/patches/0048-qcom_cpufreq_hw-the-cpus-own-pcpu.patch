@@ -1,0 +1,40 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] qcom_cpufreq_hw: the CPU's own pcpu, so the driver attaches
+
+0041 checked cpu_get_pcpu(parent) in identify and cpu_get_pcpu of the
+cpu device in probe. cpu_get_pcpu(dev) reads the pcpu from dev's parent,
+so both asked cpulist, which has none for anyone: no CPU got its
+frequency driver, powerd did not start, and the phone ran at the clock
+Linux left (2026-11-01). Identify takes pcpu_find of the cpu's unit, as
+ofw_cpu does when the MPIDR does not match (the boot CPU's is not set
+with kern.smp.disabled); probe asks cpu_get_pcpu of its own device.
+
+---
+diff --git a/sys/arm64/qualcomm/qcom_cpufreq_hw.c b/sys/arm64/qualcomm/qcom_cpufreq_hw.c
+index 36b5eca..f83ea5d 100644
+--- a/sys/arm64/qualcomm/qcom_cpufreq_hw.c
++++ b/sys/arm64/qualcomm/qcom_cpufreq_hw.c
+@@ -102,9 +102,11 @@ qcom_cpufreq_identify(driver_t *driver, device_t parent)
+ 	 * Only CPUs that run: ofw_cpu makes a cpu(4) for every CPU node, also
+ 	 * for those that were not started (kern.smp.disabled), and cpufreq(4)
+ 	 * dereferences their missing pcpu in its attach (a fatal data abort at
+-	 * the boot on the phone, 2026-11-01).
++	 * the boot on the phone, 2026-11-01). Not cpu_get_pcpu(parent): that
++	 * asks parent's own parent, cpulist, which has no pcpu for anyone, so
++	 * no CPU had a frequency driver. ofw_cpu takes the unit's pcpu.
+ 	 */
+-	if (cpu_get_pcpu(parent) == NULL)
++	if (pcpu_find(device_get_unit(parent)) == NULL)
+ 		return;
+ 	if (device_find_child(parent, "qcom_cpufreq", DEVICE_UNIT_ANY) != NULL)
+ 		return;
+@@ -120,8 +122,7 @@ qcom_cpufreq_probe(device_t dev)
+ 	u_int domain;
+ 
+ 	if (qcom_cpufreq_domain(ofw_bus_get_node(device_get_parent(dev)),
+-	    &provider, &domain) != 0 ||
+-	    cpu_get_pcpu(device_get_parent(dev)) == NULL)
++	    &provider, &domain) != 0 || cpu_get_pcpu(dev) == NULL)
+ 		return (ENXIO);
+ 	device_set_desc(dev, "Qualcomm CPU frequency hardware");
+ 	return (BUS_PROBE_DEFAULT);
