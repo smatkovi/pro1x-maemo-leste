@@ -11,6 +11,8 @@
 #   WORK=/path/to/freebsd-build bash freebsd/build.sh
 #   KERNFAST=1 ...   the kernel and modules again without a clean build
 #   NOCLEAN=1 ...    the same after a change to PRO1X (config runs again)
+#   LLVM_BIN=/usr/lib/llvm-19/bin ...   on Debian/Leste (also on the Pro1X:
+#                    the same build, aarch64 Linux as the host)
 #
 # Steps: FreeBSD's sources (releng/15.1) with patches/, the cross toolchain
 # (tools/build/make.py), a root filesystem from the release's /rescue
@@ -46,9 +48,12 @@ if ! command -v time > /dev/null; then
 	printf '#!/bin/sh\n# stand-in for GNU time, linked as a host tool\nexec "$@"\n' > "$WORK/hostbin/time"
 	chmod 755 "$WORK/hostbin/time"
 fi
-export PATH=$WORK/hostbin:$PATH MAKEOBJDIRPREFIX=$WORK/obj
-MAKE=(./tools/build/make.py --cross-bindir=/usr/bin --cross-compiler-type=clang
-      --host-bindir=/usr/bin --host-compiler-type=clang
+# LLVM_BIN: where clang, ld.lld and the llvm tools are (Arch: /usr/bin; Debian
+# and Maemo Leste, e.g. building on the Pro1X itself: /usr/lib/llvm-19/bin)
+LLVM_BIN=${LLVM_BIN:-/usr/bin}
+export PATH=$WORK/hostbin:$LLVM_BIN:$PATH MAKEOBJDIRPREFIX=$WORK/obj
+MAKE=(./tools/build/make.py --cross-bindir="$LLVM_BIN" --cross-compiler-type=clang
+      --host-bindir="$LLVM_BIN" --host-compiler-type=clang
       TARGET=arm64 TARGET_ARCH=aarch64 -j"$JOBS" -DNO_WERROR WERROR=)
 log "kernel toolchain (with makefs)"
 (cd "$SRC" && "${MAKE[@]}" kernel-toolchain -DWITH_DISK_IMAGE_TOOLS_BOOTSTRAP)
