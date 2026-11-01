@@ -104,6 +104,8 @@ cp -a "$REPO/freebsd/data/sys/." "$SRC/sys/"
 # the USB gadget (pm/README.md, stage 4): dwc3dci (pro1x_usb, on qcom_dsp
 # and usb), the template, CDC Ethernet; not loaded unless asked for
 PM_MODULES="pro1x_rpmsleep pro1x_usb usb/template usb/uether usb/cdce"
+# (uether needs miibus, which the kernel does not have: mii)
+PM_MODULES="$PM_MODULES mii"
 # and its serial port (usb_template 8, rc.d/pro1x_usbnet's serial)
 PM_MODULES="$PM_MODULES usb/ucom usb/umodem"
 # the USB-C port's detection (pro1x_typec: the PMI632's Type-C block)

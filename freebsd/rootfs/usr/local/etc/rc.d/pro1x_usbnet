@@ -49,7 +49,7 @@ fi
 : ${pro1x_usbnet_serial:=NO}
 : ${pro1x_usbnet_addr:=172.16.42.1}
 : ${pro1x_usbnet_wait:=30}
-: ${pro1x_usbnet_modules:="qcom_dsp usb usb_template uether if_cdce"}
+: ${pro1x_usbnet_modules:="qcom_dsp usb usb_template miibus uether if_cdce"}
 : ${pro1x_usbnet_keys:=/usr/local/etc/ssh/pro1x_authorized_keys}
 
 start_cmd=pro1x_usbnet_start
