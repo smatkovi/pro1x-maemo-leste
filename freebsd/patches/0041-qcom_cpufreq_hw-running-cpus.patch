@@ -1,0 +1,38 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] qcom_cpufreq_hw: only on CPUs that run
+
+ofw_cpu makes a cpu(4) for every CPU node, also for CPUs that were not
+started (kern.smp.disabled=1): cpufreq(4) attached on cpu1 then
+dereferenced its missing pcpu (a fatal data abort at the boot on the
+phone, 2026-11-01). Identify and probe only on CPUs with a pcpu.
+
+---
+diff --git a/sys/arm64/qualcomm/qcom_cpufreq_hw.c b/sys/arm64/qualcomm/qcom_cpufreq_hw.c
+index 8632be0..36b5eca 100644
+--- a/sys/arm64/qualcomm/qcom_cpufreq_hw.c
++++ b/sys/arm64/qualcomm/qcom_cpufreq_hw.c
+@@ -98,6 +98,14 @@ qcom_cpufreq_identify(driver_t *driver, device_t parent)
+ 	if (qcom_cpufreq_domain(ofw_bus_get_node(parent), &provider,
+ 	    &domain) != 0)
+ 		return;
++	/*
++	 * Only CPUs that run: ofw_cpu makes a cpu(4) for every CPU node, also
++	 * for those that were not started (kern.smp.disabled), and cpufreq(4)
++	 * dereferences their missing pcpu in its attach (a fatal data abort at
++	 * the boot on the phone, 2026-11-01).
++	 */
++	if (cpu_get_pcpu(parent) == NULL)
++		return;
+ 	if (device_find_child(parent, "qcom_cpufreq", DEVICE_UNIT_ANY) != NULL)
+ 		return;
+ 	if (BUS_ADD_CHILD(parent, 0, "qcom_cpufreq", device_get_unit(parent))
+@@ -112,7 +120,8 @@ qcom_cpufreq_probe(device_t dev)
+ 	u_int domain;
+ 
+ 	if (qcom_cpufreq_domain(ofw_bus_get_node(device_get_parent(dev)),
+-	    &provider, &domain) != 0)
++	    &provider, &domain) != 0 ||
++	    cpu_get_pcpu(device_get_parent(dev)) == NULL)
+ 		return (ENXIO);
+ 	device_set_desc(dev, "Qualcomm CPU frequency hardware");
+ 	return (BUS_PROBE_DEFAULT);

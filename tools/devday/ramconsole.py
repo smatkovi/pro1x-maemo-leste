@@ -6,15 +6,20 @@ spare splash memory, read from Linux after the next boot (as root):
 
 0x5ca00000  the entry marker (PRO1X-FBSD:ENTERED, PRO1X-KOS:ENTERED)
 0x5ca01000  the RAM console, up to 1 MiB, NUL-terminated
-            (freebsd/patches/0003, KolibriOS's console)
+            (freebsd/patches/0003, KolibriOS's console). The reset that
+            follows a run flips single bits in it (and in the pstore), some
+            into a NUL: the text ends where it stops being text, not at the
+            first NUL (2026-11-01: the first NUL was 207 bytes in, the run's
+            console 52 KB long); a byte that is not text shows as '?'.
 0x5cc00000  "PRO1X-SHOT\\n", the length (32 bits, little endian, at 12) and
             the data from 16, up to 3 MiB (freebsd/patches/0014
             /dev/pro1xshot: a gzip'd xwd or a camera tar; KolibriOS: a PPM)
 
 Prints the marker and the console to stdout; --shot FILE writes the
 screenshot's data. Only reads, unless --clear: that zeroes the marker, the
-console's start and the screenshot's header afterwards, so that the next
-read does not show this run again (do it once the output is saved).
+whole console and the screenshot's header afterwards, so that the next read
+does not show this run (or its tail behind a shorter next run) again; do it
+once the output is saved.
 
 The region is reserved, no-map memory: read() on /dev/mem refuses it and
 its uncached mapping takes only aligned accesses, so it is mapped and read
@@ -38,6 +43,28 @@ def words(view, off, n):
     return bytes(out[:n])
 
 
+def printable(c):
+    return c in (9, 10, 13) or 32 <= c < 127
+
+
+def text_of(raw, window=512):
+    """The console's text: up to the last window that is mostly text, before
+    a stretch that is not (a run's own NUL, then zeros or older data)."""
+    end = 0
+    for off in range(0, len(raw), window):
+        part = raw[off:off + window]
+        if sum(map(printable, part)) >= 0.9 * len(part):
+            end = off + len(part)
+        elif end and off - end >= 8 * window:
+            break
+    text = raw[:end]
+    nul = text.rfind(b'\0')
+    # the run's terminating NUL in the last window: the text ends there
+    if nul >= 0 and nul >= end - window and not any(map(printable, text[nul + 1:nul + 64])):
+        text = text[:nul]
+    return bytes(c if printable(c) else 63 for c in text)
+
+
 def main():
     args = sys.argv[1:]
     clear = '--clear' in args
@@ -55,13 +82,8 @@ def main():
 
     marker = words(view, MARKER, 24).split(b'\n')[0].split(b'\0')[0]
     print('marker:', marker.decode(errors='replace') if marker.startswith(b'PRO1X-') else 'none')
-    con = bytearray()
-    for off in range(CONSOLE, CONSOLE + CONSOLE_SIZE, 4096):
-        block = words(view, off, 4096)
-        end = block.find(b'\0')
-        con += block if end < 0 else block[:end]
-        if end >= 0:
-            break
+    raw = words(view, CONSOLE, CONSOLE_SIZE)
+    con = text_of(raw)
     if con.startswith(b'PRO1X-'):
         sys.stdout.write(con.decode(errors='replace'))
         if not con.endswith(b'\n'):
@@ -82,9 +104,11 @@ def main():
         print('no screenshot')
 
     if clear:
-        for off in (MARKER, CONSOLE, SHOT):
+        for off in (MARKER, SHOT):
             for i in range(4):
                 view[off // 8 + i] = 0
+        for i in range(CONSOLE // 8, (CONSOLE + CONSOLE_SIZE) // 8):
+            view[i] = 0
         print('cleared', file=sys.stderr)
     view.release()
     mm.close()

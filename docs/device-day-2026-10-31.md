@@ -1116,6 +1116,39 @@ afterwards), both collected with `CLEAR=1`:
   between its entry and the console (its proof-of-life stripe, or marker
   words written along locore/initarm), then compare with the hand-over.
 
+### 12.4 FreeBSD from the menu boots to its RAM root (2026-11-01 07:30-08:12)
+
+The marker without console text (12.3) was FreeBSD's own: a DDR dump
+(`qdl ramdump` with `DDRCS0_0*`, 2 GiB, 97 s; `tools/devday/fbsd-ddr.py` finds
+the kernel, at 0x48000000, checks its text against kernel.bin and reads boot
+variables by symbol; `fbsd-frames.py` decodes the trapframes on the boot
+stack) showed `boothowto` with RB_MULTIPLE|RB_VERBOSE (so initarm reached
+cninit), `ramcons_buf` set but `ramcons_pos` 0, and the stack full of nested
+data aborts. The outermost: `ramcons_cninit`, FAR offset 15, ESR 0x96000061
+(an alignment fault on a write): memcpy() of the magic into Device memory.
+Three FreeBSD fixes (freebsd/patches/0040-0042), each found by the next run:
+
+| Run | Kernel | Result |
+|---|---|---|
+| fbsd-G1-5-ddr (07:38) | kernel.bin of 10-31 | the dump above |
+| fbsd-G1-6-ramcons (07:49) | + 0040 (ramcons byte writes) | 51 KB of console: device attach up to cpufreq on cpu1, `Fatal data abort` far 0x3c in cpufreq_attach (cpu1 has no pcpu: kern.smp.disabled=1), panic, reboot after 15 s |
+| fbsd-G1-7 (08:08) | + 0041 (cpufreq on running CPUs), 0042 (SPMI summary IRQ via the MPM's pin map: GIC SPI 183) | through all of the device attach, the RAM root mounted, its rc runs ("enter within 10s for a shell else reboot") |
+
+What is left (run 7's console):
+
+- **UFS:** `ufshci0: SMMU ... context bank 2: ... SCTLR 0 (MMU off:
+  identity)` and `keeping the link that is up` (0040 works), then at the
+  first query `UTP transfer request list notification is not ready`,
+  `Invalid response code = 0xff` (OCS success), `ufshci_ctrlr_fail`: no
+  da0, so the rc cannot import the pool on userdata. CAP 0x1587031F (64-bit
+  addressing). Next: what the UTRD and the UCD hold after that query (a
+  DDR dump of a run that stops there), and what Linux's shutdown at kexec
+  still does to the controller after 0004.
+- `goodix0: unable to allocate the interrupt`, `aw862240: chip id 0000`.
+- The RAM console: the reset flips bits in it, some into a NUL;
+  `ramconsole.py` now reads to where the text ends and clears the whole
+  console (before, the first NUL, 207 bytes in, ended the output).
+
 ## Block 13: KolibriOS (should; 60-90 min)
 
 Sources: `~/ps/kolibrios-arm/docs/pro1x.md`, `power.md`, `storage.md`,

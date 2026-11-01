@@ -1,0 +1,62 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] arm64/pro1x: ramcons: byte writes only into the Device memory
+
+The RAM console wrote its magic with memcpy() into its Device-nGnRnE
+mapping: a 16-byte store and a 4-byte one at offset 15, an alignment
+fault before any console. The buffer was already set, so every message
+of the fault's handling (the panic) faulted again in ramcons_cnputc(),
+until the boot stack ran out; the phone hung until the watchdog. Found
+in a dump of the phone's RAM (2026-11-01). Write the magic one byte at
+a time through a volatile pointer, and set the buffer only after it.
+
+---
+diff --git a/sys/arm64/pro1x/ramcons.c b/sys/arm64/pro1x/ramcons.c
+index 1fd325a..15e3ae8 100644
+--- a/sys/arm64/pro1x/ramcons.c
++++ b/sys/arm64/pro1x/ramcons.c
+@@ -40,7 +40,7 @@
+ #define	RAMCONS_SIZE	(1024 * 1024)
+ #define	RAMCONS_MAGIC	"PRO1X-FBSD-CONSOLE\n"
+ 
+-static char *ramcons_buf;
++static volatile char *ramcons_buf;
+ static size_t ramcons_pos;
+ 
+ static void
+@@ -53,14 +53,30 @@ ramcons_cnprobe(struct consdev *cp)
+ static void
+ ramcons_cninit(struct consdev *cp)
+ {
+-	/* Device memory: no write gathering, every byte reaches the DRAM */
+-	ramcons_buf = pmap_mapdev_attr(RAMCONS_PA, RAMCONS_SIZE,
++	static const char magic[] = RAMCONS_MAGIC;
++	volatile char *buf;
++	size_t i;
++
++	/*
++	 * Device memory: no write gathering, every byte reaches the DRAM.
++	 * It takes aligned accesses only: memcpy() of the magic was a 16-byte
++	 * store and a 4-byte one at offset 15, an alignment fault before any
++	 * console, and with the buffer already set every message of the
++	 * fault's handling faulted again, until the stack ran out (found in
++	 * a dump of the phone's RAM, 2026-11-01). So every write here is one
++	 * byte, through a volatile pointer (a plain loop would become a
++	 * memcpy() again), and the buffer is used only once the magic is in.
++	 */
++	buf = pmap_mapdev_attr(RAMCONS_PA, RAMCONS_SIZE,
+ 	    VM_MEMATTR_DEVICE_nGnRnE);
+-	if (ramcons_buf == NULL)
++	if (buf == NULL)
+ 		return;
+-	memcpy(ramcons_buf, RAMCONS_MAGIC, sizeof(RAMCONS_MAGIC) - 1);
+-	ramcons_pos = sizeof(RAMCONS_MAGIC) - 1;
+-	ramcons_buf[ramcons_pos] = '\0';
++	for (i = 0; i < sizeof(magic) - 1; i++)
++		buf[i] = magic[i];
++	buf[i] = '\0';
++	dsb(sy);
++	ramcons_pos = i;
++	ramcons_buf = buf;
+ }
+ 
+ static void
