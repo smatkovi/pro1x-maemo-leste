@@ -20,6 +20,12 @@
 #   pro1x.test=1     unattended test: the full system reports and reboots
 PATH=/rescue; export PATH
 . /etc/pro1x-pool.sh
+# What this script printed reaches the screen only: the RAM console sees
+# the kernel's messages, not the console tty's. The message buffer has both
+# (kern.log_console_output), so it goes to /dev/pro1xshot (behind the RAM
+# console) before every reboot and reroot; Linux reads it after the next
+# boot (tools/devday/ramconsole.py --shot, collect.sh's ramconsole-shot.bin).
+keep_log() { dmesg -a > /dev/pro1xshot 2> /dev/null; }
 HOST=/dev/pro1x-host
 ZIMAGE=$HOST/freebsd/root.zfs
 
@@ -75,6 +81,15 @@ if [ "$(kenv -q pro1x.test)" = power ]; then
 	reboot
 fi
 
+# UFS's disks come after this script has started (the CAM probe and
+# GEOM's tasting run on their own): the boot of 2026-11-01 18:20 looked
+# before userdata's label was there and gave up. Wait for it, up to 30 s.
+i=0
+while [ ! -e /dev/gpt/userdata ] && [ $i -lt 60 ]; do
+	sleep 0.5
+	i=$((i + 1))
+done
+echo "--- GPT labels (after $((i / 2)) s): $(echo /dev/gpt/*)"
 if [ -e /dev/gpt/userdata ] && [ -d $HOST ] &&
     mount -t ext2fs -o ro /dev/gpt/userdata $HOST; then
 	echo "--- userdata at $HOST:"
@@ -90,6 +105,7 @@ if [ -e /dev/gpt/userdata ] && [ -d $HOST ] &&
 			kenv vfs.root.mountfrom.options=rw
 			kenv pro1x.rootrw=1
 			echo "=== rerooting into $bootfs (read-write)"
+			keep_log
 			reboot -r
 			exit 0
 		fi
@@ -107,6 +123,7 @@ if [ -e /dev/gpt/userdata ] && [ -d $HOST ] &&
 				kenv vfs.root.mountfrom=zfs:pro1x/ROOT/default
 				kenv vfs.root.mountfrom.options=ro
 				echo "=== rerooting into $ZIMAGE"
+				keep_log
 				reboot -r
 				exit 0
 			fi
@@ -123,8 +140,10 @@ fi
 # Enter starts a shell on the console; otherwise back to the boot menu,
 # which also ends unattended tests.
 echo "=== rc done: Enter within 10 s for a shell, else reboot"
+keep_log
 if read -t 10 key < /dev/console; then
 	echo "shell; 'reboot' returns to the boot menu"
 	exec sh < /dev/console > /dev/console 2>&1
 fi
+keep_log
 reboot
