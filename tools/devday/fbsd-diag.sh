@@ -35,9 +35,20 @@ x_answers() {
 	service -e
 	echo "=== devd"
 	service devd status
-	ls -l /var/run/devd.pipe /var/run/devd.seqpacket.pipe
+	ls -l /var/run/devd.pipe /var/run/devd.seqpacket.pipe /dev/devctl
 	cat /var/log/devd.log
 	grep -i devd /var/log/messages /var/log/daemon.log
+	# X takes its input devices from devd, and the power key needs it:
+	# why it is not running (its own words, 8 s in the foreground), then
+	# started for the test
+	if ! service devd status > /dev/null 2>&1; then
+		echo "--- devd -d, 8 s"
+		timeout 8 devd -d 2>&1 | head -n 60
+		echo "--- service devd onestart"
+		service devd onestart
+		sleep 2
+		service devd status
+	fi
 	echo "=== random"
 	sysctl kern.random.random_sources kern.random.block_seeded_status
 	echo "=== X's files"
@@ -46,8 +57,14 @@ x_answers() {
 	    /usr/local/bin/xinit /usr/local/bin/xauth
 	ls -l /dev/fb* /dev/ttyv0 /dev/input /dev/dri 2>&1
 	dmesg | grep -i 'fb\|vt\|simplefb\|dpu\|backlight'
-	echo "=== startx $D in the background"
-	(cd /root && HOME=/root startx "$D" -- -verbose 6 \
+	# X's modules from userdata first (freebsd/xorg-modules: a scfb driver
+	# built without xf86DisableRandR, freebsd/scfb), then the image's
+	M=
+	[ -d $H/xorg-modules ] &&
+	    M="-modulepath $H/xorg-modules,/usr/local/lib/xorg/modules"
+	echo "=== startx $D in the background ${M:+($M)}"
+	# shellcheck disable=SC2086
+	(cd /root && HOME=/root startx "$D" -- -verbose 6 $M \
 	    > /tmp/pro1x-startx.log 2>&1 &)
 	sleep 45
 	echo "=== after 45 s: processes"
