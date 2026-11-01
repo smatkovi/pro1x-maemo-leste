@@ -1,0 +1,60 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] ufshci: Pro1X bring-up: where a failed response landed
+
+On the phone the first query after the kexec completed with OCS success
+but a response code of 0xff. With PRO1X_RAMCONS (the bring-up kernel), a
+failed response prints the descriptors' bus addresses, the UTRD, the
+start of the request and the response, and where in the command
+descriptor a response UPIU with the request's task tag stands.
+
+---
+diff --git a/sys/dev/ufshci/ufshci_req_queue.c b/sys/dev/ufshci/ufshci_req_queue.c
+index bb6efa6..ca3a66b 100644
+--- a/sys/dev/ufshci/ufshci_req_queue.c
++++ b/sys/dev/ufshci/ufshci_req_queue.c
+@@ -255,6 +255,45 @@ ufshci_req_queue_complete_tracker(struct ufshci_tracker *tr)
+ 
+ 	error = ufshci_req_queue_response_is_error(req_queue, ocs,
+ 	    &cpl.response_upiu);
++#ifdef PRO1X_RAMCONS
++	/*
++	 * Pro1X bring-up: where the controller put this response (on the
++	 * phone the first query's response read back as 0xff, its OCS as
++	 * success): the descriptors' bus addresses, the UTRD, the start of
++	 * the request and the response, and every place in the command
++	 * descriptor where a response UPIU's transaction code (0x2x/0x3x)
++	 * with this request's task tag stands.
++	 */
++	if (error && !req_queue->is_task_mgmt) {
++		const uint8_t *u = (const uint8_t *)tr->ucd;
++		const uint32_t *d = (const uint32_t *)&tr->hwq->utrd[tr->slot_num];
++		uint8_t tag = req->request_upiu.header.task_tag;
++		int i, n = 0;
++
++		printf("ufshci: slot %u: UTRL at %#jx, UCD at %#jx\n",
++		    tr->slot_num, (uintmax_t)tr->hwq->req_queue_addr,
++		    (uintmax_t)tr->ucd_bus_addr);
++		printf("ufshci: UTRD %08x %08x %08x %08x %08x %08x %08x %08x\n",
++		    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
++		printf("ufshci: request ");
++		for (i = 0; i < 32; i++)
++			printf("%02x", u[i]);
++		printf("\nufshci: response ");
++		for (i = 0; i < 32; i++)
++			printf("%02x", u[UFSHCI_UTP_XFER_REQ_SIZE + i]);
++		printf("\n");
++		for (i = 0; i < (int)sizeof(*tr->ucd) && n < 8; i += 4)
++			if ((u[i] & 0xe0) == 0x20 && u[i + 3] == tag &&
++			    i != 0) {
++				printf("ufshci: a response UPIU at +%#x: "
++				    "%02x %02x %02x %02x  %02x %02x %02x %02x\n",
++				    i, u[i], u[i + 1], u[i + 2], u[i + 3],
++				    u[i + 4], u[i + 5], u[i + 6], u[i + 7]);
++				n++;
++			}
++		printf("ufshci: %d places found\n", n);
++	}
++#endif
+ 
+ 	/* TODO: Implement retry */
+ 	// retriable = ufshci_completion_is_retry(cpl);
