@@ -1176,9 +1176,24 @@ RAM root has no termcap.
   the login on the console.
 - X does not come up: all three desktops end in "could not connect to X
   server: connection timed out", and there is no `/var/log/Xorg.0.log`.
-  Open; `tools/devday/fbsd-diag.sh` (on userdata as `freebsd/diag.sh`,
-  run as `sh /dev/pro1x-host/freebsd/diag.sh`) keeps what it needs in the
-  shot buffer and brings the USB gadget up.
+  `tools/devday/fbsd-diag.sh` (on userdata as `freebsd/diag.sh`, run as
+  `sh /dev/pro1x-host/freebsd/diag.sh`) keeps what it needs in the shot
+  buffer and brings the USB gadget up. Run fbsd-diag-2: Xorg's own
+  "Cannot open log file /var/log/Xorg.0.log", with /var a writable tmpfs.
+  Every package file in the root image was owned by uid 65534: the
+  packages' tarballs carry that number next to uname root, and makefs
+  took the number. So the setuid Xorg.wrap ran Xorg as nobody (the same
+  for dbus-daemon-launch-helper). rootfs.sh drops the numbers where a name
+  is given (463a3e1); root.zfs of 2026-11-01 evening has it. Until then,
+  as root on the console, `startx hildon -- /usr/local/libexec/Xorg`
+  goes past the wrapper.
+- The gadget in that run: dwc3dci attached and said `connected (run)`,
+  usbus0 had its CDC Ethernet device, but the PC could not enumerate it
+  (`device not accepting address, error -62`, `device descriptor
+  read/64, error -110` then `-71`, `unable to enumerate USB device`), so
+  no ue0 after 30 s. The device controller does not finish SET_ADDRESS /
+  the first control transfers on the phone (pm/README.md stage 4 was
+  tested in qemu only). Open.
 - The gadget's `kldload` failed: uether depends on miibus, which the
   kernel lacks. build.sh builds `mii` now, pro1x_usbnet loads it first
   (d8ae214); until the next root.zfs, `miibus.ko` is in
