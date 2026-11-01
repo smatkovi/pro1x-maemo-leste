@@ -1166,6 +1166,37 @@ the SoC reset itself, no crash dump). Run 10 keeps the raw RAM console
 before it is cleared. Also: the FreeBSD keymap on the Pro1X has no `|`; the
 RAM root has no termcap.
 
+### 12.6 The root image, the menu's watchdog (2026-11-01 18:23-19:00)
+
+- The RAM root's rc looked for `/dev/gpt/userdata` before the UFS disks
+  were tasted (`GEOM: new disk da5` came after `rc done`) and rebooted:
+  it waits up to 30 s for the label now, and writes `dmesg -a` (with what
+  rc printed) to `/dev/pro1xshot` before every reboot and reroot (1bdd280).
+  Run fbsd-startx-1: `Trying to mount root from zfs:pro1x/ROOT/default`,
+  the login on the console.
+- X does not come up: all three desktops end in "could not connect to X
+  server: connection timed out", and there is no `/var/log/Xorg.0.log`.
+  Open; `tools/devday/fbsd-diag.sh` (on userdata as `freebsd/diag.sh`,
+  run as `sh /dev/pro1x-host/freebsd/diag.sh`) keeps what it needs in the
+  shot buffer and brings the USB gadget up.
+- The gadget's `kldload` failed: uether depends on miibus, which the
+  kernel lacks. build.sh builds `mii` now, pro1x_usbnet loads it first
+  (d8ae214); until the next root.zfs, `miibus.ko` is in
+  `freebsd/modules/` on userdata.
+- Run fbsd-diag-1: the same code that reached the login at 18:23 was
+  bitten at 18:42 in bufinit (900e; `fbsd-diag-1-ramdump`: text and
+  rodata intact, the console ends cleanly after `avail memory`). The menu
+  arms the APSS watchdog for the jump (32 s, the hardware's longest), and
+  qcom_wdt attaches after about 1200 console lines, each drawn on the
+  framebuffer synchronously while cold, at the CPU clock Linux left.
+  patches/0045: the RAM console feeds the watchdog on every line while
+  cold; `debug.verbose_sysinit=0` in pro1x.env drops about 900 of those
+  lines (`debug.verbose_sysinit=1` in freebsd/cmdline brings them back).
+  pro1x.env is built into the kernel by config, so a change to it needs a
+  build without `KERNFAST` (`NOCLEAN=1` is enough). Later, perhaps: the
+  CPUs at their highest clock in pro1x-loop-root before `kexec -e` (a
+  boot_b of its own).
+
 ## Block 13: KolibriOS (should; 60-90 min)
 
 Sources: `~/ps/kolibrios-arm/docs/pro1x.md`, `power.md`, `storage.md`,

@@ -118,5 +118,6 @@ env		"@ENV_FILE@"
 # output for Linux to read after the next boot (patches/0003)
 makeoptions	CONF_CFLAGS="-DPRO1X_PROOF_OF_LIFE -DPRO1X_RAMCONS"
 
-# Every SYSINIT step on the console, to see how far the boot gets
+# Every SYSINIT step on the console, to see how far the boot gets (off
+# in pro1x.env; debug.verbose_sysinit=1 in freebsd/cmdline turns it on)
 options 	VERBOSE_SYSINIT=1

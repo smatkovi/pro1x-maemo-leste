@@ -1,0 +1,58 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] pro1x ramcons: feed the boot menu's watchdog while cold
+
+The boot menu arms the APSS watchdog for the jump into FreeBSD (about
+32 s, the hardware's longest), and qcom_wdt feeds it once it attaches.
+Until then, while cold, vt draws every console line on the framebuffer
+synchronously, at the CPU clock Linux left: with about 1200 lines before
+qcom_wdt's attach, the boot sometimes took longer than that. On
+2026-11-01 one start was bitten in bufinit (900e; the DDR dump showed
+the console ending cleanly after "avail memory", an hour after the same
+code had reached the login). Every console line feeds the watchdog while
+cold; after configure_final only qcom_wdt does, so its lifetime hint is
+not undone.
+
+---
+diff --git a/sys/arm64/pro1x/ramcons.c b/sys/arm64/pro1x/ramcons.c
+index 15e3ae8..c031bfd 100644
+--- a/sys/arm64/pro1x/ramcons.c
++++ b/sys/arm64/pro1x/ramcons.c
+@@ -43,6 +43,20 @@
+ static volatile char *ramcons_buf;
+ static size_t ramcons_pos;
+ 
++/*
++ * The boot menu's watchdog: Linux armed the APSS watchdog for the jump
++ * (about 32 s, its longest), and qcom_wdt feeds it once it attaches. Until
++ * then, while cold, vt draws every line of the console on the framebuffer
++ * at once, with the CPU at whatever clock Linux left it: with 1200 lines
++ * before qcom_wdt's attach that took more than 32 s now and then (bitten in
++ * bufinit, 2026-11-01). So every line here feeds it while cold; afterwards
++ * only qcom_wdt does (its lifetime hint still means what it says).
++ */
++#define	RAMCONS_WDT_PA	0x0f017000UL
++#define	RAMCONS_WDT_RST	(0x04 / 4)
++
++static volatile uint32_t *ramcons_wdt;
++
+ static void
+ ramcons_cnprobe(struct consdev *cp)
+ {
+@@ -77,6 +91,8 @@ ramcons_cninit(struct consdev *cp)
+ 	dsb(sy);
+ 	ramcons_pos = i;
+ 	ramcons_buf = buf;
++	ramcons_wdt = pmap_mapdev_attr(RAMCONS_WDT_PA, PAGE_SIZE,
++	    VM_MEMATTR_DEVICE_nGnRnE);
+ }
+ 
+ static void
+@@ -97,6 +113,8 @@ ramcons_cnputc(struct consdev *cp, int c)
+ 		return;
+ 	ramcons_buf[ramcons_pos++] = c;
+ 	ramcons_buf[ramcons_pos] = '\0';
++	if (c == '\n' && cold && ramcons_wdt != NULL)
++		ramcons_wdt[RAMCONS_WDT_RST] = 1;
+ 	dsb(sy);
+ }
+ 
