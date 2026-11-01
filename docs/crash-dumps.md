@@ -288,7 +288,9 @@ whose pstore names the cause.
 Run 0 settled the kexec test: pro1x.5 kexec'd into itself stopped about
 0.41 s into its boot, and its pstore had 158 unrecoverable ECC blocks
 (the running DSPs wrote into the new kernel's RAM). A candidate is now
-flashed instead, with a way back that needs no hands:
+flashed instead, with a way back that needs no hands while the PC is on
+the cable (a crash ends in 900e, and only the PC's `qdl ramdump` resets
+the phone from there; without it, the power key):
 
 - `tools/devday/pro1x-probe`, an OpenRC service in Leste's sysinit
   (`probe.sh install`). When `/host/pro1x-probe/arm` names the running

@@ -68,7 +68,7 @@ same pinned key. For Kali and Arch it is `phone.sh ssh kali`, and so on.
 | `fix-ownership.sh check\|fix\|undo [ROOT]` | phone | The images built before 2026-10-31 (bb39fa8/0f271a9) left `/`, `/etc`, `/usr`, the overlays' files, the modules and the firmware owned by uid 1000 (`user`, `kali`, `alarm`) or group-writable: a way to root. `check` lists them, read only; `fix` gives our paths back to root and writes an undo list first; `undo` puts that back. Our paths: `owned-paths.txt` next to it (`mk-owned-paths.sh` writes it from the repository). `deploy.sh tools` puts both into `/root/devday/` and `/host/devday/`. |
 | `check-initrd.sh INITRD [alarm]` | PC | Checks that the initramfs `prepare` made carries the trial's parts. The watchdog's arming is skipped silently without `qcom-wdt.ko` or `devmem`. Passes on pro1x.5's initramfs. |
 | `kexec-test.sh check\|load\|go\|after K` | PC | Starts the kernel of `$WORK/out-K` once from the running Leste with kexec, boot_b untouched (block 18). `go` and `after`'s dump only with `OK=yes`. |
-| `probe.sh install\|arm\|status\|off\|watch` | PC | A kernel flashed once with a way back that needs no hands (block 18.1): the phone's `pro1x-probe` service (sysinit) puts the saved boot_b back about 15 s into the candidate's start and ends its trial; `watch` takes the dump on 900e and collects. |
+| `probe.sh install\|arm\|status\|off\|watch` | PC | A kernel flashed once with a way back that needs no hands while the PC is on the cable (block 18.1): the phone's `pro1x-probe` service (sysinit) puts the saved boot_b back about 15 s into the candidate's start and ends its trial; `watch` takes the dump on 900e and collects. |
 | `crashdump.py DIR...` | PC | Decodes a `qdl ramdump` directory: the PMIC's reset reasons, TZ's interrupt counters and log, the NoC errors (`docs/crash-dumps.md`). Reads files only. |
 | `test/run.sh` | PC | Tests the helpers above kexec-test.sh against a fake phone (fake ssh/scp): 39 checks. |
 | `test/fix-ownership.sh` | PC, sudo | Tests `fix-ownership.sh` on two fake roots made as the old builds made them (check, fix, check, undo): 47 checks; `CLEAN=<a correctly built image, mounted read-only>` adds 2. |
@@ -1105,8 +1105,10 @@ afterwards), both collected with `CLEAR=1`:
   there was **no console text** at all and no screenshot.
 - The watchdog armed by the menu bit about 32 s later (TZ's crash
   handling at 47.65 s after power-on), 900e, the dump reset the phone
-  into Leste: the way back works without hands now (G1 of 10-31 hung for
-  ten minutes).
+  into Leste: with the PC on the cable the way back needs no hands now
+  (G1 of 10-31 hung for ten minutes). Without it the phone stays in 900e
+  until a long press of the power key: `qcom_scm.download_mode` is
+  already off, so the bite going to 900e is the firmware's policy.
 - Both FreeBSD kernels end the same way, so it is not the 10-31 build.
   FreeBSD wrote its console at 0x5ca01000 on 10-25 and 10-27 (Linux
   pro1x.1-.3 era); since then the Linux side changed (0004, 0005, 0040,
@@ -1428,7 +1430,7 @@ Run 0 (pro1x.5 into itself) stopped about 0.41 s into the new kernel, and
 its pstore had 2498 corrected and 158 unrecoverable ECC blocks: something
 (the DSPs, still running) wrote into the RAM under the new kernel. kexec
 from a running Leste is no test here; runs 1-4 go by flash instead, with a
-way back that needs no hands: `tools/devday/probe.sh` and the phone's
+way back that needs no hands while the PC is on the cable: `tools/devday/probe.sh` and the phone's
 `pro1x-probe` service (`docs/crash-dumps.md`, "Probing a kernel").
 
 1. Once: `bash $D/probe.sh install` (OpenRC sysinit in Leste).
