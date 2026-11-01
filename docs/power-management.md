@@ -286,6 +286,15 @@ and 0024, below.)
 
 ## The Bluetooth UART between in-band sleeps (2026-10-29, 7.1.0-pro1x.7, untested)
 
+**Broken on the phone (2026-11-01, docs/crash-dumps.md):** with 0023, 0024,
+0029 and 0030 (pro1x.12) the WCN3950 never answers its first vendor
+command (`command 0xfc00 tx timeout`, `Reading QCA version information
+failed (-110)`), so Bluetooth does not come up; without the four
+(7.1.0-pro1x.12nobt, nobtslim) it does. Which of them breaks the setup
+is not known yet (0029 changes only the power-off path; 0023/0024 keep
+the UART down while open, 0030 moves its wake-up interrupt). They are
+left out of the kernels built since.
+
 With Bluetooth up, the UART (`4a8c000.serial`) kept its clock, its CX
 performance vote and its interconnect votes for good, in the RPM's sleep
 set too, so the SoC could not reach vlow or vmin, awake or in a suspend.

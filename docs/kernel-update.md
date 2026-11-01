@@ -88,6 +88,14 @@ saved boot images.
 
 ## Trial starts: back to slot a by itself
 
+**Fixed 2026-11-01:** udev loads qcom_wdt in the initramfs before the boot
+menu arms the watchdog, so the kernel never fed it and it bit about 42 s
+into every trial or one-shot start unless dsme had opened `/dev/watchdog`
+by then (pro1x.5 made it by about 4 s, pro1x.12 did not). The menu now
+binds qcom_wdt again after arming it (docs/crash-dumps.md, "Runs 4-6").
+Boot images made before that (pro1x.5's of 10-29 among them) still have
+the race.
+
 `flash` puts slot b on trial (`pro1x-boot trial <version> 3`). The phone's
 bootloader then takes one try for every start of slot b while the slot is
 not marked "successful". When none are left, it starts slot a, Sailfish

@@ -1091,6 +1091,29 @@ hardware (the context bank write, the hypervisor), the bypass for UFS,
 FreeBSD's `ufshci` on a link the menu did not touch, and a watchdog bite
 on this phone.
 
+### 12.3 G1 again, 2026-11-01 01:46 (kernel 7.1.0-pro1x.12nobtslim)
+
+`~/ps/pro1x-runs/2026-11-01/fbsd-G1-3*` (kernel.bin of 10-31, abaa2729)
+and `fbsd-G1-4-k1029*` (kernel.bin-2026-10-29, d77cb918, put back
+afterwards), both collected with `CLEAR=1`:
+
+- The menu got to the jump: the pstore ends with `pro1x-loop-root:
+  starting freebsd: watchdog armed` (11.7 s, 9.5 s). `kexec_bypass` was
+  there (patch 0040), UFS was not rebound.
+- FreeBSD was entered: the RAM console's marker said
+  `PRO1X-FBSD:ENTERED` both times (every collect before had `none`), but
+  there was **no console text** at all and no screenshot.
+- The watchdog armed by the menu bit about 32 s later (TZ's crash
+  handling at 47.65 s after power-on), 900e, the dump reset the phone
+  into Leste: the way back works without hands now (G1 of 10-31 hung for
+  ten minutes).
+- Both FreeBSD kernels end the same way, so it is not the 10-31 build.
+  FreeBSD wrote its console at 0x5ca01000 on 10-25 and 10-27 (Linux
+  pro1x.1-.3 era); since then the Linux side changed (0004, 0005, 0040,
+  the bisect kernel's patches, the menu). Next: find where FreeBSD stops
+  between its entry and the console (its proof-of-life stripe, or marker
+  words written along locore/initarm), then compare with the hand-over.
+
 ## Block 13: KolibriOS (should; 60-90 min)
 
 Sources: `~/ps/kolibrios-arm/docs/pro1x.md`, `power.md`, `storage.md`,
@@ -1429,12 +1452,15 @@ then `no29` before `nobt` (the dumps' NoC error at the modem block and the
 mce +pro1x6 and the full ModulesUser list run from the dry run's boot on:
 nothing else in Leste's user space changes between the runs.
 
-| Run | K | Stays up (10 min) | Goes down |
-|---|---|---|---|
-| 1 | pro1x.12 | not reproduced: run 2 anyway | the pstore: what Linux did before the bite |
-| 2 | pro1x.12no29 | 0029 | run 3 |
-| 3 | pro1x.12nobt | 0023/0024/0030 | run 4 |
-| 4 | pro1x.12nobtslim | SLIMbus (0021) | neither: 0038/0039 next |
+**Result (runs 1-7, 00:30-01:37, `docs/crash-dumps.md` from "Run 1"):**
+pro1x.12, nobt and nobtslim all went down at 41-42 s; a heartbeat in the
+kernel log showed user space alive up to the watchdog's bark, and the
+watchdog core sending no ping. The cause was the boot menu's trial
+watchdog, which the kernel never fed (qcom_wdt bound before the arming),
+racing dsme. Fixed in the initramfs (e3f60f1); nobtslim with it passed
+run 7 and, at 01:45, a regular trial (confirmed by pro1x-boot-trial).
+On the way: 0023/0024/0029/0030 break Bluetooth's setup, 0021's SLIMbus
+NGD times out; neither caused the crash.
 
 ## End of the day (15 min)
 
