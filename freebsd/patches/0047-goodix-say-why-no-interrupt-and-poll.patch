@@ -1,0 +1,154 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] goodix: say why there is no interrupt, and poll without one
+
+With 0046 the touchscreen's interrupt still could not be allocated on
+the phone, and the touchscreen stayed dead. Allocate, activate and set
+up the interrupt one by one and name the step that fails, with the
+interrupt and pin numbers. Without an interrupt, read the reports at
+60 Hz from a callout (once a second while the controller sleeps), so
+that the touchscreen works, if at some power, until the interrupt does.
+The sleep sysctl is there either way.
+
+---
+diff --git a/sys/dev/iicbus/goodix.c b/sys/dev/iicbus/goodix.c
+index 30a0e92..2199c82 100644
+--- a/sys/dev/iicbus/goodix.c
++++ b/sys/dev/iicbus/goodix.c
+@@ -25,6 +25,7 @@
+ #include <sys/endian.h>
+ #include <sys/gpio.h>
+ #include <sys/intr.h>
++#include <sys/callout.h>
+ #include <sys/kernel.h>
+ #include <sys/lock.h>
+ #include <sys/malloc.h>
+@@ -58,6 +59,7 @@
+ #define	GOODIX_CONTACT_SIZE	8
+ #define	GOODIX_MAX_CONTACTS	10
+ #define	GOODIX_READY_POLLS	20	/* status ready lags the pulse, ~10 ms */
++#define	GOODIX_POLL_HZ		60	/* without an interrupt: reports read so often */
+ 
+ /* configuration bytes */
+ #define	CFG_X_MAX		1	/* little endian 16 bit */
+@@ -90,6 +92,8 @@ struct goodix_softc {
+ 	int			irq_rid;
+ 	void			*ih;
+ 	struct task		task;
++	struct callout		poll;
++	bool			polling;	/* no interrupt: the callout reads */
+ 	struct intr_config_hook	hook;
+ 	u_int			x_max;
+ 	u_int			y_max;
+@@ -129,8 +133,8 @@ goodix_task(void *arg, int pending)
+ 	u_int i, n;
+ 	int tries;
+ 
+-	/* Ready shows up a little after the pulse. */
+-	for (tries = 0; tries < GOODIX_READY_POLLS; tries++) {
++	/* Ready shows up a little after the pulse (polled: now or not). */
++	for (tries = 0; tries < (sc->polling ? 1 : GOODIX_READY_POLLS); tries++) {
+ 		if (goodix_read(sc, GOODIX_REG_COOR, data,
+ 		    1 + GOODIX_CONTACT_SIZE) != 0)
+ 			return;
+@@ -174,6 +178,24 @@ goodix_intr(void *arg)
+ 		taskqueue_enqueue(taskqueue_thread, &sc->task);
+ }
+ 
++/*
++ * Without the interrupt: the reports read GOODIX_POLL_HZ times a second
++ * while the controller is awake, once a second while it sleeps (nothing
++ * to read then, the callout just keeps going)
++ */
++static void
++goodix_poll(void *arg)
++{
++	struct goodix_softc *sc = arg;
++
++	if (sc->detaching)
++		return;
++	if (!sc->sleeping)
++		taskqueue_enqueue(taskqueue_thread, &sc->task);
++	callout_reset(&sc->poll, sc->sleeping ? hz :
++	    MAX(1, hz / GOODIX_POLL_HZ), goodix_poll, sc);
++}
++
+ /* The INT line as an output, at a physical level */
+ static void
+ goodix_int_out(struct goodix_softc *sc, int level)
+@@ -274,17 +296,43 @@ goodix_setup_irq(struct goodix_softc *sc, u_int trigger)
+ 		    (struct intr_map_data *)gd);
+ 	}
+ 
+-	/* After the device tree's interrupt (rid 0), which has a fixed type */
++	/*
++	 * After the device tree's interrupt (rid 0), which has a fixed type.
++	 * Allocated, activated and set up one by one, to say which step
++	 * fails: on the phone the allocation did (2026-11-01).
++	 */
+ 	sc->irq_rid = 1;
+-	bus_set_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid, irq, 1);
++	error = bus_set_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid, irq, 1);
++	if (error != 0) {
++		device_printf(sc->dev, "interrupt %u: set_resource %d\n", irq,
++		    error);
++		return (error);
++	}
+ 	sc->irq = bus_alloc_resource_any(sc->dev, SYS_RES_IRQ, &sc->irq_rid,
+-	    RF_ACTIVE);
++	    0);
+ 	if (sc->irq == NULL) {
+-		device_printf(sc->dev, "unable to allocate the interrupt\n");
++		device_printf(sc->dev, "interrupt %u (pin %u): unable to "
++		    "allocate it\n", irq, sc->irq_pin->pin);
+ 		return (ENXIO);
+ 	}
+-	return (bus_setup_intr(sc->dev, sc->irq, INTR_TYPE_MISC | INTR_MPSAFE,
+-	    NULL, goodix_intr, sc, &sc->ih));
++	error = bus_activate_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid,
++	    sc->irq);
++	if (error != 0) {
++		device_printf(sc->dev, "interrupt %u (pin %u): unable to "
++		    "activate it: %d\n", irq, sc->irq_pin->pin, error);
++		bus_release_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid, sc->irq);
++		sc->irq = NULL;
++		return (error);
++	}
++	error = bus_setup_intr(sc->dev, sc->irq, INTR_TYPE_MISC | INTR_MPSAFE,
++	    NULL, goodix_intr, sc, &sc->ih);
++	if (error != 0) {
++		device_printf(sc->dev, "interrupt %u (pin %u): unable to set "
++		    "it up: %d\n", irq, sc->irq_pin->pin, error);
++		bus_release_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid, sc->irq);
++		sc->irq = NULL;
++	}
++	return (error);
+ }
+ 
+ static void
+@@ -342,8 +390,15 @@ goodix_start(void *arg)
+ 	}
+ 
+ 	TASK_INIT(&sc->task, 0, goodix_task, sc);
+-	if (goodix_setup_irq(sc, cfg[CFG_TRIGGER] & 3) != 0)
+-		return;
++	callout_init(&sc->poll, 1);
++	if (goodix_setup_irq(sc, cfg[CFG_TRIGGER] & 3) != 0) {
++		/* a touchscreen that works, if at some power: polled */
++		device_printf(sc->dev, "no interrupt: reading at %u Hz\n",
++		    GOODIX_POLL_HZ);
++		sc->polling = true;
++		callout_reset(&sc->poll, MAX(1, hz / GOODIX_POLL_HZ),
++		    goodix_poll, sc);
++	}
+ 	SYSCTL_ADD_PROC(device_get_sysctl_ctx(sc->dev),
+ 	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->dev)), OID_AUTO, "sleep",
+ 	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+@@ -387,6 +442,8 @@ goodix_detach(device_t dev)
+ 
+ 	config_intrhook_drain(&sc->hook);
+ 	sc->detaching = true;
++	if (sc->polling)
++		callout_drain(&sc->poll);
+ 	if (sc->ih != NULL)
+ 		bus_teardown_intr(dev, sc->irq, sc->ih);
+ 	if (sc->irq != NULL)
