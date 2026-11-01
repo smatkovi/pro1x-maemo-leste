@@ -385,3 +385,47 @@ Run 4 (nobtslim again, with `probe.sh arm KVER 150`): `pro1x-probe-
 heartbeat` writes a line every 2 s at error level (and who holds the
 watchdog open, every 6 s), so the pstore tells whether user space still
 ran up to the bark.
+
+### Runs 4-6: the cause
+
+| Run | Kernel, probe | Result |
+|---|---|---|
+| 4 (00:52) | nobtslim, heartbeat | heartbeat every 2 s up to 41.69 s (load 0.4-0.8), nobody holds `/dev/watchdog`; bark at 41.91 s, 900e |
+| 5 (01:00) | nobtslim, heartbeat + `stopwd` (the trial's watchdog stopped by its magic close at 19.9 s) | up; 10 minutes without a problem; dmesg has no error that pro1x.5's has not; dsme started at 44 s, Xorg at 57 s |
+| 6 (01:14) | nobtslim, heartbeat with watchdogd's context switches | `watchdogd-sw=2` from 22 s to 40 s: the watchdog core sent no ping at all; 900e |
+
+**Cause:** udev loads qcom_wdt in the initramfs long before the boot menu
+arms the trial's watchdog (it is about the second module of a start,
+`/proc/modules`). Its probe found the watchdog stopped, so the watchdog
+core never knew it ran (no `WDOG_HW_RUNNING`), and the menu's later
+`modprobe qcom_wdt` did nothing. Armed by devmem at about 9.5 s for
+0xfffff ticks (32 s), it barked and bit at 41-42 s unless dsme opened
+`/dev/watchdog` first. dsme does that at about 38 s with pro1x.5 (which
+passed its trials by those few seconds) and at about 44 s with the
+pro1x.12 kernels. Every trial start of pro1x.12 and its bisect kernels
+ended that way; it has nothing to do with Bluetooth, SLIMbus or the
+modem (the NoC errors and the other watchdogs are TZ's dump at work).
+The same holds for every one-shot choice of the boot menu (it arms the
+watchdog too).
+
+**Fix** (initramfs/local-top/pro1x-loop-root): after `wdt_arm` a qcom_wdt
+bound already is unbound and bound again; its new probe finds the
+watchdog running, sets `WDOG_HW_RUNNING`, and the core feeds it until
+dsme opens it (or `open_timeout`, 900 s, runs out). The unbind leaves
+the watchdog running (qcom_wdt has no remove, and the core stops a
+watchdog at unregister only if it is open and asked for that).
+
+**Separate pro1x.12 bugs found on the way** (not the crash):
+
+- 0023/0024/0029/0030: the WCN3950 never answers its first vendor
+  command (0xfc00, the version read): Bluetooth does not come up.
+- 0021: the LPASS SLIMbus NGD's capability exchange with the ADSP times
+  out (`HW wakeup attempt during SSR`, `QMI wait timeout`): no SLIMbus
+  (FM audio) on Linux yet.
+
+### Run 7 (01:24): the fix
+
+nobtslim with the new initramfs, on trial, heartbeat, no early stop:
+`pro1x-loop-root: watchdog armed for this start (qcom_wdt bound again)` at
+8.6 s, watchdogd's switches 2 -> 4 -> 5 (the core's pings), dsme holding
+`/dev/watchdog` at 64 s, up past 42 s with the trial's watchdog running.

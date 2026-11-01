@@ -2,7 +2,9 @@
 # pro1x-probe-heartbeat SECONDS [stopwd]: for SECONDS from now, a line every
 # 2 s in the kernel log at error level (so on the console and in the pstore
 # of a start that dies, loglevel=4): uptime, load, and every 6 s which
-# processes hold the watchdog open. The first line also has the watchdog
+# processes hold the watchdog open, and the context switches of the kernel's
+# watchdogd thread (it switches once for every ping the watchdog core
+# sends while no one has /dev/watchdog open). The first line also has the watchdog
 # core's open_timeout, whether qcom_wdt is loaded and its bark interrupt's
 # count. Started by pro1x-probe when /host/pro1x-probe/heartbeat names the
 # seconds (probe.sh arm KVER SECONDS [stopwd]). Only looks, unless stopwd:
@@ -19,6 +21,11 @@ wdinfo() {
 	    "handle_boot_enabled=$(cat /sys/module/watchdog/parameters/handle_boot_enabled 2> /dev/null)" \
 	    "qcom_wdt=$m bark-irq=[$(grep -i 'bark\|wdt' /proc/interrupts | tr -s ' ' | cut -c1-60 | tr '\n' ';')]"
 }
+wdd=
+for c in /proc/[0-9]*/comm; do
+	[ "$(cat "$c" 2> /dev/null)" = watchdogd ] && { wdd=${c%/comm}; break; }
+done
+wdsw() { [ -n "$wdd" ] && sed -n 's/^voluntary_ctxt_switches:[[:space:]]*/ watchdogd-sw=/p' "$wdd/status" 2> /dev/null; }
 say "heartbeat: $(wdinfo)"
 n=0
 while :; do
@@ -39,7 +46,7 @@ while :; do
 		done
 		w=", watchdog open by [${w# }]"
 	fi
-	say "alive, load $(cut -d' ' -f1-3 /proc/loadavg)$w"
+	say "alive, load $(cut -d' ' -f1-3 /proc/loadavg)$(wdsw)$w"
 	n=$((n + 1))
 	sleep 2
 done

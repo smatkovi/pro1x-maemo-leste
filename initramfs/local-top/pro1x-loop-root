@@ -53,9 +53,10 @@ find_backing() {
 find_backing || panic "pro1x-loop-root: backing device $BACKING not found"
 
 # The SoC's APSS watchdog (0x0f017000, kpss layout, 32 kHz), armed for its
-# longest time, about 32 s; reloaded to the full time again; stopped. Linux's
-# qcom_wdt is not loaded at this point. Without devmem, nothing (a start
-# that hangs then needs the power key).
+# longest time, about 32 s; reloaded to the full time again; stopped.
+# Linux's qcom_wdt is bound already (udev) and does not see this: see the
+# trial's arming below. Without devmem, nothing (a start that hangs then
+# needs the power key).
 wdt_arm() {
   command -v devmem > /dev/null || return 0
   devmem 0x0f017008 32 0
@@ -283,10 +284,30 @@ SNAPS
   # one-shot choice; on trial pro1x-boot-trial in the system confirms the
   # start once its user interface runs, or reboots, and the bootloader
   # takes one of the trial's tries for every start.
+  # udev loads qcom_wdt for the device tree's watchdog long before this
+  # (it is about the second module of a start): its probe found the
+  # watchdog stopped, so the kernel never fed it after wdt_arm, and the
+  # watchdog bit 32 s after it, at about 42 s, before dsme opened it (at
+  # about 38 s with pro1x.5, about 44 s with pro1x.12: 2026-11-01,
+  # docs/crash-dumps.md). So a driver bound already is bound again: its
+  # new probe finds it running and the kernel feeds it.
   if [ "$trial" = running ] || [ -n "$oneshot" ]; then
     echo 900 > /sys/module/watchdog/parameters/open_timeout 2> /dev/null
     wdt_arm
-    modprobe qcom_wdt || log_warning_msg "pro1x-loop-root: no watchdog for this start"
+    drv=/sys/bus/platform/drivers/qcom_wdt
+    bound=
+    for d in "$drv"/*.watchdog; do
+      [ -e "$d" ] || continue
+      bound=1
+      echo "${d##*/}" > "$drv/unbind" && echo "${d##*/}" > "$drv/bind" ||
+        log_warning_msg "pro1x-loop-root: ${d##*/} not bound again: the watchdog is not fed"
+    done
+    how="qcom_wdt bound again"
+    if [ -z "$bound" ]; then
+      how="qcom_wdt loaded"
+      modprobe qcom_wdt || log_warning_msg "pro1x-loop-root: no watchdog for this start"
+    fi
+    kmsg "watchdog armed for this start ($how)"
   fi
 fi
 
