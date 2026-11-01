@@ -1211,6 +1211,43 @@ RAM root has no termcap.
   build without `KERNFAST` (`NOCLEAN=1` is enough). Later, perhaps: the
   CPUs at their highest clock in pro1x-loop-root before `kexec -e` (a
   boot_b of its own).
+- That was not the cause. Run fbsd-diag-4 (20:15, kernel ebee541a, which
+  had reached the login twice) was bitten at the same place with only
+  2.3 KB of console (verbose sysinit off): a hang, not slowness. In both
+  dumps the saved frames are bufinit -> bq_insert -> __mtx_lock_sleep,
+  bqempty's lock owned by thread0, bq_len 10624 and 8736 of 50513: the
+  loop stops 4-5 MB into the buffer headers, which start at PA
+  0x1_0124_2000, the first large use of memory above 4 GB. The memory
+  maps of good and bad runs are the same, so the headers are at the same
+  place every time. `fbsd-boottest.sh physmem2500 6 'pro1x.root=ram
+  hw.physmem=2500M'`: 6 of 6 starts past bufinit (without the limit 2 of
+  6 hung today). `hw.physmem=2500M` (all below 4 GB) stays in
+  freebsd/cmdline for now. Open: what in the hand-over makes stores above
+  4 GB stall (Linux uses all 8 GB); the next bitten run is dumped with
+  DDRCS0_1 too (fbsd-boottest.sh does).
+- X itself: FreeBSD's scfb 0.0.7_2 calls xf86DisableRandR(), which
+  xorg-server 21.1.25 no longer has, once Option "Rotate" is set: Xorg
+  died with ld-elf's "Undefined symbol", the console left dark and deaf
+  (run fbsd-diag-3). freebsd/scfb/ builds it without the call in the VM
+  (8244dff), rootfs.sh puts it over the package's. With it (from
+  userdata, `-modulepath`) X and the desktop came up on the phone.
+- devd never ran: `/usr/local/etc/devd/pro1x_typec.conf` line 8 had an
+  escaped quote inside the action, which devd's lexer does not know
+  (83b83ed). Without devd no power key and no input hotplug for X.
+- `startx hildon` gave Xfce: startx runs xterm instead of `~/.xinitrc`
+  when it gets client arguments, so `~/.xinitrc` saw none and fell back
+  to Xfce. `pro1x.desktop=` in freebsd/cmdline (or kenv) picks it.
+- The touchscreen attached (GT9286) without its interrupt, the irq-gpios
+  mapping did not resolve: patches/0046 maps interrupts-extended's cells
+  as pro1x_kbd does (c7270b6). Not yet tried on the phone.
+- `tools/devday/fbsd-x.sh` (userdata `freebsd/x.sh`): devd (from a
+  mended copy while the image has the old rule), the desktop through
+  kenv, X with userdata's modules; its log and Xorg's in the shot buffer.
+- Leste, separately: 47 s into a boot the ADSP's handover interrupt fired
+  every 240 ms ("Handover signaled, but it already happened"), and about
+  three minutes later dsme's watchdog bit (pretimeout at 188 s, 900e)
+  during a 3 GB copy; the next boot did the same until
+  `echo stop > /sys/class/remoteproc/remoteproc1/state`. Open.
 
 ## Block 13: KolibriOS (should; 60-90 min)
 
