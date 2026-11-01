@@ -81,7 +81,14 @@ if [ -n "$PKGS" ]; then
 	: > "$P/samples"
 	while read -r f; do
 		bsdtar -xf "$f" -C "$R" --exclude '+*' 2> /dev/null
-		bsdtar -cf - --format=mtree --exclude '+*' @"$f" | grep -v '^#' \
+		# The packages' tarballs give every file uid and gid 65534 next to
+		# its uname and gname (root, wheel; messagebus, ...), and makefs
+		# takes the number: every package file was nobody's, setuid ones
+		# (Xorg.wrap, dbus-daemon-launch-helper) ran as nobody, Xorg could
+		# not write its log on the phone (2026-11-01). The names count, as
+		# for pkg; makefs looks them up in the image's passwd (-N).
+		bsdtar -cf - --format=mtree --exclude '+*' @"$f" | grep -v '^#' |
+			sed -E '/ uname=/s/ uid=[0-9]+//; / gname=/s/ gid=[0-9]+//' \
 			>> "$WORK/spec.pkgs"
 		# The users and groups its install script would add with pw(8),
 		# and its @sample files (into the second argument's file): the
