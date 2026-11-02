@@ -1,0 +1,122 @@
+From 9cb0670694afa61cbe576bb4dc7000d8ce2df3c4 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 2 Nov 2026 20:40:57 +0100
+Subject: [PATCH] QcomModulePkg: Pro1X: make the slot's GUIDs and boot LUN
+ follow its bits; all RAM to the kernel
+
+pro1x-boot and sgdisk switch slots by the attribute bits only, and ValidateSlotGuids then refuses the slot (2026-11-02). FindBootableSlot now swaps the type GUIDs to the active slot with set_active's own SwitchPtnSlots when the slot holds the inactive ones, and sets the UFS boot LUN when only that disagrees. The device tree gets all RAM again; the loader's own buffers stay below 4 GiB.
+---
+ .../Library/BootLib/PartitionTableUpdate.c    | 54 +++++++++++++++++++
+ .../Library/BootLib/UpdateDeviceTree.c        | 17 ------
+ 2 files changed, 54 insertions(+), 17 deletions(-)
+
+diff --git a/QcomModulePkg/Library/BootLib/PartitionTableUpdate.c b/QcomModulePkg/Library/BootLib/PartitionTableUpdate.c
+index fd5a837..42b4ad4 100755
+--- a/QcomModulePkg/Library/BootLib/PartitionTableUpdate.c
++++ b/QcomModulePkg/Library/BootLib/PartitionTableUpdate.c
+@@ -1599,6 +1599,59 @@ ValidateSlotGuids (Slot *BootableSlot)
+   return EFI_SUCCESS;
+ }
+ 
++/*
++ * F(x)tec Pro1X: a slot is its attribute bits, the type GUIDs of all _a/_b
++ * pairs and the UFS boot LUN, and ValidateSlotGuids refuses a slot whose
++ * three disagree. Tools that switch slots from Linux (pro1x-boot, sgdisk)
++ * only set the bits; on 2026-11-02 that left no slot bootable. Make the
++ * GUIDs and the LUN follow the bits, with set_active's own swap.
++ */
++STATIC VOID
++Pro1xRepairSlot (Slot *BootableSlot)
++{
++  struct PartitionEntry *BootEntry = GetBootPartitionEntry (BootableSlot);
++  CHAR16 AblName[] = L"abl_x";
++  CONST struct PartitionEntry *AblEntry;
++  CHAR8 BootDeviceType[BOOT_DEV_NAME_SIZE_MAX];
++  UINT32 UfsBootLun = 0;
++  UINT32 Want;
++
++  if (BootEntry == NULL) {
++    return;
++  }
++  AblName[StrLen (AblName) - 1] =
++      BootableSlot->Suffix[StrLen (BootableSlot->Suffix) - 1];
++  AblEntry = GetPartitionEntry (AblName);
++  if (AblEntry == NULL) {
++    return;
++  }
++
++  /* The active slot holds the "inactive" type GUIDs: swap all pairs (this
++   * also moves the boot LUN and writes the GPT) */
++  if (CompareMem (&BootEntry->PartEntry.PartitionTypeGUID,
++                  &AblEntry->PartEntry.PartitionTypeGUID,
++                  sizeof (EFI_GUID)) == 0) {
++    DEBUG ((EFI_D_ERROR, "Pro1X: slot %s has the inactive type GUIDs, "
++                         "swapping them to it\n",
++            BootableSlot->Suffix));
++    SwitchPtnSlots (BootableSlot->Suffix);
++    return;
++  }
++
++  GetRootDeviceType (BootDeviceType, BOOT_DEV_NAME_SIZE_MAX);
++  if (AsciiStrnCmp (BootDeviceType, "UFS", AsciiStrLen ("UFS"))) {
++    return;
++  }
++  Want = StrCmp (BootableSlot->Suffix, (CONST CHAR16 *)L"_b") ? 0x1 : 0x2;
++  UfsGetSetBootLun (&UfsBootLun, TRUE);
++  /* only a LUN that was read (1 or 2) is ever replaced */
++  if ((UfsBootLun == 0x1 || UfsBootLun == 0x2) && UfsBootLun != Want) {
++    DEBUG ((EFI_D_ERROR, "Pro1X: boot LUN %u for slot %s, setting %u\n",
++            UfsBootLun, BootableSlot->Suffix, Want));
++    UfsGetSetBootLun (&Want, FALSE);
++  }
++}
++
+ EFI_STATUS
+ FindBootableSlot (Slot *BootableSlot)
+ {
+@@ -1658,6 +1711,7 @@ FindBootableSlot (Slot *BootableSlot)
+   /* Validate slot suffix and partition guids */
+   if (Status == EFI_SUCCESS &&
+       NAND != CheckRootDeviceType ()) {
++    Pro1xRepairSlot (BootableSlot);
+     GUARD_OUT (ValidateSlotGuids (BootableSlot));
+   }
+   MarkPtnActive (BootableSlot->Suffix);
+diff --git a/QcomModulePkg/Library/BootLib/UpdateDeviceTree.c b/QcomModulePkg/Library/BootLib/UpdateDeviceTree.c
+index eae2b67..0aa20f8 100644
+--- a/QcomModulePkg/Library/BootLib/UpdateDeviceTree.c
++++ b/QcomModulePkg/Library/BootLib/UpdateDeviceTree.c
+@@ -42,9 +42,6 @@
+ #include <Library/PartialGoods.h>
+ #include <Library/FdtRw.h>
+ 
+-/* F(x)tec Pro1X: RAM above this is not handed to the kernel */
+-#define PRO1X_MEM_LIMIT 0x100000000ULL
+-
+ #define NUM_SPLASHMEM_PROP_ELEM 4
+ #define DEFAULT_CELL_SIZE 2
+ #define NUM_RNG_SEED_WORDS 512
+@@ -533,20 +530,6 @@ AddMemMap (VOID *Fdt, UINT32 MemNodeOffset, BOOLEAN BootWith32Bit)
+ 
+   DEBUG ((EFI_D_INFO, "RAM Partitions\r\n"));
+   for (i = 0; i < NumPartitions; i++) {
+-    /*
+-     * F(x)tec Pro1X with failing RAM above 4 GiB: the kernel is only told
+-     * about the memory below (see Pro1xReserveHighMemory in LinuxLoader).
+-     */
+-    if (RamPartitions[i].Base >= PRO1X_MEM_LIMIT) {
+-      DEBUG ((EFI_D_ERROR, "Pro1X: RAM 0x%016lx (0x%lx) left out\n",
+-              RamPartitions[i].Base, RamPartitions[i].AvailableLength));
+-      continue;
+-    }
+-    if (RamPartitions[i].Base + RamPartitions[i].AvailableLength >
+-        PRO1X_MEM_LIMIT) {
+-      RamPartitions[i].AvailableLength =
+-          PRO1X_MEM_LIMIT - RamPartitions[i].Base;
+-    }
+     DEBUG ((EFI_D_INFO, "Add Base: 0x%016lx Available Length: 0x%016lx \n",
+             RamPartitions[i].Base, RamPartitions[i].AvailableLength));
+ 
+-- 
+2.56.0
+

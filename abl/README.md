@@ -1,4 +1,4 @@
-# ABL for the Pro1X, keeping RAM above 4 GiB out of use
+# ABL for the Pro1X: slot repair, working downloads, `fastboot boot`
 
 On 2026-11-02 the Pro1X stopped booting any slot. ABL (the Android
 bootloader, edk2's LinuxLoader in `abl_a`/`abl_b`) went to fastboot every
@@ -22,24 +22,25 @@ The boot menu's Sailfish entry had changed only the attribute bits.
 booted again. In EDL, F(x)tec's firehose read the whole UFS without errors,
 and every image matched its backup.
 
-This ABL came out of the search, and it stays useful:
+This ABL came out of the search, and it stays:
 
-- **`download` works with it.** The stock ABL hung on it. FreeBSD had
-  shown on 2026-11-01 that stores above 4 GiB can stall (it runs with
-  `hw.physmem=2500M`, docs/device-day-2026-10-31.md). This ABL keeps that
-  RAM out of use, and its downloads work. Whether the RAM itself is at
-  fault is open; Linux used all 8 GiB for days.
+- **It repairs a slot that disagrees with itself** (`patches/0002`). In
+  `FindBootableSlot`, when the active slot holds the inactive type GUIDs,
+  it swaps them to that slot with set_active's own `SwitchPtnSlots`, which
+  also sets the boot LUN. When only the LUN disagrees, it sets the LUN.
+  `pro1x-boot slot a|b`, which changes only the bits, is safe with this
+  ABL: the boot menu's Sailfish entry and `pro1x-boot next leste` from
+  Sailfish.
+- **`download` works with it.** The stock ABL hung on it. FreeBSD had shown
+  on 2026-11-01 that stores above 4 GiB can stall (it runs with
+  `hw.physmem=2500M`, docs/device-day-2026-10-31.md).
+  `LinuxLoaderEntry` therefore takes every free page above 4 GiB first
+  (`AllocatePages` at fixed addresses; the pages are never touched), so
+  the loader's own buffers, from the image buffers to the thread stacks,
+  come from below. The kernel still gets all 8 GiB: patch 0001 also cut
+  the device tree's memory to 4 GiB, and 0002 takes that out again.
+  Whether the RAM itself is at fault is open; Linux used all of it for days.
 - **It has `fastboot boot`** (`USER_BUILD_VARIANT=0`).
-
-The patch is in `patches/0001-...`:
-
-- `LinuxLoaderEntry` first takes every free page above 4 GiB
-  (`AllocatePages` at fixed addresses; the pages are never touched). Every
-  later allocation, from the image buffers to the thread stacks, comes
-  from below.
-- `AddMemMap` gives the kernel's device tree only the RAM below 4 GiB, so
-  Linux (Leste, Sailfish) and FreeBSD started from it do not use the rest.
-  Leste then has 2.6 GiB.
 
 It is built from CodeLinaro's `LA.UM.9.15.r1-05900-KAMORTA.QSSI12.0` with
 the stock image's Android 11 flags (bengal, AVB 2, dynamic partitions,

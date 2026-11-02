@@ -211,7 +211,13 @@ exists from systemd 246 on.)
 If booting slot B fails completely, the ABL counts down the retries and falls
 back to slot A by itself -- Sailfish then comes back without any action.
 
-`pro1x-boot slot` sets the Qualcomm A/B attributes like `fastboot set_active`,
+`pro1x-boot slot` sets the Qualcomm A/B attribute bits of `boot_a`/`boot_b`
+only. A slot is also the type GUIDs of all `_a`/`_b` pairs and the UFS boot
+LUN, and the stock ABL refuses a slot whose three disagree; that stopped the
+phone on 2026-11-02 (tools/gptfix/README.md). The Pro1X ABL from `abl/`
+makes the GUIDs and the LUN follow the bits on its next start, and
+`pro1x-boot` refuses to switch while the stock ABL is installed. Like
+`fastboot set_active` it gives the slot priority 3 and 7 tries,
 but keeps "successful" set, because Sailfish never marks its own boot and
 would otherwise lose its slot after seven starts.
 

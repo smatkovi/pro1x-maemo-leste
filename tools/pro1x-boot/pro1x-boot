@@ -286,10 +286,22 @@ alarm_check() {
 # trial) gets the trial's tries and stays not successful: the bootloader
 # then takes one try for every start of it and starts slot a when none
 # are left (as it did on 2026-10-24, before slot b was marked successful).
+#
+# A slot is more than these bits: also the type GUIDs of all _a/_b pairs
+# (XBL loads abl, tz, hyp by them) and the UFS boot LUN. The stock ABL
+# refuses a slot whose three disagree ("Device Error", 2026-11-02:
+# tools/gptfix/README.md). The Pro1X ABL from abl/ (patch 0002) makes the
+# GUIDs and the LUN follow the bits on its next start, so switching by the
+# bits alone is only safe with it: with the stock ABL in abl_a, refuse.
+STOCK_ABL_SHA256=6d54c50a1300c71c79955a4341221610afc99098a647248574aa2aa4927b572d
 set_slot() {
 	target=$1
 	case $target in a) other=b ;; b) other=a ;; *) die "slot must be a or b" ;; esac
 	command -v sgdisk >/dev/null || die "sgdisk missing"
+	abl=/dev/disk/by-partlabel/abl_a
+	if [ -e "$abl" ] && [ "$(sha256sum < "$abl" | cut -d' ' -f1)" = "$STOCK_ABL_SHA256" ]; then
+		die "the stock ABL is installed: switching by the bits alone would leave no bootable slot (use fastboot set_active)"
+	fi
 	p=$(part_of "boot_$target") || die "boot_$target not found"
 	set -- $p
 	tdisk=$1 tnum=$2

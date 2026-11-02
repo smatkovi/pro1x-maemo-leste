@@ -50,6 +50,10 @@ loses them. Both GPT copies get new CRCs. Nothing else changes.
 4. If ABL is still in fastboot (`Device Error`), the LUN is wrong. Run
    `fastboot set_active <the same slot>`, then `fastboot reboot`.
 
+Since `abl/patches/0002` the Pro1X ABL does this repair by itself on every
+start (the GUIDs and the LUN follow the bits). The tool remains for the
+stock ABL and for a phone that cannot run ABL at all.
+
 Never use `fastboot flash partition:4` for this. Before it writes the GPT,
 ABL erases the whole LUN (`WriteGpt` calls `ErasePartition` on the entire
 device).
