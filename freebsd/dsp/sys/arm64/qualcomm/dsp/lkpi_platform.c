@@ -206,6 +206,13 @@ pf_attach(void *drv, void *bsddev, int match)
 		kobject_put(&dev->kobj);
 		return (-error);
 	}
+	/*
+	 * Without "dma-coherent" the CPU's caches do not see the device's
+	 * accesses (the WCN3990 core's node has none): Linux's way of DMA
+	 * for it (patches/0052)
+	 */
+	if (!lkpi_of_has(lkpi_pf_node(bsddev), "dma-coherent"))
+		linux_dma_set_noncoherent(dev);
 	ret = pd->pdrv->probe(pdev);
 	if (ret != 0) {
 		dev_err(dev, "probe failed: %d\n", ret);

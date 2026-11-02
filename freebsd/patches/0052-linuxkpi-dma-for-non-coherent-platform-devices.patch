@@ -1,0 +1,195 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] linuxkpi: DMA for devices the caches do not snoop (arm64)
+
+LinuxKPI's DMA assumes a cache-coherent device, as PCI is on amd64 and
+arm64 servers. The SM6115's WCN3990 Wi-Fi core (ath10k over SNOC, a
+device-tree node without "dma-coherent") is not, and bus_dma treats its
+tags accordingly: every buffer whose start or end is not on a cache line
+bounces, through a pool of two pages for these tags, and aligned buffers
+are mapped 1:1 without a map object, so dma_sync_* found nothing and did
+no cache maintenance at all. On the phone (2026-11-02) ath10k's probe
+failed at the first 8 KiB copy-engine ring: "failed to alloc CE dest ring
+1: -12".
+
+linux_dma_set_noncoherent() marks such a device (the platform glue in
+freebsd/dsp calls it for nodes without "dma-coherent"), and its DMA then
+goes as on Linux: dma_alloc_coherent's memory is uncached; streaming
+buffers are addressed by their physical address (no IOMMU translates
+for these devices, nothing beyond the DMA mask), cleaned and invalidated
+before the device gets them, invalidated again before the CPU reads,
+the partial lines at the ends cleaned first (dcache_inval_poc). Devices
+not marked keep the old way.
+
+---
+diff --git a/sys/compat/linuxkpi/common/include/linux/dma-mapping.h b/sys/compat/linuxkpi/common/include/linux/dma-mapping.h
+index db0cd1ff9..b2173a8bf 100644
+--- a/sys/compat/linuxkpi/common/include/linux/dma-mapping.h
++++ b/sys/compat/linuxkpi/common/include/linux/dma-mapping.h
+@@ -94,6 +94,9 @@ int linux_dma_tag_init(struct device *, u64);
+ int linux_dma_tag_init_coherent(struct device *, u64);
+ int linux_dma_priv_init(struct device *);
+ void linux_dma_priv_uninit(struct device *);
++#ifdef __aarch64__
++void linux_dma_set_noncoherent(struct device *);
++#endif
+ void *linux_dma_alloc_coherent(struct device *dev, size_t size,
+     dma_addr_t *dma_handle, gfp_t flag);
+ void *linuxkpi_dmam_alloc_coherent(struct device *dev, size_t size,
+diff --git a/sys/compat/linuxkpi/common/src/linux_pci.c b/sys/compat/linuxkpi/common/src/linux_pci.c
+index 075f8a627..ca805da23 100644
+--- a/sys/compat/linuxkpi/common/src/linux_pci.c
++++ b/sys/compat/linuxkpi/common/src/linux_pci.c
+@@ -50,6 +50,10 @@
+ 
+ #include <machine/bus.h>
+ #include <machine/resource.h>
++#ifdef __aarch64__
++#include <machine/cpufunc.h>
++#include <machine/vmparam.h>
++#endif
+ 
+ #include <dev/pci/pcivar.h>
+ #include <dev/pci/pci_private.h>
+@@ -145,6 +149,7 @@ struct linux_dma_priv {
+ 	bus_dma_tag_t	dmat_coherent;
+ 	struct mtx	lock;
+ 	struct pctrie	ptree;
++	bool		noncoherent;	/* linux_dma_set_noncoherent() */
+ };
+ #define	DMA_PRIV_LOCK(priv) mtx_lock(&(priv)->lock)
+ #define	DMA_PRIV_UNLOCK(priv) mtx_unlock(&(priv)->lock)
+@@ -166,6 +171,66 @@ lkpi_pci_bar_id_valid(int bar)
+ 	return (true);
+ }
+ 
++#ifdef __aarch64__
++/*
++ * A device the CPU's caches do not snoop (on arm64 a device-tree device
++ * without "dma-coherent": the SM6115's WCN3990 Wi-Fi core), set by the
++ * driver that attaches it after linux_dma_priv_init(). Its DMA goes as on
++ * Linux, not through bus_dma: bus_dma bounces every buffer whose start or
++ * end is not on a cache line through a pool of two pages for these tags
++ * (dma_alloc_coherent's 8 KiB rings failed with ENOMEM), and maps the
++ * aligned ones 1:1 without an object to sync, so they got no cache
++ * maintenance at all. Here: coherent memory is uncached, streaming
++ * buffers are addressed by their physical address (no IOMMU translates
++ * for these devices; none beyond the DMA mask, nothing goes through
++ * bus_dma or the tree of mappings), written back and invalidated before
++ * the device gets them and invalidated again before the CPU reads what it
++ * wrote, the partial lines at the ends written back first (Linux's
++ * dcache_inval_poc).
++ */
++void
++linux_dma_set_noncoherent(struct device *dev)
++{
++	struct linux_dma_priv *priv = dev->dma_priv;
++
++	if (priv != NULL)
++		priv->noncoherent = true;
++}
++
++/* Before the device reads or writes: dirty lines out, none left to evict */
++static void
++lkpi_dma_nc_for_device(vm_paddr_t phys, size_t len)
++{
++	if (len > 0)
++		cpu_dcache_wbinv_range((void *)PHYS_TO_DMAP(phys), len);
++}
++
++/* Before the CPU reads what the device wrote */
++static void
++lkpi_dma_nc_for_cpu(vm_paddr_t phys, size_t len)
++{
++	vm_offset_t va, end, a, b, line;
++
++	if (len == 0)
++		return;
++	line = dcache_line_size;
++	va = PHYS_TO_DMAP(phys);
++	end = va + len;
++	a = rounddown2(va, line);
++	b = roundup2(end, line);
++	if (a != va) {
++		cpu_dcache_wbinv_range((void *)a, line);
++		a += line;
++	}
++	if (b != end && b > a) {
++		b -= line;
++		cpu_dcache_wbinv_range((void *)b, line);
++	}
++	if (b > a)
++		cpu_dcache_inv_range((void *)a, b - a);
++}
++#endif
++
+ /*
+  * A device's DMA state (its tags): PCI devices get it when they attach,
+  * devices of other buses (platform devices of the device tree, attached by
+@@ -1700,6 +1765,15 @@ lkpi_dma_map_phys(struct device *dev, vm_paddr_t phys, size_t len,
+ 	dma_addr_t dma;
+ 
+ 	priv = dev->dma_priv;
++#ifdef __aarch64__
++	if (priv->noncoherent) {
++		if (phys + len - 1 > priv->dma_mask)
++			return (DMA_MAPPING_ERROR);
++		if ((attrs & DMA_ATTR_SKIP_CPU_SYNC) == 0)
++			lkpi_dma_nc_for_device(phys, len);
++		return (phys);
++	}
++#endif
+ 	dma = linux_dma_map_phys_common(dev, phys, len, priv->dmat);
+ 	if (dma_mapping_error(dev, dma))
+ 		return (dma);
+@@ -1727,6 +1801,15 @@ lkpi_dma_unmap(struct device *dev, dma_addr_t dma_addr, size_t len,
+ 
+ 	priv = dev->dma_priv;
+ 
++#ifdef __aarch64__
++	if (priv->noncoherent) {
++		if ((attrs & DMA_ATTR_SKIP_CPU_SYNC) == 0 &&
++		    (direction == DMA_FROM_DEVICE ||
++		    direction == DMA_BIDIRECTIONAL))
++			lkpi_dma_nc_for_cpu(dma_addr, len);
++		return;
++	}
++#endif
+ 	if (pctrie_is_empty(&priv->ptree))
+ 		return;
+ 
+@@ -1801,6 +1884,15 @@ linux_dma_alloc_coherent(struct device *dev, size_t size,
+ 	align = PAGE_SIZE << get_order(size);
+ 	/* Always zero the allocation. */
+ 	flag |= M_ZERO;
++#ifdef __aarch64__
++	if (priv->noncoherent) {
++		/* uncached, at its physical address (see above) */
++		mem = kmem_alloc_contig(size, flag & GFP_NATIVE_MASK, 0, high,
++		    align, 0, VM_MEMATTR_UNCACHEABLE);
++		*dma_handle = mem != NULL ? vtophys(mem) : 0;
++		return (mem);
++	}
++#endif
+ 	mem = kmem_alloc_contig(size, flag & GFP_NATIVE_MASK, 0, high,
+ 	    align, 0, VM_MEMATTR_DEFAULT);
+ 	if (mem != NULL) {
+@@ -1900,6 +1992,19 @@ linuxkpi_dma_sync(struct device *dev, dma_addr_t dma_addr, size_t size,
+ 
+ 	priv = dev->dma_priv;
+ 
++#ifdef __aarch64__
++	/*
++	 * dma_sync_single_for_device() asks for a PRE operation whichever the
++	 * direction, for_cpu() for POSTREAD (POSTWRITE needs nothing)
++	 */
++	if (priv->noncoherent) {
++		if ((op & (BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE)) != 0)
++			lkpi_dma_nc_for_device(dma_addr, size);
++		else if ((op & BUS_DMASYNC_POSTREAD) != 0)
++			lkpi_dma_nc_for_cpu(dma_addr, size);
++		return;
++	}
++#endif
+ 	if (pctrie_is_empty(&priv->ptree))
+ 		return;
+ 
