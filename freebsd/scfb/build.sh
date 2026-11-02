@@ -6,9 +6,10 @@
 # which the Pro1X's is (rootfs/usr/local/etc/X11/xorg.conf.d/10-pro1x.conf),
 # and Xorg dies (docs/device-day-2026-10-31.md block 12.6); and
 # 0002-rotate-cw-in-blocks.patch: that rotation through scfb_rotcw.h
-# instead of the server's column walk (test/rotcw-test.c checks it against
-# the mapping and times both). Built in a
-# FreeBSD machine against its xorg-server package (vm/vm.sh), into
+# instead of the server's column walk; 0003-scale-2.patch: Option "Scale"
+# "2", X's screen at half the size, each pixel 2 x 2 on the panel
+# (test/rotcw-test.c checks both against their mappings and times them).
+# Built in a FreeBSD machine against its xorg-server package (vm/vm.sh), into
 # $WORK/out/scfb/scfb_drv.so; rootfs.sh puts it over the package's.
 #
 #   WORK=/path/to/freebsd-build VM="ssh ... root@host" bash freebsd/scfb/build.sh

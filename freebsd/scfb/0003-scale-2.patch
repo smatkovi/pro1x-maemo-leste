@@ -1,0 +1,97 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] scfb: Option "Scale" "2", a screen of half the size
+
+The phone has no GPU: X draws, hildon-desktop composites (llvmpipe) and
+the shadow is copied, all on the CPU, for 2.3 million pixels. With
+Option "Scale" "2" (Rotate "CW", 32 bpp only) X's screen is half as wide
+and high as the framebuffer and every one of its pixels fills 2 x 2 of
+the panel's (scfb_rotcw.h's rotcw2_box): a quarter of the work, at the
+N900's pixel density on the Pro1X's 2160 x 1080 panel. The pointer goes
+to the panel's coordinates the same way.
+
+---
+--- a/src/scfb_driver.c	2026-11-02 13:45:58.777563935 +0100
++++ b/src/scfb_driver.c	2026-11-02 13:45:58.790987105 +0100
+@@ -167,12 +167,14 @@
+ /* Supported options */
+ typedef enum {
+ 	OPTION_SHADOW_FB,
+-	OPTION_ROTATE
++	OPTION_ROTATE,
++	OPTION_SCALE
+ } ScfbOpts;
+ 
+ static const OptionInfoRec ScfbOptions[] = {
+ 	{ OPTION_SHADOW_FB, "ShadowFB", OPTV_BOOLEAN, {0}, FALSE},
+ 	{ OPTION_ROTATE, "Rotate", OPTV_STRING, {0}, FALSE},
++	{ OPTION_SCALE, "Scale", OPTV_INTEGER, {0}, FALSE},
+ 	{ -1, NULL, OPTV_NONE, {0}, FALSE}
+ };
+ 
+@@ -218,6 +220,7 @@
+ 	unsigned char*		fbmem;
+ 	size_t			fbmem_len;
+ 	int			rotate;
++	int			scale;	/* 1, or 2: a screen of half the size */
+ 	Bool			shadowFB;
+ 	void *			shadow;
+ 	CloseScreenProcPtr	CloseScreen;
+@@ -546,6 +549,24 @@
+ 		}
+ 	}
+ 
++	/*
++	 * Scale 2: X's screen half as wide and high as the framebuffer, each
++	 * of its pixels 2 x 2 on the panel (scfb_rotcw.h), with Rotate "CW"
++	 * at 32 bits per pixel only
++	 */
++	fPtr->scale = 1;
++	if (xf86GetOptValInteger(fPtr->Options, OPTION_SCALE, &fPtr->scale)) {
++		if (fPtr->scale != 1 && (fPtr->scale != 2 ||
++		    fPtr->rotate != SCFB_ROTATE_CW || pScrn->bitsPerPixel != 32)) {
++			xf86DrvMsg(pScrn->scrnIndex, X_WARNING,
++			    "Option \"Scale\" %d ignored: 2 with Rotate "
++			    "\"CW\" at 32 bpp only\n", fPtr->scale);
++			fPtr->scale = 1;
++		} else if (fPtr->scale == 2)
++			xf86DrvMsg(pScrn->scrnIndex, X_CONFIG,
++			    "Scaling the screen by 2\n");
++	}
++
+ 	/* Fake video mode struct. */
+ 	mode = (DisplayModePtr)malloc(sizeof(DisplayModeRec));
+ 	mode->prev = mode;
+@@ -648,7 +669,8 @@
+ 		y1 = max(pbox->y1, 0);
+ 		x2 = min(pbox->x2, pScreen->width);
+ 		y2 = min(pbox->y2, pScreen->height);
+-		rotcw_box((const uint8_t *)shaBits,
++		(fPtr->scale == 2 ? rotcw2_box : rotcw_box)(
++		    (const uint8_t *)shaBits,
+ 		    shaStride * (ptrdiff_t)sizeof(FbBits), fPtr->fbmem,
+ 		    fPtr->linebytes, pScreen->height, x1, y1, x2, y2);
+ 	}
+@@ -785,6 +807,10 @@
+ 		pScrn->virtualX = pScrn->displayWidth = pScrn->virtualY;
+ 		pScrn->virtualY = tmp;
+ 	}
++	if (fPtr->scale == 2) {
++		pScrn->virtualX = pScrn->displayWidth = pScrn->virtualX / 2;
++		pScrn->virtualY /= 2;
++	}
+ 	if (fPtr->rotate && !fPtr->PointerMoved) {
+ 		fPtr->PointerMoved = pScrn->PointerMoved;
+ 		pScrn->PointerMoved = ScfbPointerMoved;
+@@ -982,9 +1008,9 @@
+     switch (fPtr->rotate)
+     {
+     case SCFB_ROTATE_CW:
+-	/* 90 degrees CW rotation. */
+-	newX = pScrn->pScreen->height - y - 1;
+-	newY = x;
++	/* 90 degrees CW rotation, on the panel's pixels (Scale) */
++	newX = (pScrn->pScreen->height - y - 1) * fPtr->scale;
++	newY = x * fPtr->scale;
+ 	break;
+ 
+     case SCFB_ROTATE_CCW:

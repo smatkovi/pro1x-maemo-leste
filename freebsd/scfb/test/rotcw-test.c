@@ -2,7 +2,8 @@
  * scfb_rotcw.h against the mapping it implements, on random boxes of a
  * 2160 x 1080 screen, then the time of a whole-screen update: rotcw_box
  * and the server's way (framebuffer rows in order, the shadow read down a
- * column, as miext/shadow's shrotpack.h does for a 270 rotation).
+ * column, as miext/shadow's shrotpack.h does for a 270 rotation). Then
+ * rotcw2_box (Scale 2) the same way on a 1080 x 540 screen.
  *
  *   cc -O2 -o rotcw-test rotcw-test.c && ./rotcw-test [runs]
  */
@@ -84,5 +85,44 @@ main(int argc, char **argv)
 	tb = (now() - t) / runs;
 	printf("whole screen: column walk %.2f ms, blocks %.2f ms (%.1fx)\n",
 	    tc * 1e3, tb * 1e3, tc / tb);
+
+	/* Scale 2: a W/2 x H/2 shadow onto the same framebuffer */
+	{
+		int w2 = W / 2, h2 = H / 2, bad2 = 0;
+
+		srand(2);
+		for (n = 0; n < 2000; n++) {
+			int x1 = rand() % w2, y1 = rand() % h2;
+			int x2 = x1 + rand() % (w2 - x1 + 1);
+			int y2 = y1 + rand() % (h2 - y1 + 1);
+			int x, y;
+
+			if (n == 0) { x1 = 0; y1 = 0; x2 = w2; y2 = h2; }
+			memset(fb, 0x55, W * H * 4);
+			memset(ref, 0x55, W * H * 4);
+			rotcw2_box((const uint8_t *)sha, w2 * 4, (uint8_t *)fb,
+			    H * 4, h2, x1, y1, x2, y2);
+			for (x = x1; x < x2; x++)
+				for (y = y1; y < y2; y++) {
+					uint32_t p = sha[y * w2 + x];
+					int c = 2 * (h2 - 1 - y);
+
+					ref[2 * x * H + c] = ref[2 * x * H + c + 1] = p;
+					ref[(2 * x + 1) * H + c] = p;
+					ref[(2 * x + 1) * H + c + 1] = p;
+				}
+			if (memcmp(fb, ref, W * H * 4) != 0 && bad2++ < 5)
+				printf("scale 2: box %d,%d-%d,%d differs\n",
+				    x1, y1, x2, y2);
+		}
+		printf("scale 2: %d of 2000 boxes wrong\n", bad2);
+		bad += bad2;
+		t = now();
+		for (i = 0; i < runs; i++)
+			rotcw2_box((const uint8_t *)sha, w2 * 4, (uint8_t *)fb,
+			    H * 4, h2, 0, 0, w2, h2);
+		printf("scale 2, whole screen: %.2f ms\n",
+		    (now() - t) / runs * 1e3);
+	}
 	return (bad != 0);
 }
