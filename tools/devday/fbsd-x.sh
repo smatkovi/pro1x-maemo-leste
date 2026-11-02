@@ -33,6 +33,13 @@ L=/tmp/pro1x-x.log
 		sleep 1
 	fi
 	service devd status || pgrep -lx devd
+	# devd starts a moused for every input device, the touchscreen's too,
+	# which then moves the pointer again through sysmouse, unrotated (the
+	# root image has moused_nondefault_enable="NO" from 2026-11-02 on)
+	if pgrep -x moused > /dev/null; then
+		echo "--- moused: $(pgrep -lx moused | tr '\n' ' ')stopped"
+		pkill -x moused
+	fi
 } > $L 2>&1
 cat $L > /dev/pro1xshot
 # While X runs, every 20 s into /dev/pro1xshot: this log, the touchscreen
@@ -50,6 +57,8 @@ cat $L > /dev/pro1xshot
 			echo "=== Xorg input"
 			grep -E "InputClass|libinput|Goodix|touch|TransformationMatrix|Using input driver" \
 			    /var/log/Xorg.0.log
+			echo "=== the session's output"
+			tail -n 60 /tmp/pro1x-startx.log
 			echo "=== Xorg tail"
 			tail -n 40 /var/log/Xorg.0.log
 		} > /dev/pro1xshot 2>&1
@@ -68,7 +77,9 @@ C=
 [ -d /tmp/pro1x-xorg.conf.d ] && C="-configdir /tmp/pro1x-xorg.conf.d"
 # shellcheck disable=SC2086
 HOME=/root startx -- \
-    -modulepath $H/xorg-modules,/usr/local/lib/xorg/modules $C
+    -modulepath $H/xorg-modules,/usr/local/lib/xorg/modules $C \
+    > /tmp/pro1x-startx.log 2>&1
 kill $logger_pid 2> /dev/null
-cat $L /tmp/pro1x-touchcal.txt /var/log/Xorg.0.log > /dev/pro1xshot 2>&1
+cat $L /tmp/pro1x-touchcal.txt /tmp/pro1x-startx.log /var/log/Xorg.0.log \
+    > /dev/pro1xshot 2>&1
 echo "X ended; its log is in /dev/pro1xshot"
