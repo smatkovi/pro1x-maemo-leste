@@ -4,7 +4,10 @@
 # 0001-no-xf86DisableRandR.patch: FreeBSD's package calls a function the
 # release's xorg-server no longer has as soon as the screen is rotated,
 # which the Pro1X's is (rootfs/usr/local/etc/X11/xorg.conf.d/10-pro1x.conf),
-# and Xorg dies (docs/device-day-2026-10-31.md block 12.6). Built in a
+# and Xorg dies (docs/device-day-2026-10-31.md block 12.6); and
+# 0002-rotate-cw-in-blocks.patch: that rotation through scfb_rotcw.h
+# instead of the server's column walk (test/rotcw-test.c checks it against
+# the mapping and times both). Built in a
 # FreeBSD machine against its xorg-server package (vm/vm.sh), into
 # $WORK/out/scfb/scfb_drv.so; rootfs.sh puts it over the package's.
 #
@@ -31,7 +34,11 @@ echo "$SUM  $TAR" | sha256sum -c --quiet -
 log "build in the FreeBSD machine"
 $VM 'rm -rf /root/scfb && mkdir -p /root/scfb'
 $VM 'cat > /root/scfb/src.tar.gz' < "$TAR"
-$VM 'cat > /root/scfb/fix.patch' < "$REPO/freebsd/scfb/0001-no-xf86DisableRandR.patch"
+for p in "$REPO"/freebsd/scfb/0*.patch; do
+	$VM "cat > /root/scfb/${p##*/}" < "$p"
+done
+$VM 'cat > /root/scfb/scfb_rotcw.h' < "$REPO/freebsd/scfb/scfb_rotcw.h"
+$VM 'mkdir -p /root/scfb/test && cat > /root/scfb/test/rotcw-test.c' < "$REPO/freebsd/scfb/test/rotcw-test.c"
 $VM sh -s <<'REMOTE'
 set -e
 cd /root/scfb
@@ -39,7 +46,11 @@ cd /root/scfb
 pkg install -qy xorg-server xorgproto pkgconf > /dev/null
 tar xzf src.tar.gz
 cd xf86-video-scfb-*
-patch -s -p1 < ../fix.patch
+for p in ../0*.patch; do patch -s -p1 < "$p"; done
+cp ../scfb_rotcw.h src/
+# the rotation against its mapping, on this machine's NEON
+cc -O2 -o ../test/rotcw-test ../test/rotcw-test.c
+../test/rotcw-test 3
 ./configure -q --prefix=/usr/local > ../configure.log 2>&1 || { tail -20 ../configure.log; exit 1; }
 gmake -j4 > ../make.log 2>&1 || { tail -30 ../make.log; exit 1; }
 if nm -D src/.libs/scfb_drv.so | grep -q xf86DisableRandR; then

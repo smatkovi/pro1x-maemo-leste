@@ -1,0 +1,71 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] scfb: Rotate "CW" at 32 bpp in blocks (scfb_rotcw.h)
+
+With Option "Rotate" every update of the shadow goes through the
+server's shadowUpdateRotatePacked, which walks the framebuffer's rows
+and reads the shadow down a column: for the Pro1X's 2160 x 1080 screen a
+new cache line and a new page for each of 2.3 million pixels, in the
+server's only thread, for every frame the compositor draws. For "CW" at
+32 bits per pixel the damaged boxes now go through scfb_rotcw.h (bands
+of 64 rows, 4 x 16 blocks transposed in NEON registers, 64 contiguous
+bytes to each framebuffer row); the other rotations and depths as
+before.
+
+---
+--- a/src/scfb_driver.c	2026-11-02 13:38:01.496448508 +0100
++++ b/src/scfb_driver.c	2026-11-02 13:38:01.506229064 +0100
+@@ -80,6 +80,7 @@
+ #endif
+ 
+ #include "compat-api.h"
++#include "scfb_rotcw.h"
+ 
+ #undef	DEBUG
+ #define	DEBUG	1
+@@ -612,10 +613,45 @@
+ 	return TRUE;
+ }
+ 
++/*
++ * Rotate "CW" at 32 bits per pixel through scfb_rotcw.h (in blocks; the
++ * server's shadowUpdateRotatePacked reads the shadow down a column), the
++ * other rotations and depths through the server's.
++ */
+ static void
+ scfbUpdateRotatePacked(ScreenPtr pScreen, shadowBufPtr pBuf)
+ {
+-    shadowUpdateRotatePacked(pScreen, pBuf);
++	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
++	ScfbPtr fPtr = SCFBPTR(pScrn);
++	RegionPtr damage;
++	PixmapPtr pShadow;
++	BoxPtr pbox;
++	FbBits *shaBits;
++	FbStride shaStride;
++	int shaBpp, shaXoff, shaYoff, nbox, x1, y1, x2, y2;
++
++	if (fPtr->rotate != SCFB_ROTATE_CW || pScrn->bitsPerPixel != 32) {
++		shadowUpdateRotatePacked(pScreen, pBuf);
++		return;
++	}
++	damage = DamageRegion(pBuf->pDamage);
++	pShadow = pBuf->pPixmap;
++	nbox = RegionNumRects(damage);
++	pbox = RegionRects(damage);
++	fbGetDrawable(&pShadow->drawable, shaBits, shaStride, shaBpp, shaXoff,
++	    shaYoff);
++	(void)shaBpp;
++	(void)shaXoff;
++	(void)shaYoff;
++	for (; nbox-- > 0; pbox++) {
++		x1 = max(pbox->x1, 0);
++		y1 = max(pbox->y1, 0);
++		x2 = min(pbox->x2, pScreen->width);
++		y2 = min(pbox->y2, pScreen->height);
++		rotcw_box((const uint8_t *)shaBits,
++		    shaStride * (ptrdiff_t)sizeof(FbBits), fPtr->fbmem,
++		    fPtr->linebytes, pScreen->height, x1, y1, x2, y2);
++	}
+ }
+ 
+ static void
