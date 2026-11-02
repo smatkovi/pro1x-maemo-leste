@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# Switch the F(x)tec Pro1X's boot slot from any running system, without
+# sgdisk (Sailfish OS has none): the same attribute bits as pro1x-boot's
+# set_slot, in both GPT copies of the disk that holds boot_a/boot_b.
+#
+#   pro1x-slot            show the slots
+#   pro1x-slot a|b        make a or b the active slot (then reboot)
+#
+# Only the bits of boot_a/boot_b change: the target gets priority 3, active,
+# 7 tries, successful (Sailfish never marks its own boot successful); the
+# other one priority 2, not active. The type GUIDs and the UFS boot LUN
+# that also make a slot are left to the Pro1X ABL from abl/ (patch 0002),
+# which makes them follow the bits on its next start. With the stock ABL
+# in abl_a that would leave no bootable slot (2026-11-02,
+# tools/gptfix/README.md), so the tool refuses then.
+import hashlib
+import os
+import struct
+import sys
+import zlib
+
+STOCK_ABL_SHA256 = '6d54c50a1300c71c79955a4341221610afc99098a647248574aa2aa4927b572d'
+BYLABEL = '/dev/disk/by-partlabel/'
+
+
+def die(msg):
+    sys.exit('pro1x-slot: ' + msg)
+
+
+def disk_of(label):
+    """(/dev/sdX, partition number) of a partition label"""
+    part = os.path.basename(os.path.realpath(BYLABEL + label))
+    try:
+        num = int(open('/sys/class/block/%s/partition' % part).read())
+    except OSError:
+        die('%s: no partition %s' % (label, part))
+    disk = os.path.basename(os.path.dirname(os.path.realpath('/sys/class/block/' + part)))
+    return '/dev/' + disk, num
+
+
+def read_gpt(fd, ss):
+    hdr = bytearray(os.pread(fd, ss, ss))
+    if hdr[:8] != b'EFI PART':
+        die('no GPT header')
+    hsz, = struct.unpack_from('<I', hdr, 12)
+    cur, alt = struct.unpack_from('<QQ', hdr, 24)
+    ent_lba, nent, esz = struct.unpack_from('<QII', hdr, 72)
+    asz = nent * esz
+    ents = bytearray(os.pread(fd, asz, ent_lba * ss))
+    if zlib.crc32(ents) != struct.unpack_from('<I', hdr, 88)[0]:
+        die('primary GPT entries: bad CRC')
+    bhdr = bytearray(os.pread(fd, ss, alt * ss))
+    if bhdr[:8] != b'EFI PART' or struct.unpack_from('<QQ', bhdr, 24) != (alt, cur):
+        die('no backup GPT header at LBA %d' % alt)
+    bent_lba, = struct.unpack_from('<Q', bhdr, 72)
+    bents = os.pread(fd, asz, bent_lba * ss)
+    if bents != ents:
+        die('primary and backup GPT entries differ, not touching them')
+    return hdr[:hsz], ents, bhdr[:hsz], ent_lba, bent_lba, alt, nent, esz
+
+
+def attrs(ents, num, esz):
+    return struct.unpack_from('<Q', ents, (num - 1) * esz + 48)[0]
+
+
+def describe(a):
+    b = a >> 48
+    return 'priority %d, %s, %d tries, %s%s' % (
+        b & 3, 'active' if b >> 2 & 1 else 'inactive', b >> 3 & 7,
+        'successful' if b >> 6 & 1 else 'not successful',
+        ', unbootable' if b >> 7 & 1 else '')
+
+
+def main():
+    args = sys.argv[1:]
+    disk, na = disk_of('boot_a')
+    disk_b, nb = disk_of('boot_b')
+    if disk != disk_b:
+        die('boot_a and boot_b on different disks')
+    ss = int(open('/sys/class/block/%s/queue/logical_block_size' % os.path.basename(disk)).read())
+    if not args:
+        fd = os.open(disk, os.O_RDONLY)
+        _, ents, _, _, _, _, _, esz = read_gpt(fd, ss)
+        for s, n in (('a', na), ('b', nb)):
+            print('boot_%s: %s' % (s, describe(attrs(ents, n, esz))))
+        return
+    if len(args) != 1 or args[0] not in ('a', 'b'):
+        die('usage: pro1x-slot [a|b]')
+    target = args[0]
+    tn, on = (na, nb) if target == 'a' else (nb, na)
+    abl = BYLABEL + 'abl_a'
+    if os.path.exists(abl):
+        with open(abl, 'rb') as f:
+            if hashlib.sha256(f.read()).hexdigest() == STOCK_ABL_SHA256:
+                die('the stock ABL is installed: switching by the bits alone would '
+                    'leave no bootable slot (use fastboot set_active)')
+
+    fd = os.open(disk, os.O_RDWR | os.O_SYNC)
+    hdr, ents, bhdr, ent_lba, bent_lba, alt, nent, esz = read_gpt(fd, ss)
+    a = attrs(ents, tn, esz) & ~(0xff << 48)
+    a |= (3 << 48) | (1 << 50) | (7 << 51) | (1 << 54)
+    struct.pack_into('<Q', ents, (tn - 1) * esz + 48, a)
+    o = attrs(ents, on, esz) & ~((1 << 48) | (1 << 50))
+    o |= 1 << 49
+    struct.pack_into('<Q', ents, (on - 1) * esz + 48, o)
+    crc = zlib.crc32(ents)
+    for h in (hdr, bhdr):
+        struct.pack_into('<I', h, 88, crc)
+        struct.pack_into('<I', h, 16, 0)
+        struct.pack_into('<I', h, 16, zlib.crc32(h))
+    # backup first, so that a cut leaves a valid primary or both valid
+    os.pwrite(fd, bytes(ents), bent_lba * ss)
+    os.pwrite(fd, bytes(bhdr), alt * ss)
+    os.pwrite(fd, bytes(ents), ent_lba * ss)
+    os.pwrite(fd, bytes(hdr), ss)
+    os.fsync(fd)
+    os.close(fd)
+
+    fd = os.open(disk, os.O_RDONLY)
+    _, ents2, _, _, _, _, _, _ = read_gpt(fd, ss)
+    if ents2 != ents:
+        die('the GPT did not read back as written')
+    print('slot %s active (boot_%s: %s)' % (target, target, describe(attrs(ents2, tn, esz))))
+
+
+main()
