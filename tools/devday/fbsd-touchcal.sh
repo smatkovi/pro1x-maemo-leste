@@ -68,7 +68,7 @@ EndSection
 Section "InputClass"
 	Identifier	"Pro1X touchscreen"
 	MatchProduct	"Goodix"
-	Option		"TransformationMatrix" "$m"
+	Option		"CalibrationMatrix" "$m"
 EndSection
 EOF
 	echo "written: $OUT/10-pro1x.conf; now sh /dev/pro1x-host/freebsd/x.sh"

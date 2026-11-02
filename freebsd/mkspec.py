@@ -62,18 +62,26 @@ def main():
 
     def entry(rel, full):
         st = os.lstat(full)
+        if stat.S_ISDIR(st.st_mode):
+            t = b"dir"
+        elif stat.S_ISLNK(st.st_mode):
+            t = b"link"
+        else:
+            t = b"file"
         kw = attrs.get(rel)
         if kw is None:
-            if stat.S_ISDIR(st.st_mode):
-                t = b"dir"
-            elif stat.S_ISLNK(st.st_mode):
-                t = b"link"
-            else:
-                t = b"file"
-            kw = [b"type=" + t, b"uid=0", b"gid=0",
-                  b"mode=%o" % stat.S_IMODE(st.st_mode)]
-            if t == b"link":
-                kw.append(b"link=" + encode(os.readlink(full)))
+            kw = [b"uid=0", b"gid=0", b"mode=%o" % stat.S_IMODE(st.st_mode)]
+        else:
+            # What the file is and where a link points come from the tree,
+            # only owners, modes and flags from the specification: a
+            # package's mtree named its own link target, and makefs made
+            # libgtk-x11-2.0.so.0 point to FreeBSD's GTK again although the
+            # Hildon stage had replaced the link with Maemo's (2026-11-02)
+            kw = [k for k in kw
+                  if not k.startswith(b"type=") and not k.startswith(b"link=")]
+        kw = [b"type=" + t] + kw
+        if t == b"link":
+            kw.append(b"link=" + encode(os.readlink(full)))
         lines.append(encode(rel) + b" " + b" ".join(kw))
 
     entry(b".", root)
