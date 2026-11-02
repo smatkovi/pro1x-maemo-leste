@@ -1,5 +1,4 @@
 #!/bin/bash
-# The F(x)tec Pro1X's ABL, run by abl/build.sh in the pro1x-abl-build container.
 # ABL for the F(x)tec Pro1X (bengal, Android 11 flags), in pro1x-abl-build.
 set -e
 cd /src/edk2

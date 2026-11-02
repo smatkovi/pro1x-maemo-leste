@@ -7,7 +7,7 @@
 #
 # Result: $WORK/abl/out/abl.elf. XBL wants the Qualcomm hash segment on
 # it: with QTESTSIGN=/path/to/qtestsign.py (github msm8916-mainline/
-# qtestsign) the script also writes $WORK/abl/out/abl-test-signed.mbn. The
+# qtestsign) and STOCK_ABL=<stock abl_a> it also writes $WORK/abl/out/abl-pro1x.mbn. The
 # Pro1X has secure boot off ("getvar secure: no"), so a test chain does.
 # Flashing: abl/README.md.
 set -euo pipefail
@@ -34,5 +34,10 @@ docker run --rm -u "$(id -u):$(id -g)" -v "$D:/src" pro1x-abl-build \
 if [ -n "${QTESTSIGN:-}" ]; then
 	python3 "$QTESTSIGN" -v6 abl "$D/out/abl.elf" \
 	    -o "$D/out/abl-test-signed.mbn"
-	ls -la "$D/out/abl-test-signed.mbn"
+	# qtestsign leaves the v6 metadata zero; XBL wants ABL's SW_ID there,
+	# taken from the stock ABL (STOCK_ABL, read from abl_a in EDL)
+	python3 "$HERE/setmeta.py" "$D/out/abl-test-signed.mbn" \
+	    "${STOCK_ABL:?set STOCK_ABL=<the stock abl_a image>}" \
+	    "$D/out/abl-pro1x.mbn"
+	ls -la "$D/out/abl-pro1x.mbn"
 fi
