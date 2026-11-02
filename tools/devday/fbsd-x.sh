@@ -61,7 +61,7 @@ cat $L > /dev/pro1xshot
 			uptime
 			ps -axo pid,pcpu,rss,command | sort -rn -k2 | head -n 12
 			echo "=== busiest threads (top -H, every 6 s)"
-			tail -n 240 /tmp/pro1x-perf.log
+			tail -n 900 /tmp/pro1x-perf.log
 			echo "=== Xorg input"
 			grep -E "InputClass|libinput|Goodix|touch|TransformationMatrix|Using input driver" \
 			    /var/log/Xorg.0.log
@@ -90,13 +90,16 @@ logger_pid=$!
 			top -b -H -d 2 -s 2 -o cpu 12 |
 			    awk '/^last pid/ { n++ } n == 2 && /^ *[0-9]/'
 		} >> /tmp/pro1x-perf.log 2>&1
-		if [ "$(wc -l < /tmp/pro1x-perf.log)" -gt 2000 ]; then
-			tail -n 1000 /tmp/pro1x-perf.log > /tmp/pro1x-perf.log.new
+		if [ "$(wc -l < /tmp/pro1x-perf.log)" -gt 3000 ]; then
+			tail -n 2000 /tmp/pro1x-perf.log > /tmp/pro1x-perf.log.new
 			mv /tmp/pro1x-perf.log.new /tmp/pro1x-perf.log
 		fi
 	done
 ) &
 perf_pid=$!
+# The sampler's file stays for the boot: a second session (x.sh ... half
+# after x.sh) is in the same shot, behind this mark
+echo "=== x.sh ${1:-hildon} ${2:-full} started $(date +%T)" >> /tmp/pro1x-perf.log
 # Where X has the pointer (userdata's ptrlog, tools/devday/fbsd-ptrlog) and
 # X's screen once, a minute in: which way the touches land in X's frame
 (
@@ -107,6 +110,18 @@ perf_pid=$!
 		i=$((i + 1))
 	done
 	[ -x $H/ptrlog ] && $H/ptrlog > /tmp/pro1x-ptr.log 2>&1 &
+	# X's one thread on the fast cluster (the CPUs with the higher top
+	# frequency, 4-7 on the SM6115): FreeBSD's scheduler does not know
+	# big from little and puts it on an A53 as often as on an A73
+	# (pro1x.xcpus=off leaves it to the scheduler)
+	f0=$(sysctl -n dev.cpu.0.freq_levels 2> /dev/null | cut -d/ -f1)
+	f4=$(sysctl -n dev.cpu.4.freq_levels 2> /dev/null | cut -d/ -f1)
+	x=$(pgrep -x Xorg | head -n 1)
+	if [ "$(kenv -q pro1x.xcpus)" != off ] && [ -n "$x" ] &&
+	    [ "${f4:-0}" -gt "${f0:-0}" ]; then
+		cpuset -l 4-7 -p "$x" &&
+		    echo "Xorg ($x) on CPUs 4-7 ($f4 MHz, CPU 0: $f0 MHz)" >> $L
+	fi
 	sleep 60
 	xwd -root -silent | gzip -6 > /tmp/pro1x-screen.xwd.gz
 ) &
@@ -154,7 +169,7 @@ kill $logger_pid $perf_pid 2> /dev/null
 	echo "=== pointer (ptrlog)"
 	tail -n 300 /tmp/pro1x-ptr.log
 	echo "=== busiest threads (top -H, every 6 s)"
-	tail -n 400 /tmp/pro1x-perf.log
+	tail -n 900 /tmp/pro1x-perf.log
 	echo "=== the session's output"
 	cat /tmp/pro1x-startx.log
 	echo "=== Xorg"
