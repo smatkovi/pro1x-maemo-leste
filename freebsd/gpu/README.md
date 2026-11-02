@@ -7,12 +7,12 @@ DRM core on LinuxKPI:
 | Step | What | State |
 | --- | --- | --- |
 | GPU 1 | drm-kmod 6.12-lts (the DRM core, dma-buf) as arm64 modules for the PRO1X kernel; Linux v6.12's msm sources and their register headers | built (2026-11-02): modules link against the kernel and their dependencies with no unresolved symbol; not loaded on the phone yet |
-| GPU 2 | `msm` (the GPU part: adreno, a6xx for the A610) on drm-kmod, the GPU clock controller, the SMMU | not started |
+| GPU 2 | `msm` (the GPU part: adreno, a6xx for the A610) on drm-kmod, the GPU clock controller, the SMMU (`msm-port.md`) | built (2026-11-02): `msm.ko` (`build.sh msm`) links against the kernel, LinuxKPI, qcom_dsp and drm-kmod with no unresolved symbol; msm's VRAM carveout with the GPU's SMMU in bypass, the GPU's clocks and power domains programmed natively; not loaded on the phone yet |
 | GPU 3 | Mesa 26.2.2 with freedreno (Gallium, OpenGL/GLES) and turnip (Vulkan) beside llvmpipe and softpipe, drop-in for the image's mesa-libs and mesa-dri (`mesa.sh`, below) | built (2026-11-02); llvmpipe and softpipe of this build render in the FreeBSD VM; freedreno untested (no GPU driver yet) |
 
 ## What `build.sh` makes
 
-`WORK=/path/to/freebsd-build bash freebsd/gpu/build.sh [modules|headers|all]`
+`WORK=/path/to/freebsd-build bash freebsd/gpu/build.sh [modules|headers|msm|all]`
 (after `freebsd/build.sh` has built the kernel toolchain and the PRO1X
 kernel once):
 
@@ -25,6 +25,7 @@ kernel once):
 | `$WORK/out/gpu/modules/linker.hints` | for these four |
 | `$WORK/gpu/linux-6.12/` | from linux-6.12.tar.xz (SHA-256 checked): `drivers/gpu/drm/msm` with `registers/`, `include/uapi/drm/msm_drm.h`, `include/linux/adreno-smmu-priv.h`, the SM6115 GPU clock controller (`drivers/clk/qcom/gpucc-sm6115.c` with gdsc, alpha PLL, RCG2, branch and the headers they include, `include/dt-bindings/clock/qcom,sm6115-gpucc.h`), `drivers/soc/qcom/mdt_loader.c` and its header |
 | `$WORK/gpu/linux-6.12/generated/*.xml.h` | msm's register headers, made by `registers/gen_header.py` as msm's Makefile makes them (`gen_header.py --validate --rnn drivers/gpu/drm/msm/registers --xml drivers/gpu/drm/msm/registers/adreno/a6xx.xml c-defines > generated/a6xx.xml.h`, from the tree's top, for each of its ADRENO_HEADERS and DISPLAY_HEADERS) |
+| `$WORK/out/gpu/modules/msm.ko` | target `msm` (in `all` after the headers): Linux's msm, GPU part, with `msm-patches/` and the glue in `msm/`; `msm-port.md` |
 
 `linuxkpi.ko` itself is `freebsd/build.sh`'s (`out/modules`); the kernel
 has the rest `drm.ko` depends on (pci, iicbus, iic, iicbb, mem, pseudofs).
@@ -41,6 +42,8 @@ at 1d054ae55685 (the version for FreeBSD 15.1), with:
 | Patch | |
 | --- | --- |
 | `drm-kmod-patches/0001-drm-acpi_iicbus-only-with-device-acpi.patch` | `drm.ko` registered `acpi_iicbus_driver`, which only kernels with `device acpi` have; the PRO1X kernel is FDT-only and would refuse to load it |
+| `drm-kmod-patches/0002-drm-devices-not-on-pci.patch` | `hw.dri.N.busid` (`platform:<name>`) and `dev.drm.N.PCI_ID` (0:0) for a DRM device that is not on PCI: msm's; drm-kmod read a `struct pci_dev` that is not there |
+| `drm-kmod-patches/0003-drm-gem-get-put-pages-on-linuxkpi.patch` | `drm_gem_get_pages()`/`drm_gem_put_pages()` on LinuxKPI's shmem, which drm-kmod left out (`#ifdef __linux__`) and msm links against |
 
 ## Not done yet
 
@@ -50,11 +53,9 @@ at 1d054ae55685 (the version for FreeBSD 15.1), with:
   be in `kern.module_path`, or all of them in `/boot/modules` with
   `kldxref` run there again.
 - Only `dmabuf` and `drm` are built: no `ttm` (msm does not use it).
-- For GPU 2: drm-kmod leaves out `drm_gem_get_pages()` and
-  `drm_gem_put_pages()` (shmem-backed GEM pages, `#ifdef __linux__` in
-  `drm_gem.c`), which `msm_gem.c` uses; the msm port has to bring its own.
-  The Linux IOMMU and io-pgtable code msm's `msm_iommu.c` builds on has no
-  LinuxKPI counterpart either.
+- GPU 2 (`msm-port.md`): `drm_gem_get_pages()`/`drm_gem_put_pages()`
+  come from `drm-kmod-patches/0003`; msm runs without the Linux IOMMU and
+  io-pgtable code (its VRAM carveout, the GPU's SMMU in bypass).
 
 ## GPU 3: Mesa with freedreno (`mesa.sh`)
 
@@ -159,8 +160,9 @@ The answer for GPU 2, from Mesa 26.2.2's sources:
   `hw.dri.N.busid`, which it expects as `pci:dddd:bb:dd.f`; drm-kmod
   (`drm_sysctl_freebsd.c`, `drm_add_busid_modesetting()`) makes that
   string with `to_pci_dev(dev->dev)` for every device, which for msm's
-  platform device reads a `struct pci_dev` that is not there. GPU 2 has
-  to give msm a busid of its own (e.g. `platform:...`); then
+  platform device reads a `struct pci_dev` that is not there. GPU 2
+  gives msm a busid of its own (`platform:msm`,
+  `drm-kmod-patches/0002`); then
   `drmGetDevice2()` fails cleanly and Mesa uses the driver name, but
   `drmGetDevices2()` still leaves msm out, so EGL's surfaceless and
   device platforms fall back to llvmpipe (Wayland clients, which get the

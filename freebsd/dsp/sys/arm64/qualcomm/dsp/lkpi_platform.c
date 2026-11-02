@@ -235,6 +235,8 @@ pf_detach(void *drv, void *bsddev)
 	linux_set_current(curthread);
 	if (pd->pdrv->remove != NULL)
 		pd->pdrv->remove(pdev);
+	else if (pd->pdrv->remove_new != NULL)
+		pd->pdrv->remove_new(pdev);
 	lkpi_devres_release_free_list(dev);
 	lkpi_pf_device_gone(bsddev);
 	linux_dma_priv_uninit(dev);
@@ -361,6 +363,20 @@ platform_get_irq(struct platform_device *pdev, unsigned int num)
 	if (irq < 0)
 		dev_err(&pdev->dev, "no interrupt %u: %d\n", num, irq);
 	return (irq);
+}
+
+int
+lkpi_platform_get_irq_byname(struct platform_device *pdev, const char *name)
+{
+	const char *s;
+	int i;
+
+	for (i = 0; of_property_read_string_index(pdev->dev.of_node,
+	    "interrupt-names", i, &s) == 0; i++)
+		if (strcmp(s, name) == 0)
+			return (platform_get_irq(pdev, i));
+	dev_err(&pdev->dev, "no interrupt named %s\n", name);
+	return (-ENXIO);
 }
 
 /* --- mappings ------------------------------------------------------------------------- */

@@ -33,11 +33,18 @@ struct platform_device {
 	bool				id_auto;
 	/* FreeBSD: the matching entry of the driver's of_match_table */
 	const struct of_device_id	*of_match;
+	/*
+	 * Linux's dev->platform_data, which LinuxKPI's struct device lacks
+	 * (msm's adreno config): dev_platform_data()
+	 */
+	void				*platform_data;
 };
 
 struct platform_driver {
 	int	(*probe)(struct platform_device *);
 	void	(*remove)(struct platform_device *);
+	/* Linux 6.12's drivers name it so (the same as remove) */
+	void	(*remove_new)(struct platform_device *);
 	void	(*shutdown)(struct platform_device *);
 	struct {
 		const char			*name;
@@ -66,8 +73,9 @@ platform_set_drvdata(struct platform_device *pdev, void *data)
 static inline void *
 dev_get_platdata(struct device *dev)
 {
-	return (NULL);
+	return (to_platform_device(dev)->platform_data);
 }
+#define	dev_platform_data(dev)	(to_platform_device(dev)->platform_data)
 
 int	lkpi_platform_driver_register(struct platform_driver *);
 void	lkpi_platform_driver_unregister(struct platform_driver *);
@@ -87,14 +95,22 @@ struct resource	*platform_get_resource_byname(struct platform_device *,
 struct resource	*platform_get_resource(struct platform_device *,
 		    unsigned int type, unsigned int num);
 int	platform_get_irq(struct platform_device *, unsigned int num);
+/* by the device tree's interrupt-names */
+int	lkpi_platform_get_irq_byname(struct platform_device *, const char *);
+#define	platform_get_irq_byname(pdev, name)				\
+	lkpi_platform_get_irq_byname((pdev), (name))
 
 /* Children made by drivers (ath10k's "wifi-firmware" node): not here */
 struct platform_device_info {
 	struct device		*parent;
+	struct fwnode_handle	*fwnode;
 	const char		*name;
 	int			id;
+	const struct resource	*res;
+	unsigned int		num_res;
+	const void		*data;
+	size_t			size_data;
 	u64			dma_mask;
-	struct fwnode_handle	*fwnode;
 };
 
 static inline struct platform_device *
@@ -125,5 +141,16 @@ void	*lkpi_platform_devm_ioremap(struct device *, resource_size_t,
 #define	devm_memremap(dev, offset, size, flags)				\
 	({ void *__p = lkpi_platform_devm_ioremap((dev), (offset),	\
 	    (size), (flags)); __p != NULL ? __p : ERR_PTR(-ENOMEM); })
+static inline void *
+devm_ioremap_resource(struct device *dev, const struct resource *res)
+{
+	void *p;
+
+	if (res == NULL)
+		return (ERR_PTR(-EINVAL));
+	p = lkpi_platform_devm_ioremap(dev, res->start,
+	    res->end - res->start + 1, 0);
+	return (p != NULL ? p : ERR_PTR(-ENOMEM));
+}
 
 #endif	/* _LINUXKPI_LINUX_PLATFORM_DEVICE_H */

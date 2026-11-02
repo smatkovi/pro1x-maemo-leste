@@ -1,0 +1,56 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] drm/msm/a6xx: run without an IOMMU (the VRAM carveout)
+
+msm falls back to its VRAM carveout when the GPU has no IOMMU
+(msm_iommu_new() returns NULL for a device that is not iommu-mapped,
+msm_gpu_init() prints "no IOMMU, fallback to VRAM carveout!" and leaves
+gpu->aspace NULL): msm_gem_new() then allocates every object from the
+carveout with a VMA of no address space whose iova is the physical
+address, and pinning such an object maps nothing (msm_gem_vma_map()
+returns early without an address space). Of the a6xx code, two places
+dereference the address space unconditionally:
+
+- a6xx_create_private_address_space() calls
+  msm_iommu_pagetable_create(gpu->aspace->mmu) at every DRM open
+  (context_init -> msm_gpu_create_private_address_space). It now returns
+  -ENODEV without gpu->aspace; an error rather than NULL, since its caller
+  only falls back to the global address space for IS_ERR_OR_NULL and
+  writes aspace->pid for anything that is not an error.
+- a6xx_set_pagetable() reads ctx->aspace->mmu at every submit; without an
+  address space there is no page table to switch to.
+
+msm.ko on FreeBSD (freebsd/gpu/msm-port.md, decision A) runs the SM6115's
+Adreno 610 like this, its SMMU in bypass.
+
+---
+--- a/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
+@@ -113,6 +113,13 @@
+ 	if (ctx->seqno == a6xx_gpu->base.base.cur_ctx_seqno)
+ 		return;
+ 
++	/*
++	 * Without an IOMMU (the VRAM carveout, gpu->aspace NULL) there are no
++	 * per-process pagetables to switch to
++	 */
++	if (!ctx->aspace)
++		return;
++
+ 	if (msm_iommu_pagetable_params(ctx->aspace->mmu, &ttbr, &asid))
+ 		return;
+ 
+@@ -2058,6 +2065,14 @@
+ {
+ 	struct msm_mmu *mmu;
+ 
++	/*
++	 * No IOMMU (the VRAM carveout): no private address spaces; an error,
++	 * not NULL, so that msm_gpu_create_private_address_space() falls
++	 * back to gpu->aspace
++	 */
++	if (!gpu->aspace)
++		return ERR_PTR(-ENODEV);
++
+ 	mmu = msm_iommu_pagetable_create(gpu->aspace->mmu);
+ 
+ 	if (IS_ERR(mmu))

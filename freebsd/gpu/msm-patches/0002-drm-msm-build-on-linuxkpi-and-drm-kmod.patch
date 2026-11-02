@@ -1,0 +1,192 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] drm/msm: build on FreeBSD's LinuxKPI and drm-kmod
+
+What msm.ko needs changed in Linux v6.12's msm sources to compile and run
+on LinuxKPI and drm-kmod 6.12-lts (freebsd/gpu/msm-port.md); Linux's
+behaviour is kept, each change is #ifdef __FreeBSD__ or equivalent on
+Linux:
+
+- msm_gem.h: an address space's and a submit's process is a pid_t, as
+  LinuxKPI's get_pid()/put_pid()/get_pid_task() have pids.
+- msm_gpu.h: the submitqueue's idr_lock is a spinlock_t (Linux's is
+  struct spinlock; LinuxKPI's spinlock_t is a mutex).
+- msm_gem.c: drm_vma_node_unmap() takes the GEM object on FreeBSD (drm-kmod
+  finds the user mappings by it; there is no anon_inode); a purged object's
+  shmem is truncated through its VM object, and only if it has a shmem
+  file (an object from the VRAM carveout has none); no mapping gfp mask.
+- msm_gem_submit.c: drm-kmod's scheduler has the DRM client id argument of
+  later Linux (drm_sched_job_init); 0 here.
+- adreno: the adreno config is reached with dev_platform_data(dev),
+  LinuxKPI's struct device has no platform_data (FreeBSD's platform glue
+  keeps it in the platform device); drm-kmod's uapi/linux/fb.h defines
+  ROP_COPY and ROP_XOR, which adreno_common.xml.h's enum names too.
+
+---
+--- a/drivers/gpu/drm/msm/msm_gem.h
++++ b/drivers/gpu/drm/msm/msm_gem.h
+@@ -35,7 +35,11 @@
+ 	/* For address spaces associated with a specific process, this
+ 	 * will be non-NULL:
+ 	 */
++#ifdef __FreeBSD__
++	pid_t pid;	/* LinuxKPI's pids are numbers (get_pid, put_pid) */
++#else
+ 	struct pid *pid;
++#endif
+ 
+ 	/* @faults: the number of GPU hangs associated with this address space */
+ 	int faults;
+@@ -274,7 +278,11 @@
+ 
+ 	int fence_id;       /* key into queue->fence_idr */
+ 	struct msm_gpu_submitqueue *queue;
++#ifdef __FreeBSD__
++	pid_t pid;	    /* submitting process */
++#else
+ 	struct pid *pid;    /* submitting process */
++#endif
+ 	bool bos_pinned : 1;
+ 	bool fault_dumped:1;/* Limit devcoredump dumping to one per submit */
+ 	bool in_rb : 1;     /* "sudo" mode, copy cmds into RB */
+--- a/drivers/gpu/drm/msm/msm_gpu.h
++++ b/drivers/gpu/drm/msm/msm_gpu.h
+@@ -518,7 +518,7 @@
+ 	struct msm_file_private *ctx;
+ 	struct list_head node;
+ 	struct idr fence_idr;
+-	struct spinlock idr_lock;
++	spinlock_t idr_lock;
+ 	struct mutex lock;
+ 	struct kref ref;
+ 	struct drm_sched_entity *entity;
+--- a/drivers/gpu/drm/msm/msm_gem.c
++++ b/drivers/gpu/drm/msm/msm_gem.c
+@@ -857,7 +857,12 @@
+ 
+ 	msm_gem_vunmap(obj);
+ 
++#ifdef __FreeBSD__
++	/* LinuxKPI finds the object's user mappings by the object */
++	drm_vma_node_unmap(&obj->vma_node, obj);
++#else
+ 	drm_vma_node_unmap(&obj->vma_node, dev->anon_inode->i_mapping);
++#endif
+ 
+ 	put_pages(obj);
+ 
+@@ -875,10 +880,19 @@
+ 	 * To do this we must instruct the shmfs to drop all of its
+ 	 * backing pages, *now*.
+ 	 */
++#ifdef __FreeBSD__
++	/*
++	 * LinuxKPI's shmem object frees its pages on truncation; an object
++	 * from the VRAM carveout has no shmem file
++	 */
++	if (obj->filp)
++		shmem_truncate_range(obj->filp->f_shmem, 0, (loff_t)-1);
++#else
+ 	shmem_truncate_range(file_inode(obj->filp), 0, (loff_t)-1);
+ 
+ 	invalidate_mapping_pages(file_inode(obj->filp)->i_mapping,
+ 			0, (loff_t)-1);
++#endif
+ }
+ 
+ /*
+@@ -895,7 +909,11 @@
+ 	/* Get rid of any iommu mapping(s): */
+ 	put_iova_spaces(obj, false);
+ 
++#ifdef __FreeBSD__
++	drm_vma_node_unmap(&obj->vma_node, obj);
++#else
+ 	drm_vma_node_unmap(&obj->vma_node, dev->anon_inode->i_mapping);
++#endif
+ 
+ 	put_pages(obj);
+ }
+@@ -1268,7 +1286,9 @@
+ 		 * See comments above new_inode() why this is required _and_
+ 		 * expected if you're going to pin these pages.
+ 		 */
++#ifdef __linux__
+ 		mapping_set_gfp_mask(obj->filp->f_mapping, GFP_HIGHUSER);
++#endif
+ 	}
+ 
+ 	drm_gem_lru_move_tail(&priv->lru.unbacked, obj);
+--- a/drivers/gpu/drm/msm/msm_gem_submit.c
++++ b/drivers/gpu/drm/msm/msm_gem_submit.c
+@@ -54,7 +54,15 @@
+ 		return ERR_PTR(ret);
+ 	}
+ 
++#ifdef __FreeBSD__
++	/*
++	 * drm-kmod's scheduler has the DRM client id of later Linux (its
++	 * trace events'); msm 6.12 has none to give
++	 */
++	ret = drm_sched_job_init(&submit->base, queue->entity, 1, queue, 0);
++#else
+ 	ret = drm_sched_job_init(&submit->base, queue->entity, 1, queue);
++#endif
+ 	if (ret) {
+ 		kfree(submit->hw_fence);
+ 		kfree(submit);
+--- a/drivers/gpu/drm/msm/adreno/adreno_gpu.h
++++ b/drivers/gpu/drm/msm/adreno/adreno_gpu.h
+@@ -14,6 +14,20 @@
+ 
+ #include "msm_gpu.h"
+ 
++/*
++ * The adreno config is the GPU device's platform data. LinuxKPI's struct
++ * device has no platform_data: FreeBSD's platform glue keeps it in the
++ * platform device (freebsd/dsp lkpi/linux/platform_device.h)
++ */
++#ifndef dev_platform_data
++#define dev_platform_data(dev)	((dev)->platform_data)
++#endif
++
++#ifdef __FreeBSD__
++/* drm-kmod's uapi/linux/fb.h has ROP_COPY and ROP_XOR, the XML's enum too */
++#undef ROP_COPY
++#undef ROP_XOR
++#endif
+ #include "adreno_common.xml.h"
+ #include "adreno_pm4.xml.h"
+ 
+--- a/drivers/gpu/drm/msm/adreno/adreno_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/adreno_gpu.c
+@@ -1075,7 +1075,7 @@
+ 		const struct adreno_gpu_funcs *funcs, int nr_rings)
+ {
+ 	struct device *dev = &pdev->dev;
+-	struct adreno_platform_config *config = dev->platform_data;
++	struct adreno_platform_config *config = dev_platform_data(dev);
+ 	struct msm_gpu_config adreno_gpu_config  = { 0 };
+ 	struct msm_gpu *gpu = &adreno_gpu->base;
+ 	const char *gpu_name;
+--- a/drivers/gpu/drm/msm/adreno/adreno_device.c
++++ b/drivers/gpu/drm/msm/adreno/adreno_device.c
+@@ -187,7 +187,7 @@
+ 	if (ret)
+ 		return ret;
+ 
+-	dev->platform_data = &config;
++	dev_platform_data(dev) = &config;
+ 	priv->gpu_pdev = to_platform_device(dev);
+ 
+ 	info = adreno_info(config.chip_id);
+--- a/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
+@@ -2269,7 +2269,7 @@
+ {
+ 	struct msm_drm_private *priv = dev->dev_private;
+ 	struct platform_device *pdev = priv->gpu_pdev;
+-	struct adreno_platform_config *config = pdev->dev.platform_data;
++	struct adreno_platform_config *config = dev_platform_data(&pdev->dev);
+ 	struct device_node *node;
+ 	struct a6xx_gpu *a6xx_gpu;
+ 	struct adreno_gpu *adreno_gpu;

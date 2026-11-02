@@ -1,0 +1,67 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] drm: DRM devices that are not on PCI (msm on the device tree)
+
+drm-kmod assumes every DRM device is a PCI function: drm_sysctl_init()'s
+drm_add_busid_modesetting() takes to_pci_dev(dev->dev) for the bus id,
+and drm_dev_alias() reads PCI's vendor and device ivars for the
+dev.drm.N.PCI_ID sysctl. msm's GPU on the F(x)tec Pro1X (freebsd/gpu,
+msm.ko) is a platform device below simplebus: there is no struct pci_dev
+around its struct device (to_pci_dev() reads past it), and simplebus has
+no PCI ivars (without INVARIANTS the read returns garbage).
+
+A device whose newbus parent is not a "pci" bus gets Linux's bus id for
+platform devices, "platform:<name>", and a PCI_ID of 0:0; PCI devices
+are unchanged. (LinuxKPI's dev_is_pci() compares the device's own
+devclass with "pci", which a PCI GPU's vgapci device does not have, so
+the check here looks at the parent bus.)
+
+---
+--- a/drivers/gpu/drm/drm_sysctl_freebsd.c
++++ b/drivers/gpu/drm/drm_sysctl_freebsd.c
+@@ -171,8 +171,22 @@
+ {
+ 	struct sysctl_oid *oid;
+ 	int domain, bus, slot, func;
+-	struct pci_dev *pdev = to_pci_dev(dev->dev);
++	struct pci_dev *pdev;
++	device_t bsddev = dev->dev->bsddev;
+ 
++	/*
++	 * A device that is not on PCI (a platform device on the device
++	 * tree, msm's GPU on arm64) has no struct pci_dev around its struct
++	 * device: Linux's "platform:" bus id with the device's name instead.
++	 */
++	if (bsddev == NULL || device_get_parent(bsddev) == NULL ||
++	    device_get_devclass(device_get_parent(bsddev)) !=
++	    devclass_find("pci")) {
++		snprintf(dev->busid_str, sizeof(dev->busid_str),
++		    "platform:%s", dev_name(dev->dev));
++		goto busid;
++	}
++	pdev = to_pci_dev(dev->dev);
+ 	domain = pci_domain_nr(pdev->bus);
+ 	bus    = pdev->bus->number;
+ 	slot   = PCI_SLOT(pdev->devfn);
+@@ -180,6 +194,7 @@
+ 
+ 	snprintf(dev->busid_str, sizeof(dev->busid_str),
+ 	    "pci:%04x:%02x:%02x.%d", domain, bus, slot, func);
++busid:
+ 	oid = SYSCTL_ADD_STRING(ctx, SYSCTL_CHILDREN(top), OID_AUTO, "busid",
+ 	    CTLFLAG_RD, dev->busid_str, 0, NULL);
+ 	if (oid == NULL)
+--- a/drivers/gpu/drm/drm_os_freebsd.c
++++ b/drivers/gpu/drm/drm_os_freebsd.c
+@@ -137,7 +137,11 @@
+ 	node = SYSCTL_ADD_NODE(ctx_list, SYSCTL_STATIC_CHILDREN(_dev_drm), OID_AUTO, buf,
+ 	    CTLFLAG_RD, NULL, "DRM properties");
+ 	oid_list = SYSCTL_CHILDREN(node);
+-	tmp = pci_get_vendor(dev) + ((u32)pci_get_device(dev) << 16);
++	/* only a device on PCI has PCI's ivars (msm's is on simplebus): 0:0 */
++	tmp = 0;
++	if (device_get_parent(dev) != NULL &&
++	    device_get_devclass(device_get_parent(dev)) == devclass_find("pci"))
++		tmp = pci_get_vendor(dev) + ((u32)pci_get_device(dev) << 16);
+ 	SYSCTL_ADD_PROC(ctx_list, oid_list, OID_AUTO, "PCI_ID",
+ 	    CTLTYPE_STRING | CTLFLAG_RD, NULL, tmp,
+ 	    sysctl_pci_id, "A", "PCI vendor and device ID");

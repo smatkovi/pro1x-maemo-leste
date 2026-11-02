@@ -1,0 +1,88 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] drm: drm_gem_get_pages() and drm_gem_put_pages() on LinuxKPI
+
+drm_gem.c compiles Linux's drm_gem_get_pages()/drm_gem_put_pages() only
+#ifdef __linux__ (folios, folio batches, unevictable mappings), so drm.ko
+has neither; msm's GEM objects that are backed by shmem (msm_gem.c's
+get_pages()/put_pages()) link against them.
+
+On FreeBSD, drm_gem_object_init() backs an object with LinuxKPI's shmem
+file, a swap-backed VM object in obj->filp->f_shmem. The pages come from
+shmem_read_mapping_page_gfp() (vm_page_grab_valid, wired) one by one and
+go back with put_page() (unwired), after set_page_dirty() and
+mark_page_accessed() as asked. The wiring is the pin Linux's page
+references are; there are no folios larger than a page here.
+
+---
+--- a/drivers/gpu/drm/drm_gem.c
++++ b/drivers/gpu/drm/drm_gem.c
+@@ -711,6 +711,69 @@
+ 	kvfree(pages);
+ }
+ EXPORT_SYMBOL(drm_gem_put_pages);
++#elif defined(__FreeBSD__)
++/*
++ * The same on LinuxKPI's shmem: drm_gem_object_init() backs the object with
++ * a swap-backed VM object (obj->filp->f_shmem); its pages are grabbed wired,
++ * which pins them as Linux's page references do (no folios: one page each).
++ */
++struct page **drm_gem_get_pages(struct drm_gem_object *obj)
++{
++	struct page **pages, *p;
++	long i, npages;
++
++	if (WARN_ON(!obj->filp))
++		return ERR_PTR(-EINVAL);
++
++	WARN_ON((obj->size & (PAGE_SIZE - 1)) != 0);
++
++	npages = obj->size >> PAGE_SHIFT;
++
++	pages = kvmalloc_array(npages, sizeof(struct page *), GFP_KERNEL);
++	if (pages == NULL)
++		return ERR_PTR(-ENOMEM);
++
++	for (i = 0; i < npages; i++) {
++		p = shmem_read_mapping_page_gfp(obj->filp->f_shmem, i,
++		    GFP_KERNEL);
++		if (IS_ERR(p))
++			goto fail;
++		pages[i] = p;
++	}
++
++	return pages;
++
++fail:
++	while (i-- > 0)
++		put_page(pages[i]);
++	kvfree(pages);
++	return ERR_CAST(p);
++}
++EXPORT_SYMBOL(drm_gem_get_pages);
++
++void drm_gem_put_pages(struct drm_gem_object *obj, struct page **pages,
++		bool dirty, bool accessed)
++{
++	long i, npages;
++
++	WARN_ON((obj->size & (PAGE_SIZE - 1)) != 0);
++
++	npages = obj->size >> PAGE_SHIFT;
++
++	for (i = 0; i < npages; i++) {
++		if (!pages[i])
++			continue;
++		if (dirty)
++			set_page_dirty(pages[i]);
++		if (accessed)
++			mark_page_accessed(pages[i]);
++		/* undo the wiring of drm_gem_get_pages */
++		put_page(pages[i]);
++	}
++
++	kvfree(pages);
++}
++EXPORT_SYMBOL(drm_gem_put_pages);
+ #endif
+ 
+ static int objects_lookup(struct drm_file *filp, u32 *handle, int count,

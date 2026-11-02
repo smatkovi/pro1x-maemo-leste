@@ -41,11 +41,16 @@
 
 static MALLOC_DEFINE(M_LKPI_PF, "lkpi_pf", "Linux platform drivers");
 
-/* the module this is built into depends on qcom_dsp and qrtr (its QMI) */
+/*
+ * the module this is built into depends on qcom_dsp and qrtr (its QMI);
+ * LKPI_PF_NO_QRTR: on qcom_dsp only (msm)
+ */
 #ifdef LKPI_PF_MODULE
 #define	PF_DEPEND(m, d)		MODULE_DEPEND(m, d, 1, 1, 1)
 PF_DEPEND(LKPI_PF_MODULE, qcom_dsp);
+#ifndef LKPI_PF_NO_QRTR
 PF_DEPEND(LKPI_PF_MODULE, qrtr);
+#endif
 #endif
 
 static SYSCTL_NODE(_hw, OID_AUTO, lkpi_pf, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
@@ -117,7 +122,13 @@ lkpi_pf_attach(device_t dev)
 	const struct lkpi_pf_ops *ops = pf_driver(dev)->ops;
 	int ret;
 
+	/*
+	 * LKPI_PF_NO_SMMU_BYPASS: the driver switches its SMMU itself (msm:
+	 * the GPU's SMMU has no power before the GPU's)
+	 */
+#ifndef LKPI_PF_NO_SMMU_BYPASS
 	pf_smmu_bypass(dev);
+#endif
 	ret = ops->attach(ops->drv, dev, pf_match(dev));
 	return (ret < 0 ? -ret : ret);
 }
