@@ -513,7 +513,8 @@ sysctl_socinfo(SYSCTL_HANDLER_ARGS)
 	    &error);
 	if (si != NULL && len >= sizeof(*si)) {
 		sbuf_printf(&sb, "family Snapdragon\n");
-		sbuf_printf(&sb, "machine %s\n", si->id == 417 ? "SM6115" :
+		/* Linux's QCOM_ID_SM6115 (dt-bindings/arm/qcom,ids.h) */
+		sbuf_printf(&sb, "machine %s\n", si->id == 444 ? "SM6115" :
 		    "unknown");
 		sbuf_printf(&sb, "soc_id %u\n", si->id);
 		sbuf_printf(&sb, "revision %u.%u\n", si->ver >> 16,
