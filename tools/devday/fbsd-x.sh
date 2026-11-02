@@ -35,6 +35,27 @@ L=/tmp/pro1x-x.log
 	service devd status || pgrep -lx devd
 } > $L 2>&1
 cat $L > /dev/pro1xshot
+# While X runs, every 20 s into /dev/pro1xshot: this log, the touchscreen
+# calibration, the CPU's clock and powerd, the load, X's input lines and
+# the end of its log (the shot survives the power key's power-off)
+(
+	while sleep 20; do
+		{
+			cat $L /tmp/pro1x-touchcal.txt 2> /dev/null
+			echo "=== $(date)"
+			sysctl dev.cpu.0.freq dev.cpu.0.freq_levels hw.ncpu kern.smp.disabled 2>&1
+			service powerd status 2>&1
+			uptime
+			ps -axo pid,pcpu,rss,command | sort -rn -k2 | head -n 12
+			echo "=== Xorg input"
+			grep -E "InputClass|libinput|Goodix|touch|TransformationMatrix|Using input driver" \
+			    /var/log/Xorg.0.log
+			echo "=== Xorg tail"
+			tail -n 40 /var/log/Xorg.0.log
+		} > /dev/pro1xshot 2>&1
+	done
+) &
+logger_pid=$!
 cd /root || exit 1
 # The desktop through the kernel environment, which ~/.xinitrc reads:
 # startx gives ~/.xinitrc no arguments (with any, it runs xterm instead)
@@ -43,8 +64,11 @@ kenv pro1x.desktop="${1:-hildon}" > /dev/null
 # a touchscreen transformation on trial)
 C=
 [ -d $H/xorg.conf.d ] && C="-configdir $H/xorg.conf.d"
+# touchcal.sh's, from this boot's taps, before that
+[ -d /tmp/pro1x-xorg.conf.d ] && C="-configdir /tmp/pro1x-xorg.conf.d"
 # shellcheck disable=SC2086
 HOME=/root startx -- \
     -modulepath $H/xorg-modules,/usr/local/lib/xorg/modules $C
-cat $L /var/log/Xorg.0.log > /dev/pro1xshot 2>&1
+kill $logger_pid 2> /dev/null
+cat $L /tmp/pro1x-touchcal.txt /var/log/Xorg.0.log > /dev/pro1xshot 2>&1
 echo "X ended; its log is in /dev/pro1xshot"
