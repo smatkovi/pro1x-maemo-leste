@@ -57,6 +57,12 @@ cat $L > /dev/pro1xshot
 			echo "=== Xorg input"
 			grep -E "InputClass|libinput|Goodix|touch|TransformationMatrix|Using input driver" \
 			    /var/log/Xorg.0.log
+			echo "=== pointer (ptrlog)"
+			tail -n 300 /tmp/pro1x-ptr.log
+			if [ -s /tmp/pro1x-screen.xwd.gz ]; then
+				echo "=== screen (xwd, gzip, base64)"
+				b64encode /tmp/pro1x-screen.xwd.gz pro1x-screen.xwd.gz
+			fi
 			echo "=== the session's output"
 			tail -n 60 /tmp/pro1x-startx.log
 			echo "=== Xorg tail"
@@ -65,6 +71,19 @@ cat $L > /dev/pro1xshot
 	done
 ) &
 logger_pid=$!
+# Where X has the pointer (userdata's ptrlog, tools/devday/fbsd-ptrlog) and
+# X's screen once, a minute in: which way the touches land in X's frame
+(
+	export DISPLAY=:0 XAUTHORITY=/root/.Xauthority
+	i=0
+	until xprop -root > /dev/null 2>&1 || [ $i -ge 120 ]; do
+		sleep 1
+		i=$((i + 1))
+	done
+	[ -x $H/ptrlog ] && $H/ptrlog > /tmp/pro1x-ptr.log 2>&1 &
+	sleep 60
+	xwd -root -silent | gzip -6 > /tmp/pro1x-screen.xwd.gz
+) &
 cd /root || exit 1
 # The desktop through the kernel environment, which ~/.xinitrc reads:
 # startx gives ~/.xinitrc no arguments (with any, it runs xterm instead)
@@ -80,6 +99,13 @@ HOME=/root startx -- \
     -modulepath $H/xorg-modules,/usr/local/lib/xorg/modules $C \
     > /tmp/pro1x-startx.log 2>&1
 kill $logger_pid 2> /dev/null
-cat $L /tmp/pro1x-touchcal.txt /tmp/pro1x-startx.log /var/log/Xorg.0.log \
-    > /dev/pro1xshot 2>&1
+{
+	cat $L /tmp/pro1x-touchcal.txt
+	echo "=== pointer (ptrlog)"
+	tail -n 300 /tmp/pro1x-ptr.log
+	echo "=== the session's output"
+	cat /tmp/pro1x-startx.log
+	echo "=== Xorg"
+	cat /var/log/Xorg.0.log
+} > /dev/pro1xshot 2>&1
 echo "X ended; its log is in /dev/pro1xshot"
