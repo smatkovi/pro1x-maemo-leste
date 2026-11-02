@@ -1280,6 +1280,69 @@ RAM root has no termcap.
   vt console is not rotated, the USB gadget does not enumerate, the hang
   above 4 GB without `hw.physmem`.
 
+### 12.8 What ends the sessions, the DSP ladder, the speed (2026-11-02 13:00-14:30)
+
+- **No hangs, no crashes of the system:** all eight FreeBSD runs of the
+  day end in an orderly shutdown (`Waiting for ... vnlru`, `syncer`,
+  `Syncing disks ... done`); the RAM console only loses its last few
+  hundred bytes at the reset, which looked like a hang. X never ended
+  before (no final dump in any shot). In the image only devd's
+  `pro1x-powerkey` asks for a shutdown: `shutdown -p` 2 s after a PRESS
+  without RELEASE; with the cable in, the powered-off phone starts again,
+  into the menu's default, Leste. hildon-home's and PulseAudio's signal 6
+  come during rc.shutdown's kill, not before. Since patches/0050 and 0051
+  the RAM console has the power key's edges with the time since boot,
+  `pro1x: powering off|rebooting` at the start of the way down, and what
+  programs write to `/dev/console`; a release edge that never comes is
+  seen by a 250 ms poll, and `dev.qcom_pon.0.power_key` is the key now
+  (the root image's `pro1x-powerkey` checks it before powering off from
+  the next image on).
+- **The DSP ladder, first run on the phone** (runs `fbsd-dsp-*` in
+  `~/ps/pro1x-runs/2026-11-02/`, `hw.physmem=2500M` added): dsp1 `load`
+  and dsp7a `rpm` pass (SCM, SMEM 0x46000000 with hosts 1, 2, 5, three
+  SMP2P edges, rmtfs's region shared; l8, l16, l17, l23 voted on and
+  off, nothing refused); dsp6 `modem`: tqftpserv, pd-mapper and rmtfs
+  listed, the modem ready over SMP2P after 261 ms, its GLINK edge and
+  QRTR up, DMS answers `qmicli --dms-get-revision`. The only failures:
+  TrustZone answers "not supported" to the PAS query and starts the DSPs
+  all the same (Linux never asks; now only logged), and the SoC id is
+  444, Linux's `QCOM_ID_SM6115` (417 in the test was wrong). dsp7b
+  `wifi`: WLFW (service 69) listed, `ath10k_snoc` loads, its probe fails
+  at the first 8 KiB copy-engine ring, `failed to alloc CE dest ring 1:
+  -12`: LinuxKPI treats the non-coherent WCN3990 core like a coherent
+  PCI device, bus_dma bounces unaligned buffers through two pages and
+  gives aligned ones no cache maintenance. patches/0052: Linux's DMA for
+  devices without `dma-coherent` (uncached coherent memory, physically
+  addressed streaming buffers, clean/invalidate by direction).
+  **With it (14:03-14:11) the Wi-Fi works:** ath10k0 within 4 s
+  (firmware WCN3990 hw1.0 api 5, board-2.bin, the rails l8/l16/l17/l23
+  on), a scan finds the networks around, wpa_supplicant joins the
+  network of userdata's wpa_supplicant.conf (WPA2-PSK, CCMP, keys in the
+  firmware), dhclient gets a lease, the gateway answers ping: dsp7c 25
+  passed, 0 failed but the PAS query. Left: the firmware has no MAC
+  address (`invalid MAC address; choosing random`, a new one each boot),
+  rc's netif tries wlan0 before the modem runs (`SIOCIFCREATE2`, harmless)
+  and the first wpa_supplicant (devd, at ath10k's attach) fails before
+  wlan0 is up; no Hildon UI to choose a network (no icd2 on FreeBSD).
+  For the desktop: `pro1x.wifi=on` in freebsd/cmdline, fbsd-x.sh starts
+  `fbsd-wifi.sh` beside X.
+- **The speed:** a whole-screen rotation (2160 x 1080, the shadow to the
+  framebuffer) measured on the phone's cores (Leste, `freebsd/scfb/test`):
+
+  | | A73 (CPU 4-7) | A53 (CPU 0-3) |
+  |---|---|---|
+  | xorg's shadowUpdateRotatePacked (column walk) | 14 ms | 76 ms |
+  | scfb_rotcw.h (blocks, NEON) | 16 ms | 37 ms |
+  | Scale 2 (1080 x 540, each pixel 2 x 2) | 9 ms | 13 ms |
+
+  X's one thread on an A53 costs it five times; FreeBSD's scheduler does
+  not tell the clusters apart, so `fbsd-x.sh` puts Xorg on CPUs 4-7.
+  `x.sh ... half` runs X at 1080 x 540 (scfb `Option "Scale" "2"`,
+  Hildon unscaled through a `PRO1X_DISPLAY_CONF` in /tmp): a quarter of
+  the pixels for X, the compositor's llvmpipe and every copy between
+  them. `fbsd-x.sh` samples `top -H` every 6 s into the shot (both
+  sessions of a boot), to see which threads the CPU goes to.
+
 ## Block 13: KolibriOS (should; 60-90 min)
 
 Sources: `~/ps/kolibrios-arm/docs/pro1x.md`, `power.md`, `storage.md`,
