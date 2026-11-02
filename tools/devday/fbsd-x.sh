@@ -54,6 +54,8 @@ cat $L > /dev/pro1xshot
 			service powerd status 2>&1
 			uptime
 			ps -axo pid,pcpu,rss,command | sort -rn -k2 | head -n 12
+			echo "=== busiest threads (top -H, every 6 s)"
+			tail -n 240 /tmp/pro1x-perf.log
 			echo "=== Xorg input"
 			grep -E "InputClass|libinput|Goodix|touch|TransformationMatrix|Using input driver" \
 			    /var/log/Xorg.0.log
@@ -72,6 +74,23 @@ cat $L > /dev/pro1xshot
 	done
 ) &
 logger_pid=$!
+# Which threads take the CPU while one scrolls (Xorg: drawing and the
+# rotation into the framebuffer; hildon-desktop's llvmpipe threads: the
+# compositing): top's second display covers the 2 s since its first
+(
+	while sleep 4; do
+		{
+			echo "--- $(date +%T)"
+			top -b -H -d 2 -s 2 -o cpu 12 |
+			    awk '/^last pid/ { n++ } n == 2 && /^ *[0-9]/'
+		} >> /tmp/pro1x-perf.log 2>&1
+		if [ "$(wc -l < /tmp/pro1x-perf.log)" -gt 2000 ]; then
+			tail -n 1000 /tmp/pro1x-perf.log > /tmp/pro1x-perf.log.new
+			mv /tmp/pro1x-perf.log.new /tmp/pro1x-perf.log
+		fi
+	done
+) &
+perf_pid=$!
 # Where X has the pointer (userdata's ptrlog, tools/devday/fbsd-ptrlog) and
 # X's screen once, a minute in: which way the touches land in X's frame
 (
@@ -99,11 +118,13 @@ C=
 HOME=/root startx -- \
     -modulepath $H/xorg-modules,/usr/local/lib/xorg/modules $C \
     > /tmp/pro1x-startx.log 2>&1
-kill $logger_pid 2> /dev/null
+kill $logger_pid $perf_pid 2> /dev/null
 {
 	cat $L /tmp/pro1x-touchcal.txt /tmp/pro1x-apptest.txt
 	echo "=== pointer (ptrlog)"
 	tail -n 300 /tmp/pro1x-ptr.log
+	echo "=== busiest threads (top -H, every 6 s)"
+	tail -n 400 /tmp/pro1x-perf.log
 	echo "=== the session's output"
 	cat /tmp/pro1x-startx.log
 	echo "=== Xorg"
