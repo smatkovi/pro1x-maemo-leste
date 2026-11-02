@@ -156,11 +156,15 @@ with open(sys.argv[1], "a") as out:
 		bsdtar -xf "$f" -C "$R" '/usr/local/llvm19/lib/libLLVM*.so*' 2> /dev/null
 		log "Hildon ($HILDON) and libLLVM from $(basename "$f")"
 		# What the image needs of the build: no headers, static
-		# libraries, pkg-config files or manuals
+		# libraries, pkg-config files or manuals. Over the packages' own
+		# files unconditionally (-u): without it cpio kept every package
+		# file newer than the stage's, so libgtk-x11-2.0.so.0 stayed
+		# FreeBSD's GTK instead of Maemo's, and every Hildon program
+		# died on hildon_gtk_widget_set_theme_size (2026-11-02)
 		(cd "$HILDON" && find . -type f -o -type l | grep -v \
 		    -e '^\./usr/local/include/' -e '\.a$' -e '/pkgconfig/' \
 		    -e '^\./usr/local/share/man/' -e '^\./usr/local/share/gtk-doc/') |
-		    (cd "$HILDON" && cpio -pdm --quiet "$R")
+		    (cd "$HILDON" && cpio -pdmu --quiet "$R")
 		# Leste's texts over the parts' own, as the packages have it
 		# (pkgmeta.py EXCLUDE): the stage holds the catalogue of
 		# whichever part was installed last, and libhildon's en_GB one
