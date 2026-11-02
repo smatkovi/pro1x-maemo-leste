@@ -2,7 +2,12 @@
 # FreeBSD on the Pro1X, as root on the console, until the root image has
 # the fixed scfb (freebsd/scfb): the desktop with userdata's X modules.
 #
-#   sh /dev/pro1x-host/freebsd/x.sh [hildon|harmattan|xfce]
+#   sh /dev/pro1x-host/freebsd/x.sh [hildon|harmattan|xfce] [half]
+#
+# half: X's screen at half the size, 1080 x 540, each pixel 2 x 2 on the
+# panel (scfb's Option "Scale" "2", freebsd/scfb), Hildon unscaled on it
+# (pro1x-hidpi with SCALE=1 from /tmp, not userdata's pro1x-display.conf,
+# which Leste shares): a quarter of the pixels to draw and composite.
 #
 # devd first when it is not running (X takes its input devices from it,
 # the power key needs it): its own words on why (8 s in the foreground)
@@ -48,7 +53,8 @@ cat $L > /dev/pro1xshot
 (
 	while sleep 20; do
 		{
-			cat $L /tmp/pro1x-touchcal.txt /tmp/pro1x-apptest.txt 2> /dev/null
+			cat $L /tmp/pro1x-touchcal.txt /tmp/pro1x-apptest.txt \
+			    /tmp/pro1x-wifi.log 2> /dev/null
 			echo "=== $(date)"
 			sysctl dev.cpu.0.freq dev.cpu.0.freq_levels hw.ncpu kern.smp.disabled 2>&1
 			service powerd status 2>&1
@@ -104,6 +110,11 @@ perf_pid=$!
 	sleep 60
 	xwd -root -silent | gzip -6 > /tmp/pro1x-screen.xwd.gz
 ) &
+# The Wi-Fi (userdata's wifi.sh, tools/devday/fbsd-wifi.sh) beside X when
+# the cmdline asks for it
+if [ "$(kenv -q pro1x.wifi)" = on ] && [ -f $H/wifi.sh ]; then
+	sh $H/wifi.sh > /dev/null 2>&1 &
+fi
 cd /root || exit 1
 # The desktop through the kernel environment, which ~/.xinitrc reads:
 # startx gives ~/.xinitrc no arguments (with any, it runs xterm instead)
@@ -114,13 +125,32 @@ C=
 [ -d $H/xorg.conf.d ] && C="-configdir $H/xorg.conf.d"
 # touchcal.sh's, from this boot's taps, before that
 [ -d /tmp/pro1x-xorg.conf.d ] && C="-configdir /tmp/pro1x-xorg.conf.d"
+# half: the same configuration with the framebuffer driver's Scale 2, and
+# Hildon's theme and fonts at the factor 1; otherwise the factor of
+# userdata's pro1x-display.conf (back after a half session in this boot)
+if [ "$2" = half ]; then
+	d=/usr/local/etc/X11/xorg.conf.d
+	[ -n "$C" ] && d=${C#-configdir }
+	rm -rf /tmp/pro1x-xorg-half.conf.d
+	mkdir -p /tmp/pro1x-xorg-half.conf.d
+	for f in "$d"/*.conf; do
+		sed '/Option[[:space:]]*"Rotate"/a\
+	Option		"Scale" "2"
+' "$f" > /tmp/pro1x-xorg-half.conf.d/"${f##*/}"
+	done
+	C="-configdir /tmp/pro1x-xorg-half.conf.d"
+	echo "SCALE=1" > /tmp/pro1x-display-half.conf
+	PRO1X_DISPLAY_CONF=/tmp/pro1x-display-half.conf
+	export PRO1X_DISPLAY_CONF
+fi
+/usr/local/bin/pro1x-hidpi theme >> $L 2>&1
 # shellcheck disable=SC2086
 HOME=/root startx -- \
     -modulepath $H/xorg-modules,/usr/local/lib/xorg/modules $C \
     > /tmp/pro1x-startx.log 2>&1
 kill $logger_pid $perf_pid 2> /dev/null
 {
-	cat $L /tmp/pro1x-touchcal.txt /tmp/pro1x-apptest.txt
+	cat $L /tmp/pro1x-touchcal.txt /tmp/pro1x-apptest.txt /tmp/pro1x-wifi.log
 	echo "=== pointer (ptrlog)"
 	tail -n 300 /tmp/pro1x-ptr.log
 	echo "=== busiest threads (top -H, every 6 s)"
