@@ -15,8 +15,18 @@ if m is None:
 out = os.path.join(os.path.dirname(os.path.abspath(shot)), 'screen.xwd')
 # The shot buffer loses a bit now and then across the reset: decode what
 # the stream gives up to the first damage (the top of the screen)
-raw = re.sub(rb'[^A-Za-z0-9+/=]', b'', m.group(2))
-data = base64.b64decode(raw[:len(raw) // 4 * 4])
+# A flipped bit can turn a character into one outside the alphabet or
+# into '=': decode in blocks of four and put zeros for a broken block, so
+# that everything after it stays in place
+raw = b''.join(m.group(2).split())
+buf = bytearray()
+for i in range(0, len(raw) - len(raw) % 4, 4):
+    q = raw[i:i + 4]
+    try:
+        buf += base64.b64decode(q, validate=True)
+    except Exception:
+        buf += bytes(3)
+data = bytes(buf)
 d = zlib.decompressobj(16 + zlib.MAX_WBITS)
 img = b''
 try:

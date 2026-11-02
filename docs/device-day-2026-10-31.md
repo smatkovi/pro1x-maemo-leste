@@ -1249,6 +1249,37 @@ RAM root has no termcap.
   during a 3 GB copy; the next boot did the same until
   `echo stop > /sys/class/remoteproc/remoteproc1/state`. Open.
 
+### 12.7 Hildon on the phone (2026-11-01 21:30 - 11-02 10:00)
+
+- The touchscreen sits on gpioiic (GPIOs 6/7), and neither iicbb nor
+  gpioiic passed resources up: its interrupt could not be allocated
+  (patches/0049; 0046 and 0047 were steps on the way, 0047 also polls at
+  60 Hz when there is no interrupt).
+- 0041's pcpu checks asked cpulist, so no CPU had its frequency driver
+  and powerd did not run (patches/0048): now 300-1804 MHz, powerd up.
+- `kern.smp.disabled=0` in freebsd/cmdline: all eight CPUs, no problem
+  seen so far (with `hw.physmem=2500M`).
+- Touch direction: tools/devday/fbsd-touchcal.sh read the raw corners
+  (raw y along the screen's width, raw x against its height, the
+  image's matrix was right), tools/devday/fbsd-ptrlog showed X's pointer
+  at the raw position anyway: X's TransformationMatrix was read but did
+  not apply; libinput's CalibrationMatrix does. On the way: devd's
+  moused.conf ran a moused for every input/eventN, which moved the
+  pointer a second time through sysmouse (rc.conf
+  `moused_nondefault_enable="NO"`).
+- Hildon programs died on hildon_gtk_widget_set_theme_size: the image had
+  FreeBSD's GTK, not the stage's Maemo GTK. cpio -p kept the packages'
+  newer files (now -u), and mkspec.py took the packages' mtree link
+  target for libgtk-x11-2.0.so.0 (now type and link come from the tree).
+  Root image 6c3b15af: Terminal and Music run, the touchscreen lands
+  where it is touched.
+- Open on the phone: gPodder and Pure Maps do not start, MeeGo Maps
+  shows an empty map (no network yet), scrolling lags (hildon-desktop
+  composites with llvmpipe, scfb rotates every frame in software,
+  tearing), the camera has no /dev/camss0 (qcom_camss not loaded), the
+  vt console is not rotated, the USB gadget does not enumerate, the hang
+  above 4 GB without `hw.physmem`.
+
 ## Block 13: KolibriOS (should; 60-90 min)
 
 Sources: `~/ps/kolibrios-arm/docs/pro1x.md`, `power.md`, `storage.md`,
