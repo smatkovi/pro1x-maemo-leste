@@ -6,12 +6,28 @@
 # Leste. A touch or a key brings a blank screen back too; the press after
 # that one only clears the note that it is blank (xset cannot tell), the
 # next blanks again.
+#
+# Before it powers off it asks the PMIC whether the key is still down
+# (dev.qcom_pon.0.power_key, patches/0051): a RELEASE that never reached
+# devd does not switch the phone off. What it does goes to /dev/console,
+# which the RAM console keeps (patches/0050) for Linux to read after the
+# next boot.
 pid=/var/run/pro1x-powerkey.pid
 blank=/var/run/pro1x-blanked
 standby=/var/run/pro1x-standby.pid
+say() { echo "pro1x-powerkey: $*" > /dev/console 2> /dev/null; }
 case "$1" in
 PRESS)
-	(sleep 2; rm -f "$pid"; shutdown -p now "power key") &
+	(
+		sleep 2
+		rm -f "$pid"
+		if [ "$(sysctl -n dev.qcom_pon.0.power_key 2> /dev/null)" = 0 ]; then
+			say "up again without a RELEASE: staying on"
+			exit 0
+		fi
+		say "held for 2 s: powering off"
+		shutdown -p now "power key"
+	) &
 	echo $! > "$pid"
 	;;
 RELEASE)

@@ -1,0 +1,184 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] ramcons: programs' console writes, and the way down's reason
+
+The RAM console took only what went through cnputc: the kernel's
+messages. What programs write to /dev/console (rc, the device tests'
+PASS and FAIL lines, devd's scripts) goes through the console tty to the
+screen and through log_console() into the message buffer, never to the
+consoles; the dsp tests' results of 2026-11-02 were lost that way.
+log_console() now hands each chunk to the RAM console as well (without
+CRs), and a spin lock keeps it and the kernel's printf from writing over
+each other (none in a panic or in the debugger).
+
+The last few hundred bytes before the reset never survive it, and with
+them the kernel's own line on how it goes down: a shutdown_pre_sync
+handler says first whether it powers off, halts or reboots.
+
+---
+diff --git a/sys/arm64/pro1x/ramcons.c b/sys/arm64/pro1x/ramcons.c
+index c031bfdcd..675389d3a 100644
+--- a/sys/arm64/pro1x/ramcons.c
++++ b/sys/arm64/pro1x/ramcons.c
+@@ -2,7 +2,9 @@
+  * SPDX-License-Identifier: BSD-2-Clause
+  *
+  * F(x)tec Pro1X bring-up: a console that keeps everything written to the
+- * console - kernel messages, panics, the output of rc - in a spare part of
++ * console - kernel messages, panics, the output of rc and of what else
++ * writes to /dev/console (log_console(), kern/subr_prf.c: a tty's output
++ * reaches the message buffer, not the consoles) - in a spare part of
+  * the bootloader's splash memory behind the framebuffer (reserved, no-map),
+  * written uncached so that it is in the DRAM when the system resets. Linux
+  * reads it after the next boot; the phone has no serial console FreeBSD can
+@@ -20,13 +22,22 @@
+  * devfs cannot make otherwise (no mkdir): the RAM root mounts userdata
+  * there, below /dev, where it stays across the reroot into the root image
+  * on it (kern_reroot).
++ *
++ * The way down starts with a line that says whether it powers off, halts
++ * or reboots (shutdown_pre_sync): the last few hundred bytes before the
++ * reset do not survive it, and with them went the kernel's own line.
+  */
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/conf.h>
++#include <sys/eventhandler.h>
++#include <sys/kdb.h>
+ #include <sys/kernel.h>
+ #include <sys/cons.h>
+ #include <sys/fcntl.h>
++#include <sys/lock.h>
++#include <sys/mutex.h>
++#include <sys/reboot.h>
+ #include <sys/uio.h>
+ 
+ #include <vm/vm.h>
+@@ -57,6 +68,45 @@ static size_t ramcons_pos;
+ 
+ static volatile uint32_t *ramcons_wdt;
+ 
++/*
++ * The kernel's printf and the console writes of programs (other CPUs)
++ * share the buffer: one writer at a time, except in a panic or the
++ * debugger, where a stopped CPU may hold the lock.
++ */
++static struct mtx ramcons_mtx;
++static bool ramcons_mtx_ready;
++
++void	pro1x_ramcons_log(const char *);	/* kern/subr_prf.c */
++
++static void
++ramcons_mtx_init(void *arg __unused)
++{
++	mtx_init(&ramcons_mtx, "ramcons", NULL, MTX_SPIN | MTX_NOWITNESS);
++	ramcons_mtx_ready = true;
++}
++SYSINIT(ramcons_mtx, SI_SUB_LOCK, SI_ORDER_ANY, ramcons_mtx_init, NULL);
++
++static bool
++ramcons_lock(void)
++{
++	if (!ramcons_mtx_ready || KERNEL_PANICKED() || kdb_active)
++		return (false);
++	mtx_lock_spin(&ramcons_mtx);
++	return (true);
++}
++
++static void
++ramcons_put(int c)
++{
++	if (ramcons_buf == NULL || ramcons_pos >= RAMCONS_SIZE - 1)
++		return;
++	ramcons_buf[ramcons_pos++] = c;
++	ramcons_buf[ramcons_pos] = '\0';
++	if (c == '\n' && cold && ramcons_wdt != NULL)
++		ramcons_wdt[RAMCONS_WDT_RST] = 1;
++	dsb(sy);
++}
++
+ static void
+ ramcons_cnprobe(struct consdev *cp)
+ {
+@@ -109,13 +159,26 @@ ramcons_cngetc(struct consdev *cp)
+ static void
+ ramcons_cnputc(struct consdev *cp, int c)
+ {
+-	if (ramcons_buf == NULL || ramcons_pos >= RAMCONS_SIZE - 1)
+-		return;
+-	ramcons_buf[ramcons_pos++] = c;
+-	ramcons_buf[ramcons_pos] = '\0';
+-	if (c == '\n' && cold && ramcons_wdt != NULL)
+-		ramcons_wdt[RAMCONS_WDT_RST] = 1;
+-	dsb(sy);
++	bool locked;
++
++	locked = ramcons_lock();
++	ramcons_put(c);
++	if (locked)
++		mtx_unlock_spin(&ramcons_mtx);
++}
++
++/* What a program wrote to /dev/console (log_console()), without CRs */
++void
++pro1x_ramcons_log(const char *s)
++{
++	bool locked;
++
++	locked = ramcons_lock();
++	for (; *s != '\0'; s++)
++		if (*s != '\r')
++			ramcons_put(*s);
++	if (locked)
++		mtx_unlock_spin(&ramcons_mtx);
+ }
+ 
+ static void
+@@ -194,6 +257,14 @@ static struct cdevsw mntpt_cdevsw = {
+ 	.d_name =	"pro1xmnt",
+ };
+ 
++static void
++ramcons_shutdown(void *arg __unused, int howto)
++{
++	printf("pro1x: %s (howto %#x)\n", (howto & RB_POWEROFF) ?
++	    "powering off" : (howto & RB_HALT) ? "halting" : "rebooting",
++	    howto);
++}
++
+ static void
+ shot_init(void *arg)
+ {
+@@ -205,6 +276,8 @@ shot_init(void *arg)
+ 		    "pro1xshot");
+ 	make_dev(&mntpt_cdevsw, 0, UID_ROOT, GID_WHEEL, 0400,
+ 	    "pro1x-host/.mnt");
++	EVENTHANDLER_REGISTER(shutdown_pre_sync, ramcons_shutdown, NULL,
++	    SHUTDOWN_PRI_FIRST);
+ }
+ SYSINIT(pro1xshot, SI_SUB_DRIVERS, SI_ORDER_ANY, shot_init, NULL);
+ 
+diff --git a/sys/kern/subr_prf.c b/sys/kern/subr_prf.c
+index bbf81b7a4..3df06d8e2 100644
+--- a/sys/kern/subr_prf.c
++++ b/sys/kern/subr_prf.c
+@@ -324,6 +324,10 @@ vlog(int level, const char *fmt, va_list ap)
+ 
+ #define CONSCHUNK 128
+ 
++#ifdef PRO1X_RAMCONS
++void	pro1x_ramcons_log(const char *);	/* arm64/pro1x/ramcons.c */
++#endif
++
+ void
+ log_console(struct uio *uio)
+ {
+@@ -351,6 +355,9 @@ log_console(struct uio *uio)
+ 		else
+ 			nl = 0;
+ 		msglogstr(consbuffer, pri, /*filter_cr*/ 1);
++#ifdef PRO1X_RAMCONS
++		pro1x_ramcons_log(consbuffer);
++#endif
+ 	}
+ 	/*
+ 	 * The previous behavior in log_console() is preserved when

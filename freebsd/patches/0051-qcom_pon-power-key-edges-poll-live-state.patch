@@ -1,0 +1,153 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] qcom_pon: power key edges on the console, a poll while down,
+ the key's live state
+
+On 2026-11-02 four desktop sessions ended the same way, in orderly
+shutdowns, and the only thing in the image that asks for one is
+devd's power key script (two seconds after PRESS unless RELEASE came).
+A release edge that never arrives would do it, and would also swallow
+the next press (the handler reports changes only). While a key is down,
+a callout reads PON_RT_STS again every 250 ms and reports the release
+the interrupt missed; the power key's edges go to the console with the
+time since boot, and dev.qcom_pon.0.power_key reads the key from the
+PMIC now, for the script to check before it powers off.
+
+---
+diff --git a/sys/dev/qcom_spmi/qcom_pon.c b/sys/dev/qcom_spmi/qcom_pon.c
+index 4b843e15f..3fe13a2d6 100644
+--- a/sys/dev/qcom_spmi/qcom_pon.c
++++ b/sys/dev/qcom_spmi/qcom_pon.c
+@@ -9,7 +9,13 @@
+  * wake-up (power_wakeup, qcom_spmi.h: it ends a suspend).
+  *
+  * Each key has an interrupt on both edges; its handler reads the state
+- * from PON_RT_STS (bit 0 power key, bit 1 RESIN).
++ * from PON_RT_STS (bit 0 power key, bit 1 RESIN). While a key is down, a
++ * callout reads it again every 250 ms: an edge that never comes (a release
++ * lost on the way through the arbiter) would leave the key down for the
++ * driver, and devd's power key script powers the phone off after 2 s of
++ * it. dev.qcom_pon.0.power_key is the power key as the PMIC has it now
++ * (1 down), for that script to look before it acts; the power key's edges
++ * go to the console with the time since boot.
+  */
+ 
+ #include "opt_evdev.h"
+@@ -23,6 +29,8 @@
+ #include <sys/module.h>
+ #include <sys/mutex.h>
+ #include <sys/rman.h>
++#include <sys/sysctl.h>
++#include <sys/time.h>
+ 
+ #include <machine/bus.h>
+ 
+@@ -44,6 +52,7 @@ struct qcom_pon_key {
+ 	uint8_t			bit;
+ 	uint16_t		code;
+ 	bool			pressed;
++	struct callout		poll;
+ 	int			rid;
+ 	struct resource		*irq;
+ 	void			*ih;
+@@ -65,23 +74,37 @@ static struct ofw_compat_data compat_data[] = {
+ 	{ NULL,			0 }
+ };
+ 
++#define	PON_POLL_SBT	(SBT_1S / 4)
++
++static void	qcom_pon_poll(void *);
++
++/* The key's state from RT_STS, reported when it changed (how: for the log) */
+ static void
+-qcom_pon_intr(void *arg)
++qcom_pon_update(struct qcom_pon_key *key, const char *how)
+ {
+-	struct qcom_pon_key *key = arg;
+ 	struct qcom_pon_softc *sc = key->sc;
+ 	uint8_t sts;
+ 	bool pressed;
++	sbintime_t up;
+ 
+ 	if (qcom_spmi_read(sc->dev, sc->base + PON_RT_STS, &sts, 1) != 0)
+ 		return;
+ 	pressed = (sts & key->bit) != 0;
+ 	mtx_lock(&sc->mtx);
++	if (pressed)
++		callout_reset_sbt(&key->poll, PON_POLL_SBT, PON_POLL_SBT / 4,
++		    qcom_pon_poll, key, 0);
+ 	if (pressed == key->pressed) {
+ 		mtx_unlock(&sc->mtx);
+ 		return;
+ 	}
+ 	key->pressed = pressed;
++	if (key->code == KEY_POWER) {
++		up = sbinuptime();
++		device_printf(sc->dev, "power key %s at %jd.%03jd s%s\n",
++		    pressed ? "down" : "up", (intmax_t)(up >> 32),
++		    (intmax_t)(((up & 0xffffffff) * 1000) >> 32), how);
++	}
+ #ifdef EVDEV_SUPPORT
+ 	evdev_push_key(sc->evdev, key->code, pressed);
+ 	evdev_sync(sc->evdev);
+@@ -95,6 +118,33 @@ qcom_pon_intr(void *arg)
+ 	}
+ }
+ 
++static void
++qcom_pon_intr(void *arg)
++{
++	qcom_pon_update(arg, "");
++}
++
++/* While down: the edge up may not come */
++static void
++qcom_pon_poll(void *arg)
++{
++	qcom_pon_update(arg, " (no edge: seen by the poll)");
++}
++
++static int
++qcom_pon_sysctl_key(SYSCTL_HANDLER_ARGS)
++{
++	struct qcom_pon_softc *sc = arg1;
++	uint8_t sts;
++	int down, error;
++
++	error = qcom_spmi_read(sc->dev, sc->base + PON_RT_STS, &sts, 1);
++	if (error != 0)
++		return (EIO);
++	down = (sts & RT_KPDPWR) != 0;
++	return (sysctl_handle_int(oidp, &down, 0, req));
++}
++
+ static int
+ qcom_pon_add_key(struct qcom_pon_softc *sc, phandle_t node, uint8_t bit,
+     uint16_t dflt)
+@@ -111,6 +161,7 @@ qcom_pon_add_key(struct qcom_pon_softc *sc, phandle_t node, uint8_t bit,
+ 	}
+ 	key->sc = sc;
+ 	key->bit = bit;
++	callout_init(&key->poll, 1);
+ 	key->code = OF_getencprop(node, "linux,code", &code, sizeof(code)) ==
+ 	    sizeof(code) ? code : dflt;
+ 	irq = ofw_bus_map_intr(sc->dev, qcom_spmi_intr_xref(sc->dev), 4,
+@@ -148,6 +199,7 @@ qcom_pon_detach(device_t dev)
+ 	for (i = 0; i < sc->nkeys; i++) {
+ 		if (sc->keys[i].ih != NULL)
+ 			bus_teardown_intr(dev, sc->keys[i].irq, sc->keys[i].ih);
++		callout_drain(&sc->keys[i].poll);
+ 		bus_release_resource(dev, SYS_RES_IRQ, sc->keys[i].rid,
+ 		    sc->keys[i].irq);
+ 	}
+@@ -205,6 +257,11 @@ qcom_pon_attach(device_t dev)
+ 		    INTR_TYPE_MISC | INTR_MPSAFE, NULL, qcom_pon_intr,
+ 		    &sc->keys[i], &sc->keys[i].ih) != 0)
+ 			device_printf(dev, "unable to set up key %d\n", i);
++	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
++	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
++	    "power_key", CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
++	    qcom_pon_sysctl_key, "I",
++	    "The power key now, from the PMIC (1 down)");
+ 	return (0);
+ }
+ 
