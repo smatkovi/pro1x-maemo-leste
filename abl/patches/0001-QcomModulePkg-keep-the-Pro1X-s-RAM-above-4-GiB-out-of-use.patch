@@ -1,0 +1,124 @@
+From 60e27c24ebe692732d3637d5d223fc6eb31a6012 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 2 Nov 2026 19:34:24 +0100
+Subject: [PATCH] QcomModulePkg: keep the Pro1X's RAM above 4 GiB out of use
+
+The F(x)tec Pro1X's RAM above 4 GiB fails (2026-11-02): ABL's boot image buffer, allocated from the top of memory, ends in "Device Error". Take every free page above 4 GiB at LinuxLoader's entry, and hand the kernel only the memory below.
+---
+ .../Application/LinuxLoader/LinuxLoader.c     | 57 +++++++++++++++++++
+ .../Library/BootLib/UpdateDeviceTree.c        | 17 ++++++
+ 2 files changed, 74 insertions(+)
+
+diff --git a/QcomModulePkg/Application/LinuxLoader/LinuxLoader.c b/QcomModulePkg/Application/LinuxLoader/LinuxLoader.c
+index a8b594a..01b10dd 100755
+--- a/QcomModulePkg/Application/LinuxLoader/LinuxLoader.c
++++ b/QcomModulePkg/Application/LinuxLoader/LinuxLoader.c
+@@ -166,6 +166,61 @@ WaitForDisplayCompletion (VOID)
+ 
+  **/
+ 
++/*
++ * F(x)tec Pro1X whose RAM above 4 GiB fails (2026-11-02: stores there
++ * stall, DMA into it ends in "Device Error"): take every free page above
++ * 4 GiB before anything else is allocated, so that the loader's buffers
++ * (the boot image, the thread stacks) come from below. The pages are only
++ * marked as allocated, never touched; they go back with the boot services.
++ */
++#define PRO1X_MEM_LIMIT 0x100000000ULL
++
++STATIC UINT8 Pro1xMemMap[32 * 1024];
++
++STATIC VOID
++Pro1xReserveHighMemory (VOID)
++{
++  UINTN MapSize = sizeof (Pro1xMemMap);
++  UINTN MapKey;
++  UINTN DescSize;
++  UINT32 DescVersion;
++  UINTN Index;
++  UINT64 Taken = 0;
++  EFI_STATUS Status;
++
++  Status = gBS->GetMemoryMap (&MapSize, (EFI_MEMORY_DESCRIPTOR *)Pro1xMemMap,
++                              &MapKey, &DescSize, &DescVersion);
++  if (EFI_ERROR (Status) || DescSize == 0) {
++    DEBUG ((EFI_D_ERROR, "Pro1X: no memory map (%r), high RAM stays usable\n",
++            Status));
++    return;
++  }
++
++  for (Index = 0; Index < MapSize / DescSize; Index++) {
++    EFI_MEMORY_DESCRIPTOR *Desc =
++        (EFI_MEMORY_DESCRIPTOR *)(Pro1xMemMap + Index * DescSize);
++    EFI_PHYSICAL_ADDRESS Start = Desc->PhysicalStart;
++    EFI_PHYSICAL_ADDRESS End = Start + EFI_PAGES_TO_SIZE (Desc->NumberOfPages);
++
++    if (Desc->Type != EfiConventionalMemory || End <= PRO1X_MEM_LIMIT) {
++      continue;
++    }
++    if (Start < PRO1X_MEM_LIMIT) {
++      Start = PRO1X_MEM_LIMIT;
++    }
++    Status = gBS->AllocatePages (AllocateAddress, EfiBootServicesData,
++                                 EFI_SIZE_TO_PAGES (End - Start), &Start);
++    if (EFI_ERROR (Status)) {
++      DEBUG ((EFI_D_ERROR, "Pro1X: 0x%lx-0x%lx not taken: %r\n", Start, End,
++              Status));
++      continue;
++    }
++    Taken += End - Start;
++  }
++  DEBUG ((EFI_D_ERROR, "Pro1X: %lu MiB above 4 GiB kept out of use\n",
++          Taken >> 20));
++}
++
+ EFI_STATUS EFIAPI  __attribute__ ( (no_sanitize ("safe-stack")))
+ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+ {
+@@ -182,6 +237,8 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+   DEBUG ((EFI_D_VERBOSE, "LinuxLoaderEntry Address: 0x%llx\n",
+          (UINTN)LinuxLoaderEntry));
+ 
++  Pro1xReserveHighMemory ();
++
+   Status = InitThreadUnsafeStack ();
+ 
+   if (Status != EFI_SUCCESS) {
+diff --git a/QcomModulePkg/Library/BootLib/UpdateDeviceTree.c b/QcomModulePkg/Library/BootLib/UpdateDeviceTree.c
+index 0aa20f8..eae2b67 100644
+--- a/QcomModulePkg/Library/BootLib/UpdateDeviceTree.c
++++ b/QcomModulePkg/Library/BootLib/UpdateDeviceTree.c
+@@ -42,6 +42,9 @@
+ #include <Library/PartialGoods.h>
+ #include <Library/FdtRw.h>
+ 
++/* F(x)tec Pro1X: RAM above this is not handed to the kernel */
++#define PRO1X_MEM_LIMIT 0x100000000ULL
++
+ #define NUM_SPLASHMEM_PROP_ELEM 4
+ #define DEFAULT_CELL_SIZE 2
+ #define NUM_RNG_SEED_WORDS 512
+@@ -530,6 +533,20 @@ AddMemMap (VOID *Fdt, UINT32 MemNodeOffset, BOOLEAN BootWith32Bit)
+ 
+   DEBUG ((EFI_D_INFO, "RAM Partitions\r\n"));
+   for (i = 0; i < NumPartitions; i++) {
++    /*
++     * F(x)tec Pro1X with failing RAM above 4 GiB: the kernel is only told
++     * about the memory below (see Pro1xReserveHighMemory in LinuxLoader).
++     */
++    if (RamPartitions[i].Base >= PRO1X_MEM_LIMIT) {
++      DEBUG ((EFI_D_ERROR, "Pro1X: RAM 0x%016lx (0x%lx) left out\n",
++              RamPartitions[i].Base, RamPartitions[i].AvailableLength));
++      continue;
++    }
++    if (RamPartitions[i].Base + RamPartitions[i].AvailableLength >
++        PRO1X_MEM_LIMIT) {
++      RamPartitions[i].AvailableLength =
++          PRO1X_MEM_LIMIT - RamPartitions[i].Base;
++    }
+     DEBUG ((EFI_D_INFO, "Add Base: 0x%016lx Available Length: 0x%016lx \n",
+             RamPartitions[i].Base, RamPartitions[i].AvailableLength));
+ 
+-- 
+2.56.0
+

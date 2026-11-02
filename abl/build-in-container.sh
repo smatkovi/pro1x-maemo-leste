@@ -1,0 +1,18 @@
+#!/bin/bash
+# The F(x)tec Pro1X's ABL, run by abl/build.sh in the pro1x-abl-build container.
+# ABL for the F(x)tec Pro1X (bengal, Android 11 flags), in pro1x-abl-build.
+set -e
+cd /src/edk2
+export PATH=/usr/lib/llvm-11/bin:$PATH
+make -j1 all PREBUILT_HOST_TOOLS="CC=/src/hostcc CXX=/src/hostcxx" \
+  BOOTLOADER_OUT=/src/out/obj/ABL_OBJ \
+  CLANG_BIN=/usr/lib/llvm-11/bin/ CLANG_PREFIX=aarch64-linux-gnu- \
+  TARGET_ARCHITECTURE=AARCH64 PREBUILT_PYTHON_PATH=/usr/bin/python2 \
+  BOARD_BOOTLOADER_PRODUCT_NAME=bengal \
+  VERIFIED_BOOT=0 VERIFIED_BOOT_2=1 VERIFIED_BOOT_LE=0 VERITY_LE=0 \
+  USER_BUILD_VARIANT=0 AB_RETRYCOUNT_DISABLE=0 TARGET_BOARD_TYPE_AUTO=0 \
+  DISABLE_PARALLEL_DOWNLOAD_FLASH=0 ENABLE_LE_VARIANT=false \
+  BUILD_SYSTEM_ROOT_IMAGE=0 DYNAMIC_PARTITION_SUPPORT=1 VIRTUAL_AB_OTA=1 \
+  BUILD_USES_RECOVERY_AS_BOOT=0 INIT_BIN='\"/init\"' NAND_SQUASHFS_SUPPORT=0 \
+  ENABLE_SYSTEMD_BOOTSLOT=0 RW_ROOTFS=0 USERDATAIMAGE_FILE_SYSTEM_TYPE=ext4
+ls -la /src/out/abl.elf
