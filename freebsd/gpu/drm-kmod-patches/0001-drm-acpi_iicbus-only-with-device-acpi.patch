@@ -1,0 +1,56 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] drm: attach acpi_iicbus only in kernels with "device acpi"
+
+drm_os_freebsd.c registers the iicbus driver class on drmn twice, the
+plain one and acpi_iicbus_driver. The latter is defined by
+sys/dev/iicbus/acpi_iicbus.c, which is only compiled into kernels with
+"device acpi". The PRO1X kernel is FDT-only (no ACPI on the SM6115):
+drm.ko then has acpi_iicbus_driver as its one undefined symbol that
+neither the kernel nor linuxkpi, linuxkpi_video, dmabuf or lindebugfs
+provide, and kldload refuses it.
+
+With the kernel's option headers (a build with KERNBUILDDIR, as
+freebsd/gpu/build.sh does) the registration now follows DEV_ACPI from
+opt_acpi.h; built without them (the port's default) it stays as it was.
+
+---
+diff --git a/drivers/gpu/drm/drm_os_freebsd.c b/drivers/gpu/drm/drm_os_freebsd.c
+index e1b6400..161888e 100644
+--- a/drivers/gpu/drm/drm_os_freebsd.c
++++ b/drivers/gpu/drm/drm_os_freebsd.c
+@@ -2,6 +2,8 @@
+ #include <sys/cdefs.h>
+ __FBSDID("$FreeBSD$");
+ 
++#include "opt_acpi.h"
++
+ #include <drm/drm_device.h>
+ #include <drm/drm_file.h>
+ #include <drm/drm_ioctl.h>
+@@ -186,7 +188,14 @@ MODULE_VERSION(drmn, 2);
+ MODULE_DEPEND(drmn, agp, 1, 1, 1);
+ #endif
+ DRIVER_MODULE(iicbus, drmn, iicbus_driver, NULL, NULL);
++/*
++ * acpi_iicbus_driver exists only in kernels with "device acpi". An FDT-only
++ * kernel (arm64 without ACPI) has no such symbol and the linker would refuse
++ * drm.ko. Without the kernel's option headers (no KERNBUILDDIR), keep it.
++ */
++#if defined(DEV_ACPI) || !defined(HAVE_KERNEL_OPTION_HEADERS)
+ DRIVER_MODULE(acpi_iicbus, drmn, acpi_iicbus_driver, NULL, NULL);
++#endif
+ MODULE_DEPEND(drmn, iicbus, IICBUS_MINVER, IICBUS_PREFVER, IICBUS_MAXVER);
+ MODULE_DEPEND(drmn, iic, 1, 1, 1);
+ MODULE_DEPEND(drmn, iicbb, IICBB_MINVER, IICBB_PREFVER, IICBB_MAXVER);
+diff --git a/drm/Makefile b/drm/Makefile
+index 841fa16..5628e28 100644
+--- a/drm/Makefile
++++ b/drm/Makefile
+@@ -148,6 +148,7 @@ SRCS+=	buddy.c
+ 
+ SRCS+=	device_if.h \
+ 	vnode_if.h \
++	opt_acpi.h \
+ 	bus_if.h \
+ 	pci_if.h \
+ 	pci_iov_if.h \
