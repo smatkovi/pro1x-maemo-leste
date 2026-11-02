@@ -48,7 +48,7 @@ cat $L > /dev/pro1xshot
 (
 	while sleep 20; do
 		{
-			cat $L /tmp/pro1x-touchcal.txt 2> /dev/null
+			cat $L /tmp/pro1x-touchcal.txt /tmp/pro1x-apptest.txt 2> /dev/null
 			echo "=== $(date)"
 			sysctl dev.cpu.0.freq dev.cpu.0.freq_levels hw.ncpu kern.smp.disabled 2>&1
 			service powerd status 2>&1
@@ -64,7 +64,8 @@ cat $L > /dev/pro1xshot
 				b64encode /tmp/pro1x-screen.xwd.gz pro1x-screen.xwd.gz
 			fi
 			echo "=== the session's output"
-			tail -n 60 /tmp/pro1x-startx.log
+			grep -v -e 'did not exit properly' -e 'background image' \
+			    -e bookmark -e 'operator' /tmp/pro1x-startx.log | tail -n 400
 			echo "=== Xorg tail"
 			tail -n 40 /var/log/Xorg.0.log
 		} > /dev/pro1xshot 2>&1
@@ -100,7 +101,7 @@ HOME=/root startx -- \
     > /tmp/pro1x-startx.log 2>&1
 kill $logger_pid 2> /dev/null
 {
-	cat $L /tmp/pro1x-touchcal.txt
+	cat $L /tmp/pro1x-touchcal.txt /tmp/pro1x-apptest.txt
 	echo "=== pointer (ptrlog)"
 	tail -n 300 /tmp/pro1x-ptr.log
 	echo "=== the session's output"
