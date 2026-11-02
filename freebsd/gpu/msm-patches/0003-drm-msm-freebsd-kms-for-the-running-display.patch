@@ -1,0 +1,57 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Subject: [PATCH] drm/msm: FreeBSD's KMS for the display Linux leaves running
+
+The headless DRM device (no DPU driver of Linux's; FreeBSD's qcom_dpu
+keeps the display Linux set up) gets KMS from msm_freebsd_kms.c
+(freebsd/gpu/kms.md) when hw.msm.kms=1: one CRTC, one primary plane and
+a DSI connector with the mode the panel runs in, so that the same
+device, /dev/dri/card0, offers KMS and the GPU to Xorg's modesetting
+driver and Mesa. msm_drm_init() tries it where it would turn
+DRIVER_MODESET and DRIVER_ATOMIC off; when it declines, the device
+stays headless as before. msm_drm_uninit() hands the scanout back to
+the console's framebuffer. Linux's behaviour is unchanged
+(#ifdef __FreeBSD__).
+
+---
+--- a/drivers/gpu/drm/msm/msm_drv.c
++++ b/drivers/gpu/drm/msm/msm_drv.c
+@@ -80,6 +80,11 @@
+ 		if (priv->kms)
+ 			drm_atomic_helper_shutdown(ddev);
+ 	}
++#ifdef __FreeBSD__
++	/* the display back to the console's framebuffer, its interrupt off */
++	if (!priv->kms)
++		msm_freebsd_kms_fini(ddev);
++#endif
+ 
+ 	/* We must cancel and cleanup any pending vblank enable/disable
+ 	 * work before msm_irq_uninstall() to avoid work re-enabling an
+@@ -274,6 +279,10 @@
+ 		ret = msm_drm_kms_init(dev, drv);
+ 		if (ret)
+ 			goto err_msm_uninit;
++#ifdef __FreeBSD__
++	} else if (msm_freebsd_kms_init(ddev) == 0) {
++		/* one CRTC, plane and DSI connector on the running display */
++#endif
+ 	} else {
+ 		/* valid only for the dummy headless case, where of_node=NULL */
+ 		WARN_ON(dev->of_node);
+--- a/drivers/gpu/drm/msm/msm_kms.h
++++ b/drivers/gpu/drm/msm/msm_kms.h
+@@ -190,4 +190,14 @@
+ int msm_drm_kms_init(struct device *dev, const struct drm_driver *drv);
+ void msm_drm_kms_uninit(struct device *dev);
+ 
++#ifdef __FreeBSD__
++/*
++ * FreeBSD (freebsd/gpu/kms.md): KMS for the display Linux leaves running,
++ * in the headless DRM device (msm_freebsd_kms.c): 0 when set up, else an
++ * error and the device stays headless
++ */
++int msm_freebsd_kms_init(struct drm_device *ddev);
++void msm_freebsd_kms_fini(struct drm_device *ddev);
++#endif
++
+ #endif /* __MSM_KMS_H__ */

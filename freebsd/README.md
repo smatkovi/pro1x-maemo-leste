@@ -251,6 +251,8 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `patches/0029-*` | shared GEOM nops (`kern.geom.nop.shared`): the writable pool's ranges inside userdata |
 | `patches/0035-*` | `qcom_rtc`'s alarm as a wake-up (`dev.qcom_rtc.0.wakealarm`), `power_wakeup` for the suspend (`pm/README.md`) |
 | `patches/0036-*`, `0037-*` | `pro1x.power=on`: the power profile's kernel settings (all CPUs, their idle states); LinuxKPI 802.11: the driver's power save, `ifconfig wlan0 powersave` (`pm/README.md`, stage 6) |
+| `patches/0053-*` | `qcom_dpu` takes the MDSS interrupt: the DPU's interrupts for msm.ko's KMS (eventhandler `qcom_dpu_mdp_intr`), the DSI controller's for the DCS waits; `hw.qcom_dpu.irq=0` leaves it off (`gpu/kms.md`) |
+| `gpu/` | the Adreno 610: drm-kmod, `msm.ko` (GPU, and KMS on the running display with `hw.msm.kms=1`), Mesa with freedreno, X on KMS (`gpu/README.md`, `gpu/msm-port.md`, `gpu/kms.md`) |
 | `patches/0038-*`, `0039-*`, `rng/` | random(4)'s sources: `qcom_rnd` reads the SoC's PRNG (`qcom,prng-ee`, its clock voted around each read), kexec's `/chosen/rng-seed` into Fortuna's pool 0; the USB sshd's host keys after the seed (`rng/README.md`) |
 | `mfsroot/etc/pro1x-pool.sh` | the writable pool through the file's blocks, boot environment menu |
 | `rootfs.sh`, `rootfs/` | the full system's root image and its configuration |

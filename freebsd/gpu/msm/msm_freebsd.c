@@ -18,8 +18,9 @@
  *    qcom_dsp's secure monitor calls;
  *  - dma_alloc_attrs (the VRAM carveout), memparse;
  *  - what msm.ko leaves out: IOMMU (decision A: no IOMMU, msm's VRAM
- *    carveout; msm_iommu_new() finds none), devfreq (the OPP stays), KMS
- *    and fbdev, debugfs's display parts, the a2xx..a5xx catalogs.
+ *    carveout; msm_iommu_new() finds none), devfreq (the OPP stays), msm's
+ *    own KMS and fbdev (msm_freebsd_kms.c has a small KMS of FreeBSD's,
+ *    kms.md), debugfs's display parts, the a2xx..a5xx catalogs.
  */
 
 #include <linux/kernel.h>

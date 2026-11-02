@@ -2,12 +2,20 @@
 # FreeBSD on the Pro1X, as root on the console, until the root image has
 # the fixed scfb (freebsd/scfb): the desktop with userdata's X modules.
 #
-#   sh /dev/pro1x-host/freebsd/x.sh [hildon|harmattan|xfce] [half]
+#   sh /dev/pro1x-host/freebsd/x.sh [hildon|harmattan|xfce] [half|kms]
 #
 # half: X's screen at half the size, 1080 x 540, each pixel 2 x 2 on the
 # panel (scfb's Option "Scale" "2", freebsd/scfb), Hildon unscaled on it
 # (pro1x-hidpi with SCALE=1 from /tmp, not userdata's pro1x-display.conf,
 # which Leste shares): a quarter of the pixels to draw and composite.
+#
+# kms: X on the GPU (freebsd/gpu/kms.md): msm.ko loaded with hw.msm.kms=1
+# and hw.msm.vram=256m (userdata's freebsd/modules first, as pro1x-gputest),
+# Xorg's modesetting driver with glamor on /dev/dri/card0 through the second
+# configuration directory (userdata's freebsd/xorg-kms.conf.d, else the
+# image's /usr/local/etc/X11/xorg-kms.conf.d), Mesa with freedreno from
+# userdata's freebsd/mesa when there (out/gpu/mesa), the screen turned
+# right by RandR (xrandr once X is up, if the configuration did not).
 #
 # devd first when it is not running (X takes its input devices from it,
 # the power key needs it): its own words on why (8 s in the foreground)
@@ -97,6 +105,40 @@ logger_pid=$!
 	done
 ) &
 perf_pid=$!
+# kms: the GPU's modules, Mesa, the configuration
+KMS=
+if [ "$2" = kms ]; then
+	KMS=1
+	{
+		echo "--- kms: msm.ko with KMS"
+		[ -d $H/modules ] && kldconfig -i $H/modules
+		for v in hw.msm.kms=1 hw.msm.vram=256m; do
+			[ -n "$(kenv -q "${v%%=*}")" ] || kenv "$v"
+		done
+		for m in firmware linuxkpi linuxkpi_video dmabuf lindebugfs drm \
+		    qcom_dsp msm; do
+			kldload -n $m
+		done
+		i=0
+		until [ -c /dev/dri/card0 ] || [ $i -ge 20 ]; do
+			sleep 1
+			i=$((i + 1))
+		done
+		ls -la /dev/dri
+		sysctl hw.msm.kms_info dev.qcom_dpu.0.irq
+		dmesg | grep -E "kms:|Initialized msm" | tail -20
+	} >> $L 2>&1
+	if [ -d $H/mesa/usr/local/lib ]; then
+		M=$H/mesa/usr/local
+		LD_LIBRARY_PATH=$M/lib
+		LIBGL_DRIVERS_PATH=$M/lib/dri
+		GBM_BACKENDS_PATH=$M/lib/gbm
+		__EGL_VENDOR_LIBRARY_FILENAMES=$M/share/glvnd/egl_vendor.d/50_mesa.json
+		export LD_LIBRARY_PATH LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH \
+		    __EGL_VENDOR_LIBRARY_FILENAMES
+		echo "kms: Mesa from $H/mesa" >> $L
+	fi
+fi
 # The sampler's file stays for the boot: a second session (x.sh ... half
 # after x.sh) is in the same shot, behind this mark
 echo "=== x.sh ${1:-hildon} ${2:-full} started $(date +%T)" >> /tmp/pro1x-perf.log
@@ -110,6 +152,21 @@ echo "=== x.sh ${1:-hildon} ${2:-full} started $(date +%T)" >> /tmp/pro1x-perf.l
 		i=$((i + 1))
 	done
 	[ -x $H/ptrlog ] && $H/ptrlog > /tmp/pro1x-ptr.log 2>&1 &
+	# kms: the panel's output turned right, unless the configuration's
+	# Monitor option or ~/.xinitrc did; what glamor runs on
+	if [ "$KMS" = 1 ]; then
+		if ! xrandr --query 2> /dev/null |
+		    grep -q '^DSI-1 connected [^(]* right ('; then
+			xrandr --output DSI-1 --rotate right >> $L 2>&1
+		fi
+		{
+			xrandr --query
+			grep -iE "glamor|DRI3|modeset\(0\)" /var/log/Xorg.0.log |
+			    head -20
+			sysctl hw.msm.kms_info hw.msm.kms_vblanks \
+			    hw.msm.kms_flips hw.msm.kms_underruns
+		} >> $L 2>&1
+	fi
 	# X's one thread on the fast cluster (the CPUs with the higher top
 	# frequency, 4-7 on the SM6115): FreeBSD's scheduler does not know
 	# big from little and puts it on an A53 as often as on an A73
@@ -140,6 +197,12 @@ C=
 [ -d $H/xorg.conf.d ] && C="-configdir $H/xorg.conf.d"
 # touchcal.sh's, from this boot's taps, before that
 [ -d /tmp/pro1x-xorg.conf.d ] && C="-configdir /tmp/pro1x-xorg.conf.d"
+# kms: the KMS configuration directory instead (userdata's first)
+if [ "$KMS" = 1 ]; then
+	C="-configdir /usr/local/etc/X11/xorg-kms.conf.d"
+	[ -d $H/xorg-kms.conf.d ] && C="-configdir $H/xorg-kms.conf.d"
+	echo "kms: X $C" >> $L
+fi
 # half: the same configuration with the framebuffer driver's Scale 2, and
 # Hildon's theme and fonts at the factor 1; otherwise the factor of
 # userdata's pro1x-display.conf (back after a half session in this boot)

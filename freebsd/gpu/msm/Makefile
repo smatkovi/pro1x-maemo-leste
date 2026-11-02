@@ -11,8 +11,9 @@
 #             as drm.ko, the structures must match)
 #   DSPDIR    freebsd/dsp/sys/arm64/qualcomm/dsp (the Linux platform driver
 #             glue lkpi_platform*.c, its shim headers, qcom_dsp.h)
-# No KMS, DPU, DSI, HDMI or DP: the display stays FreeBSD's (scfb on the
-# framebuffer Linux left).
+# No DPU, DSI, HDMI or DP driver of Linux's: the display stays the one Linux
+# left running, which qcom_dpu (freebsd/patches/0017) takes over; with
+# hw.msm.kms=1, msm_freebsd_kms.c offers KMS on it (freebsd/gpu/kms.md).
 
 DSPDIR?=	${.CURDIR:H:H}/dsp/sys/arm64/qualcomm/dsp
 .if !defined(LINUX) || !defined(DRM_KMOD)
@@ -68,6 +69,9 @@ SRCS+=	mdt_loader.c
 # FreeBSD: the platform drivers, the Linux interfaces msm uses that LinuxKPI
 # lacks (msm_freebsd.c), the GPU's power, clocks and SMMU (msm_freebsd_bsd.c)
 SRCS+=	msm_freebsd.c msm_freebsd_bsd.c
+# KMS for the display Linux left running (kms.md): one CRTC, plane, DSI
+# connector on the DPU's registers, vblank through qcom_dpu (patches/0053)
+SRCS+=	msm_freebsd_kms.c
 SRCS+=	lkpi_platform.c lkpi_platform_bsd.c
 
 SRCS+=	device_if.h bus_if.h ofw_bus_if.h vnode_if.h pci_if.h \

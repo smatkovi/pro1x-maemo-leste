@@ -45,16 +45,29 @@
  *   selftest     1 (loader): power the GPU up at load and check that its
  *                registers answer; writing 1 runs it again
  *   vram         (msm's module parameter, a string) the VRAM carveout's
- *                size, default "16m"
+ *                size, default "16m"; 256m with KMS (a few screens)
+ *   kms          1: KMS for the display Linux left running
+ *                (msm_freebsd_kms.c, freebsd/gpu/kms.md); the VRAM carveout
+ *                then below 4 GiB, for the display's 32-bit addresses.
+ *                Default 0: the device stays headless (GPU only)
+ *   kms_irq      1 (default): vblank from INTF_1's vsync interrupt through
+ *                qcom_dpu's MDSS interrupt when the kernel has it
+ *                (patches/0053, dev.qcom_dpu.0.irq); 0: polled
+ *   kms_info, kms_vblanks, kms_flips, kms_flips_late, kms_underruns
+ *                (read only) KMS's set-up, its vblanks, page flips done,
+ *                flips a frame late, INTF_1 underruns
  */
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
+#include <sys/callout.h>
+#include <sys/eventhandler.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
+#include <sys/proc.h>
 #include <sys/sx.h>
 #include <sys/sysctl.h>
 
@@ -115,6 +128,12 @@ SYSCTL_UINT(_hw_msm, OID_AUTO, cx_voted, CTLFLAG_RD, &msm_cx_voted, 0,
 static u_int msm_cx_wanted;
 SYSCTL_UINT(_hw_msm, OID_AUTO, cx_wanted, CTLFLAG_RD, &msm_cx_wanted, 0,
     "VDDCX level the GPU's OPP requires");
+static int msm_kms;
+SYSCTL_INT(_hw_msm, OID_AUTO, kms, CTLFLAG_RDTUN, &msm_kms, 0,
+    "KMS for the display Linux left running (freebsd/gpu/kms.md)");
+static int msm_kms_irq = 1;
+SYSCTL_INT(_hw_msm, OID_AUTO, kms_irq, CTLFLAG_RDTUN, &msm_kms_irq, 0,
+    "KMS vblank from qcom_dpu's MDSS interrupt when there (0: polled)");
 
 unsigned long
 msm_bsd_max_freq(void)
@@ -1323,19 +1342,24 @@ msm_bsd_vram_alloc(size_t size, uint64_t *pa)
 	u_long npages = atop(round_page(size));
 	int tries;
 
+	/* with KMS below 4 GiB: the display's source pipes take 32-bit
+	 * addresses (its SMMU translates nothing, qcom_dpu) */
+	vm_paddr_t high = msm_kms ? (vm_paddr_t)0xffffffff : ~(vm_paddr_t)0;
+
 	for (tries = 0; tries < 3; tries++) {
 		m = vm_page_alloc_noobj_contig(VM_ALLOC_WIRED | VM_ALLOC_ZERO |
-		    VM_ALLOC_NORMAL, npages, 0, ~(vm_paddr_t)0, PAGE_SIZE, 0,
+		    VM_ALLOC_NORMAL, npages, 0, high, PAGE_SIZE, 0,
 		    VM_MEMATTR_WRITE_COMBINING);
 		if (m != NULL) {
 			*pa = VM_PAGE_TO_PHYS(m);
 			return (m);
 		}
 		if (vm_page_reclaim_contig(VM_ALLOC_NORMAL | VM_ALLOC_WAITOK,
-		    npages, 0, ~(vm_paddr_t)0, PAGE_SIZE, 0) != 0)
+		    npages, 0, high, PAGE_SIZE, 0) != 0)
 			break;
 	}
-	printf("msm: no %zu bytes of contiguous memory for the VRAM\n", size);
+	printf("msm: no %zu bytes of contiguous memory for the VRAM%s\n", size,
+	    msm_kms ? " below 4 GiB" : "");
 	return (NULL);
 }
 
@@ -1383,6 +1407,137 @@ msm_bsd_wb(void *va, size_t size)
 {
 	cpu_dcache_wb_range(va, size);
 }
+
+/* --- the display: KMS's FreeBSD side (msm_freebsd_kms.c, kms.md) ------------------- */
+
+/*
+ * qcom_dpu's eventhandler for the DPU's interrupts (patches/0053,
+ * sys/arm64/qualcomm/qcom_dpu.h, declared again here: msm.ko is built
+ * against kernel sources that may not have it yet, and registers by name)
+ */
+typedef void (*qcom_dpu_mdp_intr_fn)(void *arg, uint32_t intr, uint32_t intr2);
+EVENTHANDLER_DECLARE(qcom_dpu_mdp_intr, qcom_dpu_mdp_intr_fn);
+
+static eventhandler_tag msm_kms_eh;
+static struct callout msm_kms_callout;
+static void (*volatile msm_kms_poll_fn)(void *);
+static void *msm_kms_poll_arg;
+static sbintime_t msm_kms_poll_sbt;
+
+static char msm_kms_info[160] = "off";
+SYSCTL_STRING(_hw_msm, OID_AUTO, kms_info, CTLFLAG_RD, msm_kms_info,
+    sizeof(msm_kms_info), "KMS: mode, source pipes, vblank source");
+static u_long msm_kms_counts[MSM_KMS_NCOUNT];
+SYSCTL_ULONG(_hw_msm, OID_AUTO, kms_vblanks, CTLFLAG_RD,
+    &msm_kms_counts[MSM_KMS_VBLANKS], 0, "KMS vblanks handled");
+SYSCTL_ULONG(_hw_msm, OID_AUTO, kms_flips, CTLFLAG_RD,
+    &msm_kms_counts[MSM_KMS_FLIPS], 0, "KMS flips done (events sent)");
+SYSCTL_ULONG(_hw_msm, OID_AUTO, kms_flips_late, CTLFLAG_RD,
+    &msm_kms_counts[MSM_KMS_FLIPS_LATE], 0,
+    "KMS vblanks with a flip's flush still pending");
+SYSCTL_ULONG(_hw_msm, OID_AUTO, kms_underruns, CTLFLAG_RD,
+    &msm_kms_counts[MSM_KMS_UNDERRUNS], 0, "INTF_1 underrun interrupts");
+
+bool
+msm_bsd_kms_enabled(void)
+{
+	return (msm_kms != 0);
+}
+
+int
+msm_bsd_kms_intr_register(void (*fn)(void *, uint32_t, uint32_t), void *arg)
+{
+	char name[] = "dev.qcom_dpu.0.irq";
+	size_t len = sizeof(int);
+	int on = 0;
+
+	if (msm_kms_irq == 0) {
+		printf("msm: kms: vblank polled (hw.msm.kms_irq=0)\n");
+		return (0);
+	}
+	if (kernel_sysctlbyname(curthread, name, &on, &len, NULL, 0, NULL,
+	    0) != 0 || on == 0) {
+		printf("msm: kms: qcom_dpu has no MDSS interrupt (%s: "
+		    "patches/0053, hw.qcom_dpu.irq): vblank polled\n", name);
+		return (0);
+	}
+	msm_kms_eh = EVENTHANDLER_REGISTER(qcom_dpu_mdp_intr,
+	    (qcom_dpu_mdp_intr_fn)fn, arg, EVENTHANDLER_PRI_ANY);
+	if (msm_kms_eh == NULL)
+		return (-ENOMEM);
+	printf("msm: kms: the DPU's interrupts from qcom_dpu's MDSS "
+	    "interrupt\n");
+	return (1);
+}
+
+void
+msm_bsd_kms_intr_deregister(void)
+{
+	/* waits for a handler that runs */
+	if (msm_kms_eh != NULL)
+		EVENTHANDLER_DEREGISTER(qcom_dpu_mdp_intr, msm_kms_eh);
+	msm_kms_eh = NULL;
+}
+
+static void
+msm_kms_tick(void *arg)
+{
+	void (*fn)(void *) = msm_kms_poll_fn;
+
+	if (fn == NULL)
+		return;
+	fn(msm_kms_poll_arg);
+	if (msm_kms_poll_fn != NULL)
+		callout_schedule_sbt(&msm_kms_callout, msm_kms_poll_sbt,
+		    msm_kms_poll_sbt / 8, 0);
+}
+
+/*
+ * Called with sleep mutexes held (DRM's vblank lock): no waiting here, a
+ * tick that runs may come once more and finds nothing to call
+ */
+void
+msm_bsd_kms_poll(void (*fn)(void *), void *arg, unsigned int us)
+{
+	if (fn == NULL || us == 0) {
+		msm_kms_poll_fn = NULL;
+		callout_stop(&msm_kms_callout);
+		return;
+	}
+	msm_kms_poll_arg = arg;
+	msm_kms_poll_sbt = us * SBT_1US;
+	msm_kms_poll_fn = fn;
+	callout_reset_sbt(&msm_kms_callout, msm_kms_poll_sbt,
+	    msm_kms_poll_sbt / 8, msm_kms_tick, NULL, 0);
+}
+
+void
+msm_bsd_kms_poll_drain(void)
+{
+	msm_kms_poll_fn = NULL;
+	callout_drain(&msm_kms_callout);
+}
+
+void
+msm_bsd_kms_count(int what)
+{
+	if (what >= 0 && what < MSM_KMS_NCOUNT)
+		atomic_add_long(&msm_kms_counts[what], 1);
+}
+
+void
+msm_bsd_kms_set_info(const char *info)
+{
+	strlcpy(msm_kms_info, info, sizeof(msm_kms_info));
+}
+
+static void
+msm_bsd_kms_load(void *arg)
+{
+	callout_init(&msm_kms_callout, 1);
+}
+SYSINIT(msm_bsd_kms_load, SI_SUB_DRIVERS, SI_ORDER_FIRST, msm_bsd_kms_load,
+    NULL);
 
 /* --- secure monitor calls (qcom_dsp's qcom_scm.c) ---------------------------------- */
 
@@ -1518,6 +1673,8 @@ SYSINIT(msm_bsd_load, SI_SUB_DRIVERS, SI_ORDER_ANY, msm_bsd_load, NULL);
 static void
 msm_bsd_unload(void *arg)
 {
+	msm_bsd_kms_intr_deregister();
+	msm_bsd_kms_poll_drain();
 	regs_unmap(&smmu);
 	regs_unmap(&gcc);
 	regs_unmap(&gpucc);

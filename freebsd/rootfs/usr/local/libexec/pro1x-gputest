@@ -328,7 +328,7 @@ if [ "$step" = kms3 ]; then
 	check "glamor on freedreno (FD610)" \
 	    sh -c "grep -i 'glamor X acceleration enabled on' /var/log/Xorg.0.log | grep -q FD6"
 	xrandr --query 2>&1 | head -10
-	check "DSI-1 turned right" sh -c "xrandr --query | grep -q 'DSI-1 connected.* right'"
+	check "DSI-1 turned right" sh -c "xrandr --query | grep -q '^DSI-1 connected [^(]* right ('"
 	echo "--- a client on DRI3"
 	out=$(run_bounded 30 egl-pbuffer x11 2>&1)
 	echo "$out"

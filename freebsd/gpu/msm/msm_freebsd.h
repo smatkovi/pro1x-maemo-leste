@@ -105,6 +105,35 @@ int	msm_bsd_pas_auth_and_reset(uint32_t pas_id);
 int	msm_bsd_pas_shutdown(uint32_t pas_id);
 int	msm_bsd_pas_supported(uint32_t pas_id);
 
+/* --- the display (KMS: msm_freebsd_kms.c, freebsd/gpu/kms.md) ------------------------ */
+/* hw.msm.kms: KMS for the display Linux left running (0, the default: headless) */
+bool	msm_bsd_kms_enabled(void);
+/*
+ * The DPU's interrupts through qcom_dpu's MDSS interrupt (patches/0053):
+ * fn(arg, intr, intr2) in that interrupt's thread, intr and intr2 the
+ * enabled statuses of the DPU's INTR and INTR2 registers. 1: registered,
+ * qcom_dpu has the interrupt on; 0: nothing will come (no such interrupt
+ * in this kernel, hw.qcom_dpu.irq=0 or hw.msm.kms_irq=0): poll instead;
+ * negative: an error
+ */
+int	msm_bsd_kms_intr_register(void (*fn)(void *, uint32_t, uint32_t),
+	    void *arg);
+void	msm_bsd_kms_intr_deregister(void);
+/* fn(arg) every us microseconds in a callout; fn NULL or us 0 stops it
+ * (without waiting: callable with sleep mutexes held); drain waits */
+void	msm_bsd_kms_poll(void (*fn)(void *), void *arg, unsigned int us);
+void	msm_bsd_kms_poll_drain(void);
+/* counters (sysctl hw.msm.kms_*), the summary (hw.msm.kms_info) */
+enum {
+	MSM_KMS_VBLANKS,
+	MSM_KMS_FLIPS,
+	MSM_KMS_FLIPS_LATE,
+	MSM_KMS_UNDERRUNS,
+	MSM_KMS_NCOUNT
+};
+void	msm_bsd_kms_count(int what);
+void	msm_bsd_kms_set_info(const char *info);
+
 /* --- device runs ---------------------------------------------------------------------- */
 /* the power-up self test (hw.msm.selftest=1 at load, sysctl hw.msm.selftest) */
 int	msm_bsd_selftest(void);

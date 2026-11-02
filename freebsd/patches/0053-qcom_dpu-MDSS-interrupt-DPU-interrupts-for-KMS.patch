@@ -1,0 +1,477 @@
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Mon, 2 Nov 2026 17:30:00 +0100
+Subject: [PATCH] qcom_dpu: the MDSS interrupt, the DPU's for a KMS driver
+
+The MDSS is the interrupt controller in front of the DPU and the DSI
+controller (Linux's msm_mdss.c; GIC SPI 186 on the SM6115). qcom_dpu
+owns its node, so it takes the interrupt: HW_INTR_STATUS bit 0, the
+DPU, is acknowledged here (INTR, INTR2, HIST, INTF_1's own and tear
+statuses, as dpu_core_irq does) and the enabled statuses go to the
+handlers of a new eventhandler, qcom_dpu_mdp_intr (qcom_dpu.h), in the
+interrupt's thread: msm.ko's KMS (freebsd/gpu/kms.md) registers there
+by name, sets the enable bits it wants (INTF_1's vsync) and needs no
+symbol of the kernel's. Bit 4, the DSI controller: its statuses are
+taken for the DCS code's waits, which read them through the handler's
+latch now (dsi_intr_status); its error interrupt goes off at the first
+error, as Linux's dsi_error does.
+
+At set-up every DPU and DSI interrupt enable is off and every status
+cleared, so nothing interrupts until a consumer asks for it; a source
+that stays asserted after handling for 1000 passes in a row has all
+enables turned off. The DSI registers stay mapped when DCS is refused
+(DSI not as expected), for the handler. dev.qcom_dpu.0.irq says whether
+the interrupt is on, intr_* count; hw.qcom_dpu.irq=0 leaves it alone.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+diff --git a/sys/arm64/qualcomm/qcom_dpu_handover.c b/sys/arm64/qualcomm/qcom_dpu_handover.c
+index 9a1f8cc..0e00fd5 100644
+--- a/sys/arm64/qualcomm/qcom_dpu_handover.c
++++ b/sys/arm64/qualcomm/qcom_dpu_handover.c
+@@ -29,21 +29,37 @@
+  * the Nokia N9's panel driver (panel-nokia-dsi, "lpm", partial area) used
+  * for its stand-by screen, for the stand-by screen and a pocket. Linux's
+  * DSI and DMA trigger settings are kept as they are and checked first.
++ *
++ * The MDSS interrupt (GIC SPI 186 on the SM6115; the MDSS is the interrupt
++ * controller in front of the DPU and the DSI controller in Linux's device
++ * tree, msm_mdss.c): taken here, since this driver owns the MDSS node. Its
++ * HW_INTR_STATUS says which block interrupts. The DPU's are acknowledged
++ * here and handed to whoever registered for them (the eventhandler
++ * qcom_dpu_mdp_intr, qcom_dpu.h: msm.ko's KMS, freebsd/gpu/kms.md), which
++ * sets the enable bits it wants itself; the DSI controller's go to the DCS
++ * code's waits, its error interrupt off after the first (as Linux's
++ * dsi_error). All of the DPU's and DSI's interrupt enables are off when it
++ * is set up: nothing interrupts until a consumer asks for it.
++ * hw.qcom_dpu.irq=0 leaves the interrupt alone.
+  */
+ 
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/bus.h>
+ #include <sys/conf.h>
++#include <sys/eventhandler.h>
+ #include <sys/kernel.h>
+ #include <sys/lock.h>
+ #include <sys/module.h>
++#include <sys/mutex.h>
++#include <sys/rman.h>
+ #include <sys/sx.h>
+ #include <sys/sysctl.h>
+ #include <sys/time.h>
+ 
+ #include <machine/atomic.h>
+ #include <machine/bus.h>
++#include <machine/resource.h>
+ 
+ #include <vm/vm.h>
+ #include <vm/pmap.h>
+@@ -55,6 +71,8 @@
+ 
+ #include <dev/backlight/backlight.h>
+ 
++#include <arm64/qualcomm/qcom_dpu.h>
++
+ #include "backlight_if.h"
+ 
+ #define	CTL0			0x1000
+@@ -73,6 +91,38 @@ static const struct {
+ 	{ "DMA0",	0x24000,	1u << 11 },
+ };
+ 
++/* The MDSS top: which block interrupts (msm_mdss.c HW_INTR_STATUS; the
++ * device tree's mdp node has interrupts = <0>, dsi0 <4>) */
++#define	MDSS_HW_INTR_STATUS	0x010
++#define	 MDSS_INTR_MDP		(1u << 0)
++#define	 MDSS_INTR_DSI0		(1u << 4)
++
++/*
++ * The DPU's interrupt registers below DPU 7 (Linux's dpu_hwio.h and
++ * dpu_hw_interrupts.c, dpu_intr_set_legacy): top, top 2, histogram, and
++ * INTF_1's own and its tear check block
++ */
++#define	MDP_INTR_EN		0x010
++#define	MDP_INTR_STATUS		0x014
++#define	MDP_INTR_CLEAR		0x018
++#define	MDP_INTR2_EN		0x008
++#define	MDP_INTR2_STATUS	0x00c
++#define	MDP_INTR2_CLEAR		0x02c
++#define	MDP_HIST_INTR_EN	0x01c
++#define	MDP_HIST_INTR_STATUS	0x020
++#define	MDP_HIST_INTR_CLEAR	0x024
++#define	MDP_INTF1_INTR_EN	(0x6a800 + 0x1c0)
++#define	MDP_INTF1_INTR_STATUS	(0x6a800 + 0x1c4)
++#define	MDP_INTF1_INTR_CLEAR	(0x6a800 + 0x1c8)
++#define	MDP_INTF1_TEAR_EN	(0x6d800 + 0x000)
++#define	MDP_INTF1_TEAR_STATUS	(0x6d800 + 0x004)
++#define	MDP_INTF1_TEAR_CLEAR	(0x6d800 + 0x008)
++
++/* Passes in a row with the interrupt still asserted after handling */
++#define	QCOM_DPU_STORM		1000
++
++EVENTHANDLER_LIST_DEFINE(qcom_dpu_mdp_intr);
++
+ /* ARM SMMUv2 (MMU-500) */
+ #define	SMMU_IDR0		0x020
+ #define	SMMU_IDR1		0x024
+@@ -102,8 +152,11 @@ static const struct {
+ #define	DSI_INTR_CTRL		0x10c
+ #define	 DSI_IRQ_CMD_DMA_DONE	(1u << 0)
+ #define	 DSI_IRQ_VIDEO_DONE	(1u << 16)
++#define	 DSI_IRQ_ERROR		(1u << 24)
++#define	 DSI_IRQ_MASK_ERROR	(1u << 25)
+ /* each status bit has its mask (enable) bit after it; status: write 1 */
+ #define	 DSI_IRQ_MASKS		0x02220202u
++#define	 DSI_IRQ_STATUSES	(DSI_IRQ_MASKS >> 1)
+ #define	DSI_TX_SIZE		256
+ 
+ /* MIPI DCS */
+@@ -128,8 +181,24 @@ static const struct {
+ struct qcom_dpu_softc {
+ 	device_t	dev;
+ 	struct sx	lock;
+-	vm_offset_t	dsi;		/* 0: no DSI commands */
++	vm_offset_t	dsi;		/* the DSI controller, 0: none found */
+ 	bus_size_t	dsi_size;
++	bool		dcs;		/* DCS commands possible */
++	vm_offset_t	mdss;		/* MDSS top, for the interrupt */
++	bus_size_t	mdss_size;
++	vm_offset_t	mdp;		/* the DPU */
++	bus_size_t	mdp_size;
++	struct resource	*irq_res;
++	void		*irq_cookie;
++	struct mtx	intr_mtx;	/* DSI_INTR_CTRL, dsi_latched */
++	uint32_t	dsi_latched;	/* DSI statuses the handler took */
++	u_long		n_mdp;		/* DPU interrupts */
++	u_long		n_mdp_none;	/* ... with no enabled status */
++	u_long		n_dsi;		/* DSI interrupts */
++	u_long		n_dsi_err;	/* ... with its error status */
++	u_long		n_stray;	/* from other blocks */
++	u_int		storm;
++	int		irq_on;
+ 	bus_dma_tag_t	tag;
+ 	bus_dmamap_t	map;
+ 	uint8_t		*buf;
+@@ -276,11 +345,38 @@ dsi_wr(struct qcom_dpu_softc *sc, bus_size_t off, uint32_t v)
+ 	*reg32(sc->dsi, DSI_REG_SHIFT + off) = v;
+ }
+ 
++/*
++ * The DSI controller's interrupt statuses: the register's, and those the
++ * MDSS interrupt handler took (and cleared) since they were last cleared
++ */
++static uint32_t
++dsi_intr_status(struct qcom_dpu_softc *sc)
++{
++	uint32_t v;
++
++	mtx_lock_spin(&sc->intr_mtx);
++	v = (dsi_rd(sc, DSI_INTR_CTRL) | sc->dsi_latched) & DSI_IRQ_STATUSES;
++	mtx_unlock_spin(&sc->intr_mtx);
++	return (v);
++}
++
++/* The interrupt masks and the statuses in clear (written as 1) */
++static void
++dsi_intr_set(struct qcom_dpu_softc *sc, uint32_t masks, uint32_t clear)
++{
++	mtx_lock_spin(&sc->intr_mtx);
++	dsi_wr(sc, DSI_INTR_CTRL, (masks & DSI_IRQ_MASKS) |
++	    (clear & DSI_IRQ_STATUSES));
++	sc->dsi_latched &= ~clear;
++	mtx_unlock_spin(&sc->intr_mtx);
++}
++
+ /*
+  * One packet from the command buffer, as msm's dsi_cmd_dma_tx does: the
+  * controller in command mode as well, the transfer started after a
+  * frame's video (in the blanking that follows), done when CMD_DMA_DONE
+- * latches. The interrupt itself stays unused (the status is polled).
++ * latches. The statuses are polled; with the MDSS interrupt on, its
++ * handler takes them (dsi_intr_status).
+  */
+ static int
+ dsi_dma_tx(struct qcom_dpu_softc *sc, u_int len)
+@@ -294,13 +390,13 @@ dsi_dma_tx(struct qcom_dpu_softc *sc, u_int len)
+ 		return (ENXIO);
+ 	dsi_wr(sc, DSI_CTRL, ctrl | DSI_CTRL_CMD_MODE_EN | DSI_CTRL_ENABLE);
+ 	masks = dsi_rd(sc, DSI_INTR_CTRL) & DSI_IRQ_MASKS;
+-	dsi_wr(sc, DSI_INTR_CTRL, masks | (DSI_IRQ_CMD_DMA_DONE << 1) |
+-	    (DSI_IRQ_VIDEO_DONE << 1) | DSI_IRQ_CMD_DMA_DONE |
++	dsi_intr_set(sc, masks | (DSI_IRQ_CMD_DMA_DONE << 1) |
++	    (DSI_IRQ_VIDEO_DONE << 1), DSI_IRQ_CMD_DMA_DONE |
+ 	    DSI_IRQ_VIDEO_DONE);
+ 	/* Waits of a millisecond or more sleep, so that the CPU can idle */
+ 	if (dsi_rd(sc, DSI_STATUS0) & DSI_STATUS0_VIDEO_BUSY) {
+ 		for (i = 0; i < 70 &&
+-		    !(dsi_rd(sc, DSI_INTR_CTRL) & DSI_IRQ_VIDEO_DONE); i++)
++		    !(dsi_intr_status(sc) & DSI_IRQ_VIDEO_DONE); i++)
+ 			pause_sbt("dsivid", SBT_1MS, SBT_1MS / 4, 0);
+ 		/* past the blanking's first line (BLLP), as msm waits */
+ 		pause_sbt("dsibllp", 3 * SBT_1MS, SBT_1MS, 0);
+@@ -312,17 +408,15 @@ dsi_dma_tx(struct qcom_dpu_softc *sc, u_int len)
+ 	dsi_wr(sc, DSI_TRIG_DMA, 1);
+ 	/* a few bytes in low power mode: microseconds, rarely a frame */
+ 	for (i = 0; i < 20 &&
+-	    !(dsi_rd(sc, DSI_INTR_CTRL) & DSI_IRQ_CMD_DMA_DONE); i++)
++	    !(dsi_intr_status(sc) & DSI_IRQ_CMD_DMA_DONE); i++)
+ 		DELAY(10);
+ 	for (i = 0; i < 200 &&
+-	    !(dsi_rd(sc, DSI_INTR_CTRL) & DSI_IRQ_CMD_DMA_DONE); i++)
++	    !(dsi_intr_status(sc) & DSI_IRQ_CMD_DMA_DONE); i++)
+ 		pause_sbt("dsidma", SBT_1MS, SBT_1MS / 4, 0);
+-	error = (dsi_rd(sc, DSI_INTR_CTRL) & DSI_IRQ_CMD_DMA_DONE) ? 0 :
+-	    ETIMEDOUT;
++	error = (dsi_intr_status(sc) & DSI_IRQ_CMD_DMA_DONE) ? 0 : ETIMEDOUT;
+ 	bus_dmamap_sync(sc->tag, sc->map, BUS_DMASYNC_POSTWRITE);
+-	/* Linux's masks back, the two statuses cleared */
+-	dsi_wr(sc, DSI_INTR_CTRL, masks | DSI_IRQ_CMD_DMA_DONE |
+-	    DSI_IRQ_VIDEO_DONE);
++	/* the masks as before, the two statuses cleared */
++	dsi_intr_set(sc, masks, DSI_IRQ_CMD_DMA_DONE | DSI_IRQ_VIDEO_DONE);
+ 	dsi_wr(sc, DSI_CTRL, ctrl);
+ 	if (error != 0)
+ 		device_printf(sc->dev, "DCS %#x: no CMD_DMA_DONE\n", sc->buf[0]);
+@@ -336,7 +430,7 @@ dsi_dcs_write(struct qcom_dpu_softc *sc, const uint8_t *p, u_int n)
+ 	uint8_t *d = sc->buf;
+ 	u_int len;
+ 
+-	if (sc->dsi == 0)
++	if (!sc->dcs)
+ 		return (ENXIO);
+ 	if (n == 0 || 4 + n > DSI_TX_SIZE)
+ 		return (EINVAL);
+@@ -553,6 +647,7 @@ qcom_dpu_dsi_setup(struct qcom_dpu_softc *sc, phandle_t node)
+ 			break;
+ 	if (c <= 0 || ofw_reg_to_paddr(c, 0, &pa, &sc->dsi_size, NULL) != 0)
+ 		return;
++	/* mapped for good: the MDSS interrupt handler needs it, DCS or not */
+ 	sc->dsi = (vm_offset_t)pmap_mapdev(pa, sc->dsi_size);
+ 	ctrl = dsi_rd(sc, DSI_CTRL);
+ 	trig = dsi_rd(sc, DSI_TRIG_CTRL);
+@@ -602,12 +697,168 @@ qcom_dpu_dsi_setup(struct qcom_dpu_softc *sc, phandle_t node)
+ 	    OID_AUTO, "partial", CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
+ 	    sc, 0, qcom_dpu_partial_sysctl, "A",
+ 	    "Partial mode: only rows \"first last\" of the panel driven, 0: all");
++	sc->dcs = true;
+ 	device_printf(dev, "DCS commands over DSI at %#jx (buffer %#jx)\n",
+ 	    (uintmax_t)pa, (uintmax_t)sc->buf_pa);
+ 	return;
+ fail:
+-	pmap_unmapdev((void *)sc->dsi, sc->dsi_size);
+-	sc->dsi = 0;
++	sc->dcs = false;
++}
++
++/*
++ * The MDSS interrupt: the DPU's statuses acknowledged and handed to the
++ * consumer (qcom_dpu_mdp_intr: the enabled ones), the DSI controller's
++ * taken for the DCS code (its error interrupt off, as Linux's dsi_error
++ * does before it looks at the errors). An ithread handler: the consumer's
++ * handler may take sleep mutexes (DRM's event lock).
++ */
++static void
++qcom_dpu_intr(void *arg)
++{
++	struct qcom_dpu_softc *sc = arg;
++	vm_offset_t m = sc->mdp;
++	uint32_t hw, st, en, st2, en2, v, isr;
++
++	hw = *reg32(sc->mdss, MDSS_HW_INTR_STATUS);
++	if (hw & MDSS_INTR_MDP) {
++		/* all statuses cleared, as dpu_core_irq; the enabled reported */
++		st = *reg32(m, MDP_INTR_STATUS);
++		en = *reg32(m, MDP_INTR_EN);
++		if (st != 0)
++			*reg32(m, MDP_INTR_CLEAR) = st;
++		st2 = *reg32(m, MDP_INTR2_STATUS);
++		en2 = *reg32(m, MDP_INTR2_EN);
++		if (st2 != 0)
++			*reg32(m, MDP_INTR2_CLEAR) = st2;
++		if ((v = *reg32(m, MDP_HIST_INTR_STATUS)) != 0)
++			*reg32(m, MDP_HIST_INTR_CLEAR) = v;
++		if ((v = *reg32(m, MDP_INTF1_INTR_STATUS)) != 0)
++			*reg32(m, MDP_INTF1_INTR_CLEAR) = v;
++		if ((v = *reg32(m, MDP_INTF1_TEAR_STATUS)) != 0)
++			*reg32(m, MDP_INTF1_TEAR_CLEAR) = v;
++		dsb(sy);
++		atomic_add_long(&sc->n_mdp, 1);
++		st &= en;
++		st2 &= en2;
++		if ((st | st2) != 0)
++			EVENTHANDLER_DIRECT_INVOKE(qcom_dpu_mdp_intr, st, st2);
++		else
++			atomic_add_long(&sc->n_mdp_none, 1);
++	}
++	if ((hw & MDSS_INTR_DSI0) && sc->dsi != 0) {
++		mtx_lock_spin(&sc->intr_mtx);
++		isr = dsi_rd(sc, DSI_INTR_CTRL);
++		v = isr;
++		if (isr & DSI_IRQ_ERROR)
++			v &= ~DSI_IRQ_MASK_ERROR;
++		/* the statuses written back as read: cleared */
++		dsi_wr(sc, DSI_INTR_CTRL, v);
++		sc->dsi_latched |= isr & DSI_IRQ_STATUSES;
++		mtx_unlock_spin(&sc->intr_mtx);
++		atomic_add_long(&sc->n_dsi, 1);
++		if (isr & DSI_IRQ_ERROR)
++			atomic_add_long(&sc->n_dsi_err, 1);
++	}
++	if (hw & ~(MDSS_INTR_MDP | MDSS_INTR_DSI0))
++		atomic_add_long(&sc->n_stray, 1);
++
++	/*
++	 * A source that stays asserted would bring the handler back at once,
++	 * for good: all enables off, once, and said
++	 */
++	if (*reg32(sc->mdss, MDSS_HW_INTR_STATUS) == 0) {
++		sc->storm = 0;
++		return;
++	}
++	if (++sc->storm == QCOM_DPU_STORM) {
++		*reg32(m, MDP_INTR_EN) = 0;
++		*reg32(m, MDP_INTR2_EN) = 0;
++		*reg32(m, MDP_HIST_INTR_EN) = 0;
++		*reg32(m, MDP_INTF1_INTR_EN) = 0;
++		*reg32(m, MDP_INTF1_TEAR_EN) = 0;
++		if (sc->dsi != 0)
++			dsi_intr_set(sc, 0, DSI_IRQ_STATUSES);
++		device_printf(sc->dev, "MDSS interrupt stays asserted (HW_INTR_"
++		    "STATUS %#x): all DPU and DSI interrupt enables off\n",
++		    *reg32(sc->mdss, MDSS_HW_INTR_STATUS));
++	}
++}
++
++/*
++ * The MDSS interrupt set up with every source off: the DPU's enables
++ * cleared, its statuses too, the DSI controller's masks off (DCS sets the
++ * two it waits for while it sends)
++ */
++static void
++qcom_dpu_intr_setup(struct qcom_dpu_softc *sc, phandle_t node)
++{
++	device_t dev = sc->dev;
++	struct sysctl_ctx_list *ctx;
++	struct sysctl_oid_list *tree;
++	bus_addr_t pa;
++	vm_offset_t m = sc->mdp;
++	int rid, error, on;
++
++	ctx = device_get_sysctl_ctx(dev);
++	tree = SYSCTL_CHILDREN(device_get_sysctl_tree(dev));
++	SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "irq", CTLFLAG_RD, &sc->irq_on, 0,
++	    "The MDSS interrupt handled here (DPU interrupts for "
++	    "qcom_dpu_mdp_intr)");
++	on = 1;
++	TUNABLE_INT_FETCH("hw.qcom_dpu.irq", &on);
++	if (on == 0) {
++		device_printf(dev, "MDSS interrupt left alone (hw.qcom_dpu.irq)\n");
++		return;
++	}
++	if (ofw_reg_to_paddr(node, 0, &pa, &sc->mdss_size, NULL) != 0)
++		return;
++	sc->mdss = (vm_offset_t)pmap_mapdev(pa, sc->mdss_size);
++	device_printf(dev, "MDSS interrupt status %#x, DPU enables %#x %#x "
++	    "%#x, INTF_1 %#x, DSI %#x\n", *reg32(sc->mdss, MDSS_HW_INTR_STATUS),
++	    *reg32(m, MDP_INTR_EN), *reg32(m, MDP_INTR2_EN),
++	    *reg32(m, MDP_HIST_INTR_EN), *reg32(m, MDP_INTF1_INTR_EN),
++	    sc->dsi != 0 ? dsi_rd(sc, DSI_INTR_CTRL) : 0);
++	*reg32(m, MDP_INTR_EN) = 0;
++	*reg32(m, MDP_INTR2_EN) = 0;
++	*reg32(m, MDP_HIST_INTR_EN) = 0;
++	*reg32(m, MDP_INTF1_INTR_EN) = 0;
++	*reg32(m, MDP_INTF1_TEAR_EN) = 0;
++	*reg32(m, MDP_INTR_CLEAR) = 0xffffffff;
++	*reg32(m, MDP_INTR2_CLEAR) = 0xffffffff;
++	*reg32(m, MDP_HIST_INTR_CLEAR) = 0xffffffff;
++	*reg32(m, MDP_INTF1_INTR_CLEAR) = 0xffffffff;
++	*reg32(m, MDP_INTF1_TEAR_CLEAR) = 0xffffffff;
++	if (sc->dsi != 0)
++		dsi_intr_set(sc, 0, DSI_IRQ_STATUSES);
++	dsb(sy);
++
++	rid = 0;
++	sc->irq_res = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid, RF_ACTIVE);
++	if (sc->irq_res == NULL) {
++		device_printf(dev, "no MDSS interrupt\n");
++		return;
++	}
++	error = bus_setup_intr(dev, sc->irq_res, INTR_TYPE_MISC | INTR_MPSAFE,
++	    NULL, qcom_dpu_intr, sc, &sc->irq_cookie);
++	if (error != 0) {
++		device_printf(dev, "MDSS interrupt not set up: %d\n", error);
++		bus_release_resource(dev, SYS_RES_IRQ, rid, sc->irq_res);
++		sc->irq_res = NULL;
++		return;
++	}
++	sc->irq_on = 1;
++	SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "intr_mdp", CTLFLAG_RD,
++	    &sc->n_mdp, "DPU interrupts");
++	SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "intr_mdp_none", CTLFLAG_RD,
++	    &sc->n_mdp_none, "DPU interrupts without an enabled status");
++	SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "intr_dsi", CTLFLAG_RD,
++	    &sc->n_dsi, "DSI interrupts");
++	SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "intr_dsi_errors", CTLFLAG_RD,
++	    &sc->n_dsi_err, "DSI error interrupts (the error interrupt is "
++	    "turned off at the first)");
++	SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "intr_stray", CTLFLAG_RD,
++	    &sc->n_stray, "MDSS interrupts from other blocks");
++	device_printf(dev, "MDSS interrupt on, all sources off\n");
+ }
+ 
+ static int
+@@ -675,11 +926,14 @@ qcom_dpu_attach(device_t dev)
+ 	*reg32(va, CTL0 + CTL_FLUSH) = flush | FLUSH_CTL;
+ 	device_printf(dev, "scanout now from %#jx (stride %u)\n",
+ 	    (uintmax_t)fb_pa, stride);
+-	pmap_unmapdev((void *)va, mdp_size);
+ 	dpu_dump_dsi(dev, node);
+ 	sc->dev = dev;
++	sc->mdp = va;
++	sc->mdp_size = mdp_size;
+ 	sx_init(&sc->lock, "qcom_dpu");
++	mtx_init(&sc->intr_mtx, "qcom_dpu intr", NULL, MTX_SPIN);
+ 	qcom_dpu_dsi_setup(sc, node);
++	qcom_dpu_intr_setup(sc, node);
+ 	return (0);
+ }
+ 
+diff --git a/sys/arm64/qualcomm/qcom_dpu.h b/sys/arm64/qualcomm/qcom_dpu.h
+new file mode 100644
+index 0000000..48f5d40
+--- /dev/null
++++ b/sys/arm64/qualcomm/qcom_dpu.h
+@@ -0,0 +1,33 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * qcom_dpu (qcom_dpu_handover.c): the display Linux leaves running on the
++ * F(x)tec Pro1X (SM6115), and its MDSS interrupt.
++ */
++
++#ifndef _ARM64_QUALCOMM_QCOM_DPU_H_
++#define	_ARM64_QUALCOMM_QCOM_DPU_H_
++
++#include <sys/eventhandler.h>
++
++/*
++ * The DPU's interrupts, for a display driver beside qcom_dpu (msm.ko's KMS,
++ * freebsd/gpu/kms.md). qcom_dpu owns the MDSS interrupt; whenever the DPU
++ * interrupts, it acknowledges all of its statuses and calls the handlers
++ * registered here with those that are enabled:
++ *
++ *   intr   the top block's INTR_STATUS & INTR_EN (Linux's
++ *          MDP_SSPP_TOP0_INTR: INTF_1's vsync bit 27, its underrun 26,
++ *          PINGPONG_0's done 8, ...)
++ *   intr2  INTR2_STATUS & INTR2_EN (MDP_SSPP_TOP0_INTR2: CTL_0's start 9)
++ *
++ * in the interrupt's thread (sleep mutexes allowed, no sleeping). A
++ * consumer sets and clears the enable bits it wants itself (the DPU's
++ * INTR_EN at 0x010 and INTR2_EN at 0x008 of its "mdp" registers) and
++ * turns them off again before it deregisters. All are off when qcom_dpu
++ * attaches. dev.qcom_dpu.0.irq is 1 when the interrupt is on.
++ */
++typedef void (*qcom_dpu_mdp_intr_fn)(void *arg, uint32_t intr, uint32_t intr2);
++EVENTHANDLER_DECLARE(qcom_dpu_mdp_intr, qcom_dpu_mdp_intr_fn);
++
++#endif /* _ARM64_QUALCOMM_QCOM_DPU_H_ */

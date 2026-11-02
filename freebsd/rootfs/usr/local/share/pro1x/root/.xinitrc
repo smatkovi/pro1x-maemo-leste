@@ -1,6 +1,15 @@
 # The image loaders' list is built at boot (rc.d/pro1x_setup): the root is
 # read only.
 export GDK_PIXBUF_MODULE_FILE=/var/db/gdk-pixbuf-loaders.cache
+# X on KMS (xorg-kms.conf.d, freebsd/gpu/kms.md): the portrait panel's
+# output DSI-1 turned right, as scfb's Rotate "CW" (the configuration's
+# Monitor option does it at the server's start; this again in case the
+# server did not take it). On scfb there is no DSI-1: nothing happens.
+if command -v xrandr > /dev/null 2>&1 &&
+    xrandr --query 2> /dev/null | grep -q '^DSI-1 connected' &&
+    ! xrandr --query | grep -q '^DSI-1 connected [^(]* right ('; then
+	xrandr --output DSI-1 --rotate right
+fi
 # The Nokia N9's stand-by screen (pro1x-standby): as on the N9, after the
 # display time-out without input (30 s, pro1x.display_timeout in
 # freebsd/cmdline; the N9 offered 15, 30, 60, 120, 180) and 3 s more, or
