@@ -21,7 +21,8 @@ VM=${VM:?set VM=<ssh command for a FreeBSD machine, as root>}
 OUT=$WORK/out
 log() { echo ">> $*"; }
 
-SIZE=${SIZE:-3g}
+# 4 GiB: with Python (PyOtherSide) 3 GiB were full (2026-11-02)
+SIZE=${SIZE:-4g}
 if [ -n "${VMDISKS:-}" ]; then
 	[ -f "$OUT/root.zfs.new" ] || truncate -s "$SIZE" "$OUT/root.zfs.new"
 	if ! $VM 'test -e /dev/diskid/DISK-pro1xufs && test -e /dev/diskid/DISK-pro1xzfs'; then
