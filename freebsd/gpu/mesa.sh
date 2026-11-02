@@ -92,7 +92,7 @@ if [ "$WHAT" = test ]; then
 	    -isystem "$SYSROOT/usr/local/include" -L"$SYSROOT/usr/local/lib" \
 	    -Wl,-rpath-link,"$SYSROOT/usr/local/lib" \
 	    -o "$T/egl-pbuffer" "$REPO/freebsd/gpu/test/egl-pbuffer.c" \
-	    -lEGL -lGLESv2 -lgbm
+	    -lEGL -lGLESv2 -lgbm -lX11
 	log "staged libraries to the machine (/tmp/mesa-stage)"
 	$VM 'rm -rf /tmp/mesa-stage && mkdir -p /tmp/mesa-stage'
 	bsdtar -cf - -C "$OUT" usr | $VM 'tar -xf - -C /tmp/mesa-stage'

@@ -9,6 +9,10 @@
 # pro1x.test=modem: the modem's calls, SMS, GPS (pro1x-modemtest,
 # pro1x.modem=modem|sms|call|gps, pro1x.modem_wait=SECONDS)
 # pro1x.test=data: mobile data, the IPA (pro1x-datatest, pro1x.data=ipa|modem|wds)
+# pro1x.test=gpu: the GPU and KMS (pro1x-gputest, pro1x.gpu=gpu1..gpu6|kms1..kms4,
+# freebsd/gpu/msm-port.md, freebsd/gpu/kms.md)
+# pro1x.test=script: userdata's freebsd/test.sh (read only, next to the
+# kernel), its output on the console; for one-off runs without a new image
 # pro1x.test=panel: the DCS commands of qcom_dpu (patches/0022), each step
 # with its time on the console: brightness 100/10/50 %, the low power mode
 # (idle mode), partial mode (one half of the panel), the panel off and on,
@@ -70,6 +74,26 @@ elif [ "$(kenv -q pro1x.test)" = data ]; then
 	/usr/local/libexec/pro1x-datatest 2>&1
 	echo "=== test done, rebooting in 20 s"
 	(sleep 20; shutdown -r now "pro1x data test done") > /dev/null 2>&1 &
+elif [ "$(kenv -q pro1x.test)" = gpu ]; then
+	echo "=== FreeBSD multi-user: GPU test ==="
+	/usr/local/libexec/pro1x-gputest 2>&1
+	echo "=== test done, rebooting in 20 s"
+	(sleep 20; shutdown -r now "pro1x gpu test done") > /dev/null 2>&1 &
+elif [ "$(kenv -q pro1x.test)" = script ]; then
+	echo "=== FreeBSD multi-user: test script ==="
+	t=/dev/pro1x-host/freebsd/test.sh
+	if [ -f $t ]; then
+		echo "=== $t ($(wc -c < $t) bytes), $(date)"
+		# from a copy: userdata is read only and stays as it was
+		cp $t /tmp/pro1x-test.sh
+		PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin \
+		    sh /tmp/pro1x-test.sh 2>&1
+		echo "=== $t exited $?"
+	else
+		echo "=== no $t"
+	fi
+	echo "=== test done, rebooting in 20 s"
+	(sleep 20; shutdown -r now "pro1x test script done") > /dev/null 2>&1 &
 elif [ -n "$(kenv -q pro1x.test)" ]; then
 	echo "=== FreeBSD multi-user: test report ==="
 	uname -a

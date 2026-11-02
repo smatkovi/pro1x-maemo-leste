@@ -25,7 +25,13 @@
 # FreeBSD glue in msm/, against drm.ko, dmabuf.ko, linuxkpi.ko and qcom_dsp.ko
 # (freebsd/build.sh's), into $WORK/out/gpu/modules too.
 #
-#   WORK=/path/to/freebsd-build bash freebsd/gpu/build.sh [modules|headers|msm|all]
+# Target tools: the device runs' programs (msm-port.md, kms.md) into
+# $WORK/out/gpu/tools: pro1x-gpu (test/pro1x-gpu.c: msm's parameters, a
+# submit, KMS with a test pattern, flips and vblanks; libdrm) and
+# egl-pbuffer (test/egl-pbuffer.c: GLES through EGL surfaceless, on GBM, on
+# X), cross-compiled against freebsd/hildon/build.sh's sysroot.
+#
+#   WORK=/path/to/freebsd-build bash freebsd/gpu/build.sh [modules|headers|msm|tools|all]
 #   CLEAN=1 ...   the modules from scratch ($WORK/gpu/obj removed first)
 #
 # Needs freebsd/build.sh's kernel toolchain and PRO1X kernel in $WORK/obj
@@ -76,8 +82,8 @@ MSM_XML="adreno/a2xx adreno/a3xx adreno/a4xx adreno/a5xx adreno/a6xx
 	display/sfpb"
 log() { echo ">> $*"; }
 case $WHAT in
-modules|headers|msm|all|--in-buildenv) ;;
-*) echo "usage: WORK=... $0 [modules|headers|msm|all]" >&2; exit 2 ;;
+modules|headers|msm|tools|all|--in-buildenv) ;;
+*) echo "usage: WORK=... $0 [modules|headers|msm|tools|all]" >&2; exit 2 ;;
 esac
 DSP_MODULES=$WORK/out/modules
 
@@ -280,5 +286,28 @@ if [ "$WHAT" = msm ] || [ "$WHAT" = all ]; then
 		    "$G/lindebugfs.ko"
 		[ "$missing" = 0 ] && log "all symbols of msm resolved"
 	fi
+fi
+
+# --- the device runs' programs (pro1x-gputest) -------------------------------------
+# against the Hildon build's sysroot (libdrm, EGL, GLES, GBM, X11: the
+# image's packages); msm's uapi header from Linux v6.12 before libdrm's
+# older copy
+SYSROOT=$WORK/hildon/sysroot
+if [ "$WHAT" = tools ] || { [ "$WHAT" = all ] && [ -f "$SYSROOT/.base" ]; }; then
+	[ -f "$SYSROOT/.base" ] || { echo "no $SYSROOT: freebsd/hildon/build.sh once"; exit 1; }
+	[ -f "$LINUX/include/uapi/drm/msm_drm.h" ] ||
+		{ echo "no $LINUX: build.sh headers first"; exit 1; }
+	log "tools: pro1x-gpu, egl-pbuffer"
+	mkdir -p "$OUT/tools"
+	CC=("$LLVM_BIN/clang" --target=aarch64-unknown-freebsd15.1
+	    --sysroot="$SYSROOT" -fuse-ld=lld -O2 -Wall
+	    -isystem "$SYSROOT/usr/local/include" -L"$SYSROOT/usr/local/lib"
+	    -Wl,-rpath-link,"$SYSROOT/usr/local/lib")
+	"${CC[@]}" -I"$LINUX/include/uapi/drm" \
+	    -isystem "$SYSROOT/usr/local/include/libdrm" \
+	    -o "$OUT/tools/pro1x-gpu" "$REPO/freebsd/gpu/test/pro1x-gpu.c" -ldrm
+	"${CC[@]}" -o "$OUT/tools/egl-pbuffer" \
+	    "$REPO/freebsd/gpu/test/egl-pbuffer.c" -lEGL -lGLESv2 -lgbm -lX11
+	file "$OUT"/tools/* 2> /dev/null || ls -la "$OUT/tools"
 fi
 log "done"

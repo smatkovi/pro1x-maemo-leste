@@ -19,7 +19,7 @@ REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 WORK=${WORK:?set WORK=<build directory>}
 ABI=${ABI:-FreeBSD:15:aarch64}
 PKGURL=${PKGURL:-https://pkg.freebsd.org/$ABI/quarterly}
-PKGS=${PKGS-xorg-minimal xf86-video-scfb xf86-input-libinput xinit xfce xfce4-terminal xfce4-genmon-plugin dejavu xset xwd}
+PKGS=${PKGS-xorg-minimal xf86-video-scfb xf86-input-libinput xinit xfce xfce4-terminal xfce4-genmon-plugin dejavu xset xwd xrandr}
 # Pulled in only for building or for optional parts: LLVM (mesa's OpenCL
 # and llvmpipe, 1.8 GiB), Samba (gvfs's SMB backend), Qt and bsdisks
 # (automounting), Perl (scripts). Not Python: PyOtherSide needs libpython,
@@ -269,6 +269,34 @@ if [ -d "$OUT/modules" ]; then
 	cp "$OUT"/modules/*.ko "$R/boot/modules/"
 	cp "$OUT"/dsp-tools/* "$R/usr/local/sbin/"
 fi
+# The GPU (gpu/README.md, msm-port.md, kms.md), when gpu/build.sh has
+# built it: drm-kmod's modules and msm.ko beside the DSP stack's, with
+# linker.hints for both (kldload msm finds drm, dmabuf, linuxkpi, qcom_dsp
+# by their names: the build's kldxref, as build.sh runs it for
+# out/modules); the device runs' programs
+GPUOUT=$OUT/gpu
+if [ -d "$GPUOUT/modules" ]; then
+	mkdir -p "$R/boot/modules"
+	cp "$GPUOUT"/modules/*.ko "$R/boot/modules/"
+	log "GPU modules: $(cd "$GPUOUT/modules" && echo *.ko)"
+fi
+if [ -d "$GPUOUT/tools" ]; then
+	mkdir -p "$R/usr/local/sbin"
+	cp "$GPUOUT"/tools/* "$R/usr/local/sbin/"
+fi
+KLDXREF=$(find "$WORK/obj" -path '*/tmp/legacy/bin/kldxref' -type f | head -1)
+if [ -d "$R/boot/modules" ] && [ -x "$KLDXREF" ]; then
+	"$KLDXREF" "$R/boot/modules"
+fi
+# Mesa with freedreno (gpu/mesa.sh) over the packages' mesa-libs and
+# mesa-dri, without headers and pkg-config files; the package's DRI stubs
+# for drivers this build lacks fail cleanly (gpu/README.md)
+if [ -d "$GPUOUT/mesa/usr" ]; then
+	(cd "$GPUOUT/mesa" && find . -type f -o -type l | grep -v \
+	    -e '^\./usr/local/include/' -e '/pkgconfig/') |
+	    (cd "$GPUOUT/mesa" && cpio -pdmu --quiet "$R")
+	log "Mesa with freedreno from $GPUOUT/mesa"
+fi
 # Power management (pm/README.md): the Pro1X's zzz
 mkdir -p "$R/usr/local/sbin"
 install -m 755 "$REPO/freebsd/pm/tools/pro1x-suspend" "$R/usr/local/sbin/"
@@ -304,6 +332,40 @@ elif [ -d "$FW_CHECKOUT/qcom/sm6115/Fxtec/QX1050" ]; then
 	ls "$R/$FW/qcom/sm6115/Fxtec/QX1050" "$R/$FW/ath10k"/*/* | tr '\n' ' '; echo
 else
 	log "no Leste image ($LESTE_IMG) nor firmware checkout ($FW_CHECKOUT): the root image has no DSP firmware"
+fi
+# The Adreno 610's microcode for msm (msm-port.md "Firmware"; the zap shader
+# is the phone's, in QX1050 above): linux-firmware's qcom/a630_sqe.fw,
+# redistributable under LICENSE.qcom (gpu/README.md), from the build host's
+# linux-firmware (unpacked where it is compressed), else linux-firmware's
+# tag 20260916 from kernel.org, SHA-256 checked. /boot/firmware/qcom is a
+# link to this directory (rootfs/boot/firmware/qcom), so LinuxKPI's
+# request_firmware() finds qcom/a630_sqe.fw and the zap shader's path.
+FW_SQE=${FW_SQE:-/usr/lib/firmware/qcom/a630_sqe.fw}
+SQE_TAG=20260916
+SQE_SHA256=1c21b527d9183487cc550dabbb3f43e555df5a977a461934fc61f0635a9aa90c
+SQE_DL=$WORK/dl/linux-firmware-$SQE_TAG/qcom/a630_sqe.fw
+mkdir -p "$R/$FW/qcom"
+if [ -f "$FW_SQE" ]; then
+	cp "$FW_SQE" "$R/$FW/qcom/a630_sqe.fw"
+elif [ -f "$FW_SQE.zst" ]; then
+	zstd -dqc "$FW_SQE.zst" > "$R/$FW/qcom/a630_sqe.fw"
+elif [ -f "$FW_SQE.xz" ]; then
+	xz -dc "$FW_SQE.xz" > "$R/$FW/qcom/a630_sqe.fw"
+else
+	if [ ! -f "$SQE_DL" ]; then
+		mkdir -p "$(dirname "$SQE_DL")"
+		curl -sSfL -o "$SQE_DL.new" "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/qcom/a630_sqe.fw?h=$SQE_TAG" &&
+			mv "$SQE_DL.new" "$SQE_DL" || rm -f "$SQE_DL.new"
+	fi
+	if [ -f "$SQE_DL" ] &&
+	    echo "$SQE_SHA256  $SQE_DL" | sha256sum -c --quiet -; then
+		cp "$SQE_DL" "$R/$FW/qcom/a630_sqe.fw"
+	fi
+fi
+if [ -f "$R/$FW/qcom/a630_sqe.fw" ]; then
+	log "GPU microcode qcom/a630_sqe.fw ($(wc -c < "$R/$FW/qcom/a630_sqe.fw") bytes)"
+else
+	log "no a630_sqe.fw (FW_SQE=$FW_SQE, nor linux-firmware $SQE_TAG): the GPU will not start"
 fi
 # The phone's sensor configuration and registry for hexagonrpcd, as Leste
 # installs them (scripts/46-sensor-stack.sh): from the NixOS port's checkout

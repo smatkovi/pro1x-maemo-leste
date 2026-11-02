@@ -8,6 +8,15 @@
  *   egl-pbuffer             render; exit 0 when the pixels are right
  *   egl-pbuffer gbm FILE    gbm_create_device() on FILE: on a file that is
  *                           no GPU the driver has to refuse, not crash
+ *   egl-pbuffer render FILE the same drawing through EGL on GBM on FILE
+ *                           (/dev/dri/renderD128: freedreno found by the
+ *                           device's driver name, not by libdrm's device
+ *                           list, which has no msm on FreeBSD), into a
+ *                           framebuffer object of a context without surface
+ *   egl-pbuffer x11         the same on the X server ($DISPLAY): a client
+ *                           of X, its buffers through DRI3 when the server
+ *                           offers it (Xorg's modesetting with glamor)
+ * (freebsd/gpu/msm-port.md run gpu4, kms.md run kms3)
  */
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -19,6 +28,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <X11/Xlib.h>
 
 static void
 where(const char *lib)
@@ -81,6 +91,12 @@ main(int argc, char **argv)
 		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
 		EGL_ALPHA_SIZE, 8, EGL_NONE
 	};
+	static const EGLint cfg_any[] = {
+		EGL_SURFACE_TYPE, 0,
+		EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
+		EGL_NONE
+	};
 	static const EGLint pb_attr[] = { EGL_WIDTH, 64, EGL_HEIGHT, 64, EGL_NONE };
 	static const EGLint ctx_attr[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
 	static const GLfloat tri[] = { -0.5f, -0.5f, 0.5f, -0.5f, 0.0f, 0.5f };
@@ -90,12 +106,36 @@ main(int argc, char **argv)
 	EGLSurface surf;
 	EGLContext ctx;
 	EGLint n, major, minor;
-	GLuint prog;
+	EGLenum platform = EGL_PLATFORM_SURFACELESS_MESA;
+	void *native = EGL_DEFAULT_DISPLAY;
+	struct gbm_device *gbm = NULL;
+	Display *x = NULL;
+	GLuint prog, tex, fbo;
 	unsigned char mid[4], corner[4];
-	int ok;
+	int ok, fd, pbuffer = 1;
 
 	if (argc == 3 && strcmp(argv[1], "gbm") == 0)
 		return gbm_test(argv[2]);
+	if (argc == 3 && strcmp(argv[1], "render") == 0) {
+		if ((fd = open(argv[2], O_RDWR)) < 0 ||
+		    (gbm = gbm_create_device(fd)) == NULL) {
+			fprintf(stderr, "no GBM device on %s\n", argv[2]);
+			return 1;
+		}
+		printf("GBM on %s: backend %s\n", argv[2],
+		    gbm_device_get_backend_name(gbm));
+		platform = EGL_PLATFORM_GBM_KHR;
+		native = gbm;
+		pbuffer = 0;
+	} else if (argc == 2 && strcmp(argv[1], "x11") == 0) {
+		if ((x = XOpenDisplay(NULL)) == NULL) {
+			fprintf(stderr, "no X display\n");
+			return 1;
+		}
+		platform = EGL_PLATFORM_X11_KHR;
+		native = x;
+		pbuffer = 0;
+	}
 
 	get_display = (PFNEGLGETPLATFORMDISPLAYEXTPROC)
 	    eglGetProcAddress("eglGetPlatformDisplayEXT");
@@ -103,23 +143,43 @@ main(int argc, char **argv)
 		fprintf(stderr, "no eglGetPlatformDisplayEXT\n");
 		return 1;
 	}
-	dpy = get_display(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, NULL);
+	dpy = get_display(platform, native, NULL);
 	if (dpy == EGL_NO_DISPLAY || !eglInitialize(dpy, &major, &minor)) {
 		fprintf(stderr, "eglInitialize: 0x%x\n", eglGetError());
 		return 1;
 	}
 	printf("EGL %d.%d, %s\n", major, minor, eglQueryString(dpy, EGL_VENDOR));
-	if (!eglChooseConfig(dpy, cfg_attr, &cfg, 1, &n) || n < 1) {
-		fprintf(stderr, "no pbuffer config: 0x%x\n", eglGetError());
+	if (!eglChooseConfig(dpy, pbuffer ? cfg_attr : cfg_any, &cfg, 1, &n) ||
+	    n < 1) {
+		fprintf(stderr, "no %s config: 0x%x\n", pbuffer ? "pbuffer" :
+		    "GLES 2", eglGetError());
 		return 1;
 	}
-	surf = eglCreatePbufferSurface(dpy, cfg, pb_attr);
+	surf = pbuffer ? eglCreatePbufferSurface(dpy, cfg, pb_attr) :
+	    EGL_NO_SURFACE;
 	eglBindAPI(EGL_OPENGL_ES_API);
 	ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctx_attr);
-	if (surf == EGL_NO_SURFACE || ctx == EGL_NO_CONTEXT ||
+	if ((pbuffer && surf == EGL_NO_SURFACE) || ctx == EGL_NO_CONTEXT ||
 	    !eglMakeCurrent(dpy, surf, surf, ctx)) {
 		fprintf(stderr, "pbuffer/context: 0x%x\n", eglGetError());
 		return 1;
+	}
+	if (!pbuffer) {
+		/* no surface (EGL_KHR_surfaceless_context): a texture as
+		 * the colour buffer */
+		glGenTextures(1, &tex);
+		glBindTexture(GL_TEXTURE_2D, tex);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 64, 64, 0, GL_RGBA,
+		    GL_UNSIGNED_BYTE, NULL);
+		glGenFramebuffers(1, &fbo);
+		glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+		    GL_TEXTURE_2D, tex, 0);
+		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
+		    GL_FRAMEBUFFER_COMPLETE) {
+			fprintf(stderr, "framebuffer object incomplete\n");
+			return 1;
+		}
 	}
 	printf("GL_RENDERER: %s\nGL_VERSION: %s\n",
 	    (const char *)glGetString(GL_RENDERER),
@@ -150,7 +210,12 @@ main(int argc, char **argv)
 	    corner[0], corner[1], corner[2], ok ? "OK" : "WRONG");
 	eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 	eglDestroyContext(dpy, ctx);
-	eglDestroySurface(dpy, surf);
+	if (surf != EGL_NO_SURFACE)
+		eglDestroySurface(dpy, surf);
 	eglTerminate(dpy);
+	if (gbm != NULL)
+		gbm_device_destroy(gbm);
+	if (x != NULL)
+		XCloseDisplay(x);
 	return ok ? 0 : 1;
 }

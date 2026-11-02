@@ -205,25 +205,29 @@ Tunables: `msm_freebsd_bsd.c`'s header (`hw.msm.max_freq`, `cx_vote`,
 
 | File | From | Needed by |
 | --- | --- | --- |
-| `/boot/firmware/qcom/a630_sqe.fw` | linux-firmware (`qcom/a630_sqe.fw`); not in this repository, not in the QX1050 firmware directory `rootfs.sh` copies | `adreno_load_fw()` at the first open (gpu2 on) |
+| `/boot/firmware/qcom/a630_sqe.fw` | linux-firmware (`qcom/a630_sqe.fw`, LICENSE.qcom); not in this repository: `rootfs.sh` copies it from the build host's linux-firmware or linux-firmware's tag 20260916 (README.md "In the image") | `adreno_load_fw()` at the first open (gpu2 on) |
 | `/boot/firmware/qcom/sm6115/Fxtec/QX1050/a610_zap.mbn` | the phone's firmware (`rootfs.sh` copies `qcom/sm6115/Fxtec/QX1050` to `/usr/local/share/pro1x/firmware`); the name is the Pro1X device tree's `zap-shader` `firmware-name` | `zap_shader_load_mdt()` at the first hardware init, PAS id 13 |
 
 The image has `/boot/firmware/ath10k` as a link into
-`/usr/local/share/pro1x/firmware`; the GPU needs the same for `qcom`
-(`rootfs/boot/firmware/qcom -> /usr/local/share/pro1x/firmware/qcom`) and
-`rootfs.sh` copying `a630_sqe.fw` there (from the Leste image's
-`/lib/firmware/qcom/` if it has linux-firmware's, or the host's
-linux-firmware). Neither is done yet.
+`/usr/local/share/pro1x/firmware`, and the same for `qcom`
+(`rootfs/boot/firmware/qcom -> /usr/local/share/pro1x/firmware/qcom`);
+`rootfs.sh` copies `a630_sqe.fw` there.
 
 ## Device runs
 
-To come as `pro1x.test=gpu pro1x.gpu=<run>` in `/host/freebsd/cmdline`
-with a `pro1x-gputest` in the style of `pro1x-dsptest`: `PASS gpu-RUN:` and
-`FAIL gpu-RUN:` lines, bounded waits, the summary line
-`=== gpu-RUN: PASS|FAIL (...)`, modules from `/host/freebsd/modules`
-first. Load order: `kldload firmware linuxkpi linuxkpi_video dmabuf
-lindebugfs drm qcom_dsp msm` (the modules of `out/modules` and
-`out/gpu/modules` in one directory, or both in `kern.module_path`).
+`pro1x.test=gpu pro1x.gpu=<run>` in `/host/freebsd/cmdline` runs
+`rootfs/usr/local/libexec/pro1x-gputest` (in the style of
+`pro1x-dsptest`): `PASS gpu-RUN:` and `FAIL gpu-RUN:` lines, bounded
+waits, the summary line `=== gpu-RUN: PASS|FAIL (...)`, modules from
+userdata's `freebsd/modules` first, its programs `pro1x-gpu` and
+`egl-pbuffer` (`build.sh tools`) from `freebsd/gpu-tools`. Load order:
+`kldload firmware linuxkpi linuxkpi_video dmabuf lindebugfs drm qcom_dsp
+msm` (the image's `/boot/modules` has both module sets and `linker.hints`,
+README.md "In the image"). The ioctls of gpu2 to gpu4 are
+`pro1x-gpu param` and `pro1x-gpu submit`; Mesa's part of gpu4 is
+`egl-pbuffer render /dev/dri/renderD128` (EGL on GBM on the render node:
+EGL's surfaceless platform would look for the GPU in libdrm's device
+list, which has no msm on FreeBSD, README.md, and fall back to llvmpipe).
 
 | Run | Does | Expected on the console | The script checks |
 | --- | --- | --- | --- |
@@ -245,8 +249,6 @@ zero or the CX GDSC still off (its clocks). Each run is a reboot.
 ## Not done yet
 
 - Never run on the phone (the runs above).
-- `rootfs.sh` puts neither `out/gpu/modules` nor the GPU firmware into the
-  image, and there is no `pro1x-gputest` yet.
 - No frequency scaling (devfreq), no thermal limit; one OPP by default.
 - No IOMMU: any process allowed to submit can reach all memory through
   the GPU (decision A). Own context bank plus io-pgtable is the way out.

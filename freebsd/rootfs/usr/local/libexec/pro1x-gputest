@@ -1,0 +1,377 @@
+#!/bin/sh
+# pro1x-gputest [STEP]: the GPU's device runs (freebsd/gpu/msm-port.md, gpu1
+# to gpu6) and KMS's (freebsd/gpu/kms.md, kms1 to kms4), one per boot
+# (kernel environment pro1x.gpu, set in the boot menu's freebsd/cmdline with
+# pro1x.test=gpu):
+#
+#   gpu1  power    msm.ko loaded with hw.msm.selftest=1: the GPU powered up
+#                  and its registers answering, then msm attached; unloaded
+#                  and loaded again
+#   gpu2  zap      the first open: microcode, power-up, the zap shader; msm's
+#                  parameters (GPU_ID 610, CHIP_ID 0x0601xxxx)
+#   gpu3  ring     gpu2 and the CP's init on the ring; the GPU's interrupt,
+#                  its always-on counter rising
+#   gpu4  submit   a submit from user space (CP_MEM_WRITE, the fence within
+#                  1 s, the pattern), then Mesa's freedreno through GBM
+#                  (egl-pbuffer render: GL_RENDERER FD610)
+#   gpu5  cycle    hw.msm.autosuspend=1: gpu4, a pause, gpu4 again; the
+#                  suspend count rises
+#   gpu6  cx       hw.msm.cx_vote=1 hw.msm.max_freq=0: gpu4 at all OPPs with
+#                  VDDCX voted
+#   kms1  pattern  hw.msm.kms=1: the KMS device on the display Linux left
+#                  running; a test pattern in a dumb buffer, page flips
+#   kms2  vblank   kms1 and the vblank counts: about 60 Hz, the MDSS
+#                  interrupt (qcom_dpu, patches/0053) counted, no underrun
+#   kms3  xorg     Xorg's modesetting driver with glamor on /dev/dri/card0
+#                  (xorg-kms.conf.d), turned right; a client on freedreno
+#                  through DRI3 (egl-pbuffer x11); the screen kept
+#   kms4  hildon   the Hildon session on it for 60 s: hildon-desktop drawing
+#                  with freedreno (no llvmpipe threads); the screen kept
+#
+# Every check prints "PASS gpu-STEP: ..." or "FAIL gpu-STEP: ...", every
+# wait is bounded so that the run ends before the watchdog
+# (hint.qcom_wdt.0.lifetime, counted from the boot: 25 s are left for this
+# summary and rc.local's reboot), and the last line is
+#   === gpu-STEP: PASS|FAIL (N passed, M failed; first failure: ...)
+# Everything goes to the console, which the RAM console keeps for Linux after
+# the next boot; kms3 and kms4 keep the screen (xwd) in /dev/pro1xshot.
+# From userdata (next to the kernel) first, a build newer than the root
+# image's: this script and the programs in freebsd/gpu-tools (pro1x-gpu,
+# egl-pbuffer: freebsd/gpu/build.sh tools), the modules in freebsd/modules
+# (out/modules and out/gpu/modules together), Mesa in freebsd/mesa
+# (out/gpu/mesa), the X configuration in freebsd/xorg-kms.conf.d.
+step=${1:-$(kenv -q pro1x.gpu)}
+step=${step:-gpu1}
+host=/dev/pro1x-host/freebsd
+if [ -f $host/gpu-tools/pro1x-gputest ] && [ "${PRO1X_GPUTEST_HOST:-}" != 1 ]; then
+	echo "=== the newer pro1x-gputest from $host/gpu-tools"
+	PRO1X_GPUTEST_HOST=1 exec sh $host/gpu-tools/pro1x-gputest "$step"
+fi
+# rc's PATH has no /usr/local
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+[ -d $host/gpu-tools ] && PATH=$host/gpu-tools:$PATH
+export PATH
+case $step in
+gpu[1-6] | kms[1-4]) ;;
+*) echo "=== pro1x-gputest: no step $step (gpu1..gpu6, kms1..kms4)"; exit 1 ;;
+esac
+RUN=gpu-$step
+npass=0
+nfail=0
+first=
+pass() { echo "PASS $RUN: $*"; npass=$((npass + 1)); }
+fail() {
+	echo "FAIL $RUN: $*"
+	nfail=$((nfail + 1))
+	[ -n "$first" ] || first=$*
+}
+check() {	# check WHAT COMMAND...: PASS if the command succeeds
+	what=$1
+	shift
+	if "$@" > /dev/null 2>&1; then pass "$what"; else fail "$what"; fi
+}
+summary() {
+	[ $nfail -eq 0 ] && r=PASS || r=FAIL
+	echo "=== $RUN: $r ($npass passed, $nfail failed${first:+; first failure: $first})"
+}
+trap summary EXIT
+
+# --- time: the watchdog's lifetime from the boot -----------------------------------
+boot=$(sysctl -n kern.boottime | sed 's/^{ sec = \([0-9]*\),.*/\1/')
+life=$(kenv -q hint.qcom_wdt.0.lifetime)
+uptime_s() { echo $(($(date +%s) - boot)); }
+left() {	# seconds this run may still wait
+	if [ -n "$life" ]; then echo $((life - $(uptime_s) - 25)); else echo 600; fi
+}
+# wait_for SECONDS WHAT COMMAND...: up to SECONDS (or what the watchdog
+# leaves) for the command to succeed; PASS/FAIL with the time it took
+wait_for() {
+	max=$1
+	what=$2
+	shift 2
+	l=$(left)
+	[ "$l" -lt "$max" ] && max=$l
+	i=0
+	while ! "$@" > /dev/null 2>&1; do
+		if [ $i -ge "$max" ]; then
+			fail "$what (not within $i s)"
+			return 1
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+	pass "$what ($i s)"
+}
+dmesg_has() { dmesg | grep -q -- "$1"; }
+dmesg_lacks() { ! dmesg | grep -q -- "$1"; }
+# run_bounded SECONDS COMMAND...: the command, killed after SECONDS
+run_bounded() {
+	t=$1
+	shift
+	l=$(left)
+	[ "$l" -lt "$t" ] && t=$l
+	[ "$t" -gt 0 ] || t=1
+	timeout -k 5 "$t" "$@"
+}
+
+echo "=== GPU test $RUN, $(uptime_s) s after the boot, watchdog ${life:-off}"
+fw=/boot/firmware/qcom
+ls -la $fw/a630_sqe.fw $fw/sm6115/Fxtec/QX1050/a610_zap.mbn 2>&1
+check "qcom/a630_sqe.fw in /boot/firmware" test -s $fw/a630_sqe.fw
+check "the zap shader in /boot/firmware" \
+    test -s $fw/sm6115/Fxtec/QX1050/a610_zap.mbn
+if [ -d $host/modules ]; then
+	kldconfig -i $host/modules
+	echo "modules from $host/modules first:"
+	ls $host/modules
+fi
+# Mesa from userdata, when there (Xorg's glamor and the clients take it
+# through the library path)
+if [ -d $host/mesa/usr/local/lib ]; then
+	M=$host/mesa/usr/local
+	LD_LIBRARY_PATH=$M/lib
+	LIBGL_DRIVERS_PATH=$M/lib/dri
+	GBM_BACKENDS_PATH=$M/lib/gbm
+	__EGL_VENDOR_LIBRARY_FILENAMES=$M/share/glvnd/egl_vendor.d/50_mesa.json
+	export LD_LIBRARY_PATH LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH \
+	    __EGL_VENDOR_LIBRARY_FILENAMES
+	echo "Mesa from $host/mesa"
+fi
+
+# --- the tunables of the step, then the modules -------------------------------------
+setenv() {	# setenv NAME VALUE: unless freebsd/cmdline set it
+	[ -n "$(kenv -q "$1")" ] || kenv "$1=$2" > /dev/null
+	echo "$1=$(kenv -q "$1")"
+}
+case $step in
+gpu1) setenv hw.msm.selftest 1 ;;
+gpu5) setenv hw.msm.autosuspend 1 ;;
+gpu6) setenv hw.msm.cx_vote 1; setenv hw.msm.max_freq 0 ;;
+kms*) setenv hw.msm.kms 1; setenv hw.msm.vram 256m ;;
+esac
+echo "--- load msm"
+# in order: without linker.hints in the module directories too
+for m in firmware linuxkpi linuxkpi_video dmabuf lindebugfs drm qcom_dsp; do
+	kldload -n $m 2>&1
+done
+check "kldload msm" kldload -n msm
+kldstat | grep -E "msm|drm|dmabuf|linuxkpi|lindebugfs|qcom_dsp"
+dmesg | grep -E "msm|drm|adreno|gmuwrap|kms:|qcom_dpu" | tail -60
+wait_for 20 "Initialized msm 1.12.0" dmesg_has "Initialized msm 1.12.0"
+check "/dev/dri/card0" test -c /dev/dri/card0
+check "/dev/dri/renderD128" test -c /dev/dri/renderD128
+sysctl hw.dri.0.name hw.dri.0.busid 2>&1
+check "hw.dri.0.busid platform:msm" \
+    sh -c "sysctl -n hw.dri.0.busid | grep -q platform:msm"
+check "no 'status stuck'" dmesg_lacks "status stuck"
+check "no msm 'failed to'" sh -c "! dmesg | grep msm | grep -q 'failed to'"
+sysctl hw.msm 2>&1 | grep -vE "^hw.msm.(perf|rd)"
+
+# --- gpu1: power ---------------------------------------------------------------------
+if [ "$step" = gpu1 ]; then
+	dmesg | grep "msm: selftest" | tail -20
+	check "selftest passed" dmesg_has "msm: selftest: passed"
+	check "the GPU's registers answer" dmesg_has "the GPU's registers answer"
+	dmesg | grep -E "GPU SMMU|VDDCX|OPP|VRAM|carveout" | tail -20
+	echo "--- unload, load again"
+	check "kldunload msm" kldunload msm
+	check "/dev/dri/card0 gone" test ! -e /dev/dri/card0
+	kenv -u hw.msm.selftest > /dev/null 2>&1
+	check "kldload msm again" kldload msm
+	wait_for 20 "/dev/dri/renderD128 again" test -c /dev/dri/renderD128
+	exit 0
+fi
+
+# --- gpu2 ... gpu6: the first open and on --------------------------------------------
+gpu_param() {
+	run_bounded 60 pro1x-gpu param 2>&1
+}
+gpu_open() {
+	echo "--- the first open (microcode, power-up, zap shader)"
+	out=$(gpu_param)
+	echo "$out"
+	echo "$out" | grep -q "^ok: GPU_ID 610" && pass "GPU_ID 610" ||
+	    fail "GPU_ID 610"
+	echo "$out" | grep -q "^ok: CHIP_ID" && pass "CHIP_ID 0x0601xxxx" ||
+	    fail "CHIP_ID 0x0601xxxx"
+	dmesg | grep -E "msm|adreno|a6xx|zap|firmware|sqe" | tail -30
+	check "the microcode loaded" dmesg_has "a630_sqe.fw"
+	for e in "Unable to load" "Unable to authorize" "Zap shader not enabled" \
+	    "gpu hw init failed" "Couldn't power up"; do
+		check "no '$e'" dmesg_lacks "$e"
+	done
+	check "hw.msm.cx_wanted 64 (LOW_SVS)" \
+	    test "$(sysctl -n hw.msm.cx_wanted)" = 64
+}
+gpu_submit() {	# gpu_submit WHAT
+	echo "--- submit ($1)"
+	out=$(run_bounded 60 pro1x-gpu submit 2>&1)
+	echo "$out"
+	echo "$out" | grep -q "^ok: fence .* signalled" &&
+	    pass "$1: the fence signalled" || fail "$1: the fence signalled"
+	echo "$out" | grep -q "^ok: the GPU wrote the pattern" &&
+	    pass "$1: the pattern" || fail "$1: the pattern"
+	check "$1: no 'CAP_SYS_RAWIO required'" dmesg_lacks "CAP_SYS_RAWIO"
+	check "$1: no hangcheck" dmesg_lacks "hangcheck"
+}
+if [ "${step#gpu}" != "$step" ]; then
+	gpu_open
+	[ "$step" = gpu2 ] && exit 0
+	check "no 'CP initialization failed'" dmesg_lacks "CP initialization failed"
+	check "no 'timeout waiting to drain'" dmesg_lacks "timeout waiting to drain"
+	check "no hangcheck" dmesg_lacks "hangcheck"
+	echo "$out" | grep -q "^ok: TIMESTAMP" && pass "TIMESTAMP rises" ||
+	    fail "TIMESTAMP rises"
+	vmstat -i | grep -iE "gpu|kgsl|adreno|msm"
+	check "the GPU's interrupt counted" \
+	    sh -c "vmstat -i | grep -iqE 'gpu|adreno|msm'"
+	[ "$step" = gpu3 ] && exit 0
+	gpu_submit first
+	echo "--- Mesa's freedreno through GBM"
+	out=$(run_bounded 60 egl-pbuffer render /dev/dri/renderD128 2>&1)
+	echo "$out"
+	echo "$out" | grep -qE "GL_RENDERER: (FD6|Adreno)" && pass "GL_RENDERER FD610" ||
+	    fail "GL_RENDERER FD610"
+	echo "$out" | grep -q "corner 0,0,255: OK" && pass "freedreno drew" ||
+	    fail "freedreno drew"
+	if [ "$step" = gpu5 ]; then
+		s0=$(gpu_param | sed -n 's/^param SUSPENDS: .*(\([0-9]*\))$/\1/p')
+		sleep 3
+		gpu_submit second
+		s1=$(gpu_param | sed -n 's/^param SUSPENDS: .*(\([0-9]*\))$/\1/p')
+		[ -n "$s0" ] && [ -n "$s1" ] && [ "$s1" -gt "$s0" ] &&
+		    pass "SUSPENDS $s0 -> $s1" || fail "SUSPENDS ${s0:-?} -> ${s1:-?}"
+		dmesg | grep -E "GPU SMMU|GDSC|msm" | tail -20
+	fi
+	if [ "$step" = gpu6 ]; then
+		dmesg | grep -E "VDDCX|qcom_rpm" | tail -10
+		check "VDDCX voted" dmesg_has "VDDCX voted at level"
+		echo "hw.msm.cx_voted $(sysctl -n hw.msm.cx_voted)"
+		check "no RPM request refused" \
+		    test "$(sysctl -n hw.qcom_rpm.refused 2>/dev/null)" = 0
+		check "no RPM request timed out" \
+		    test "$(sysctl -n hw.qcom_rpm.timeouts 2>/dev/null)" = 0
+	fi
+	dmesg | grep -E "msm|adreno|a6xx" | tail -20
+	exit 0
+fi
+
+# --- kms1 ... kms4: KMS ---------------------------------------------------------------
+echo "--- KMS"
+dmesg | grep -E "kms:|qcom_dpu" | tail -30
+sysctl dev.qcom_dpu.0 2>&1 | grep -E "irq|intr"
+sysctl hw.msm.kms_info
+check "KMS set up (hw.msm.kms_info)" \
+    sh -c "! sysctl -n hw.msm.kms_info | grep -qx off"
+check "DSI in video mode" dmesg_has "kms: DSI at .* in video mode"
+run_bounded 30 pro1x-gpu info /dev/dri/card0 2>&1
+v0=$(sysctl -n hw.msm.kms_vblanks)
+i0=$(sysctl -n dev.qcom_dpu.0.intr_mdp 2>/dev/null)
+if [ "$step" = kms1 ] || [ "$step" = kms2 ]; then
+	echo "--- the test pattern, flips, vblanks (pro1x-gpu kms)"
+	out=$(run_bounded 60 pro1x-gpu kms 10 2>&1)
+	echo "$out"
+	echo "$out" | grep -q "^ok: connector DSI-1 connected" &&
+	    pass "connector DSI-1 connected" || fail "connector DSI-1 connected"
+	echo "$out" | grep -q "^ok: SETCRTC" && pass "the test pattern set" ||
+	    fail "the test pattern set"
+	echo "$out" | grep -q "^ok: .* page flips" && pass "page flips" ||
+	    fail "page flips"
+	sysctl hw.msm.kms_vblanks hw.msm.kms_flips hw.msm.kms_flips_late \
+	    hw.msm.kms_underruns
+	if [ "$step" = kms2 ]; then
+		echo "$out" | grep -q "^ok: 120 vblanks" &&
+		    pass "120 vblanks at about 60 Hz" ||
+		    fail "120 vblanks at about 60 Hz"
+		v1=$(sysctl -n hw.msm.kms_vblanks)
+		[ "$v1" -gt "$((v0 + 120))" ] && pass "kms_vblanks $v0 -> $v1" ||
+		    fail "kms_vblanks $v0 -> $v1"
+		check "no underrun" test "$(sysctl -n hw.msm.kms_underruns)" = 0
+		if [ "$(sysctl -n dev.qcom_dpu.0.irq 2>/dev/null)" = 1 ]; then
+			i1=$(sysctl -n dev.qcom_dpu.0.intr_mdp)
+			[ "$i1" -gt "$((i0 + 120))" ] &&
+			    pass "MDSS interrupts $i0 -> $i1" ||
+			    fail "MDSS interrupts $i0 -> $i1"
+			sysctl dev.qcom_dpu.0 | grep intr
+			vmstat -i | grep -iE "qcom_dpu|gic" | head -5
+		else
+			echo "info $RUN: no MDSS interrupt (kernel without patches/0053?): vblank polled"
+		fi
+	fi
+	dmesg | grep -E "kms:|drm" | tail -10
+	exit 0
+fi
+
+# kms3, kms4: X on KMS
+C=/usr/local/etc/X11/xorg-kms.conf.d
+[ -d $host/xorg-kms.conf.d ] && C=$host/xorg-kms.conf.d
+check "X configuration $C" test -d $C
+export DISPLAY=:0
+x_up() { xprop -root > /dev/null 2>&1; }
+shot() {	# the screen into /dev/pro1xshot
+	XAUTHORITY=/root/.Xauthority xwd -root -silent -display :0 |
+	    gzip -9 > /dev/pro1xshot && echo "screenshot kept"
+}
+xlog() {
+	grep -E "\((EE|WW)\)|modeset\(0\)|glamor|DRI3|Rotat|Output|DSI" \
+	    /var/log/Xorg.0.log | head -60
+}
+if [ "$step" = kms3 ]; then
+	echo "--- Xorg with modesetting and glamor ($C)"
+	Xorg :0 -configdir $C -nolisten tcp -noreset > /tmp/pro1x-xorg.out 2>&1 &
+	xpid=$!
+	wait_for 40 "Xorg up" x_up
+	xlog
+	check "modesetting on card0" grep -q "modeset(0)" /var/log/Xorg.0.log
+	check "glamor initialized" grep -qi "glamor initialized" /var/log/Xorg.0.log
+	grep -i "glamor X acceleration enabled on" /var/log/Xorg.0.log
+	check "glamor on freedreno (FD610)" \
+	    sh -c "grep -i 'glamor X acceleration enabled on' /var/log/Xorg.0.log | grep -q FD6"
+	xrandr --query 2>&1 | head -10
+	check "DSI-1 turned right" sh -c "xrandr --query | grep -q 'DSI-1 connected.* right'"
+	echo "--- a client on DRI3"
+	out=$(run_bounded 30 egl-pbuffer x11 2>&1)
+	echo "$out"
+	echo "$out" | grep -qE "GL_RENDERER: (FD6|Adreno)" &&
+	    pass "the client's GL_RENDERER FD610" ||
+	    fail "the client's GL_RENDERER FD610"
+	shot
+	sysctl hw.msm.kms_vblanks hw.msm.kms_flips hw.msm.kms_underruns
+	kill $xpid 2> /dev/null
+	sleep 3
+	tail -5 /tmp/pro1x-xorg.out
+	dmesg | grep -E "kms:|drm" | tail -10
+	exit 0
+fi
+
+# kms4: the Hildon session (the root image's ~/.xinitrc, as rc.local's
+# desktop test starts it), 60 s
+echo "--- the Hildon session on KMS ($C)"
+kenv pro1x.desktop=hildon > /dev/null
+(cd /root && HOME=/root startx -- -configdir $C > /var/log/startx.log 2>&1 &)
+wait_for 40 "Xorg up" x_up
+sleep 30
+xlog
+xrandr --query 2>&1 | head -5
+check "glamor on freedreno (FD610)" \
+    sh -c "grep -i 'glamor X acceleration enabled on' /var/log/Xorg.0.log | grep -q FD6"
+hd=$(pgrep -x hildon-desktop | head -1)
+if [ -n "$hd" ]; then
+	pass "hildon-desktop runs ($hd)"
+	n=$(procstat -t "$hd" 2> /dev/null | grep -c llvmpipe)
+	[ "$n" = 0 ] && pass "hildon-desktop has no llvmpipe threads" ||
+	    fail "hildon-desktop has $n llvmpipe threads (software GL)"
+	fstat -p "$hd" 2> /dev/null | grep -E "dri|drm"
+	check "hildon-desktop has a DRM device open" \
+	    sh -c "fstat -p $hd | grep -qE 'dri|drm'"
+	top -b -H -d 2 -s 2 -o cpu 12 2> /dev/null | tail -14
+else
+	fail "hildon-desktop runs"
+fi
+ps ax | grep -E "Xorg|hildon" | grep -v grep
+tail -10 /var/log/startx.log
+sysctl hw.msm.kms_vblanks hw.msm.kms_flips hw.msm.kms_flips_late \
+    hw.msm.kms_underruns
+shot
+dmesg | grep -E "kms:|drm|msm" | tail -10
+exit 0

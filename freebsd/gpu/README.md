@@ -9,6 +9,7 @@ DRM core on LinuxKPI:
 | GPU 1 | drm-kmod 6.12-lts (the DRM core, dma-buf) as arm64 modules for the PRO1X kernel; Linux v6.12's msm sources and their register headers | built (2026-11-02): modules link against the kernel and their dependencies with no unresolved symbol; not loaded on the phone yet |
 | GPU 2 | `msm` (the GPU part: adreno, a6xx for the A610) on drm-kmod, the GPU clock controller, the SMMU (`msm-port.md`) | built (2026-11-02): `msm.ko` (`build.sh msm`) links against the kernel, LinuxKPI, qcom_dsp and drm-kmod with no unresolved symbol; msm's VRAM carveout with the GPU's SMMU in bypass, the GPU's clocks and power domains programmed natively; not loaded on the phone yet |
 | GPU 3 | Mesa 26.2.2 with freedreno (Gallium, OpenGL/GLES) and turnip (Vulkan) beside llvmpipe and softpipe, drop-in for the image's mesa-libs and mesa-dri (`mesa.sh`, below) | built (2026-11-02); llvmpipe and softpipe of this build render in the FreeBSD VM; freedreno untested (no GPU driver yet) |
+| GPU 4 | KMS in `msm.ko` for the display Linux leaves running (one CRTC, plane, DSI connector; vblank from qcom_dpu's MDSS interrupt, `patches/0053`), Xorg's modesetting driver with glamor on it (`kms.md`) | built (2026-11-02): `msm.ko` with `msm/msm_freebsd_kms.c` and `msm-patches/0003`, symbols resolved; `patches/0053` compiled against the PRO1X kernel's flags; not run on the phone |
 
 ## What `build.sh` makes
 
@@ -25,7 +26,8 @@ kernel once):
 | `$WORK/out/gpu/modules/linker.hints` | for these four |
 | `$WORK/gpu/linux-6.12/` | from linux-6.12.tar.xz (SHA-256 checked): `drivers/gpu/drm/msm` with `registers/`, `include/uapi/drm/msm_drm.h`, `include/linux/adreno-smmu-priv.h`, the SM6115 GPU clock controller (`drivers/clk/qcom/gpucc-sm6115.c` with gdsc, alpha PLL, RCG2, branch and the headers they include, `include/dt-bindings/clock/qcom,sm6115-gpucc.h`), `drivers/soc/qcom/mdt_loader.c` and its header |
 | `$WORK/gpu/linux-6.12/generated/*.xml.h` | msm's register headers, made by `registers/gen_header.py` as msm's Makefile makes them (`gen_header.py --validate --rnn drivers/gpu/drm/msm/registers --xml drivers/gpu/drm/msm/registers/adreno/a6xx.xml c-defines > generated/a6xx.xml.h`, from the tree's top, for each of its ADRENO_HEADERS and DISPLAY_HEADERS) |
-| `$WORK/out/gpu/modules/msm.ko` | target `msm` (in `all` after the headers): Linux's msm, GPU part, with `msm-patches/` and the glue in `msm/`; `msm-port.md` |
+| `$WORK/out/gpu/modules/msm.ko` | target `msm` (in `all` after the headers): Linux's msm, GPU part, with `msm-patches/` and the glue in `msm/`; `msm-port.md`; KMS with `hw.msm.kms=1`, `kms.md` |
+| `$WORK/out/gpu/tools/pro1x-gpu`, `egl-pbuffer` | target `tools` (in `all` when `freebsd/hildon/build.sh`'s sysroot exists): the device runs' programs, `test/pro1x-gpu.c` (msm's parameters, a submit with `CP_MEM_WRITE`, KMS with a test pattern, page flips and vblanks; libdrm and Linux 6.12's `msm_drm.h`) and `test/egl-pbuffer.c` (GLES through EGL surfaceless, on GBM on a device, on X) |
 
 `linuxkpi.ko` itself is `freebsd/build.sh`'s (`out/modules`); the kernel
 has the rest `drm.ko` depends on (pci, iicbus, iic, iicbb, mem, pseudofs).
@@ -45,13 +47,45 @@ at 1d054ae55685 (the version for FreeBSD 15.1), with:
 | `drm-kmod-patches/0002-drm-devices-not-on-pci.patch` | `hw.dri.N.busid` (`platform:<name>`) and `dev.drm.N.PCI_ID` (0:0) for a DRM device that is not on PCI: msm's; drm-kmod read a `struct pci_dev` that is not there |
 | `drm-kmod-patches/0003-drm-gem-get-put-pages-on-linuxkpi.patch` | `drm_gem_get_pages()`/`drm_gem_put_pages()` on LinuxKPI's shmem, which drm-kmod left out (`#ifdef __linux__`) and msm links against |
 
+## In the image (`rootfs.sh`)
+
+When the outputs exist, `rootfs.sh` puts them into the root image:
+
+| What | Where |
+| --- | --- |
+| `out/gpu/modules/*.ko` | `/boot/modules`, beside `out/modules`; then the build's `kldxref` over the directory, so `kldload msm` finds `drm`, `dmabuf`, `linuxkpi_video`, `lindebugfs`, `linuxkpi`, `firmware`, `qcom_dsp` by name (the image had no `linker.hints` there before) |
+| `out/gpu/mesa` | over the packages' Mesa files (`/usr/local/lib`, `/usr/local/share`, `/usr/local/etc`), without headers and pkg-config files |
+| `out/gpu/tools/*` | `/usr/local/sbin` |
+| `qcom/a630_sqe.fw` | `/usr/local/share/pro1x/firmware/qcom/`, with `/boot/firmware/qcom` a link there (`rootfs/boot/firmware/qcom`, as `ath10k`): LinuxKPI's `request_firmware()` reads `/boot/firmware/qcom/a630_sqe.fw` and the zap shader `/boot/firmware/qcom/sm6115/Fxtec/QX1050/a610_zap.mbn` |
+| `xrandr` | in the default `PKGS` (the KMS session turns the screen with it) |
+
+`a630_sqe.fw` (the Adreno 6xx's CP microcode, 34188 bytes) is linux-firmware's
+(`WHENCE`: "Driver: adreno - Qualcomm Adreno GPU firmware", "Redistributable.
+See LICENSE.qcom and NOTICE.qcom"): Qualcomm's licence lets the binary be
+redistributed, for Qualcomm platforms only, not modified or reverse
+engineered; it is not in this repository. `rootfs.sh` takes it from the
+build host's linux-firmware (`FW_SQE`, default
+`/usr/lib/firmware/qcom/a630_sqe.fw`, also `.zst` or `.xz`), else from
+linux-firmware's tag 20260916 on git.kernel.org into
+`$WORK/dl/linux-firmware-20260916/qcom/` (SHA-256 1c21b527...a9aa90c,
+the same on gitlab.com's mirror). Arch's `linux-firmware-qcom` has it; the
+build PC of 2026-11-02 did not have that package installed.
+
+## Device runs
+
+`pro1x.test=gpu pro1x.gpu=<step>` in `/host/freebsd/cmdline` runs
+`/usr/local/libexec/pro1x-gputest` from `rc.local` and reboots: `gpu1` ..
+`gpu6` of `msm-port.md`, `kms1` .. `kms4` of `kms.md`. Newer files from
+userdata first: `freebsd/gpu-tools/` (`pro1x-gputest`, `pro1x-gpu`,
+`egl-pbuffer`), `freebsd/modules/` (the `.ko` of `out/modules` and
+`out/gpu/modules` in one directory), `freebsd/mesa/` (`out/gpu/mesa`),
+`freebsd/xorg-kms.conf.d/`. `pro1x.test=script` runs userdata's
+`freebsd/test.sh` (a copy of it) with its output on the console, then
+reboots, for runs that need no new image.
+
 ## Not done yet
 
-- Nothing here has been loaded on the phone. `rootfs.sh` does not put
-  `out/gpu/modules` into the image yet; `drm.ko` needs `linuxkpi.ko`
-  (`out/modules`) found by the same `kldload`, so both directories have to
-  be in `kern.module_path`, or all of them in `/boot/modules` with
-  `kldxref` run there again.
+- Nothing here has been loaded on the phone.
 - Only `dmabuf` and `drm` are built: no `ttm` (msm does not use it).
 - GPU 2 (`msm-port.md`): `drm_gem_get_pages()`/`drm_gem_put_pages()`
   come from `drm-kmod-patches/0003`; msm runs without the Linux IOMMU and
