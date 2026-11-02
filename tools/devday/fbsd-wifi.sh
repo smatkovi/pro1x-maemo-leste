@@ -13,7 +13,13 @@
 L=/tmp/pro1x-wifi.log
 {
 	echo "=== pro1x wifi.sh $(date)"
-	for s in tqftpserv pd_mapper rmtfs pro1x_modem pro1x_wifi; do
+	# started already (rc.conf, or this script before): only the report
+	services="tqftpserv pd_mapper rmtfs pro1x_modem pro1x_wifi"
+	if service pro1x_wifi onestatus > /dev/null 2>&1; then
+		echo "--- running already"
+		services=
+	fi
+	for s in $services; do
 		echo "--- service $s onestart"
 		service $s onestart 2>&1
 		echo "(exit $?)"
