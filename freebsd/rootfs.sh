@@ -22,8 +22,10 @@ PKGURL=${PKGURL:-https://pkg.freebsd.org/$ABI/quarterly}
 PKGS=${PKGS-xorg-minimal xf86-video-scfb xf86-input-libinput xinit xfce xfce4-terminal xfce4-genmon-plugin dejavu xset xwd}
 # Pulled in only for building or for optional parts: LLVM (mesa's OpenCL
 # and llvmpipe, 1.8 GiB), Samba (gvfs's SMB backend), Qt and bsdisks
-# (automounting), Python and Perl (scripts)
-PRUNE=${PRUNE-llvm* spirv-llvm-translator* samba* qt6-* bsdisks python3* py3*-* perl5*}
+# (automounting), Perl (scripts). Not Python: PyOtherSide needs libpython,
+# and without it gPodder and Pure Maps did not start on the phone
+# (2026-11-02)
+PRUNE=${PRUNE-llvm* spirv-llvm-translator* samba* qt6-* bsdisks perl5*}
 # Hildon (freebsd/hildon/build.sh), when built: HILDON= leaves it out
 HILDON=${HILDON-$WORK/hildon/stage}
 # Time zone, as tzsetup sets it (TIMEZONE= keeps UTC)
