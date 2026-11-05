@@ -81,6 +81,27 @@ done
 pacman -Scc --noconfirm > /dev/null
 EOF
 
+# Arch's phoc links wlroots0.20 instead of its own copy of wlroots, which
+# carries a patch Phosh needs (arch/wlroots0.20/PKGBUILD says which): the
+# package again with that patch, built as alarm, and kept by pacman
+log "wlroots0.20 with phoc's patch"
+rm -rf "$MNT/var/tmp/wlroots0.20"
+cp -r "$REPO/arch/wlroots0.20" "$MNT/var/tmp/wlroots0.20"
+chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
+pacman -S --noconfirm --needed base-devel git glslang meson ninja vulkan-headers xorg-xwayland > /dev/null
+B=/var/tmp/wlroots0.20
+chown -R alarm:alarm "$B"
+cd "$B"
+# without the signing keys: the PKGBUILD's sum (Arch's) checks the tag
+runuser -u alarm -- env HOME="$B" makepkg --skippgpcheck --nocheck > build.log 2>&1 ||
+	{ tail -30 build.log; exit 1; }
+pacman -U --noconfirm "$B"/wlroots0.20-*.pkg.tar.* > /dev/null
+grep -q '^IgnorePkg = wlroots0.20' /etc/pacman.conf ||
+	sed -i '/^\[options\]/a IgnorePkg = wlroots0.20' /etc/pacman.conf
+pacman -Scc --noconfirm > /dev/null
+EOF
+rm -rf "$MNT/var/tmp/wlroots0.20"
+
 # --- from Leste: kernel modules, firmware, the Pro1X stack -------------------
 log "kernel modules $KVER and firmware"
 mkdir -p "$MNT/usr/lib/modules"

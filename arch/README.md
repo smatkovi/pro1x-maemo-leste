@@ -9,7 +9,7 @@ No partition is touched.
 | Step | Script | What it does |
 | --- | --- | --- |
 | 10 | `10-make-rootfs.sh` | Arch Linux ARM's generic aarch64 root filesystem (signature checked against the Arch Linux ARM build key) into `/host/arch.img` |
-| 20 | `20-pro1x-hardware.sh` | without Arch's kernel package; Phosh (with phoc and squeekboard) as the phone shell, NetworkManager, ModemManager, BlueZ, PipeWire, gpsd; Leste's kernel modules and firmware (`/usr/lib/firmware/updates`); the Pro1X stack from scripts/46 in `/usr/lib/pro1x` (hexagonrpcd, libssc, iio-sensor-proxy with SSC, pro1x-gnss, pro1x-steps), and the modem's rmtfs, tqftpserv and qrtr-ns from Leste where Arch Linux ARM has none; Kali's systemd units for them; `rootfs-overlay/` (phoc's output: landscape, scale 2; `phosh.service`, which starts Phosh for `alarm` without a display manager, as Debian's does: Arch's phosh package has no system unit) |
+| 20 | `20-pro1x-hardware.sh` | without Arch's kernel package; Phosh (with phoc and squeekboard) as the phone shell, wlroots0.20 built again with phoc's patch (`wlroots0.20/`, below), NetworkManager, ModemManager, BlueZ, PipeWire, gpsd; Leste's kernel modules and firmware (`/usr/lib/firmware/updates`); the Pro1X stack from scripts/46 in `/usr/lib/pro1x` (hexagonrpcd, libssc, iio-sensor-proxy with SSC, pro1x-gnss, pro1x-steps), and the modem's rmtfs, tqftpserv and qrtr-ns from Leste where Arch Linux ARM has none; Kali's systemd units for them; `rootfs-overlay/` (phoc's output: landscape, scale 2; `phosh.service`, which starts Phosh for `alarm` without a display manager, as Debian's does: Arch's phosh package has no system unit) |
 
 Both run as root on the phone in Maemo Leste:
 
@@ -158,10 +158,19 @@ menu's default stays Leste), so every way back is a reboot:
 
 First boot (2026-10-28): Arch comes up on Leste's kernel in about a
 minute, with SSH over USB, NetworkManager, ModemManager, the DSP daemons
-and the watchdog; phoc draws with the GPU (freedreno, FD610). Phosh does
-not stay up yet: its home bar asks for a layer surface of height 0
-anchored only at the bottom, and phoc ends the connection ("height 0
-requested without setting top and bottom anchors"). The clock starts at
+and the watchdog; phoc draws with the GPU (freedreno, FD610). Phosh's
+home bar asks for a layer surface of height 0 anchored only at the
+bottom, which wlroots refuses ("height 0 requested without setting top and
+bottom anchors"): phoc ends Phosh's connection, and Phosh starts again
+every 14 s. phoc's own copy of wlroots takes that check back (its
+subprojects/packagefiles/wlroots), but Arch's phoc links Arch's wlroots0.20
+instead. Step 20 therefore builds wlroots0.20 again with phoc's patch
+(`wlroots0.20/PKGBUILD`) and keeps it with `IgnorePkg` in
+`/etc/pacman.conf`; Phosh stays up with it (2026-11-05). On an image made
+before, the same by hand: the PKGBUILD and patch into a directory of
+`alarm`'s, there `makepkg --skippgpcheck --nocheck` (meson, ninja and
+vulkan-headers installed), then `pacman -U` the package, the `IgnorePkg`
+line, and `systemctl restart phosh`. The clock starts at
 1970 until a saved RTC offset exists (`/host/pro1x-rtc-offset`);
 `pro1x-rtc.service` waits for the RTC (rtc0, a module's, about 17 s into
 the boot) before it puts the offset on top.
