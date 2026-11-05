@@ -335,7 +335,10 @@ fi
 if [ "$(blkid -o value -s TYPE /dev/loop0 2>/dev/null)" = btrfs ]; then
   modprobe btrfs 2>/dev/null
   echo "ROOTFSTYPE=btrfs" >> /conf/param.conf
-  echo "ROOTFLAGS='-o subvol=${SUBVOL:-@},noatime${FS_DEFAULTS:-,lazytime},compress=zstd:1'" >> /conf/param.conf
+  # FS_DEFAULTS only says "the old options", it is no option text
+  lazy=,lazytime
+  [ -z "$FS_DEFAULTS" ] || lazy=
+  echo "ROOTFLAGS='-o subvol=${SUBVOL:-@},noatime$lazy,compress=zstd:1'" >> /conf/param.conf
   [ -z "${SUBVOL:-}" ] || : > /conf/pro1x-overlay
 elif [ -z "$FS_DEFAULTS" ]; then
   # ext4 (Leste, the MeeGo copy, Kali, LuneOS); each system's fstab has
