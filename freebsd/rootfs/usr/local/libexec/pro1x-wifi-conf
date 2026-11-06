@@ -1,0 +1,55 @@
+#!/bin/sh
+# wpa_supplicant's configuration on the Pro1X (rc.conf's
+# wpa_supplicant_conf_file), made from userdata's freebsd/wpa_supplicant.conf,
+# which FreeBSD only reads: with the control interface and update_config for
+# the status menu (pro1x-wifi-status), which saves the networks chosen there
+# into it. Where /var is kept (the writable pool) the file stays; on the
+# read-only root /var is in memory and it is made anew at each start.
+# Userdata's networks that it has not got (by their ssid line) are added
+# every time, so one added from Linux shows up too.
+#
+#   pro1x-wifi-conf [configuration [userdata's file]]
+#
+# Run by rc.d/pro1x_wifi before ath10k loads (devd starts a wpa_supplicant
+# when wlan0 appears) and by pro1x-dsptest.
+conf=${1:-/var/db/pro1x-wifi/wpa_supplicant.conf}
+host=${2:-/dev/pro1x-host/freebsd/wpa_supplicant.conf}
+umask 077
+mkdir -p "${conf%/*}" || exit 1
+if [ ! -s "$conf" ]; then
+	{
+		echo "ctrl_interface=/var/run/wpa_supplicant"
+		echo "ctrl_interface_group=wheel"
+		echo "update_config=1"
+		# userdata's own settings (country=, ...); its networks below
+		[ -r "$host" ] && awk '
+			/^[ \t]*network[ \t]*=[ \t]*\{/ { blk = 1 }
+			!blk && !/^[ \t]*(ctrl_interface|ctrl_interface_group|update_config)[ \t]*=/ { print }
+			blk && /^[ \t]*\}/ { blk = 0 }
+		' "$host"
+	} > "$conf" || exit 1
+fi
+[ -r "$host" ] || exit 0
+awk -v conf="$conf" '
+BEGIN {
+	while ((getline l < conf) > 0)
+		if (l ~ /^[ \t]*ssid[ \t]*=/) {
+			sub(/^[ \t]*ssid[ \t]*=[ \t]*/, "", l)
+			have[l] = 1
+		}
+	close(conf)
+}
+/^[ \t]*network[ \t]*=[ \t]*\{/ { blk = 1; text = ""; ssid = "" }
+blk {
+	text = text $0 "\n"
+	if ($0 ~ /^[ \t]*ssid[ \t]*=/) {
+		ssid = $0
+		sub(/^[ \t]*ssid[ \t]*=[ \t]*/, "", ssid)
+	}
+}
+blk && /^[ \t]*\}/ {
+	blk = 0
+	if (ssid != "" && !(ssid in have))
+		printf "\n%s", text
+}
+' "$host" >> "$conf"

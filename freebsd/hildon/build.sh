@@ -46,6 +46,12 @@ if [ ! -f "$SYSROOT/.base" ]; then
 	: > "$H/sysroot.list"
 	touch "$SYSROOT/.base"
 fi
+# SYSROOT_OFFLINE=1: the sysroot as it is, without the package index or
+# downloads (for a part of this repository's after the package cache was
+# cleaned: pkgfetch would fetch every package again)
+if [ -n "${SYSROOT_OFFLINE:-}" ] && [ -f "$SYSROOT/.base" ]; then
+	log "sysroot: as it is (SYSROOT_OFFLINE)"
+else
 [ -f "$WORK/pkgs/site/packagesite.yaml" ] ||
 	{ echo "run rootfs.sh once first (package index)"; exit 1; }
 x=()
@@ -58,6 +64,7 @@ while read -r f; do
 	bsdtar -xf "$f" -C "$SYSROOT" --exclude '+*' 2> /dev/null
 	echo "$f" >> "$H/sysroot.list"
 done < "$H/sysroot.want"
+fi
 
 # --- host tools ----------------------------------------------------------
 # Many configure.ac files take their version from debian/changelog.
@@ -677,6 +684,34 @@ led_part() {
 	cp -a "$PR/." "$STAGE/"
 }
 
+# The Wi-Fi in the status area and menu (pro1x-wifi-status: wpa_supplicant's
+# control interface; Leste's connui needs icd2), in connui-internet's place.
+# The status menu loads every plugin in its directory: libhildondesktop's
+# examples go.
+wifi_status_part() {
+	local b=$BUILD/pro1x-wifi-status src=$REPO/freebsd/hildon/pro1x-wifi-status
+	local plugins=$STAGE/usr/local/etc/hildon-desktop/status-menu.plugins
+	local desktop=/usr/local/share/applications/hildon-status-menu/pro1x-wifi-status.desktop
+	log "pro1x-wifi-status"
+	mkdir -p "$b"
+	# shellcheck disable=SC2046
+	$CC $CPPFLAGS $CFLAGS $LDFLAGS -Wall -shared -fPIC -o "$b/pro1x-wifi-status.so" \
+	    "$src/pro1x-wifi-status.c" $(pkg-config --cflags --libs libhildondesktop-1 hildon-1 gtk+-2.0) \
+	    > "$b/make.out" 2>&1 || { grep -m20 -E "error|warning" "$b/make.out"; return 1; }
+	PR=$H/pkgroot/pro1x-wifi-status
+	rm -rf "$PR"
+	install -D -m 644 "$b/pro1x-wifi-status.so" "$PR/usr/local/lib/hildon-desktop/pro1x-wifi-status.so"
+	install -D -m 644 "$src/pro1x-wifi-status.desktop" "$PR$desktop"
+	cp -a "$PR/." "$STAGE/"
+	if [ -f "$plugins" ] && ! grep -q '^\[pro1x-wifi-status.desktop\]' "$plugins"; then
+		printf '\n[pro1x-wifi-status.desktop]\nX-Desktop-File=%s\nX-Status-Area-Position=1\nX-Status-Menu-Position=5\n' \
+		    "$desktop" >> "$plugins"
+	fi
+	rm -f "$STAGE"/usr/local/share/applications/hildon-status-menu/example-*.desktop \
+	    "$STAGE"/usr/local/share/applications/hildon-home/example-*.desktop \
+	    "$STAGE"/usr/local/share/applications/hildon-notification/example-*.desktop
+}
+
 # pkg-config puts the sysroot in front of path variables, which some
 # parts install to: those files back where they belong
 unsysroot() {
@@ -875,6 +910,10 @@ fi
 # the status LED as the notification light (pro1x-led)
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-led "* ]]; then
 	led_part || failed+=(pro1x-led)
+fi
+# the Wi-Fi in the status menu (pro1x-wifi-status)
+if [ $# -eq 0 ] || [[ " $* " == *" pro1x-wifi-status "* ]]; then
+	wifi_status_part || failed+=(pro1x-wifi-status)
 fi
 # the N9's volume bar for the MeeGo-like look, on PulseAudio's default sink
 if [ $# -eq 0 ] || [[ " $* " == *" pro1x-volume-osd "* ]]; then

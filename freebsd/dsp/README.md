@@ -398,11 +398,23 @@ waits for `ath10k0`, then does what devd does for a card that attached:
 `/etc/pccard_ether ath10k0 startchildren`, i.e. `wlans_ath10k0="wlan0"`,
 `ifconfig_wlan0="WPA DHCP"`). devd's own attach event comes too early: the
 newbus device attaches before ath10k has talked the firmware up and
-registered with net80211. All of it is off in `rc.conf` until the device
-tests pass. wpa_supplicant reads `/host/freebsd/wpa_supplicant.conf` on
+registered with net80211. All of it is on with `pro1x.wifi=on` in
+`freebsd/cmdline` (`rc.conf`; the device test of 2026-11-02 passed), off
+without it. The networks come from `/host/freebsd/wpa_supplicant.conf` on
 userdata (`/dev/pro1x-host/freebsd/...` under FreeBSD), written from
-Linux, never part of an image; resolvconf writes `/var/run/resolv.conf`,
-where `/etc/resolv.conf` points (the root is read only).
+Linux, never part of an image: `pro1x-wifi-conf` (run by `rc.d/pro1x_wifi`
+and the test) makes wpa_supplicant's own configuration,
+`/var/db/pro1x-wifi/wpa_supplicant.conf`, from it, with the control
+interface and `update_config=1`, and adds the networks it has not got yet
+each time. The status menu's Internet item (`hildon/pro1x-wifi-status`)
+talks to that control interface: it lists the networks of a scan, joins
+one (asking for the password of a WPA-PSK or SAE one, again when it was
+wrong), disconnects, switches Wi-Fi off and on; a network joined there is
+saved into that configuration, which lasts as long as `/var` (until the
+next boot on the read-only root, for good on the writable pool).
+Enterprise (EAP) and WEP networks are listed but not joined. resolvconf
+writes `/var/run/resolv.conf`, where `/etc/resolv.conf` points (the root
+is read only).
 
 The keys go into the firmware, as with ath10k on Linux:
 `compat.linuxkpi.80211.hw_crypto=1` (LinuxKPI's default is net80211's

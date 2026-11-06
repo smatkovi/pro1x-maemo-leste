@@ -41,6 +41,10 @@ pro1x_wifi_start()
 {
 	local i dev
 
+	# wpa_supplicant's configuration from userdata's, before devd starts
+	# one for the new wlan0
+	/usr/local/libexec/pro1x-wifi-conf "${wpa_supplicant_conf_file}" ||
+	    warn "no wpa_supplicant configuration ${wpa_supplicant_conf_file}"
 	# the keys in the firmware, as ath10k has them on Linux (LinuxKPI's
 	# default is net80211's ciphers in software); a tunable of
 	# linuxkpi_wlan, so before it loads

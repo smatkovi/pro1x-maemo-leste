@@ -208,7 +208,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | storage | UFS on the link Linux brought up; no SD card |
 | Hildon, Xfce | yes, switchable |
 | USB (network to the PC, host) | not yet: FreeBSD's dwc3 is host only, and Linux takes the controller down at kexec |
-| Wi-Fi | built, untested on the phone: ath10k over SNOC on the DSP stack (`dsp/README.md`: remoteproc, GLINK, QRTR, QMI) |
+| Wi-Fi | yes, with `pro1x.wifi=on` in `freebsd/cmdline` (scan, WPA2, DHCP on the phone, 2026-11-02): ath10k over SNOC on the DSP stack (`dsp/README.md`: remoteproc, GLINK, QRTR, QMI); networks chosen in the status menu's Internet item (`pro1x-wifi-status`, tried in the VM against a simulated wpa_supplicant) or from userdata's `wpa_supplicant.conf` |
 | Bluetooth | the chip only, for the FM radio (`fm/README.md`); no Bluetooth stack |
 | modem: calls, SMS, GPS | built, untested on the phone: `pro1x-modemd` (QMI over QRTR through libqmi) as oFono's D-Bus API, so Leste's sphone runs unchanged (tried in the VM against a simulated modem); the SMS in Conversations through telepathy-ring and Mission Control, as on Leste (tried in the VM), sphone for the calls; the voice of a call through `pro1x-audiod` (`pro1x-callaudio`); GPS through gpsd, location-daemon and liblocation (`modem/README.md`) |
 | mobile data | built, untested on the phone: `qcom_ipa` (a port of Linux's IPA driver for the IPA v4.2: GSI, endpoints, the QMI handshake with the modem, QMAP with MAPv4 checksum offload, interfaces `qmapN`) and the sessions in `pro1x-modemd` (DPM, WDA, WDS; oFono's ConnectionManager); host tested against models of the hardware and the modem (`data/README.md`) |

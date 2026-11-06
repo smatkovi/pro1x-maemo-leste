@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Internet
+Comment=Wi-Fi through wpa_supplicant (pro1x-wifi-status)
+Type=default
+X-Path=pro1x-wifi-status.so

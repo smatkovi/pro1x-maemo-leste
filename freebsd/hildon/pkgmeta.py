@@ -123,6 +123,14 @@ LOCAL = {
                   '(pro1x_battery); off otherwise and while suspended, steady, '
                   'without a timer (freebsd/pm/tools/pro1x-led), with its rc.d '
                   'script.', ['BSD2CLAUSE']),
+    'pro1x-wifi-status': ('1.0', "Wi-Fi in Hildon's status menu through wpa_supplicant",
+                          'pro1x-wifi-status shows the Wi-Fi network in the status area '
+                          "and lists the networks in reach in the status menu's Internet "
+                          'item: a tap joins one (asking for the password of a WPA-PSK or '
+                          'SAE network, again when it was wrong), and it disconnects and '
+                          "switches Wi-Fi off and on, through wpa_supplicant's control "
+                          "interface, where Leste's connui needs icd2 "
+                          '(freebsd/hildon/pro1x-wifi-status).', ['BSD2CLAUSE']),
     # 1.1: not while the display is off (mce's display_status_ind)
     'pro1x-volume-osd': ('1.1', "The Nokia N9's volume bar for Hildon's MeeGo-like look",
                          'pro1x-volume-osd shows the volume of PulseAudio\'s default sink '
@@ -284,6 +292,8 @@ RUNTIME = {
     'pro1x-volume-keys': ['pulseaudio'],
     # the requests come over the system bus
     'pro1x-led': ['dbus'],
+    # a plugin of the status menu
+    'pro1x-wifi-status': ['hildon-status-menu'],
     # the modem asks for its files and domains before its file systems
     'rmtfs': ['tqftpserv', 'pd-mapper'],
     # QtSql's SQLite driver, a package of its own on FreeBSD

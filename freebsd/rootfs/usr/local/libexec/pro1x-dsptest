@@ -288,6 +288,7 @@ if [ "$step" = wifi ] || [ "$step" = wpa ]; then
 			exit 0
 		fi
 		ifconfig wlan0 down
+		/usr/local/libexec/pro1x-wifi-conf
 		/etc/rc.d/wpa_supplicant status wlan0 > /dev/null 2>&1 ||
 		    /etc/rc.d/wpa_supplicant start wlan0
 		wait_for 30 "associated" \
