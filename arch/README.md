@@ -170,7 +170,13 @@ instead. Step 20 therefore builds wlroots0.20 again with phoc's patch
 before, the same by hand: the PKGBUILD and patch into a directory of
 `alarm`'s, there `makepkg --skippgpcheck --nocheck` (meson, ninja and
 vulkan-headers installed), then `pacman -U` the package, the `IgnorePkg`
-line, and `systemctl restart phosh`. The clock starts at
+line, and `systemctl restart phosh`. An image made before 2026-11-06 has
+its own `/etc/pam.d/phosh` without an `auth` line in place of Arch's
+package's, so Phosh's lock screen refuses every password (one `pam_warn`
+for `phosh:auth` in the journal per try): Arch's file back
+(`auth`/`account`/`session include system-local-login`, or `pacman -S
+phosh`) fixes it, at once. phosh.service uses the same PAM service; systemd
+does not ask for a password there. The clock starts at
 1970 until a saved RTC offset exists (`/host/pro1x-rtc-offset`);
 `pro1x-rtc.service` waits for the RTC (rtc0, a module's, about 17 s into
 the boot) before it puts the offset on top.
