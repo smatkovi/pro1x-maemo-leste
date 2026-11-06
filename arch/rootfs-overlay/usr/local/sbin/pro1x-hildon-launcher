@@ -1,0 +1,50 @@
+#!/bin/sh
+# pro1x-hildon-launcher: the applications Arch's packages install
+# (/usr/share/applications) in Hildon's launcher, which reads only
+# /usr/share/applications/hildon: a link there for each one a phone's user
+# starts (an application, shown, not in a terminal, not only for other
+# desktops, not a development, system or settings tool, not named in
+# /etc/pro1x/hildon-launcher.exclude), and the link gone again with it.
+# pacman runs it after every transaction that changes those entries
+# (/etc/pacman.d/hooks/pro1x-hildon-launcher.hook); hildon-desktop sees the
+# change at once. Hildon's own entries (files, not links) stay as they are.
+set -eu
+A=/usr/share/applications
+H=$A/hildon
+X=/etc/pro1x/hildon-launcher.exclude
+[ -d "$H" ] || exit 0
+
+# the value of KEY in the entry's first group, between semicolons
+field() {
+	printf ';%s;' "$(sed -n "/^\[Desktop Entry\]/,/^\[/s/^$1=//p" "$2" | head -1)"
+}
+
+wanted() {
+	f=$A/$1
+	[ -f "$f" ] || return 1
+	! grep -qx "${1%.desktop}" "$X" 2> /dev/null || return 1
+	[ "$(field Type "$f")" = ";Application;" ] || return 1
+	for k in NoDisplay Hidden Terminal; do
+		[ "$(field $k "$f")" != ";true;" ] || return 1
+	done
+	only=$(field OnlyShowIn "$f")
+	case $only in ";;" | *";Hildon;"*) ;; *) return 1 ;; esac
+	case $(field NotShowIn "$f") in *";Hildon;"*) return 1 ;; esac
+	case $(field Categories "$f") in
+	*";Development;"* | *";System;"* | *";Settings;"*) return 1 ;;
+	esac
+}
+
+for f in "$A"/*.desktop; do
+	n=${f##*/}
+	if wanted "$n" && [ ! -e "$H/$n" ] && [ ! -L "$H/$n" ]; then
+		ln -s "../$n" "$H/$n"
+	fi
+done
+# the links made here whose entry went or is no longer wanted
+for l in "$H"/*.desktop; do
+	[ -L "$l" ] || continue
+	t=$(readlink "$l")
+	case $t in ../*.desktop) ;; *) continue ;; esac
+	wanted "${t#../}" || rm -f "$l"
+done

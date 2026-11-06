@@ -235,4 +235,8 @@ if [ -x "$MNT/usr/bin/meegotouchhome" ]; then
 	install -m 644 "$REPO/arch/harmattan/harmattan.service" "$MNT/etc/systemd/system/"
 	rm -f "$MNT/usr/local/bin/meego-session"
 fi
+# Arch's applications in Hildon's launcher too, from now on after each
+# pacman transaction (rootfs-overlay: pro1x-hildon-launcher and its hook)
+[ ! -x "$MNT/usr/local/sbin/pro1x-hildon-launcher" ] ||
+	chroot "$MNT" /usr/local/sbin/pro1x-hildon-launcher
 log "done: pro1x-desktop hildon or meego (as root) makes it the session"

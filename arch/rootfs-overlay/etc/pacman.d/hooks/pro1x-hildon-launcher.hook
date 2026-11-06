@@ -1,0 +1,13 @@
+# The applications a package brings or takes away in Hildon's launcher
+# too (it reads only /usr/share/applications/hildon)
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Target = usr/share/applications/*.desktop
+
+[Action]
+Description = Updating Hildon's launcher...
+When = PostTransaction
+Exec = /usr/local/sbin/pro1x-hildon-launcher

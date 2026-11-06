@@ -1,0 +1,8 @@
+# Applications (their entry's file name without .desktop, one a line) that
+# pro1x-hildon-launcher keeps out of Hildon's launcher: the test tools of
+# V4L2 and gpsd. Changes count from the next pacman transaction, or at once
+# with: sudo pro1x-hildon-launcher
+qv4l2
+qvidcap
+xgps
+xgpsspeed
