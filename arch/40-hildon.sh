@@ -223,6 +223,11 @@ install -m 755 "$REPO/arch/hildon/hildon-session" "$MNT/usr/local/bin/hildon-ses
 install -m 644 "$REPO/arch/hildon/hildon.service" "$REPO/arch/hildon/meego.service" \
 	"$MNT/etc/systemd/system/"
 install -m 755 "$REPO/arch/pro1x-desktop" "$MNT/usr/local/bin/pro1x-desktop"
+# Arch's systemd marks every prompt and command with OSC 3008 sequences
+# (/etc/profile.d/80-systemd-osc-context.sh); X Terminal's VTE is too old
+# for them and prints them as text: off, as the script itself says how
+rm -f "$MNT/etc/profile.d/80-systemd-osc-context.sh"
+ln -sfn /dev/null "$MNT/etc/tmpfiles.d/20-systemd-osc-context.conf"
 # the N9's own UI (step 30) is "harmattan", "meego" the MeeGo look on Hildon
 if [ -x "$MNT/usr/bin/meegotouchhome" ]; then
 	install -m 755 "$REPO/arch/harmattan/harmattan-session" "$MNT/usr/local/bin/"
