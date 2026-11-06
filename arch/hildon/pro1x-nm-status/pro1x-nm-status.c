@@ -635,6 +635,8 @@ button_clicked_cb (GtkButton *button, gpointer data)
 	enabled = nm_client_wireless_get_enabled (self->client);
 	if (self->wifi)
 		ac = nm_device_get_active_connection (NM_DEVICE (self->wifi));
+	/* the status menu closes, as Maemo's own items do */
+	gtk_widget_hide (gtk_widget_get_toplevel (GTK_WIDGET (button)));
 
 	self->dialog = hildon_dialog_new_with_buttons ("Wi-Fi networks", NULL,
 	                                               GTK_DIALOG_MODAL, NULL);
@@ -642,7 +644,7 @@ button_clicked_cb (GtkButton *button, gpointer data)
 		gtk_dialog_add_button (GTK_DIALOG (self->dialog), "Disconnect",
 		                       RESPONSE_DISCONNECT);
 	gtk_dialog_add_button (GTK_DIALOG (self->dialog),
-	                       enabled ? "Switch Wi-Fi off" : "Switch Wi-Fi on",
+	                       enabled ? "Wi-Fi off" : "Wi-Fi on",
 	                       RESPONSE_WIFI);
 	self->list = gtk_vbox_new (FALSE, 0);
 	area = hildon_pannable_area_new ();
