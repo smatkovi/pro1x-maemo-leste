@@ -26,6 +26,18 @@ xset s off -dpms
 # At the N900's size on the full resolution (pro1x-hidpi)
 eval "$(/usr/local/bin/pro1x-hidpi env)"
 /usr/local/bin/pro1x-hidpi x11
+# hildon-desktop opens most applications through their D-Bus service, and
+# D-Bus has the user's systemd start them, outside this session: they get
+# its display and settings from here ("cannot open display" without), and
+# lose them again when the session ends, before Phosh's programs, which
+# come from the same systemd, would get them too
+session_env="DISPLAY XAUTHORITY GTK2_RC_FILES HILDON_DESKTOP_APPS_PRESTART
+	CLUTTER_BACKEND XDG_CURRENT_DESKTOP PRO1X_LOOK HILDON_SCALE GDK_SCALE
+	GDK_DPI_SCALE QT_ENABLE_HIGHDPI_SCALING QT_SCALE_FACTOR_ROUNDING_POLICY"
+dbus-update-activation-environment --systemd $session_env 2> /dev/null
+trap 'systemctl --user unset-environment $session_env 2> /dev/null' EXIT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # The theme engine's image server before any GTK program
 GDK_DISABLE_XSHM=1 /usr/lib/sapwood/sapwood-server &
