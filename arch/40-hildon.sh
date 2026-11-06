@@ -217,6 +217,28 @@ gcc -O2 -Wall -o /usr/local/bin/pro1x-theme-scale /usr/src/hildon/pro1x-theme-sc
 pro1x-hidpi theme > /dev/null || echo "   (no theme to scale yet: pro1x-hidpi theme once it is there)"
 EOF
 
+# --- the status menu ----------------------------------------------------------------
+# NetworkManager's Wi-Fi in the status area and menu (hildon/pro1x-nm-status:
+# Leste's connui needs icd2, which Arch does not have), in connui-internet's
+# place. The status menu loads every plugin in its directory: libhildondesktop's
+# examples go.
+log "status menu: pro1x-nm-status"
+cp -r "$REPO/arch/hildon/pro1x-nm-status" "$MNT$B/"
+chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
+S=/usr/src/hildon/pro1x-nm-status
+gcc -shared -fPIC -O2 -Wall -Wno-deprecated-declarations -o "$S/pro1x-nm-status.so" \
+	"$S/pro1x-nm-status.c" $(pkg-config --cflags --libs libhildondesktop-1 hildon-1 libnm)
+install -m 644 "$S/pro1x-nm-status.so" /usr/lib/hildon-desktop/
+install -m 644 "$S/pro1x-nm-status.desktop" /usr/share/applications/hildon-status-menu/
+P=/etc/hildon-desktop/status-menu.plugins
+grep -q '^\[pro1x-nm-status.desktop\]' "$P" ||
+	printf '\n[pro1x-nm-status.desktop]\nX-Desktop-File=%s\nX-Status-Area-Position=1\nX-Status-Menu-Position=5\n' \
+		/usr/share/applications/hildon-status-menu/pro1x-nm-status.desktop >> "$P"
+rm -f /usr/share/applications/hildon-status-menu/example-*.desktop \
+	/usr/share/applications/hildon-home/example-*.desktop \
+	/usr/share/applications/hildon-notification/example-*.desktop
+EOF
+
 # --- the session ------------------------------------------------------------------
 log "hildon-session"
 install -m 755 "$REPO/arch/hildon/hildon-session" "$REPO/arch/hildon/pro1x-powerkey-x" \

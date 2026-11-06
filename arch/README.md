@@ -52,6 +52,17 @@ unit; `pro1x-desktop phosh|hildon|meego|harmattan` (as root) picks one:
 | `meego` | the same, `42-meego-look.sh` | Hildon with the Nokia N9's look as on Leste and FreeBSD (`patches/meego`): the home views, the launcher and the open applications as pages in a ring, the edge gestures, no title bars but the N9's thin status bar, the one-column app menu, the N9's icon shapes and rolling wheels for dates and times; the Events page (`tools/pro1x-events`: the weather, notifications, the calendar's appointments, a Mastodon timeline; Settings, Events) and the N9's volume bar (`tools/pro1x-volume-osd`); the MeeGo clock and the other MeeGo apps with the N9's theme |
 | `harmattan` | `30-meego.sh` | the N9's own user interface ported to Qt 5 (smatkovi/harmattan-qt5: mcompositor, the home screen, the system UI with its status menu, the settings, the N9's keyboard), its touch and event sounds |
 
+In the `hildon` and `meego` sessions the status menu's Internet item is
+NetworkManager's (`hildon/pro1x-nm-status`; Leste's connui needs icd2): the
+Wi-Fi signal in the status area, on a tap the networks in reach, a password
+asked for a new network or for one NetworkManager has none for (one saved
+in Phosh, whose agent kept the password), and kept for every desktop.
+Applications from Arch's packages show in Hildon's launcher too
+(`pro1x-hildon-launcher`, run by a pacman hook; leave one out in
+`/etc/pro1x/hildon-launcher.exclude`). A short press on the power key turns
+the screen dark or back on (`hildon/pro1x-powerkey-x`); held for 5 s, it
+powers the phone off.
+
 Alarms (docs/alarm-power-on.md): in the `hildon` and `meego` sessions
 `hildon-session` starts alarmd (with `librtc-realtime`, so that an alarm
 switches the phone on) and the system UI's alarm dialog; step 42 builds
