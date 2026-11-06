@@ -219,7 +219,8 @@ EOF
 
 # --- the session ------------------------------------------------------------------
 log "hildon-session"
-install -m 755 "$REPO/arch/hildon/hildon-session" "$MNT/usr/local/bin/hildon-session"
+install -m 755 "$REPO/arch/hildon/hildon-session" "$REPO/arch/hildon/pro1x-powerkey-x" \
+	"$MNT/usr/local/bin/"
 install -m 644 "$REPO/arch/hildon/hildon.service" "$REPO/arch/hildon/meego.service" \
 	"$MNT/etc/systemd/system/"
 install -m 755 "$REPO/arch/pro1x-desktop" "$MNT/usr/local/bin/pro1x-desktop"

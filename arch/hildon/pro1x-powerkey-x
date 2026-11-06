@@ -1,0 +1,68 @@
+#!/usr/bin/python3 -I
+"""pro1x-powerkey-x: the power key's short press in the X sessions, which
+have no mce (hildon-session): the screen dark, or back on, as on Leste.
+
+logind powers the phone off only when the key is held
+(logind.conf.d/50-pro1x-powerkey.conf), and X leaves the key alone
+(xorg.conf.d/45-pro1x-powerkey.conf), so that the press does not wake
+the screen it is about to blank. A touch or a key brings a dark screen
+back too (DPMS).
+
+Reads the PMIC's power key (pm8941_pwrkey) as a member of the input
+group and blanks through DPMS, which the session otherwise keeps off
+(xset -dpms: no blanking by time-out without mce).
+"""
+import glob
+import os
+import struct
+import subprocess
+import sys
+
+EV_KEY = 1
+KEY_POWER = 116
+EVENT = struct.Struct("llHHi")  # struct input_event on a 64-bit kernel
+
+
+def device():
+    for d in sorted(glob.glob("/sys/class/input/event*")):
+        try:
+            with open(d + "/device/name") as f:
+                if f.read().strip() == "pm8941_pwrkey":
+                    return "/dev/input/" + os.path.basename(d)
+        except OSError:
+            pass
+    return None
+
+
+def xset(*args):
+    return subprocess.run(["xset", *args], capture_output=True, text=True).stdout
+
+
+def toggle():
+    # xset tells the monitor's state only while DPMS is on: after a blank
+    state = xset("q")
+    if "Monitor is Off" in state or "Monitor is in " in state:
+        xset("dpms", "force", "on")
+        xset("-dpms")
+    else:
+        xset("+dpms")
+        xset("dpms", "0", "0", "0")
+        xset("dpms", "force", "off")
+
+
+def main():
+    path = device()
+    if path is None:
+        sys.exit("pro1x-powerkey-x: no pm8941_pwrkey input device")
+    with open(path, "rb", buffering=0) as f:
+        while True:
+            data = f.read(EVENT.size)
+            if len(data) < EVENT.size:
+                sys.exit("pro1x-powerkey-x: " + path + " closed")
+            _, _, kind, code, value = EVENT.unpack(data)
+            if kind == EV_KEY and code == KEY_POWER and value == 0:
+                toggle()
+
+
+if __name__ == "__main__":
+    main()

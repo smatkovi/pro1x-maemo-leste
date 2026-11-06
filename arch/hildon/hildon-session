@@ -71,6 +71,12 @@ if [ -x /usr/bin/pro1x-volume-osd ]; then
 	respawn /usr/bin/pro1x-volume-osd &
 	extra=$!
 fi
+# The power key's short press: the screen dark or back on, which mce does
+# on Leste (logind only powers off when the key is held)
+if [ -x /usr/local/bin/pro1x-powerkey-x ]; then
+	respawn /usr/local/bin/pro1x-powerkey-x &
+	extra="$extra $!"
+fi
 # The alarm daemon and the system UI, which shows its alarm dialog (Leste:
 # Xsession.d/03alarmd and 03osso-systemui), as this session's user (arch/
 # alarm: its D-Bus policy, the queue's directory, rtc0 for it). alarmd sets
