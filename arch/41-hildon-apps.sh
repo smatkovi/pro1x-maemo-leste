@@ -150,7 +150,10 @@ fi
 # has only the GTK 3 and 4 ones
 VTE=vte-0.28.2
 VTE_SHA256=86cf0b81aa023fa93ed415653d51c96767f20b2d7334c893caba71e42654b0ae
-if want osso-xterm && [ ! -f "$MNT/usr/lib/pkgconfig/vte.pc" ]; then
+# (with hildon/vte-0.28-osc.patch, which swallows the OSC sequences systemd
+# and others send now; a VTE built without it is built again)
+if want osso-xterm && { [ ! -f "$MNT/usr/lib/pkgconfig/vte.pc" ] ||
+    [ ! -f "$MNT$B/$VTE.osc.done" ]; }; then
 	log "$VTE (GTK 2)"
 	mkdir -p "$MNT$B/dl"
 	f=$MNT$B/dl/$VTE.tar.xz
@@ -159,6 +162,7 @@ if want osso-xterm && [ ! -f "$MNT/usr/lib/pkgconfig/vte.pc" ]; then
 	rm -rf "${MNT:?}$B/build/$VTE"
 	mkdir -p "$MNT$B/build"
 	tar -xJf "$f" -C "$MNT$B/build"
+	patch -d "$MNT$B/build/$VTE" -p1 -s < "$REPO/arch/hildon/vte-0.28-osc.patch"
 	chroot "$MNT" /bin/bash -euo pipefail -s "$B/build/$VTE" "$JOBS" <<'EOF'
 cd "$1"
 export CFLAGS="-O2 -pipe -std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration -Wno-error=int-conversion"
@@ -170,6 +174,7 @@ make -j"$2" > make.log 2>&1 || { grep -m20 -E "error:|Error [0-9]" make.log; exi
 make install > install.log 2>&1 || { tail -20 install.log; exit 1; }
 ldconfig
 EOF
+	touch "$MNT$B/$VTE.osc.done"
 fi
 
 # libical 3 (the calendar backend is written for it; Arch has libical 4,

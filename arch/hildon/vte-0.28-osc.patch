@@ -1,0 +1,29 @@
+# VTE 0.28 (GTK 2, osso-xterm's) prints OSC sequences it has no entry for as
+# text: systemd's OSC 3008 context marks around every elevated command,
+# hyperlinks, progress. This gives the newer ones an entry without a
+# handler, so that they are swallowed.
+--- a/src/caps.c
++++ b/src/caps.c
+@@ -561,6 +561,22 @@
+ 	{OSC "21;%s" ST, "set-text-property-21", 0},
+ 	{OSC "2L;%s" ST, "set-text-property-2L", 0},
+ 
++	/* Newer terminals' sequences, swallowed: no handler has the name.
++	 * systemd's OSC 3008 context marks, OSC 8 hyperlinks, OSC 9 notices
++	 * and progress, OSC 7 and 133 of shell integrations, OSC 777. */
++	{OSC "7;%s" BEL, "ignored-osc-7", 0},
++	{OSC "8;%s" BEL, "ignored-osc-8", 0},
++	{OSC "9;%s" BEL, "ignored-osc-9", 0},
++	{OSC "133;%s" BEL, "ignored-osc-133", 0},
++	{OSC "777;%s" BEL, "ignored-osc-777", 0},
++	{OSC "3008;%s" BEL, "ignored-osc-3008", 0},
++	{OSC "7;%s" ST, "ignored-osc-7", 0},
++	{OSC "8;%s" ST, "ignored-osc-8", 0},
++	{OSC "9;%s" ST, "ignored-osc-9", 0},
++	{OSC "133;%s" ST, "ignored-osc-133", 0},
++	{OSC "777;%s" ST, "ignored-osc-777", 0},
++	{OSC "3008;%s" ST, "ignored-osc-3008", 0},
++
+ 	{NULL, NULL, 0},
+ };
+ 
