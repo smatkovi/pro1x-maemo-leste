@@ -25,7 +25,12 @@ StandardError=journal
 UtmpIdentifier=tty7
 UtmpMode=user
 ExecStartPre=+/usr/bin/chvt 7
-ExecStart=/usr/bin/xinit /usr/local/bin/hildon-session -- /usr/bin/Xorg :0 vt7 -keeptty -nolisten tcp
+# pam_systemd gives a local session CAP_WAKE_ALARM as an ambient
+# capability (systemd 254). Everything under xinit would inherit it, and
+# bwrap, in which gdk-pixbuf's glycin runs every image loader, refuses to
+# run with capabilities it did not get setuid: no image or icon would load.
+# alarmd sets the RTC's wake alarm through /dev/rtc0 and needs none.
+ExecStart=/usr/bin/setpriv --inh-caps=-all --ambient-caps=-all /usr/bin/xinit /usr/local/bin/hildon-session -- /usr/bin/Xorg :0 vt7 -keeptty -nolisten tcp
 Restart=always
 RestartSec=5s
 
