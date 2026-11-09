@@ -153,7 +153,9 @@ pool_bootfs()
 # made the root read only once more right after rc.d/root. Two more from
 # that day: rc.local's X at boot started on the first free terminal, ttyv1,
 # whose getty then wrote over it and kept the keyboard from anyone (now
-# ttyv8, "-- vt9"); pkg had no TMPDIR on the pool's /var/tmp, and the
+# ttyv8, "-- vt9"), and as a background job of rc it went with the
+# console session's SIGHUP when rc ended (now in a session of its own,
+# daemon); pkg had no TMPDIR on the pool's /var/tmp, and the
 # 128 MB tmpfs /tmp was too small for FreeBSD-ports' catalogue (pkg.conf
 # PKG_ENV). The pool imported (pool_rw), BE is mounted at /tmp for the
 # changes and unmounted again; nothing changes where they are right.
@@ -179,9 +181,9 @@ RC
 		echo "--- $be: fstab's UFS root line commented out (fixup)"
 	fi
 	if [ -f $rclocal ] &&
-	    [ -n "$(sed -n '\|/usr/local/bin/startx > /var/log/startx.log|p' $rclocal)" ]; then
-		sed -i '' -e 's|/usr/local/bin/startx > /var/log/startx.log|/usr/local/bin/startx -- vt9 > /var/log/startx.log|' $rclocal
-		echo "--- $be: rc.local starts X on ttyv8 (fixup)"
+	    [ -n "$(sed -n '\|/usr/local/bin/startx \(-- vt9 \)\{0,1\}> /var/log/startx.log 2>&1 &)|p' $rclocal)" ]; then
+		sed -i '' -e 's|/usr/local/bin/startx \(-- vt9 \)\{0,1\}> /var/log/startx.log 2>&1 &)|daemon -f -o /var/log/startx.log /usr/local/bin/startx -- vt9)|' $rclocal
+		echo "--- $be: rc.local starts X on ttyv8 in a session of its own (fixup)"
 	fi
 	if [ -d /tmp/usr/local/etc ] &&
 	    { [ ! -f $pkgconf ] || [ -z "$(sed -n '/TMPDIR/p' $pkgconf)" ]; }; then

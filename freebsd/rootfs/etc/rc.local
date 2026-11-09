@@ -147,9 +147,12 @@ fi
 # freebsd/cmdline: the console only, startx by hand. On ttyv8 (vt9), the
 # one ttys leaves without a getty: started from here, before init starts
 # the gettys, X took the first free terminal, ttyv1, whose getty then
-# wrote over it and the keyboard stayed with X.
+# wrote over it and the keyboard stayed with X. In a session of its own
+# (daemon: setsid): a background job of this script is in the console's
+# session, whose SIGHUP when /etc/rc ends took xinit and X down a few
+# seconds after the boot (2026-11-09: X up at 68 s, gone at 78 s).
 if [ -z "$(kenv -q pro1x.test)" ] && [ "$(kenv -q pro1x.autox)" != off ] &&
     [ -x /usr/local/bin/startx ]; then
 	(cd /root && HOME=/root PATH=$PATH:/usr/local/sbin:/usr/local/bin \
-	    /usr/local/bin/startx -- vt9 > /var/log/startx.log 2>&1 &)
+	    daemon -f -o /var/log/startx.log /usr/local/bin/startx -- vt9)
 fi

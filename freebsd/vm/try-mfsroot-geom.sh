@@ -76,10 +76,10 @@ fixup_try()
 	[ "$n" = "$want" ] || fail "pool_fixup $name: $n fstab notes, $want wanted"
 	grep -Eq '^/dev/md1[[:space:]]+/[[:space:]]' $be/etc/fstab &&
 	    fail "pool_fixup $name: fstab still has the UFS root line"
-	grep -q '/usr/local/bin/startx > /var/log' $be/etc/rc.local &&
-	    fail "pool_fixup $name: rc.local starts X without a terminal"
-	[ "$(grep -c 'startx -- vt9' $be/etc/rc.local)" = 1 ] ||
-	    fail "pool_fixup $name: rc.local not starting X on vt9 once"
+	grep -q 'startx.*> /var/log/startx.log 2>&1 &)' $be/etc/rc.local &&
+	    fail "pool_fixup $name: rc.local starts X as rc's background job"
+	[ "$(grep -c 'daemon -f -o /var/log/startx.log /usr/local/bin/startx -- vt9)' $be/etc/rc.local)" = 1 ] ||
+	    fail "pool_fixup $name: rc.local not starting X on vt9 in a session of its own once"
 	[ "$(grep -c 'TMPDIR' $be/usr/local/etc/pkg.conf 2>/dev/null)" -ge 1 ] ||
 	    fail "pool_fixup $name: no TMPDIR in pkg.conf"
 	if [ "$want" = 1 ]; then
@@ -119,6 +119,12 @@ fi
 RC
 fixup_try old 1 /tmp/mfsroot-test-rc.old /tmp/mfsroot-test-fstab.old \
     /tmp/mfsroot-test-rclocal.old none
+# rc.local as the pools of 2026-11-09 have it after the first fixup: vt9,
+# still rc's background job
+sed -e 's|startx > /var/log|startx -- vt9 > /var/log|' \
+    /tmp/mfsroot-test-rclocal.old > /tmp/mfsroot-test-rclocal.vt9
+fixup_try vt9 1 /tmp/mfsroot-test-rc.old /tmp/mfsroot-test-fstab.old \
+    /tmp/mfsroot-test-rclocal.vt9 none
 if [ -f "${RCCONF:-/tmp/rc.conf}" ] && [ -f "${FSTAB:-/tmp/fstab}" ] &&
     [ -f "${RCLOCAL:-/tmp/rc.local}" ] && [ -f "${PKGCONF:-/tmp/pkg.conf}" ]; then
 	fixup_try new 0 "${RCCONF:-/tmp/rc.conf}" "${FSTAB:-/tmp/fstab}" \
@@ -126,7 +132,8 @@ if [ -f "${RCCONF:-/tmp/rc.conf}" ] && [ -f "${FSTAB:-/tmp/fstab}" ] &&
 else
 	echo "(not all of the repository's rc.conf, fstab, rc.local, pkg.conf in /tmp: not tried)"
 fi
-rm -f /tmp/mfsroot-test-rc.old /tmp/mfsroot-test-fstab.old /tmp/mfsroot-test-rclocal.old
+rm -f /tmp/mfsroot-test-rc.old /tmp/mfsroot-test-fstab.old /tmp/mfsroot-test-rclocal.old \
+    /tmp/mfsroot-test-rclocal.vt9
 $C /rescue/zpool destroy tp || fail "zpool destroy"
 
 $C /sbin/geom concat destroy tc
