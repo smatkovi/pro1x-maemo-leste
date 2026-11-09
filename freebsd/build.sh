@@ -13,6 +13,10 @@
 #   NOCLEAN=1 ...    the same after a change to PRO1X (config runs again)
 #   LLVM_BIN=/usr/lib/llvm-19/bin ...   on Debian/Leste (also on the Pro1X:
 #                    the same build, aarch64 Linux as the host)
+#   SKIP_PATCHES="0053 ..."   these patches (by number) stay out of the
+#                    sources, e.g. a later one not yet run on the phone
+#                    when only an earlier part changes; nothing is marked
+#                    applied, the next build without it applies them
 #
 # Steps: FreeBSD's sources (releng/15.1) with patches/, the cross toolchain
 # (tools/build/make.py), a root filesystem from the release's /rescue
@@ -36,6 +40,13 @@ mkdir -p "$WORK" "$OUT" "$WORK/obj" "$WORK/dl"
 for p in "$REPO"/freebsd/patches/*.patch; do
 	mark=$SRC/.pro1x-applied-$(basename "$p" .patch)
 	[ -f "$mark" ] && continue
+	n=$(basename "$p")
+	case " ${SKIP_PATCHES:-} " in
+	*" ${n%%-*} "*)
+		log "patch $n left out (SKIP_PATCHES)"
+		continue
+		;;
+	esac
 	log "patch $(basename "$p")"
 	git -C "$SRC" apply "$p"
 	touch "$mark"

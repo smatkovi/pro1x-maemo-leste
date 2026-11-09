@@ -201,7 +201,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | GPU (Adreno 610) | none: FreeBSD's DRM has no msm driver; Mesa's software renderer |
 | touch, keyboard, keyboard light, slider | yes (`goodix`, `pro1xkbd`, `gpiokeys`, `gpioled`) |
 | status LED, vibration | yes (`qcom_lpg`, `aw86224`) |
-| battery, charging | state of charge (`pro1x_battery`); the charger itself runs as the bootloader set it |
+| battery, charging | state of charge (`pro1x_battery`); the charger as Leste's `pro1x-charger-icl` drives it: its watchdog petted (else it stops charging minutes after a plug-in), the input limit 1.5 A on chargers, charging ports, QC and Type-C 1.5/3 A, USB's 500 mA on a PC (`dev.pro1x_battery.0.{icl,charger_state,apsd,max_icl,min_icl,charger_wdog}`, `hint.pro1x_battery.0.min_icl` for more on a PC's port) |
 | clock across power off | yes, with Leste's offset (`qcom_rtc`); wake alarms: alarmd's into the RTC's alarm, which ends a suspend (`pm/README.md`, untested on the phone) |
 | CPU frequency, all CPUs | frequency yes; all eight CPUs from `kern.smp.disabled=0` (run 10 tests it) |
 | power management (autosuspend, CPU idle states) | `powerd` by default; built, untested on the phone and off until the device runs: the CPUs' PSCI idle states, suspend-to-idle with the SoC's sleep, the suspend while nobody uses the phone (`pro1x-autosleep`), all of it with one switch, `pro1x.power=on` in `freebsd/cmdline`, which also stops the jack's SoundWire bus between its events, turns on Wi-Fi's power save, the USB role switch and the panel off after 10 minutes of the stand-by screen (`pm/README.md`, stage 6) |
@@ -252,6 +252,7 @@ FreeBSD stands. Everything here is untested on the phone so far.
 | `patches/0035-*` | `qcom_rtc`'s alarm as a wake-up (`dev.qcom_rtc.0.wakealarm`), `power_wakeup` for the suspend (`pm/README.md`) |
 | `patches/0036-*`, `0037-*` | `pro1x.power=on`: the power profile's kernel settings (all CPUs, their idle states); LinuxKPI 802.11: the driver's power save, `ifconfig wlan0 powersave` (`pm/README.md`, stage 6) |
 | `patches/0053-*` | `qcom_dpu` takes the MDSS interrupt: the DPU's interrupts for msm.ko's KMS (eventhandler `qcom_dpu_mdp_intr`), the DSI controller's for the DCS waits; `hw.qcom_dpu.irq=0` leaves it off (`gpu/kms.md`) |
+| `patches/0054-*` | `pro1x_battery` drives the charger as Leste's `pro1x-charger-icl`: watchdog pet every 2 s with USB in use, charging enabled again if it bit, the input current limit raised for sources that allow 1.5 A |
 | `gpu/` | the Adreno 610: drm-kmod, `msm.ko` (GPU, and KMS on the running display with `hw.msm.kms=1`), Mesa with freedreno, X on KMS (`gpu/README.md`, `gpu/msm-port.md`, `gpu/kms.md`) |
 | `patches/0038-*`, `0039-*`, `rng/` | random(4)'s sources: `qcom_rnd` reads the SoC's PRNG (`qcom,prng-ee`, its clock voted around each read), kexec's `/chosen/rng-seed` into Fortuna's pool 0; the USB sshd's host keys after the seed (`rng/README.md`) |
 | `mfsroot/etc/pro1x-pool.sh` | the writable pool through the file's blocks, boot environment menu |

@@ -1,0 +1,311 @@
+pro1x_battery: the charger, as Leste's pro1x-charger-icl drives it
+
+FreeBSD read the battery but left the PMI632 charger as the bootloader or
+Leste left it. Its watchdog then stops charging a few minutes after a
+plug-in (2026-11-09 on the phone: USB in use, the battery current +2 mA,
+i.e. discharging, "charging" shown for the cable alone), and its input
+current limit stays at USB's 500 mA on chargers that allow 1.5 A.
+
+charger_task, every 2 s with USB in use and every 20 s without, does what
+Leste's driver does, with its registers and values: pets the watchdog,
+enables charging again if it bit (once, until the charger is seen in
+another state), raises the input current limit to 1.5 A for chargers,
+charging ports, QC and Type-C 1.5/3 A sources (max_icl; min_icl raises
+it on any source, a PC's port too), clears a USB input suspend left over
+at attach, and logs the source, the limit and the charger's state.
+dev.pro1x_battery.0.{icl,charger_state,apsd,max_icl,min_icl,charger_wdog},
+hint.pro1x_battery.0.{max_icl,min_icl,charger_wdog}.
+
+--- a/sys/dev/qcom_spmi/pro1x_battery.c	2026-11-09 11:48:50.593207911 +0100
++++ b/sys/dev/qcom_spmi/pro1x_battery.c	2026-11-09 11:49:50.714800676 +0100
+@@ -19,6 +19,10 @@
+  *
+  * Reported as dev.pro1x_battery.0.* and, for battery monitors written for
+  * ACPI, hw.acpi.battery.{life,state,time,units} and hw.acpi.acline.
++ *
++ * And the charger, as the Leste kernel's pro1x-charger-icl drives it
++ * (charger_task): its watchdog petted, its input current limit raised for
++ * chargers that allow more than USB's 500 mA.
+  */
+ 
+ #include "opt_acpi.h"
+@@ -134,6 +138,13 @@
+ 	u_int			interval_s, poll_battery_s;
+ 	int			cap, status;
+ 	bool			usb;
++
++	/* the charger (charger_task), on its own cadence */
++	struct timeout_task	chg;
++	bool			chg_present, chg_recovered;
++	int			chg_state, chg_wdog;
++	u_int			chg_apsd, chg_snk, chg_icl_ma, chg_applied_ma;
++	u_int			max_icl_ma, min_icl_ma;
+ };
+ 
+ static struct pro1x_battery_softc *pro1x_battery_sc;
+@@ -452,6 +463,249 @@
+ 	return (qcom_spmi_write(sc->dev, PMI632_USBIN_CMD_IL, &v, 1));
+ }
+ 
++/* --- charger ----------------------------------------------------------- */
++
++/*
++ * The PMI632 "smb5" charger, as the Leste kernel's pro1x-charger-icl
++ * drives it (registers and values from there, after the charger's 0x1000
++ * on this PMIC). The hardware charges the battery on its own, but
++ *
++ *  - its watchdog stops charging a few minutes after a plug-in unless it is
++ *    petted; if it bit already, charging is enabled again (once, until the
++ *    charger is seen in another state);
++ *  - its input current limit comes from the charger detection (APSD) and
++ *    stays at USB's 500 mA unless raised, as the vendor's smb5 raises it
++ *    for dedicated chargers, charging ports and Type-C sources that
++ *    advertise 1.5 or 3 A (to 1.5 A, max_icl). It never lowers the limit
++ *    and never touches the charge current or voltage.
++ *
++ * Every 2 s with USB in use (the pet), every 20 s without (to see the
++ * next plug-in), on its own timeout task beside the battery readings.
++ */
++#define	CHG_POLL_S		2
++#define	CHG_POLL_IDLE_S		20
++#define	CHGR_STATUS_1		0x1006
++#define	 CHGR_STATE_MASK	0x07
++#define	 CHGR_STATE_DISABLED	7
++#define	CHGR_ENABLE_CMD		0x1042
++#define	 CHGR_ENABLE		0x01
++#define	DCDC_ICL_STATUS		0x1107
++#define	POWER_PATH_STATUS	0x110b
++#define	 USE_USBIN		0x10
++#define	APSD_RESULT_STATUS	0x1308
++#define	 APSD_CDP		0x04
++#define	 APSD_DCP		0x08
++#define	 APSD_QC2		0x20
++#define	 APSD_QC3		0x40
++#define	CMD_ICL_OVERRIDE	0x1342
++#define	 ICL_OVERRIDE		0x01
++#define	USBIN_ICL_OPTIONS	0x1366
++#define	 USB51_MODE		0x02
++#define	 USBIN_MODE_CHG		0x01
++#define	USBIN_CURRENT_LIMIT_CFG	0x1370
++#define	TYPE_C_SNK_STATUS	0x1506
++#define	 SNK_RP_1P5		0x24
++#define	 SNK_RP_3P0		0x12
++#define	WDOG_PET		0x1643
++#define	 WDOG_PET_BIT		0x01
++#define	WD_CFG			0x1651
++#define	SNARL_BARK_BITE_CFG	0x1653
++#define	ICL_STEP_MA		50
++#define	ICL_MAX_MA		3000
++
++static int
++chg_read(struct pro1x_battery_softc *sc, uint16_t reg, uint8_t *v)
++{
++	return (qcom_spmi_read(sc->dev, reg, v, 1));
++}
++
++static int
++chg_write(struct pro1x_battery_softc *sc, uint16_t reg, uint8_t v)
++{
++	return (qcom_spmi_write(sc->dev, reg, &v, 1));
++}
++
++static int
++chg_update(struct pro1x_battery_softc *sc, uint16_t reg, uint8_t mask,
++    uint8_t val)
++{
++	uint8_t v;
++	int error;
++
++	if ((error = chg_read(sc, reg, &v)) != 0)
++		return (error);
++	return (chg_write(sc, reg, (v & ~mask) | (val & mask)));
++}
++
++static u_int
++chg_icl_ma(struct pro1x_battery_softc *sc)
++{
++	uint8_t v;
++
++	return (chg_read(sc, DCDC_ICL_STATUS, &v) == 0 ? v * ICL_STEP_MA : 0);
++}
++
++/* What the source allows: 1.5 A from a charger, a charging port, QC, Type-C */
++static u_int
++chg_wanted_ma(struct pro1x_battery_softc *sc, uint8_t apsd, uint8_t snk)
++{
++	u_int ma = 0;
++
++	if (apsd & (APSD_DCP | APSD_CDP | APSD_QC2 | APSD_QC3))
++		ma = 1500;
++	if (snk & (SNK_RP_1P5 | SNK_RP_3P0))
++		ma = 1500;
++	ma = MAX(ma, sc->min_icl_ma);
++	return (MIN(ma, MIN(sc->max_icl_ma, ICL_MAX_MA)));
++}
++
++static void
++chg_apply(struct pro1x_battery_softc *sc, u_int ma)
++{
++	u_int before = chg_icl_ma(sc);
++
++	chg_write(sc, USBIN_CURRENT_LIMIT_CFG, ma / ICL_STEP_MA);
++	/* the limit from the register above, not the USB 100/500 mA logic */
++	chg_update(sc, USBIN_ICL_OPTIONS, USB51_MODE | USBIN_MODE_CHG,
++	    USBIN_MODE_CHG);
++	chg_update(sc, CMD_ICL_OVERRIDE, ICL_OVERRIDE, ICL_OVERRIDE);
++	pause_sbt("p1xicl", 200 * SBT_1MS, 0, 0);
++	device_printf(sc->dev, "charger: input current limit %u mA, %u mA "
++	    "requested, now %u mA\n", before, ma, chg_icl_ma(sc));
++}
++
++static void
++chg_pet(struct pro1x_battery_softc *sc)
++{
++	uint8_t st, en, il;
++
++	chg_write(sc, WDOG_PET, WDOG_PET_BIT);
++	if (chg_read(sc, CHGR_STATUS_1, &st) != 0)
++		return;
++	st &= CHGR_STATE_MASK;
++	if (st != sc->chg_state)
++		device_printf(sc->dev, "charger: state %u\n", st);
++	sc->chg_state = st;
++	if (st != CHGR_STATE_DISABLED) {
++		sc->chg_recovered = false;
++		return;
++	}
++	/* (disabled is also what a suspended input looks like) */
++	if (sc->chg_recovered || chg_read(sc, CHGR_ENABLE_CMD, &en) != 0 ||
++	    !(en & CHGR_ENABLE) || chg_read(sc, PMI632_USBIN_CMD_IL, &il) != 0 ||
++	    (il & USBIN_SUSPEND))
++		return;
++	sc->chg_recovered = true;
++	chg_update(sc, CHGR_ENABLE_CMD, CHGR_ENABLE, 0);
++	pause_sbt("p1xchg", 50 * SBT_1MS, 0, 0);
++	chg_update(sc, CHGR_ENABLE_CMD, CHGR_ENABLE, CHGR_ENABLE);
++	device_printf(sc->dev, "charger: charging was disabled, enable "
++	    "toggled\n");
++}
++
++static void
++charger_task(void *arg, int pending)
++{
++	struct pro1x_battery_softc *sc = arg;
++	uint8_t pp, apsd = 0, snk = 0;
++	u_int icl, want;
++
++	if (sc->detaching)
++		return;
++	if (chg_read(sc, POWER_PATH_STATUS, &pp) != 0)
++		goto out;
++	if (!(pp & USE_USBIN)) {
++		if (sc->chg_present)
++			device_printf(sc->dev, "charger: input out\n");
++		sc->chg_present = false;
++		sc->chg_recovered = false;
++		sc->chg_applied_ma = 0;
++		sc->chg_state = -1;
++		goto out;
++	}
++	chg_read(sc, APSD_RESULT_STATUS, &apsd);
++	chg_read(sc, TYPE_C_SNK_STATUS, &snk);
++	apsd &= 0x7f;
++	icl = chg_icl_ma(sc);
++	if (!sc->chg_present || apsd != sc->chg_apsd || snk != sc->chg_snk ||
++	    icl != sc->chg_icl_ma)
++		device_printf(sc->dev, "charger: input in: apsd %#04x, type-c "
++		    "%#04x, limit %u mA\n", apsd, snk, icl);
++	sc->chg_present = true;
++	sc->chg_apsd = apsd;
++	sc->chg_snk = snk;
++	sc->chg_icl_ma = icl;
++	if (sc->chg_wdog)
++		chg_pet(sc);
++	want = chg_wanted_ma(sc, apsd, snk);
++	if (want > icl && want > sc->chg_applied_ma) {
++		sc->chg_applied_ma = want;
++		chg_apply(sc, want);
++		sc->chg_icl_ma = chg_icl_ma(sc);
++	}
++out:
++	taskqueue_enqueue_timeout_sbt(taskqueue_thread, &sc->chg,
++	    (sc->chg_present ? CHG_POLL_S : CHG_POLL_IDLE_S) * SBT_1S,
++	    sc->chg_present ? 0 : SBT_1S, 0);
++}
++
++static void
++charger_attach(struct pro1x_battery_softc *sc)
++{
++	device_t dev = sc->dev;
++	struct sysctl_ctx_list *ctx = device_get_sysctl_ctx(dev);
++	struct sysctl_oid_list *tree =
++	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev));
++	uint8_t wd = 0, wd2 = 0;
++	int v;
++
++	sc->max_icl_ma = 1500;
++	sc->min_icl_ma = 0;
++	sc->chg_wdog = 1;
++	sc->chg_state = -1;
++	/* hint.pro1x_battery.0.{max_icl,min_icl,charger_wdog} (freebsd/cmdline) */
++	if (resource_int_value(device_get_name(dev), device_get_unit(dev),
++	    "max_icl", &v) == 0 && v >= 0)
++		sc->max_icl_ma = v;
++	if (resource_int_value(device_get_name(dev), device_get_unit(dev),
++	    "min_icl", &v) == 0 && v >= 0)
++		sc->min_icl_ma = v;
++	if (resource_int_value(device_get_name(dev), device_get_unit(dev),
++	    "charger_wdog", &v) == 0)
++		sc->chg_wdog = v != 0;
++	/*
++	 * The suspend bit outlives a reboot (a measurement cut short, Leste's
++	 * input_suspend): the input back, as Leste's probe does it
++	 */
++	chg_update(sc, PMI632_USBIN_CMD_IL, USBIN_SUSPEND, 0);
++	chg_read(sc, WD_CFG, &wd);
++	chg_read(sc, SNARL_BARK_BITE_CFG, &wd2);
++	device_printf(dev, "charger: watchdog cfg %#04x, snarl/bark/bite %#04x\n",
++	    wd, wd2);
++
++	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "icl", CTLFLAG_RD, &sc->chg_icl_ma,
++	    0, "USB input current limit now (mA)");
++	SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "charger_state", CTLFLAG_RD,
++	    &sc->chg_state, 0, "Charger state (0 inhibit, 1 trickle, 2 precharge, "
++	    "3 fast, 4 taper, 5 terminated, 6 paused, 7 disabled; -1 no input)");
++	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "apsd", CTLFLAG_RD, &sc->chg_apsd,
++	    0, "Charger detection (APSD: 0x04 charging port, 0x08 charger, "
++	    "0x20/0x40 QC)");
++	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "max_icl", CTLFLAG_RW,
++	    &sc->max_icl_ma, 0, "Highest input current limit to set (mA, 0: "
++	    "leave it)");
++	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "min_icl", CTLFLAG_RW,
++	    &sc->min_icl_ma, 0, "Input current limit at least this on any "
++	    "source, a PC's port too (mA, 0: off; the chip's AICL backs off "
++	    "if the source sags)");
++	SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "charger_wdog", CTLFLAG_RW,
++	    &sc->chg_wdog, 0, "Pet the charger's watchdog, enable charging "
++	    "again if it bit");
++
++	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->chg, 0, charger_task, sc);
++	taskqueue_enqueue_timeout(taskqueue_thread, &sc->chg, 1);
++}
++
+ static int
+ sysctl_status(SYSCTL_HANDLER_ARGS)
+ {
+@@ -679,6 +933,7 @@
+ 	    "usbin %#x 1/%u), %d OCV rows\n", subtype, sc->adc_base,
+ 	    sc->vbat.num, sc->vbat.pre_den / sc->vbat.pre_num, sc->usbin.num,
+ 	    sc->usbin.pre_den / sc->usbin.pre_num, sc->ocv_n);
++	charger_attach(sc);
+ 	return (0);
+ }
+ 
+@@ -689,6 +944,7 @@
+ 
+ 	sc->detaching = true;
+ 	taskqueue_drain_timeout(taskqueue_thread, &sc->poll);
++	taskqueue_drain_timeout(taskqueue_thread, &sc->chg);
+ 	pro1x_battery_sc = NULL;
+ 	mtx_destroy(&sc->mtx);
+ 	return (0);
