@@ -446,6 +446,16 @@ image.
   found in what it left in the FIFO (`hw.qcom_rpm.lcid` overrides it). If
   the RPM wants a GLINK handshake after all, dsp7a shows no answers
   (`timeouts`), and an OPEN of `rpm_requests` is next.
+- **The board data is not the phone's:** linux-firmware's `board-2.bin`
+  has no entry for the Pro1X (board id 0xff, chip id 0x120, variant
+  `Fxtec_QX1050`), so ath10k (FreeBSD's as Linux's) takes the generic
+  `bus=snoc,qmi-board-id=ff`: about -80 dBm and 1.9 Mbit/s from the router
+  where Sailfish OS, with Android's loader, has the phone's own
+  calibration. `tools/pro1x-wifi-bdf` adds the phone's `image/bdwlan.bin`
+  from its modem partition (read only, FAT) under the Pro1X's names; the
+  file is Qualcomm's and stays off this repository. Put on the phone
+  2026-11-09 (the original kept as `board-2.bin.linux-firmware`), in
+  effect from the next start.
 - **Wi-Fi without a modem restart:** ath10k expects the firmware's
   `FW_READY` after its board data; a modem started by FreeBSD (dsp6) sends
   it as after a cold boot. A modem that crashes is not passed on to ath10k

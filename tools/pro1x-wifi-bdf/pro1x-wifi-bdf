@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""pro1x-wifi-bdf: the Pro1X's own Wi-Fi board data in ath10k's board-2.bin.
+
+linux-firmware's ath10k/WCN3990/hw1.0/board-2.bin has no entry for the
+Pro1X: ath10k asks for "bus=snoc,qmi-board-id=ff,qmi-chip-id=120,
+variant=Fxtec_QX1050" (the device tree's qcom,calibration-variant), then
+without the variant, and ends on the generic "bus=snoc,qmi-board-id=ff",
+whose antenna and transmit power tables are not the phone's (2026-11-09:
+the router at about -80 dBm, 1 Mbit/s, long downloads breaking off).
+Android, and with it Sailfish OS, loads the phone's own calibration from
+its modem partition instead: image/bdwlan.bin for board id 0xff (the
+board id the WLAN firmware reports, OTP unprogrammed).
+
+This writes a board-2.bin with every entry of the given one plus one for
+the Pro1X, the phone's bdwlan.bin under both names ath10k tries first
+(with and without the variant); entries of those names already there are
+replaced. bdwlan.bin is Qualcomm's and the phone's, read from the phone
+itself; neither it nor the result belongs in this repository.
+
+  pro1x-wifi-bdf [--board-id ff] [--chip-id 120] [--variant Fxtec_QX1050]
+                 BOARD-2.BIN BDWLAN.BIN OUT
+  pro1x-wifi-bdf --list BOARD-2.BIN
+
+The format is ath10k's (core.c, ath10k_core_parse_bd_ie_board): the magic
+"QCA-ATH10K-BOARD" with its NUL, padded to 4 bytes, then elements of a
+32-bit id and length (little endian) and the data padded to 4 bytes;
+element 0 (BOARD) holds name elements (0) and one data element (1).
+"""
+import argparse
+import struct
+import sys
+
+MAGIC = b"QCA-ATH10K-BOARD\0"
+IE_BOARD, IE_BOARD_EXT = 0, 1
+IE_NAME, IE_DATA = 0, 1
+
+
+def pad4(n):
+    return (n + 3) & ~3
+
+
+def elements(buf):
+    """(id, data) of each element in buf"""
+    off = 0
+    while off + 8 <= len(buf):
+        ie_id, ie_len = struct.unpack_from("<II", buf, off)
+        off += 8
+        if off + ie_len > len(buf):
+            raise ValueError(f"element {ie_id} at {off - 8} runs past the end")
+        yield ie_id, buf[off:off + ie_len]
+        off += pad4(ie_len)
+
+
+def element(ie_id, data):
+    return struct.pack("<II", ie_id, len(data)) + data + b"\0" * (pad4(len(data)) - len(data))
+
+
+def parse_bytes(raw):
+    """a board file's top-level elements: [(id, data)]"""
+    if not raw.startswith(MAGIC):
+        raise ValueError("not an ath10k board file")
+    return list(elements(raw[pad4(len(MAGIC)):]))
+
+
+def parse(path):
+    return parse_bytes(open(path, "rb").read())
+
+
+def names_of(board):
+    return [d.decode(errors="replace") for i, d in elements(board) if i == IE_NAME]
+
+
+def data_of(board):
+    return next((d for i, d in elements(board) if i == IE_DATA), None)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--list", action="store_true", help="list the entries")
+    ap.add_argument("--board-id", default="ff")
+    ap.add_argument("--chip-id", default="120")
+    ap.add_argument("--variant", default="Fxtec_QX1050")
+    ap.add_argument("files", nargs="+")
+    a = ap.parse_args()
+
+    if a.list:
+        for ie_id, d in parse(a.files[0]):
+            if ie_id in (IE_BOARD, IE_BOARD_EXT):
+                data = data_of(d)
+                print(f"{'board' if ie_id == IE_BOARD else 'eboard'} "
+                      f"{len(data) if data else 0:6d} {', '.join(names_of(d))}")
+        return 0
+    if len(a.files) != 3:
+        ap.error("BOARD-2.BIN BDWLAN.BIN OUT")
+    src, bdwlan, out = a.files
+    bd = open(bdwlan, "rb").read()
+    if bd.startswith(MAGIC) or not 4096 <= len(bd) <= 65536:
+        sys.exit(f"{bdwlan}: not a WCN3990 bdwlan file ({len(bd)} bytes)")
+    base = f"bus=snoc,qmi-board-id={a.board_id},qmi-chip-id={a.chip_id}"
+    new = ([base + f",variant={a.variant}"] if a.variant else []) + [base]
+
+    kept, dropped = [], 0
+    for ie_id, d in parse(src):
+        if ie_id == IE_BOARD and set(names_of(d)) & set(new):
+            dropped += 1
+            continue
+        kept.append((ie_id, d))
+    board = b"".join(element(IE_NAME, n.encode()) for n in new) + element(IE_DATA, bd)
+    kept.append((IE_BOARD, board))
+    blob = MAGIC + b"\0" * (pad4(len(MAGIC)) - len(MAGIC))
+    blob += b"".join(element(i, d) for i, d in kept)
+
+    # read back as ath10k would: each new name finds exactly this data
+    check = parse_bytes(blob)
+    for n in new:
+        found = [data_of(d) for i, d in check if i == IE_BOARD and n in names_of(d)]
+        if found != [bd]:
+            sys.exit(f"{out}: {n!r} does not find the new data once")
+    with open(out, "wb") as f:
+        f.write(blob)
+    print(f"{out}: {len(kept)} elements ({dropped} replaced), "
+          f"{', '.join(new)}: {len(bd)} bytes of {bdwlan}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
