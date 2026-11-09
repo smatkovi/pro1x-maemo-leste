@@ -30,6 +30,7 @@ running then).
 import argparse
 import array
 import fcntl
+import hashlib
 import os
 import struct
 import subprocess
@@ -45,6 +46,16 @@ MAP_MAGIC = "pro1x-pool-map 1"
 BLOCK = 4 << 20
 LABELS = 512 << 10  # ZFS labels 2 and 3, at the end of a vdev
 MAX_RANGES = 64     # GEOM nop providers FreeBSD makes for it at boot
+# A ZFS label (256 KiB): the boot environment block (8 KiB at 8 KiB), the
+# vdev's nvlist (112 KiB at 16 KiB), the ring of uberblocks (128 KiB at
+# 128 KiB); every block ends in an embedded checksum (zio_eck_t: magic,
+# then four words of SHA-256)
+LABEL = 256 << 10
+LABEL_BLOCKS = ((8 << 10, 8 << 10), (16 << 10, 112 << 10))
+NVLIST = 16 << 10
+UB_RING, UB_RING_LEN = 128 << 10, 128 << 10
+ECK = 40
+ECK_MAGIC = 0x0210DA7AB10C7A11
 
 
 def size_bytes(s):
@@ -108,6 +119,51 @@ def ranges(path):
     return out
 
 
+def label_cksum(block, offset):
+    """The checksum ZFS gives a label block at this offset on the device
+    (ZIO_CHECKSUM_LABEL): SHA-256 over the block with the offset as the
+    verifier in its checksum field, stored as four little-endian words."""
+    b = bytearray(block)
+    b[-32:] = struct.pack("<4Q", offset, 0, 0, 0)
+    d = hashlib.sha256(b).digest()
+    return struct.pack("<4Q", *struct.unpack(">4Q", d))
+
+
+def label_ok(tail, at, size, base):
+    """Whether the block at tail[at:at + size] verifies at device offset
+    base + at."""
+    blk = tail[at:at + size]
+    return (struct.unpack_from("<Q", blk, size - ECK)[0] == ECK_MAGIC and
+            label_cksum(blk, base + at) == bytes(blk[-32:]))
+
+
+def relabel(tail, old, new):
+    """ZFS labels 2 and 3 (tail: their 512 KiB) moved on the device from
+    offset old to new. Each of their blocks checksums its own place on the
+    device: copied as they are, none verifies at the new place, and FreeBSD
+    finds two labels where it wants four (pro1x-pool.sh), so the pool of
+    2026-10-29 was never imported. Every block that verified at the old
+    place gets the checksum for the new one; the others (empty uberblock
+    slots) stay as they are. True when both nvlists verify there."""
+    def fix(at, size):
+        if label_ok(tail, at, size, old):
+            tail[at + size - 32:at + size] = label_cksum(tail[at:at + size],
+                                                         new + at)
+    for lab in (0, LABEL):
+        for at, size in LABEL_BLOCKS:
+            fix(lab + at, size)
+        # the ring's slots: 1 KiB << (ashift - 10), at most 8 KiB; the size
+        # at which most of them verify
+        ring = lab + UB_RING
+        slot = max((1 << s for s in range(10, 14)),
+                   key=lambda z: sum(label_ok(tail, ring + i, z, old)
+                                     for i in range(0, UB_RING_LEN, z)))
+        for i in range(0, UB_RING_LEN, slot):
+            fix(ring + i, slot)
+    return all(label_ok(tail, lab + NVLIST, LABEL_BLOCKS[1][1], new)
+               for lab in (0, LABEL))
+
+
 def immutable(path, on):
     subprocess.run(["chattr", "+i" if on else "-i", path], check=True)
 
@@ -162,13 +218,16 @@ def cmd_create(a, d):
             os.write(fd, zero[:n])
             done += n
         # ZFS keeps two of its four labels at the device's end: the image's
-        # (the same as its first two) go to the file's new end, so that
-        # FreeBSD finds all four there (and the pool grows into the rest:
-        # autoexpand)
+        # (the same as its first two) go to the file's new end, with their
+        # checksums for that place, so that FreeBSD finds all four there
+        # (and the pool grows into the rest: autoexpand)
         if want > have:
             with open(src, "rb") as s:
                 s.seek(have - LABELS)
-                tail = s.read(LABELS)
+                tail = bytearray(s.read(LABELS))
+            if not relabel(tail, have - LABELS, want - LABELS):
+                raise SystemExit("%s: its labels 2 and 3 do not verify "
+                                 "(not a ZFS pool image?)" % src)
             os.pwrite(fd, tail, want - LABELS)
         os.fsync(fd)
     except BaseException:
@@ -207,6 +266,17 @@ def cmd_status(a, d):
     st = os.stat(pool)
     print("%s: %d bytes, inode %d, %s" % (pool, st.st_size, st.st_ino,
           "immutable" if is_immutable(pool) else "NOT immutable"))
+    # the four labels' nvlists at their places, as FreeBSD's RAM root
+    # wants them before it imports the pool (pro1x-pool.sh)
+    good = []
+    with open(pool, "rb") as f:
+        for n, base in enumerate((0, LABEL, st.st_size - LABELS,
+                                  st.st_size - LABEL)):
+            blk = os.pread(f.fileno(), LABEL_BLOCKS[1][1], base + NVLIST)
+            if label_ok(blk, 0, len(blk), base + NVLIST):
+                good.append(str(n))
+    print("ZFS labels that verify: %s%s" % (" ".join(good) or "none",
+          "" if len(good) == 4 else " (FreeBSD wants 0 1 2 3)"))
     try:
         lines = open(mapfile).read().split("\n")
     except OSError:
