@@ -45,7 +45,8 @@
  * (Linux), the profile from profiled on the session bus.
  *
  *   pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout]
- *                 [-O minutes|SECONDSs] [-R none|cw|ccw|inverted] [-P pidfile]
+ *                 [-O|-A minutes|SECONDSs] [-C settings]
+ *                 [-R none|cw|ccw|inverted] [-P pidfile]
  *                 [-t themedir] [-d dpi] [-f font] [-2]
  *       runs in the X session (with X's own screen saver off, xset s off);
  *       -O: the panel off (and the touchscreen asleep, the proximity
@@ -73,6 +74,20 @@
  *       stand-by screen and the panel on, as mce turns the display on.
  *       Each sender's state holds until it changes it or leaves the bus.
  *       The power key works as before.
+ *       And it takes the display's settings as Leste's mce does, which
+ *       the control panel's Display (osso-applet-display) asks it for:
+ *       get_/set_display_timeout (display_dim_timeout, s; 0 never),
+ *       get_/set_display_brightness (1-5, 20 % each, as mce's
+ *       filter-brightness-simple) and get_/set_inhibit_timout_mode
+ *       (inhibit_blank_mode: 1 on and 2 dimmed at most while the charger
+ *       is in, 3 and 4 always), each change said as mce's
+ *       sig_display_timeout, sig_display_brightness and
+ *       sig_display_timeout_mode. They apply at once and are kept in -C
+ *       (/var/db/pro1x-display, mce's key names); a time-out kept there
+ *       counts instead of -s. -A (as -O, minutes or SECONDSs): the
+ *       panel off that long after the last input, whatever the time-out
+ *       (the stand-by screen in between, or none when the time-out and
+ *       3 s reach that), in place of -O's time of the stand-by screen.
  *   pro1x-standby -M [-R ...] [-t themedir] [-d dpi] [-f font] [-2]
  *       on Leste, with mce's low power mode (patches/lpm): mce decides
  *       (time-outs, proximity, the power key, the panel's lpm and
@@ -125,6 +140,7 @@
 #define DOUBLE_TAP_MS 400	/* two touches this close wake it up */
 #define DOUBLE_TAP_MM 10.0	/* and this near each other */
 #define DEFAULT_PIDFILE "/var/run/pro1x-standby.pid"
+#define DEFAULT_SETTINGS "/var/db/pro1x-display"
 #define MAX_ICONS 5		/* NotificationIconAreaStyle max-icons */
 
 /* LockScreenLowPowerMode* styles, in mm */
@@ -146,6 +162,13 @@ static int standby_bl = STANDBY_BL;
 static int kbd_timeout = KBD_TIMEOUT_S;
 /* -O: seconds of the stand-by screen before the panel goes off; -1 never */
 static int off_after = -1;
+/* -A: seconds after the last input until the panel goes off; -1: -O's */
+static int off_total = -1;
+/* the control panel's settings, as mce's (where no mce runs): -C */
+static const char *settings = DEFAULT_SETTINGS;
+static int dim_kept;		/* dim_timeout from there, not -s */
+static int bl_level = -1;	/* display_brightness 1-5, -1 never set */
+static int inhibit_mode;	/* inhibit_blank_mode 0-4 */
 /* how X's screen lies on the panel's rows, for partial mode; NULL: off */
 static const char *rotation;
 /* -M: follow mce's low power mode instead of timing it here */
@@ -950,9 +973,9 @@ static void go_active(struct standby *sb)
 		arm(sb, 0, 0);
 		return;
 	}
-	if (held()) {
-		/* an alarm's screen or a pause: no time-out */
-		debug("held");
+	if (held() || dim_timeout <= 0) {
+		/* an alarm's screen or a pause, or the time-out "never" */
+		debug(dim_timeout <= 0 ? "no time-out" : "held");
 		arm(sb, 0, 0);
 		return;
 	}
@@ -1120,6 +1143,40 @@ static void panel_sleep(struct standby *sb)
 	sb->panel_off = 1;
 }
 
+/* seconds of the stand-by screen before the panel goes off, -1 never: -O,
+ * or what -A leaves of its time after the time-out and the 3 s (now) */
+static int panel_off_after(void)
+{
+	int t;
+
+	if (off_total < 0)
+		return off_after;
+	t = off_total - (dim_timeout > 0 ? dim_timeout : 0) - BLANK_TIMEOUT_S;
+	return t > 0 ? t : 0;
+}
+
+/*
+ * inhibit_blank_mode as mce's: how far the display may go now. 0 all the
+ * way, 1 not past on (modes 1 and 3), 2 not past dimmed (2 and 4); 1 and
+ * 2 only while the charger is in.
+ */
+static int inhibit_limit(void)
+{
+	struct state st;
+
+	switch (inhibit_mode) {
+	case 3:
+		return 1;
+	case 4:
+		return 2;
+	case 1:
+	case 2:
+		read_battery(&st);
+		return st.charge != CHARGE_NONE ? inhibit_mode : 0;
+	}
+	return 0;
+}
+
 static void sb_show(struct standby *sb)
 {
 	if (sb->mode == STANDBY)
@@ -1141,7 +1198,7 @@ static void sb_show(struct standby *sb)
 	place(sb->w, sb->h, 0, &sb->right, &sb->top);
 	sb->shown_at = time(NULL);
 	sb->panel_off = 0;
-	if (off_after == 0 && !follow_mce) {
+	if (panel_off_after() == 0 && !follow_mce) {
 		panel_sleep(sb);
 		return;
 	}
@@ -1284,6 +1341,162 @@ static long long pauses_due(struct standby *sb)
 	return next;
 }
 
+/*
+ * The display's settings, kept in -C as "key value" lines with mce's key
+ * names (its GConf /system/osso/dsm/display), read once at the start
+ */
+static void settings_read(void)
+{
+	char line[128], key[64];
+	FILE *f;
+	int v;
+
+	if (!settings || !*settings || !(f = fopen(settings, "r")))
+		return;
+	while (fgets(line, sizeof(line), f)) {
+		if (sscanf(line, "%63s %d", key, &v) != 2)
+			continue;
+		if (!strcmp(key, "display_dim_timeout") && v >= 0) {
+			dim_timeout = v;
+			dim_kept = 1;
+		} else if (!strcmp(key, "display_brightness") && v >= 1 && v <= 5) {
+			bl_level = v;
+		} else if (!strcmp(key, "inhibit_blank_mode") && v >= 0 && v <= 4) {
+			inhibit_mode = v;
+		}
+	}
+	fclose(f);
+}
+
+/* what was set, written anew in full (a new file renamed over it) */
+static void settings_write(void)
+{
+	char tmp[512];
+	FILE *f;
+	int ok;
+
+	if (!settings || !*settings)
+		return;
+	snprintf(tmp, sizeof(tmp), "%s.new", settings);
+	if (!(f = fopen(tmp, "w"))) {
+		debug("settings not kept (no file)");
+		return;
+	}
+	fprintf(f, "# pro1x-standby: the display's settings from the control panel\n");
+	if (dim_kept)
+		fprintf(f, "display_dim_timeout %d\n", dim_timeout);
+	if (bl_level > 0)
+		fprintf(f, "display_brightness %d\n", bl_level);
+	fprintf(f, "inhibit_blank_mode %d\n", inhibit_mode);
+	ok = fflush(f) == 0 && fsync(fileno(f)) == 0;
+	if (fclose(f) != 0 || !ok || rename(tmp, settings) != 0) {
+		unlink(tmp);
+		debug("settings not kept");
+	}
+}
+
+/* sig_display_timeout and the like, as mce's */
+static void mce_signal_int(struct standby *sb, const char *name, int v)
+{
+	dbus_int32_t i = v;
+	DBusMessage *m;
+
+	if (!(m = dbus_message_new_signal("/com/nokia/mce/signal",
+	    "com.nokia.mce.signal", name)))
+		return;
+	if (dbus_message_append_args(m, DBUS_TYPE_INT32, &i, DBUS_TYPE_INVALID))
+		dbus_connection_send(sb->sys, m, NULL);
+	dbus_message_unref(m);
+}
+
+/* the brightness the desktop has, now or when it is back: 1-5 */
+static int brightness_level(struct standby *sb)
+{
+	int cur = sb->mode == ACTIVE ? bl_get() : sb->saved_bl;
+
+	if (bl_level > 0)
+		return bl_level;
+	if (cur < 0)
+		return 3;
+	cur = (cur + 10) / 20;
+	return cur < 1 ? 1 : cur > 5 ? 5 : cur;
+}
+
+/* set_display_brightness: the level's 20 % each, now on the desktop or
+ * when it comes back from dimmed or the stand-by screen */
+static void set_brightness(struct standby *sb, int level)
+{
+	bl_level = level;
+	if (sb->mode == ACTIVE)
+		bl_set(level * 20);
+	else
+		sb->saved_bl = level * 20;
+}
+
+/* get_ and set_ requests for the display's settings: 1 handled (R the
+ * reply, NULL for bad arguments), 0 not one of them */
+static int mce_setting(struct standby *sb, DBusMessage *m, const char *member,
+    DBusMessage **r)
+{
+	dbus_int32_t v;
+	char what[64];
+	int get;
+
+	if (!strncmp(member, "get_", 4))
+		get = 1;
+	else if (!strncmp(member, "set_", 4))
+		get = 0;
+	else
+		return 0;
+	if (strcmp(member + 4, "display_timeout") &&
+	    strcmp(member + 4, "display_brightness") &&
+	    strcmp(member + 4, "inhibit_timout_mode"))
+		return 0;
+	if (get) {
+		if (!strcmp(member + 4, "display_timeout"))
+			v = dim_timeout;
+		else if (!strcmp(member + 4, "display_brightness"))
+			v = brightness_level(sb);
+		else
+			v = inhibit_mode;
+		if ((*r = dbus_message_new_method_return(m)))
+			dbus_message_append_args(*r, DBUS_TYPE_INT32, &v,
+						 DBUS_TYPE_INVALID);
+		return 1;
+	}
+	*r = NULL;
+	if (!dbus_message_get_args(m, NULL, DBUS_TYPE_INT32, &v,
+				   DBUS_TYPE_INVALID))
+		return 1;
+	snprintf(what, sizeof(what), "%s %d", member, (int)v);
+	if (!strcmp(member + 4, "display_timeout")) {
+		if (v < 0)
+			return 1;
+		dim_timeout = v;
+		dim_kept = 1;
+		mce_signal_int(sb, "sig_display_timeout", v);
+		/* counted anew with it (the dim and stand-by steps as they are) */
+		if (sb->mode == ACTIVE)
+			go_active(sb);
+	} else if (!strcmp(member + 4, "display_brightness")) {
+		if (v < 1 || v > 5)
+			return 1;
+		set_brightness(sb, v);
+		mce_signal_int(sb, "sig_display_brightness", v);
+	} else {
+		if (v < 0 || v > 4)
+			return 1;
+		inhibit_mode = v;
+		mce_signal_int(sb, "sig_display_timeout_mode", v);
+		if (sb->mode == ACTIVE)
+			go_active(sb);
+	}
+	debug(what);
+	settings_write();
+	*r = dbus_message_new_method_return(m);
+	return 1;
+}
+
 /* A request to com.nokia.mce (ours): the display's, others an error */
 static void mce_request(struct standby *sb, DBusMessage *m)
 {
@@ -1291,6 +1504,7 @@ static void mce_request(struct standby *sb, DBusMessage *m)
 	const char *sender = dbus_message_get_sender(m);
 	DBusMessage *r = NULL;
 	dbus_bool_t on = TRUE;
+	int bad = 0;
 
 	if (member && dbus_message_has_interface(m, "com.nokia.mce.request")) {
 		if (!strcmp(member, "req_display_state_on")) {
@@ -1314,9 +1528,14 @@ static void mce_request(struct standby *sb, DBusMessage *m)
 			if (r)
 				dbus_message_append_args(r, DBUS_TYPE_STRING, &st,
 							 DBUS_TYPE_INVALID);
+		} else if (mce_setting(sb, m, member, &r)) {
+			bad = !r;
 		}
 	}
-	if (!r)
+	if (bad)
+		r = dbus_message_new_error(m, DBUS_ERROR_INVALID_ARGS,
+		    "an int32 in the setting's range");
+	else if (!r)
 		r = dbus_message_new_error(m, DBUS_ERROR_UNKNOWN_METHOD,
 		    "pro1x-standby takes only the display's requests");
 	if (!r)
@@ -1559,6 +1778,12 @@ static int run_x(void)
 	prctl(PR_SET_TIMERSLACK, 100000000UL, 0UL, 0UL, 0UL);
 #endif
 	srandom(time(NULL));
+	/* the display's settings are ours as mce's: as last set */
+	if (mce_owned) {
+		settings_read();
+		if (bl_level > 0)
+			bl_set(bl_level * 20);
+	}
 	go_active(&sb);
 
 	if (pipe(sigpipe) == 0) {
@@ -1576,6 +1801,7 @@ static int run_x(void)
 		};
 		long long wait = -1, t;
 		time_t now;
+		int oa;
 		char c;
 
 		while (XPending(sb.dpy)) {
@@ -1593,9 +1819,19 @@ static int run_x(void)
 						undim(&sb);
 					go_active(&sb);
 				} else if (n->alarm == sb.up) {
-					if (sb.mode == ACTIVE) {
-						long long base = idle_now(&sb);
+					long long base = idle_now(&sb);
+					int limit = inhibit_limit();
 
+					/* inhibit_blank_mode (the charger in):
+					 * no further, asked again a time-out
+					 * later, input as ever */
+					if (limit == 1 || (limit == 2 &&
+					    sb.mode == DIMMED)) {
+						debug("inhibited");
+						arm(&sb, base + (dim_timeout > 0 ?
+						    dim_timeout : DIM_TIMEOUT_S) *
+						    1000LL, base);
+					} else if (sb.mode == ACTIVE) {
 						dim(&sb);
 						arm(&sb, base + BLANK_TIMEOUT_S *
 						    1000LL, base);
@@ -1662,8 +1898,9 @@ static int run_x(void)
 
 		/* sleep until the next event; timers only while needed */
 		now = time(NULL);
-		if (sb.mode == STANDBY && !sb.panel_off && off_after > 0 &&
-		    now - sb.shown_at >= off_after)
+		oa = panel_off_after();
+		if (sb.mode == STANDBY && !sb.panel_off && oa > 0 &&
+		    now - sb.shown_at >= oa)
 			panel_sleep(&sb);
 		if (sb.mode == STANDBY && !sb.near && !sb.panel_off) {
 			if (now - sb.moved >= MOVE_S) {
@@ -1674,8 +1911,8 @@ static int run_x(void)
 				sb_draw(&sb, 0);
 			}
 			wait = (60 - now % 60) * 1000LL;
-			if (off_after > 0) {
-				t = (sb.shown_at + off_after - now) * 1000LL;
+			if (oa > 0) {
+				t = (sb.shown_at + oa - now) * 1000LL;
 				if (t < wait)
 					wait = t > 0 ? t : 0;
 			}
@@ -1782,7 +2019,8 @@ static int off_seconds(const char *a)
 static void usage(void)
 {
 	fprintf(stderr,
-	    "usage: pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout] [-O minutes|SECONDSs]\n"
+	    "usage: pro1x-standby [-s timeout] [-b brightness] [-k kbdtimeout]\n"
+	    "                     [-O|-A minutes|SECONDSs] [-C settings]\n"
 	    "                     [-R none|cw|ccw|inverted] [-P pidfile]\n"
 	    "                     [-t themedir] [-d dpi] [-f font] [-2]\n"
 	    "       pro1x-standby -M [-R ...] [-t themedir] [-d dpi] [-f font] [-2]\n"
@@ -1795,7 +2033,7 @@ int main(int argc, char **argv)
 	const char *preview = NULL;
 	int c;
 
-	while ((c = getopt(argc, argv, "s:b:k:O:R:P:t:d:f:p:2Mh")) != -1) {
+	while ((c = getopt(argc, argv, "s:b:k:O:A:C:R:P:t:d:f:p:2Mh")) != -1) {
 		switch (c) {
 		case 'R':
 			if (strcmp(optarg, "none") && strcmp(optarg, "cw") &&
@@ -1810,6 +2048,11 @@ int main(int argc, char **argv)
 			if ((off_after = off_seconds(optarg)) < -1)
 				usage();
 			break;
+		case 'A':
+			if ((off_total = off_seconds(optarg)) < 0)
+				usage();
+			break;
+		case 'C': settings = optarg; break;
 		case 'P': pidfile = optarg; break;
 		case 't': theme = optarg; break;
 		case 'd': dpi = atof(optarg); break;
