@@ -47,49 +47,60 @@ $C /rescue/zdb -l /dev/concat/tc | grep -q '^ *labels = 0 1 2 3 *$' ||
 $C /rescue/zpool import -N -o cachefile=none -d /dev/concat/tc tp ||
     fail "zpool import"
 
-# pool_fixup: a boot environment with rc.conf as root images before
-# 2026-11-09 had it (root_rw_mount off, the pool's part without it) gets
-# root_rw_mount on for the writable pool, once; RCCONF (the repository's
-# rc.conf, copied to the VM) must stay as it is
+# pool_fixup: a boot environment as root images before 2026-11-09 had it
+# (rc.conf: root_rw_mount off, the pool's part without it; fstab: the UFS
+# root's "/dev/md1 / ufs ro", which mount -a applied again) gets
+# root_rw_mount on for the writable pool and that fstab line commented
+# out, once (two runs); the repository's rc.conf and fstab (RCCONF,
+# FSTAB, copied to the VM) must stay as they are
 fixup_try()
 {
-	local name=$1 want=$2 n
+	local name=$1 want=$2 rc=$3 fstab=$4 be=/tmp/mfsroot-test-be n
 	zfs create -o canmount=noauto -o mountpoint=/ tp/ROOT/$name
-	mkdir -p /tmp/mfsroot-test-be
-	mount -t zfs tp/ROOT/$name /tmp/mfsroot-test-be
-	mkdir -p /tmp/mfsroot-test-be/etc
-	cat > /tmp/mfsroot-test-be/etc/rc.conf
-	cp /tmp/mfsroot-test-be/etc/rc.conf /tmp/mfsroot-test-rc.before
-	umount /tmp/mfsroot-test-be
+	mkdir -p $be
+	mount -t zfs tp/ROOT/$name $be
+	mkdir -p $be/etc
+	cp "$rc" $be/etc/rc.conf
+	cp "$fstab" $be/etc/fstab
+	umount $be
 	$C /rescue/sh -c ". /etc/pro1x-pool.sh; pool_fixup tp/ROOT/$name;
 	    pool_fixup tp/ROOT/$name" || fail "pool_fixup $name"
-	mount -t zfs tp/ROOT/$name /tmp/mfsroot-test-be
-	n=$(grep -c "pool_fixup" /tmp/mfsroot-test-be/etc/rc.conf)
-	[ "$n" = "$want" ] || fail "pool_fixup $name: $n blocks, $want wanted"
-	[ "$want" = 1 ] || cmp -s /tmp/mfsroot-test-rc.before \
-	    /tmp/mfsroot-test-be/etc/rc.conf || fail "pool_fixup $name changed it"
+	mount -t zfs tp/ROOT/$name $be
+	n=$(grep -c "pool_fixup" $be/etc/rc.conf)
+	[ "$n" = "$want" ] || fail "pool_fixup $name: $n rc.conf blocks, $want wanted"
+	n=$(grep -c "pool_fixup" $be/etc/fstab)
+	[ "$n" = "$want" ] || fail "pool_fixup $name: $n fstab notes, $want wanted"
+	grep -Eq '^/dev/md1[[:space:]]+/[[:space:]]' $be/etc/fstab &&
+	    fail "pool_fixup $name: fstab still has the UFS root line"
+	if [ "$want" = 0 ]; then
+		cmp -s "$rc" $be/etc/rc.conf || fail "pool_fixup $name changed rc.conf"
+		cmp -s "$fstab" $be/etc/fstab || fail "pool_fixup $name changed fstab"
+	fi
 	# as on the phone after the reroot into the pool (the VM's kernel
 	# environment for this one check)
 	kenv pro1x.rootrw=1 > /dev/null
-	[ "$(sh -c '. /tmp/mfsroot-test-be/etc/rc.conf; echo $root_rw_mount')" = YES ] ||
+	[ "$(sh -c ". $be/etc/rc.conf; echo \$root_rw_mount")" = YES ] ||
 	    fail "pool_fixup $name: root_rw_mount not YES on the pool"
 	kenv -u pro1x.rootrw
-	umount /tmp/mfsroot-test-be
+	umount $be
 }
 zfs create -o canmount=noauto -o mountpoint=none tp/ROOT
-fixup_try old 1 <<'RC'
+cat > /tmp/mfsroot-test-rc.old <<'RC'
 root_rw_mount="NO"
 varmfs="YES"
 if [ "$(/bin/kenv -q pro1x.rootrw 2> /dev/null)" = 1 ]; then
 	varmfs="NO"
 fi
 RC
-if [ -f "${RCCONF:-/tmp/rc.conf}" ]; then
-	fixup_try new 0 < "${RCCONF:-/tmp/rc.conf}"
+printf '# Device\tMountpoint\tFStype\tOptions\t\tDump\tPass#\n/dev/md1\t/\t\tufs\tro\t\t0\t0\n' \
+    > /tmp/mfsroot-test-fstab.old
+fixup_try old 1 /tmp/mfsroot-test-rc.old /tmp/mfsroot-test-fstab.old
+if [ -f "${RCCONF:-/tmp/rc.conf}" ] && [ -f "${FSTAB:-/tmp/fstab}" ]; then
+	fixup_try new 0 "${RCCONF:-/tmp/rc.conf}" "${FSTAB:-/tmp/fstab}"
 else
-	echo "(no ${RCCONF:-/tmp/rc.conf}: the repository's rc.conf not tried)"
+	echo "(no ${RCCONF:-/tmp/rc.conf} or ${FSTAB:-/tmp/fstab}: the repository's not tried)"
 fi
-rm -f /tmp/mfsroot-test-rc.before
+rm -f /tmp/mfsroot-test-rc.old /tmp/mfsroot-test-fstab.old
 $C /rescue/zpool destroy tp || fail "zpool destroy"
 
 $C /sbin/geom concat destroy tc

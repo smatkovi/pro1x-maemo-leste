@@ -1,5 +1,9 @@
 # Device	Mountpoint	FStype	Options		Dump	Pass#
-# The image the RAM root mounted from userdata (/dev/pro1x-host, read only)
-/dev/md1	/		ufs	ro		0	0
+# No line for the root: it is ZFS (root.zfs read only, or the writable
+# pool), the kernel mounts it read only and rc.d/root remounts it per
+# root_rw_mount (rc.conf). A root line here is applied again by mount -a
+# (rc.d/mountcritlocal: mount(8) counts "/" as never mounted and updates
+# it), so the old "/dev/md1 / ufs ro" of the UFS root made the writable
+# pool's root read only after rc.d/root (until 2026-11-09).
 # root's home: the dataset pro1x/root on the writable pool, else in
 # memory (rc.d/pro1x_setup mounts it and fills it)

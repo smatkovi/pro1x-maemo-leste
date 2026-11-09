@@ -147,12 +147,15 @@ pool_bootfs()
 # root_rw_mount off on the pool too: the kernel mounts every root read
 # only (vfs_mountroot.c drops "rw") and only rc.d/root remounts it, so the
 # root stayed read only with /var on it, and login failed (pam_xdg could
-# not make /var/run/xdg). The pool imported (pool_rw), BE is mounted at
-# /tmp for the change and unmounted again; nothing changes where rc.conf
-# turns root_rw_mount on already.
+# not make /var/run/xdg). And their fstab kept the UFS root's line
+# (/dev/md1 / ufs ro): mount -a (rc.d/mountcritlocal) applies fstab's root
+# line again (mount(8) counts "/" as never mounted and updates it), so it
+# made the root read only once more right after rc.d/root. The pool
+# imported (pool_rw), BE is mounted at /tmp for the changes and unmounted
+# again; nothing changes where rc.conf and fstab are right already.
 pool_fixup()
 {
-	local be=$1 rc=/tmp/etc/rc.conf
+	local be=$1 rc=/tmp/etc/rc.conf fstab=/tmp/etc/fstab
 	mount -t zfs "$be" /tmp || { echo "!! $be: not mounted for its fixup"; return 1; }
 	if [ -f $rc ] && [ -z "$(sed -n '/root_rw_mount="YES"/p' $rc)" ]; then
 		cat >> $rc <<'RC'
@@ -164,6 +167,11 @@ if [ "$(/bin/kenv -q pro1x.rootrw 2> /dev/null)" = 1 ]; then
 fi
 RC
 		echo "--- $be: rc.conf turns root_rw_mount on for the writable pool (fixup)"
+	fi
+	if [ -f $fstab ] &&
+	    [ -n "$(sed -n '\|^/dev/md1[[:space:]][[:space:]]*/[[:space:]]|p' $fstab)" ]; then
+		sed -i '' -e 's|^/dev/md1[[:space:]][[:space:]]*/[[:space:]].*|# & (pool_fixup: the root is ZFS; mount -a made it read only)|' $fstab
+		echo "--- $be: fstab's UFS root line commented out (fixup)"
 	fi
 	umount /tmp
 }
