@@ -144,9 +144,12 @@ fi
 # The desktop at boot, outside the unattended tests: X as root (as the
 # status menu's Wi-Fi plugin wants it, for wpa_supplicant's socket), the
 # desktop pro1x.desktop names (.xinitrc). pro1x.autox=off in
-# freebsd/cmdline: the console only, startx by hand.
+# freebsd/cmdline: the console only, startx by hand. On ttyv8 (vt9), the
+# one ttys leaves without a getty: started from here, before init starts
+# the gettys, X took the first free terminal, ttyv1, whose getty then
+# wrote over it and the keyboard stayed with X.
 if [ -z "$(kenv -q pro1x.test)" ] && [ "$(kenv -q pro1x.autox)" != off ] &&
     [ -x /usr/local/bin/startx ]; then
 	(cd /root && HOME=/root PATH=$PATH:/usr/local/sbin:/usr/local/bin \
-	    /usr/local/bin/startx > /var/log/startx.log 2>&1 &)
+	    /usr/local/bin/startx -- vt9 > /var/log/startx.log 2>&1 &)
 fi

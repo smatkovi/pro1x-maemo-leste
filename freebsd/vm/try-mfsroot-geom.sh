@@ -49,19 +49,23 @@ $C /rescue/zpool import -N -o cachefile=none -d /dev/concat/tc tp ||
 
 # pool_fixup: a boot environment as root images before 2026-11-09 had it
 # (rc.conf: root_rw_mount off, the pool's part without it; fstab: the UFS
-# root's "/dev/md1 / ufs ro", which mount -a applied again) gets
-# root_rw_mount on for the writable pool and that fstab line commented
-# out, once (two runs); the repository's rc.conf and fstab (RCCONF,
-# FSTAB, copied to the VM) must stay as they are
+# root's "/dev/md1 / ufs ro", which mount -a applied again; rc.local: X
+# at boot without a terminal; no pkg.conf) gets root_rw_mount on, that
+# fstab line commented out, X on vt9 and pkg's TMPDIR, once (two runs);
+# the repository's rc.conf, fstab, rc.local and pkg.conf (RCCONF, FSTAB,
+# RCLOCAL, PKGCONF, copied to the VM) must stay as they are
 fixup_try()
 {
-	local name=$1 want=$2 rc=$3 fstab=$4 be=/tmp/mfsroot-test-be n
+	local name=$1 want=$2 rc=$3 fstab=$4 rcl=$5 pkgc=$6 be=/tmp/mfsroot-test-be n
 	zfs create -o canmount=noauto -o mountpoint=/ tp/ROOT/$name
 	mkdir -p $be
 	mount -t zfs tp/ROOT/$name $be
 	mkdir -p $be/etc
 	cp "$rc" $be/etc/rc.conf
 	cp "$fstab" $be/etc/fstab
+	cp "$rcl" $be/etc/rc.local
+	mkdir -p $be/usr/local/etc
+	[ "$pkgc" = none ] || cp "$pkgc" $be/usr/local/etc/pkg.conf
 	umount $be
 	$C /rescue/sh -c ". /etc/pro1x-pool.sh; pool_fixup tp/ROOT/$name;
 	    pool_fixup tp/ROOT/$name" || fail "pool_fixup $name"
@@ -72,9 +76,21 @@ fixup_try()
 	[ "$n" = "$want" ] || fail "pool_fixup $name: $n fstab notes, $want wanted"
 	grep -Eq '^/dev/md1[[:space:]]+/[[:space:]]' $be/etc/fstab &&
 	    fail "pool_fixup $name: fstab still has the UFS root line"
-	if [ "$want" = 0 ]; then
+	grep -q '/usr/local/bin/startx > /var/log' $be/etc/rc.local &&
+	    fail "pool_fixup $name: rc.local starts X without a terminal"
+	[ "$(grep -c 'startx -- vt9' $be/etc/rc.local)" = 1 ] ||
+	    fail "pool_fixup $name: rc.local not starting X on vt9 once"
+	[ "$(grep -c 'TMPDIR' $be/usr/local/etc/pkg.conf 2>/dev/null)" -ge 1 ] ||
+	    fail "pool_fixup $name: no TMPDIR in pkg.conf"
+	if [ "$want" = 1 ]; then
+		[ "$(grep -c 'PKG_ENV' $be/usr/local/etc/pkg.conf)" = 1 ] ||
+		    fail "pool_fixup $name: pkg.conf's PKG_ENV not once"
+	else
 		cmp -s "$rc" $be/etc/rc.conf || fail "pool_fixup $name changed rc.conf"
 		cmp -s "$fstab" $be/etc/fstab || fail "pool_fixup $name changed fstab"
+		cmp -s "$rcl" $be/etc/rc.local || fail "pool_fixup $name changed rc.local"
+		cmp -s "$pkgc" $be/usr/local/etc/pkg.conf ||
+		    fail "pool_fixup $name changed pkg.conf"
 	fi
 	# as on the phone after the reroot into the pool (the VM's kernel
 	# environment for this one check)
@@ -94,13 +110,23 @@ fi
 RC
 printf '# Device\tMountpoint\tFStype\tOptions\t\tDump\tPass#\n/dev/md1\t/\t\tufs\tro\t\t0\t0\n' \
     > /tmp/mfsroot-test-fstab.old
-fixup_try old 1 /tmp/mfsroot-test-rc.old /tmp/mfsroot-test-fstab.old
-if [ -f "${RCCONF:-/tmp/rc.conf}" ] && [ -f "${FSTAB:-/tmp/fstab}" ]; then
-	fixup_try new 0 "${RCCONF:-/tmp/rc.conf}" "${FSTAB:-/tmp/fstab}"
-else
-	echo "(no ${RCCONF:-/tmp/rc.conf} or ${FSTAB:-/tmp/fstab}: the repository's not tried)"
+cat > /tmp/mfsroot-test-rclocal.old <<'RC'
+if [ -z "$(kenv -q pro1x.test)" ] && [ "$(kenv -q pro1x.autox)" != off ] &&
+    [ -x /usr/local/bin/startx ]; then
+	(cd /root && HOME=/root PATH=$PATH:/usr/local/sbin:/usr/local/bin \
+	    /usr/local/bin/startx > /var/log/startx.log 2>&1 &)
 fi
-rm -f /tmp/mfsroot-test-rc.old /tmp/mfsroot-test-fstab.old
+RC
+fixup_try old 1 /tmp/mfsroot-test-rc.old /tmp/mfsroot-test-fstab.old \
+    /tmp/mfsroot-test-rclocal.old none
+if [ -f "${RCCONF:-/tmp/rc.conf}" ] && [ -f "${FSTAB:-/tmp/fstab}" ] &&
+    [ -f "${RCLOCAL:-/tmp/rc.local}" ] && [ -f "${PKGCONF:-/tmp/pkg.conf}" ]; then
+	fixup_try new 0 "${RCCONF:-/tmp/rc.conf}" "${FSTAB:-/tmp/fstab}" \
+	    "${RCLOCAL:-/tmp/rc.local}" "${PKGCONF:-/tmp/pkg.conf}"
+else
+	echo "(not all of the repository's rc.conf, fstab, rc.local, pkg.conf in /tmp: not tried)"
+fi
+rm -f /tmp/mfsroot-test-rc.old /tmp/mfsroot-test-fstab.old /tmp/mfsroot-test-rclocal.old
 $C /rescue/zpool destroy tp || fail "zpool destroy"
 
 $C /sbin/geom concat destroy tc

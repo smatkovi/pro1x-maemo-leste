@@ -150,12 +150,17 @@ pool_bootfs()
 # not make /var/run/xdg). And their fstab kept the UFS root's line
 # (/dev/md1 / ufs ro): mount -a (rc.d/mountcritlocal) applies fstab's root
 # line again (mount(8) counts "/" as never mounted and updates it), so it
-# made the root read only once more right after rc.d/root. The pool
-# imported (pool_rw), BE is mounted at /tmp for the changes and unmounted
-# again; nothing changes where rc.conf and fstab are right already.
+# made the root read only once more right after rc.d/root. Two more from
+# that day: rc.local's X at boot started on the first free terminal, ttyv1,
+# whose getty then wrote over it and kept the keyboard from anyone (now
+# ttyv8, "-- vt9"); pkg had no TMPDIR on the pool's /var/tmp, and the
+# 128 MB tmpfs /tmp was too small for FreeBSD-ports' catalogue (pkg.conf
+# PKG_ENV). The pool imported (pool_rw), BE is mounted at /tmp for the
+# changes and unmounted again; nothing changes where they are right.
 pool_fixup()
 {
 	local be=$1 rc=/tmp/etc/rc.conf fstab=/tmp/etc/fstab
+	local rclocal=/tmp/etc/rc.local pkgconf=/tmp/usr/local/etc/pkg.conf
 	mount -t zfs "$be" /tmp || { echo "!! $be: not mounted for its fixup"; return 1; }
 	if [ -f $rc ] && [ -z "$(sed -n '/root_rw_mount="YES"/p' $rc)" ]; then
 		cat >> $rc <<'RC'
@@ -172,6 +177,24 @@ RC
 	    [ -n "$(sed -n '\|^/dev/md1[[:space:]][[:space:]]*/[[:space:]]|p' $fstab)" ]; then
 		sed -i '' -e 's|^/dev/md1[[:space:]][[:space:]]*/[[:space:]].*|# & (pool_fixup: the root is ZFS; mount -a made it read only)|' $fstab
 		echo "--- $be: fstab's UFS root line commented out (fixup)"
+	fi
+	if [ -f $rclocal ] &&
+	    [ -n "$(sed -n '\|/usr/local/bin/startx > /var/log/startx.log|p' $rclocal)" ]; then
+		sed -i '' -e 's|/usr/local/bin/startx > /var/log/startx.log|/usr/local/bin/startx -- vt9 > /var/log/startx.log|' $rclocal
+		echo "--- $be: rc.local starts X on ttyv8 (fixup)"
+	fi
+	if [ -d /tmp/usr/local/etc ] &&
+	    { [ ! -f $pkgconf ] || [ -z "$(sed -n '/TMPDIR/p' $pkgconf)" ]; }; then
+		cat >> $pkgconf <<'PKG'
+
+# pkg unpacks a repository catalogue into $TMPDIR (else the 128 MB tmpfs
+# /tmp, too small for FreeBSD-ports'): the pool's /var/tmp. Added by the
+# RAM root's pool_fixup.
+PKG_ENV {
+	TMPDIR: "/var/tmp"
+}
+PKG
+		echo "--- $be: pkg.conf sets TMPDIR /var/tmp (fixup)"
 	fi
 	umount /tmp
 }
