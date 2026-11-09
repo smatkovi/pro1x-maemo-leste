@@ -40,9 +40,15 @@
 # egl-pbuffer: freebsd/gpu/build.sh tools), the modules in freebsd/modules
 # (out/modules and out/gpu/modules together), Mesa in freebsd/mesa
 # (out/gpu/mesa), the X configuration in freebsd/xorg-kms.conf.d.
+#
+# In a running system instead (the writable pool, where userdata is not
+# mounted): PRO1X_GPUTEST_LIVE=1, no watchdog budget (watchdogd feeds it;
+# each wait has its own bound), and PRO1X_GPUTEST_KIT=DIR, a directory laid
+# out as userdata's freebsd/ (gpu-tools, modules, mesa, xorg-kms.conf.d)
+# in its place. One step after another then, in the same system.
 step=${1:-$(kenv -q pro1x.gpu)}
 step=${step:-gpu1}
-host=/dev/pro1x-host/freebsd
+host=${PRO1X_GPUTEST_KIT:-/dev/pro1x-host/freebsd}
 if [ -f $host/gpu-tools/pro1x-gputest ] && [ "${PRO1X_GPUTEST_HOST:-}" != 1 ]; then
 	echo "=== the newer pro1x-gputest from $host/gpu-tools"
 	PRO1X_GPUTEST_HOST=1 exec sh $host/gpu-tools/pro1x-gputest "$step"
@@ -81,7 +87,11 @@ boot=$(sysctl -n kern.boottime | sed 's/^{ sec = \([0-9]*\),.*/\1/')
 life=$(kenv -q hint.qcom_wdt.0.lifetime)
 uptime_s() { echo $(($(date +%s) - boot)); }
 left() {	# seconds this run may still wait
-	if [ -n "$life" ]; then echo $((life - $(uptime_s) - 25)); else echo 600; fi
+	if [ -n "$life" ] && [ "${PRO1X_GPUTEST_LIVE:-}" != 1 ]; then
+		echo $((life - $(uptime_s) - 25))
+	else
+		echo 600
+	fi
 }
 # wait_for SECONDS WHAT COMMAND...: up to SECONDS (or what the watchdog
 # leaves) for the command to succeed; PASS/FAIL with the time it took
@@ -114,6 +124,7 @@ run_bounded() {
 	timeout -k 5 "$t" "$@"
 }
 
+[ "${PRO1X_GPUTEST_LIVE:-}" = 1 ] && life=
 echo "=== GPU test $RUN, $(uptime_s) s after the boot, watchdog ${life:-off}"
 fw=/boot/firmware/qcom
 ls -la $fw/a630_sqe.fw $fw/sm6115/Fxtec/QX1050/a610_zap.mbn 2>&1
