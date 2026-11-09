@@ -69,6 +69,39 @@ ROOT=$WORK/mfsroot
 rm -rf "$ROOT"
 mkdir -p "$ROOT"/{dev,tmp,bin,sbin}
 bsdtar -xpf "$B" -C "$ROOT" ./rescue
+# geom with the nop and concat classes for the writable pool
+# (mfsroot/etc/pro1x-pool.sh): /rescue's geom has part and label built in
+# only (sbin/geom/Makefile, RESCUE). Built as that one is, static, with nop
+# and concat in their place (geom/0001-*.patch; their symbols renamed as
+# part's and label's are), against the release's libraries in base.txz:
+# 1 MB, where the dynamic geom with its libraries would not fit the image
+log "static geom (nop, concat) for the RAM root"
+SYSROOT=$WORK/sysroot
+if [ ! -f "$SYSROOT/usr/lib/libgeom.a" ]; then
+	rm -rf "$SYSROOT"
+	mkdir -p "$SYSROOT"
+	bsdtar -xpf "$B" -C "$SYSROOT" ./usr/include ./usr/lib ./lib
+fi
+GS=$WORK/geom-static
+rm -rf "$GS"
+mkdir -p "$GS/sbin/geom/core"
+cp "$SRC/sbin/geom/core/geom.c" "$GS/sbin/geom/core/"
+(cd "$GS" && patch -s -p1 < "$REPO/freebsd/geom/0001-geom-static-nop-concat.patch")
+for c in nop concat; do
+	sed -e "s/^uint32_t lib_version /uint32_t g${c}_lib_version /" \
+	    -e "s/^uint32_t version /uint32_t g${c}_version /" \
+	    -e "s/^struct g_command class_commands\[\]/struct g_command g${c}_class_commands[]/" \
+	    "$SRC/lib/geom/$c/geom_$c.c" > "$GS/geom_$c.c"
+done
+"$LLVM_BIN/clang" --target="aarch64-unknown-freebsd${RELEASE%%-*}" \
+	--sysroot="$SYSROOT" -fuse-ld=lld -static -Os -ffunction-sections \
+	-fdata-sections -Wl,--gc-sections -DSTATIC_GEOM_CLASSES \
+	-DGEOM_CLASS_DIR='"/lib/geom"' -I"$SRC/sbin/geom" -I"$SRC/sbin/geom/core" \
+	"$GS/sbin/geom/core/geom.c" "$SRC/sbin/geom/misc/subr.c" \
+	"$GS/geom_nop.c" "$GS/geom_concat.c" \
+	-lgeom -lutil -lxo -lsbuf -lbsdxml -o "$GS/geom"
+"$LLVM_BIN/llvm-strip" "$GS/geom"
+install -m 555 "$GS/geom" "$ROOT/sbin/geom"
 ln -s /rescue/sh "$ROOT/bin/sh"
 ln -s /rescue/init "$ROOT/sbin/init"
 cp -a "$REPO/freebsd/mfsroot/." "$ROOT/"

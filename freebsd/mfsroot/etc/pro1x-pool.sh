@@ -23,13 +23,20 @@
 POOL_GEOMS=""
 POOL_HOST=""
 POOL_PART=""
+# geom(8) with the nop and concat classes: /rescue's has label and part
+# built in only (sbin/geom/Makefile, RESCUE), so the RAM root carries the
+# release's /sbin/geom, its class libraries and the shared libraries they
+# need (build.sh). Without them (until 2026-11-09) every nop create failed
+# and the RAM root went on to root.zfs read only.
+GEOM=/sbin/geom
+[ -x $GEOM ] || GEOM=geom
 
 pool_undo()
 {
 	local g
-	[ -e /dev/concat/pro1xpool ] && geom concat destroy pro1xpool
+	[ -e /dev/concat/pro1xpool ] && $GEOM concat destroy pro1xpool
 	for g in $POOL_GEOMS; do
-		geom nop destroy $g 2> /dev/null
+		$GEOM nop destroy $g 2> /dev/null
 	done
 	POOL_GEOMS=""
 	if [ -n "$POOL_HOST" ]; then
@@ -60,7 +67,7 @@ pool_rw()
 	[ $# -ge 2 ] || { echo "!! $map: no ranges"; return 1; }
 	sysctl -q kern.geom.nop.shared > /dev/null ||
 	    { echo "!! the kernel's nops cannot be shared (patches/0029)"; return 1; }
-	kldstat -q -m g_concat 2> /dev/null || geom concat load 2> /dev/null
+	kldstat -q -m g_concat 2> /dev/null || $GEOM concat load 2> /dev/null
 	umount $host || { echo "!! $host: busy"; return 1; }
 	POOL_HOST=$host
 	POOL_PART=$part
@@ -69,7 +76,8 @@ pool_rw()
 	provs=""
 	while [ $# -ge 2 ]; do
 		# (gnop names the provider <name>.nop)
-		if ! geom nop create -Z pro1xpool$i -o $1 -s $2 $part; then
+		if ! $GEOM nop create -Z pro1xpool$i -o $1 -s $2 $part; then
+			echo "!! $part: no nop provider for range $i ($1, $2 bytes)"
 			sysctl -q kern.geom.nop.shared=0 > /dev/null
 			pool_undo
 			return 1
@@ -80,7 +88,8 @@ pool_rw()
 		shift 2
 	done
 	sysctl -q kern.geom.nop.shared=0 > /dev/null
-	geom concat create pro1xpool $provs || pool_undo || return 1
+	$GEOM concat create pro1xpool $provs ||
+	    { echo "!! no concat over the $i ranges"; pool_undo; return 1; }
 	dev=/dev/concat/pro1xpool
 	if [ -z "$(zdb -l $dev | sed -n "s/^ *labels = 0 1 2 3 *$/ok/p")" ] ||
 	    [ -z "$(zdb -l $dev | sed -n "s/^ *name: 'pro1x'$/ok/p")" ]; then

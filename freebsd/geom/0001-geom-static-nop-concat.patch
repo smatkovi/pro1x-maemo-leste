@@ -1,0 +1,44 @@
+geom(8) built static with the nop and concat classes, for the Pro1X's
+RAM root (build.sh): /rescue's geom has part and label built in only
+(sbin/geom/Makefile, RESCUE), and the RAM root's writable pool needs nop
+providers over userdata's ranges and a concat over them
+(mfsroot/etc/pro1x-pool.sh). build.sh renames the two classes' symbols
+(lib_version, version, class_commands) to g<class>_..., as part's and
+label's PUBSYM does, and links against base.txz's static libraries.
+
+--- a/sbin/geom/core/geom.c
++++ b/sbin/geom/core/geom.c
+@@ -56,10 +56,10 @@
+ #define GEOM_XO_VERSION "1"
+ 
+ #ifdef STATIC_GEOM_CLASSES
+-extern uint32_t gpart_version;
+-extern struct g_command gpart_class_commands[];
+-extern uint32_t glabel_version;
+-extern struct g_command glabel_class_commands[];
++extern uint32_t gnop_version;
++extern struct g_command gnop_class_commands[];
++extern uint32_t gconcat_version;
++extern struct g_command gconcat_class_commands[];
+ #endif
+ 
+ static char comm[MAXPATHLEN], *class_name = NULL, *gclass_name = NULL;
+@@ -651,12 +651,12 @@
+ #ifndef STATIC_GEOM_CLASSES
+ 	load_library();
+ #else
+-	if (!strcasecmp(class_name, "part")) {
+-		version = &gpart_version;
+-		class_commands = gpart_class_commands;
+-	} else if (!strcasecmp(class_name, "label")) {
+-		version = &glabel_version;
+-		class_commands = glabel_class_commands;
++	if (!strcasecmp(class_name, "nop")) {
++		version = &gnop_version;
++		class_commands = gnop_class_commands;
++	} else if (!strcasecmp(class_name, "concat")) {
++		version = &gconcat_version;
++		class_commands = gconcat_class_commands;
+ 	}
+ #endif /* !STATIC_GEOM_CLASSES */
+ 

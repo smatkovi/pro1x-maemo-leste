@@ -6,6 +6,8 @@
 # the pool imported read-write, written, scrubbed, imported again; a boot
 # environment; then /tmp/userdata-after.img.zst to check on the PC
 # (e2fsck, before.sha).
+# This runs in the full system (/sbin/geom with its class libraries); the
+# RAM root's own tools are checked by try-mfsroot-geom.sh.
 set -u
 . /tmp/pro1x-pool.sh
 cd /tmp && zstd -q -d -f userdata.img.zst -o userdata.img
