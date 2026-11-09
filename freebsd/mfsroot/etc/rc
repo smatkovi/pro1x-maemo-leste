@@ -101,6 +101,7 @@ if [ -e /dev/gpt/userdata ] && [ -d $HOST ] &&
 		zfs list -o name,used,avail,refer,compressratio
 		if [ "$(kenv -q pro1x.root)" != ram ]; then
 			bootfs=$(pool_bootfs)
+			pool_fixup $bootfs
 			kenv vfs.root.mountfrom=zfs:$bootfs
 			kenv vfs.root.mountfrom.options=rw
 			kenv pro1x.rootrw=1

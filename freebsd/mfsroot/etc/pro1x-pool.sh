@@ -141,3 +141,29 @@ pool_bootfs()
 	fi
 	echo $bootfs
 }
+
+# pool_fixup BE: the boot environment BE as the writable pool needs it,
+# for pools made from root images before 2026-11-09. Their rc.conf kept
+# root_rw_mount off on the pool too: the kernel mounts every root read
+# only (vfs_mountroot.c drops "rw") and only rc.d/root remounts it, so the
+# root stayed read only with /var on it, and login failed (pam_xdg could
+# not make /var/run/xdg). The pool imported (pool_rw), BE is mounted at
+# /tmp for the change and unmounted again; nothing changes where rc.conf
+# turns root_rw_mount on already.
+pool_fixup()
+{
+	local be=$1 rc=/tmp/etc/rc.conf
+	mount -t zfs "$be" /tmp || { echo "!! $be: not mounted for its fixup"; return 1; }
+	if [ -f $rc ] && [ -z "$(sed -n '/root_rw_mount="YES"/p' $rc)" ]; then
+		cat >> $rc <<'RC'
+
+# The writable pool: the root read-write (rc.d/root; the kernel mounts it
+# read only first). Added by the RAM root's pool_fixup.
+if [ "$(/bin/kenv -q pro1x.rootrw 2> /dev/null)" = 1 ]; then
+	root_rw_mount="YES"
+fi
+RC
+		echo "--- $be: rc.conf turns root_rw_mount on for the writable pool (fixup)"
+	fi
+	umount /tmp
+}
