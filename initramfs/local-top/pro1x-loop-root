@@ -253,6 +253,19 @@ SNAPS
         pm=/sys/bus/platform/devices/$d/power/control
         [ -e $pm ] && echo on > $pm
       done
+      # The USB gadget (g_cdc, built in, bound by itself): soft-disconnected,
+      # which halts the DWC3 controller (run/stop off, events off) but
+      # leaves its power and clocks to the next system. Left running, it
+      # can go on writing events and received packets by DMA into this
+      # kernel's buffers (through SMMU tables in this kernel's memory), all
+      # of it the next system's RAM by then: the suspect for FreeBSD's
+      # hangs in bufinit on its first big use of memory above 4 GB (2 of 6
+      # starts with the cable in, docs/device-day-2026-10-31.md 12.7;
+      # hw.physmem=2500M keeps it below 4 GB). Not yet confirmed by starts
+      # without the cable or with this.
+      for u in /sys/class/udc/*; do
+        [ -e "$u/soft_connect" ] && echo disconnect > "$u/soft_connect" 2>/dev/null
+      done
       # The full 32 s again for the jump: FreeBSD's qcom_wdt (KolibriOS's
       # timer) keeps feeding it, and a system that hangs before or after
       # that resets the phone. Nothing stops it on the way out.
